@@ -1,5 +1,37 @@
 # TASK LITRICOS-W0-0002 — correct the documentation contradictions against the tree
 
+## 0. Outcome — 2026-10-11 (written after execution)
+
+All three contradictions are corrected, and a fourth was found while correcting
+them.
+
+| Finding | What changed | Evidence for the replacement statement |
+|---|---|---|
+| the compositor | `ARCH-00`'s L5 box reads "Rust (software framebuffer, ADR-0017)"; §5's Compositor row is replaced by one "Desktop shell (no separate compositor)" row; a dated correction section names ADR-0017 for the framebuffer decision and ADR-0016 for the process split, and states that L4's service list is a target list | `docs/adr/0017-framebuffer-shell.md`, `docs/adr/0016-system-daemon.md`, `src/litric-shell/Cargo.toml` |
+| the directories that do not exist | `REPO-00` gains §0, "What this repository actually is — 2026-10-11": the real top level (`src/`, `image/`, `ci/`, `docs/`, `tests/`, `tools/`, `keys/`, `build/`) and the list of planned-only directories. §1 is retitled "the Phase 00 plan" and §1/§2 keep the plan, as §3 requires | the tree itself; `src/Cargo.toml` |
+| RISK-010 | marked **NOT APPLICABLE** with the reason, the correction date, and a pointer to `ci/lint-deps.py` as the check that would make it live again | `docs/adr/0017-framebuffer-shell.md` |
+| **not named in the ticket** — the crate count | three documents said the workspace has **19** crates. `src/Cargo.toml` lists **18**. Each place now cites the manifest instead of a number | `src/Cargo.toml`; `ci/lint-deps.py` prints the member list and its groups |
+
+Rather than retarget RISK-010 to the risk the ticket proposed (§5.3), the
+version-control gap is recorded as its own entry, **RISK-015**, with the mitigation
+that actually happened on the same day: `git init -b main` and a first commit of
+637 files. A register that lists only open risks loses the record of how a fixed
+one was fixed, and RISK-010 was never the version-control risk.
+
+**Commands run, and their results:**
+
+| Command | Result |
+|---|---|
+| `python3 ci/lint-doc-refs.py` | `OK: 284 citation(s) across 107 document(s) resolve`, exit 0 |
+| `python3 ci/lint-doc-refs.py --self-test` | 3 PASS (fabricated citation flagged, real citation resolves, prose ignored), exit 0 |
+| acceptance test 6, run for real: a temporary document under `docs/` citing a markdown path that was never written (named here in prose, not as a path, because a correction that dresses a phantom string up as a citation is the defect it is correcting) | linter exited **1** and named the fabricated path and its line; the plant was then deleted and the linter returned to exit 0 |
+| `python3 ci/check-memory-budget.py`, `python3 ci/count-scope.py`, `python3 ci/lint-line-endings.py` | PASS (all three run inside the gate below; count-scope reports the TALLY unchanged) |
+| `bash ci/verify.sh --evidence` | **25 pass, 0 fail, 5 skipped**, exit 0; the five skips are the image build and the four boot measurements, which need a Linux host |
+
+**Not verified:** that a reviewer will find the corrected statements convincing;
+that is what review is for. Nothing here was checked on a booted image, and none
+of these three documents makes a runtime claim after the edits.
+
 ## 1. Context from verified repository
 
 Three documents describe an architecture the tree does not have. Each is a
@@ -21,7 +53,8 @@ renderer.
 [`docs/REPO-00-layout.md`](../../REPO-00-layout.md) §1/§2 describes
 `compositor/`, `shell/panel/`, `defender/onaccess/`, `ai/`, `sdk/`, `gaming/`
 and `update/`. None of those paths exist. The real implementation is the Cargo
-workspace under `src/`, with 19 crates whose names are recorded in
+workspace under `src/`, with the crates listed in `src/Cargo.toml` (18 of them at
+the time of writing) also named in
 `docs/master-plan/24-feature-parity.md` and
 `docs/audit/2026-10-11-beta-1.0-stage-a-audit.md` §2.
 

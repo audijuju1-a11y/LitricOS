@@ -20,11 +20,22 @@ resolved by existence in the image tree, so adding a helper cannot be forgotten.
 A second, larger difference: a `/usr/bin/<name>` that is neither ours nor named
 `litric-*` is reported as SKIP (base distribution) rather than MISSING, because
 this gate also runs on a Windows host that cannot enumerate the image's `/usr/bin`.
+That one was found by reading the file after writing it: the docstring promised
+SKIP for `/usr/bin/cat` and the code returned MISSING, which would have failed the
+gate the first time a unit ran `systemctl`.
+
+Acceptance test 4 (`ci/verify.sh` shows the new checks as PASS with nothing else
+changing) was run on 2026-10-11 as part of the full gate:
+`bash ci/verify.sh --evidence` reported **25 pass, 0 fail, 5 skipped** (the skips
+are the image build and the boot measurements, which need a Linux host). Test 5,
+`grep -rn "litric-capd\|litric-filesd" image/`, now matches only the parked files
+under `image/units-pending/` and this record.
 
 ## 1. Context from verified repository
 
-- **Repository root:** the LitricOS project root. `src/` is a Cargo workspace of
-  19 crates; `image/` holds the mkosi image definition; `ci/` holds the gate
+- **Repository root:** the LitricOS project root. `src/` is a Cargo workspace;
+  `src/Cargo.toml` lists its members (18 of them at the time of writing) in six
+  labelled groups; `image/` holds the mkosi image definition; `ci/` holds the gate
   script and its linters.
 - **Architecture facts confirmed in source:**
   - The image starts services through systemd units shipped at

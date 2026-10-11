@@ -1,5 +1,61 @@
 # TASK LITRICOS-W0-0003 — enforce the dependency policy instead of asserting it
 
+## 0. Outcome — 2026-10-11 (written after execution)
+
+`ci/lint-deps.py` exists, is wired into `ci/verify.sh` as section **[3h]**, and
+passes on the real tree: `18 member(s): 16 covered by the no-dependency policy, 2
+outside it (applications, native ecosystem)`, 0 violations, exit 0.
+
+**The rule implemented.**
+
+- **Coverage is derived from `src/Cargo.toml`**, from the group comment above each
+  member. `core`, `runtime`, `defender` and `benchmark` are covered; `applications`
+  and `native ecosystem` are not. Every group name has an explicit decision in the
+  linter's `CLASS_POLICY`; a member under a group that table does not name, or
+  under no group at all, is a **failure**, which is §4's fail-closed invariant.
+- A member whose own manifest declares itself dependency-free is covered whatever
+  its group (§5.1, second half). No member needed it — the two manifests that say
+  so are already in covered groups — and the check is kept because that claim is
+  what it enforces.
+- For a covered crate every entry in `dependencies`, `dev-dependencies`,
+  `build-dependencies` and their `target.'…'` forms must be a path dependency **on
+  a declared member of this workspace**. A path that leaves the workspace, or
+  points at a directory that is not a member, is a violation: acceptance test 3
+  needs the member list, not merely "has a `path`".
+- A `build-dependencies` entry is refused **even inside the workspace**, with the
+  reason printed, per §5.
+- **Deviations, both deliberate:** the run prints one coverage line per member, so
+  the decision is visible on every run rather than only in this file; and a
+  violation is reported only for a **covered** crate (the ticket's non-goal is
+  respected — `litric-shell` may take a dependency, and self-test case 6 asserts
+  that it does not fail the gate).
+
+**Commands run, and their results:**
+
+| Command | Result |
+|---|---|
+| `python3 ci/lint-deps.py` | coverage table for all 18 members; `0 violation(s) in covered member(s)`; exit **0** |
+| `python3 ci/lint-deps.py --self-test` | 9 PASS: registry dependency flagged; path dependency on a member accepted; path outside the workspace flagged; target-specific dependency flagged; in-workspace build-dependency refused; platform crate not covered; unknown manifest group fails closed; a recorded exception clears the violation and is reported; the same tree with no record fails. Exit **0** |
+| acceptance test 6, `grep -rn "\[dependencies\]" src/litric-core/Cargo.toml src/litric-caps/Cargo.toml` | both files have the section header and **no entry under it** — `[dependencies]` with nothing following, which is why the linter reports 0 dependency entries for them |
+| `bash ci/verify.sh --evidence` | **25 pass, 0 fail, 5 skipped**, exit 0; sections [3h] both PASS |
+
+**Two bugs, found by running the checker rather than reading it** — recorded
+because they are the reason §6 asks for a self-test at all:
+
+1. Reading only the last line of a wrapped group comment classified
+   `litric-defender` under the group "arrives in Phase 2 and is what makes this a
+   platform crate", which silently *uncovered* a crate the manifest says has zero
+   dependencies of any kind.
+2. Clearing the group at the first member of a group left every later member
+   unclassified, so `litric-caps`, `litric-env`, `litric-storage` and five others
+   were outside the policy while the summary still read as though coverage were
+   complete.
+
+**No disagreement remains between the manifest's classification and the linter:**
+all six groups have a decision, and the crate count in `src/Cargo.toml` (18) is
+what the linter prints. Three documents said 19; that is fixed in
+[TASK-0002](TASK-0002-doc-contradictions.md) §0.
+
 ## 1. Context from verified repository
 
 - The workspace manifest [`src/Cargo.toml`](../../../src/Cargo.toml) opens with a

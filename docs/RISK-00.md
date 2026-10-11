@@ -121,3 +121,29 @@
 - **Details:** Mesa covers most hardware, but edge cases exist.
 - **Mitigation:** HCL (Hardware Compatibility List) with TESTED-WORKING/PARTIAL/BROKEN/UNTESTED.
 - **Status:** MONITORING
+
+---
+
+## 5. Risks closed
+
+An entry stays here after it is fixed, because a register that lists only open
+risks loses the record of how the fixed ones were fixed — and of what it cost to
+work around them while they were open.
+
+### RISK-015: The working copy had no version control
+- **Severity:** S1 (CRITICAL) while open
+- **Impact:** no change could be reviewed, diffed, bisected or reverted, and every
+  artifact — including the VM evidence captures — existed in exactly one place
+- **Details:** the checkout had no `.git` directory at all (Stage A audit §1).
+  Every implementation wave therefore rested on file-level copies and an explicit
+  list of touched files; a bad edit could not be undone, only overwritten, and the
+  prompt set's requirement to preserve user changes was unenforceable.
+- **Mitigation applied:** `git init -b main` in the project root on 2026-10-11,
+  first commit `c70f3ba` recording 637 files, with `.gitattributes` pinning LF so
+  a Windows checkout cannot reintroduce the CRLF defect
+  (`docs/bugs/BUG-0007-crlf-in-five-tool-scripts.md`), and `.gitignore` excluding
+  generated output (`src/target/`, `build/`, `__pycache__/`) and VM images.
+  Development signing keys stay out through `keys/.gitignore`.
+- **Status:** **CLOSED** — 2026-10-11. Reopened if the repository is ever copied
+  or edited outside version control again (an export, a second checkout without
+  its history, or a backup taken while `.git` is absent).
