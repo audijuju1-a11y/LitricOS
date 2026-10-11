@@ -220,13 +220,14 @@ fi
 echo
 echo "[3h] Dependency policy"
 # ---------------------------------------------------------------------------
-# src/Cargo.toml states the rule in prose -- zero third-party dependencies in the
-# core crates -- and nothing checked it. Every dependency in every member is a
-# path dependency today, so the ratchet is "a member may not gain a non-path
-# dependency". Recorded exceptions live in ci/dep-policy-allow.txt.
+# src/Cargo.toml states the rule in prose -- the crates in its core group take
+# zero third-party dependencies, std only -- and nothing checked it. Coverage is
+# derived from the manifest's own group comments, so a new crate cannot arrive
+# outside the policy; a group the linter has no decision for fails closed.
+# Recorded exceptions live in ci/dep-policy-allow.txt.
 if have python || have python3; then
     PY=$(command -v python3 || command -v python)
-    check "no workspace member takes a third-party dependency" \
+    check "core crates take no third-party dependencies" \
         "$PY" ci/lint-deps.py
     check "dependency linter detects a planted dependency" \
         "$PY" ci/lint-deps.py --self-test
@@ -375,6 +376,22 @@ echo
 
 if [[ "${1:-}" == "--evidence" ]]; then
     OUT="docs/EVIDENCE.md"
+    # Everything between the record markers is hand-written record, not generated
+    # output: the generated part is the header, the Verified and NOT RUN tables
+    # and the closing paragraph. This generator used to overwrite the whole file,
+    # so running it would have deleted the VM, benchmark and design-system records
+    # -- the file that exists to say what was executed would have destroyed half of
+    # what was executed. The markers make re-runs idempotent: the heading between
+    # them is regenerated, so it cannot accumulate once per run. A file written
+    # before the markers existed has no markers, and its records are everything
+    # from the first horizontal rule onward.
+    KEEP=""
+    if [[ -f "$OUT" ]]; then
+        KEEP="$(awk '/<!-- records-begin -->/{f=1;next} /<!-- records-end -->/{f=0} f' "$OUT")"
+        if [[ -z "$KEEP" ]]; then
+            KEEP="$(sed -n '/^---$/,$p' "$OUT" | tail -n +2)"
+        fi
+    fi
     {
         echo "# LITRIC — EXECUTED EVIDENCE"
         echo
@@ -418,6 +435,19 @@ if [[ "${1:-}" == "--evidence" ]]; then
         echo "nothing has been booted. Until the rows in NOT RUN become PASS rows,"
         echo "GATE 01 stays BLOCKED and no performance number in \`docs/PERF-budget.md\`"
         echo "may be quoted as a measurement."
+        if [[ -n "$KEEP" ]]; then
+            echo
+            echo "---"
+            echo
+            echo "<!-- records-begin -->"
+            echo "## Earlier records, preserved and NOT re-executed in this run"
+            echo
+            echo "Each section below was executed on the date and host it names."
+            echo "This run did not repeat it; the tables above are the only rows"
+            echo "that were executed today."
+            printf '\n%s\n' "$KEEP"
+            echo "<!-- records-end -->"
+        fi
     } > "$OUT"
     echo "evidence written to $OUT"
 fi
