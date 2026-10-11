@@ -1,0 +1,12 @@
+[package]
+name        = "litric-design"
+description = "LitricOS design system: colour, type, spacing, motion and glass-material tokens, with contrast and legibility enforced by test"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]

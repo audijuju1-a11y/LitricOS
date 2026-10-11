@@ -1,0 +1,19 @@
+[Unit]
+Description=LitricOS AI service resource slice
+Before=slices.target
+
+[Slice]
+# Budget line 11.  MemoryMax here bounds the SERVICE, not a loaded model; the
+# router raises the limit transactionally when it admits a model and lowers it
+# on unload.  See ADR-0015.
+MemoryAccounting=yes
+MemoryHigh=10M
+MemoryMax=12M
+
+# Strictly below the shell.  Inference must never make the cursor stutter.
+CPUAccounting=yes
+CPUWeight=10
+
+IOAccounting=yes
+IOWeight=10
+TasksMax=128

@@ -1,0 +1,14 @@
+[package]
+name        = "litric-manifest"
+description = "LitricOS application manifest: parsing and validation of the declaration an installer shows the user"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+litric-core = { path = "../litric-core" }
+litric-caps = { path = "../litric-caps" }

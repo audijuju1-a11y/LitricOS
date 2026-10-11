@@ -1,0 +1,6 @@
+# Development keys are generated locally by tools/gen-dev-keys.sh and are never
+# committed. A committed signing key -- even a development one -- is a key that
+# will eventually be used by mistake.
+dev/
+*.key
+*.pem

@@ -1,0 +1,15 @@
+[package]
+name        = "litric-defender"
+description = "LitricOS Defender policy core: hash verdicts, byte patterns, verdict cache, fail-open policy and quarantine planning (ADR-0022 Phase 0)"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Deliberately empty. ADR-0022 §7: the policy core parses untrusted content and
+# decides what the machine may execute; it does not get to pull crates from the
+# internet. SHA-256 and the pattern matcher are implemented here, std-only.

@@ -1,0 +1,16 @@
+[package]
+name        = "litric-bench"
+description = "LitricOS maximum-depth adversarial security benchmark: destructive-equivalent corpus, deterministic chaos, forensic hash-chained event log (safety architecture per MASTER prompt §SAFETY)"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The only dependency, and it is in-workspace: the scan runner drives the
+# real engine (MASTER §26 `scan`). No third-party code enters the benchmark:
+# litric-defender is itself zero-dependency.
+litric-defender = { path = "../litric-defender" }

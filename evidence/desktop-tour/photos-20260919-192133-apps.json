@@ -1,0 +1,36 @@
+{
+ "20-launcher": [
+  "00-desktop-idle.png"
+ ],
+ "21-activity": [
+  "00-launcher.png",
+  "03-activity-appmenu.png"
+ ],
+ "21-browser": [
+  "00-launcher.png",
+  "03-browser-appmenu.png",
+  "05-browser-ctx.png"
+ ],
+ "21-defender": [
+  "00-launcher.png",
+  "03-defender-appmenu.png"
+ ],
+ "21-environments": [
+  "00-launcher.png",
+  "03-environments-appmenu.png"
+ ],
+ "21-files": [
+  "00-launcher.png",
+  "03-files-appmenu.png",
+  "05-files-ctx.png",
+  "07-files-closed.png"
+ ],
+ "21-terminal": [
+  "00-launcher.png",
+  "03-terminal-appmenu.png",
+  "07-terminal-closed.png"
+ ],
+ "22-final": [
+  "00-after-apps.png"
+ ]
+}

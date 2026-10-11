@@ -1,0 +1,12 @@
+[Unit]
+Description=LitricOS boot time analysis
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'systemd-analyze > /dev/kmsg 2>&1'
+ExecStart=/bin/sh -c 'systemd-analyze blame > /dev/kmsg 2>&1'
+ExecStart=/bin/sh -c 'systemd-analyze critical-chain > /dev/kmsg 2>&1'
+
+[Install]
+WantedBy=multi-user.target

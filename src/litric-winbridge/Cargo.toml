@@ -1,0 +1,13 @@
+[package]
+name        = "litric-winbridge"
+description = "LitricOS Windows compatibility: PE inspection, installer detection, bottle lifecycle, install planning"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+litric-core = { path = "../litric-core" }

@@ -1,0 +1,18 @@
+[Unit]
+Description=Litric Files daemon socket
+Documentation=file:///usr/share/doc/litric/adr/0019-litric-files.md
+
+[Socket]
+# Same shape as litric-browser.socket: 0600 root, so only the shell can ask the
+# daemon to touch the user's files, and one daemon process per connection.
+ListenStream=/run/litric/files.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0755
+Accept=yes
+MaxConnections=8
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

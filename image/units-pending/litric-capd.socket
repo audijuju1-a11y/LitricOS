@@ -1,0 +1,17 @@
+[Unit]
+Description=LitricOS capability broker socket
+Documentation=file:///usr/share/doc/litric/API-00-contracts.md
+
+[Socket]
+ListenStream=/run/litric/capd.sock
+SocketMode=0666
+# 0666 is correct and deliberate: every process on the system must be able to ASK.
+# Authorisation happens inside the broker using SO_PEERCRED plus the caller's
+# cgroup-derived application identity, never by filesystem permission on the
+# socket. Relying on socket mode for authorisation is exactly the confused-deputy
+# bug that RUNTIME section 37 exists to prevent.
+Accept=no
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

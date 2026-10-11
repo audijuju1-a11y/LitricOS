@@ -1,0 +1,41 @@
+[Unit]
+Description=LitricOS memory-management runtime tuning (MGLRU, THP, zswap off)
+Documentation=file:///usr/share/doc/litric/PERF-budget.md
+DefaultDependencies=no
+After=sysinit.target
+Before=basic.target
+ConditionPathExists=/sys/kernel/mm
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/litric/mm-tune
+# Failing to tune must never fail the boot. A machine that boots slightly less
+# optimally is fine; a machine that does not boot is not.
+SuccessExitStatus=0 1
+
+# --- sandbox ---------------------------------------------------------------
+# This service writes to /sys/kernel/mm and nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+# THREAT ACCEPTED: ProtectKernelTunables would block the writes this service
+# exists to make. Scope is narrowed to exactly one path by ReadWritePaths.
+ProtectKernelTunables=no
+ReadWritePaths=/sys/kernel/mm
+CapabilityBoundingSet=CAP_SYS_ADMIN
+
+[Install]
+WantedBy=sysinit.target

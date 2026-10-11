@@ -1,0 +1,22 @@
+[Unit]
+Description=Litric Browser engine broker socket
+Documentation=file:///usr/share/doc/litric/adr/0018-browser-engine-chromium.md
+
+[Socket]
+# The shell connects here. systemd owns the access check: the socket is 0600
+# root, the shell runs as root without capabilities, so owner permission lets it
+# in and nothing else on the machine.
+ListenStream=/run/litric/browser.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+DirectoryMode=0755
+# One broker per connection, handed the connected socket as stdin/stdout, so
+# the broker needs no fd passing and no unsafe code. Nothing runs, and no
+# memory is used, until the browser window is opened.
+Accept=yes
+MaxConnections=1
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

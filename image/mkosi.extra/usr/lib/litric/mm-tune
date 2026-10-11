@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# =============================================================================
+# LitricOS — memory-management runtime tuning
+#
+# These settings have no sysctl equivalent; they live in /sys and must be written
+# once at boot. Run by litric-mm-tune.service before basic.target.
+#
+# Every write here is (a) best-effort and (b) logged. A kernel that does not
+# expose a knob is not an error -- it is an older or differently-configured
+# kernel, and the boot must continue regardless (Phase 02 failure mode).
+# =============================================================================
+set -uo pipefail
+
+log()  { printf 'litric-mm-tune: %s\n' "$*"; }
+warn() { printf 'litric-mm-tune: WARNING: %s\n' "$*" >&2; }
+
+# try_write <path> <value> <why>
+# Never fatal. Records what happened so that a missing knob shows up in the
+# journal rather than silently changing the performance profile of the machine.
+try_write() {
+    local path="$1" value="$2" why="$3"
+    if [[ ! -e "$path" ]]; then
+        warn "absent: $path (skipping: $why)"
+        return 1
+    fi
+    if ! printf '%s' "$value" > "$path" 2>/dev/null; then
+        warn "write failed: $path = $value ($why)"
+        return 1
+    fi
+    log "set $path = $value  # $why"
+    return 0
+}
+
+rc=0
+
+# --- MGLRU ------------------------------------------------------------------
+# Multi-Gen LRU. Budget lever: fewer low-memory kills, less kswapd CPU, faster
+# app launch. Phase 13 task 4 measures on/off; until then this is a hypothesis
+# we ship enabled because the upstream default trend is the same direction.
+#
+# The value is a bitmask: 0x1 core, 0x2 clear-young walks, 0x4 mm walk.
+# "y" enables all supported bits and is forward-compatible.
+try_write /sys/kernel/mm/lru_gen/enabled y "MGLRU" || rc=1
+
+# Minimum time a generation must age before it can be evicted. 1000 ms keeps a
+# briefly-idle application's working set resident across a short alt-tab.
+try_write /sys/kernel/mm/lru_gen/min_ttl_ms 1000 "MGLRU min generation age" || true
+
+# --- Transparent huge pages -------------------------------------------------
+# madvise, not always. "always" costs latency spikes on allocation-heavy
+# workloads (khugepaged compaction stalls) for a throughput win that games and
+# desktop apps mostly do not see. Applications that benefit ask for it.
+# On low-RAM systems (< 8GB), disable THP entirely to save ~50MB and prevent
+# khugepaged from raising min_free_kbytes. On larger systems, madvise lets
+# applications opt in. nano profile target: ≤320MB idle RAM.
+TOTAL_KB=$(awk '/^MemTotal/ {print $2}' /proc/meminfo)
+if [[ "${TOTAL_KB:-0}" -lt 8388608 ]]; then
+    try_write /sys/kernel/mm/transparent_hugepage/enabled never "THP: disabled (low-RAM, ${TOTAL_KB}kB)" || rc=1
+    try_write /sys/kernel/mm/transparent_hugepage/shmem_enabled never "THP shmem: disabled (low-RAM)" || true
+    try_write /sys/kernel/mm/transparent_hugepage/defrag never "THP defrag: disabled (low-RAM)" || true
+else
+    try_write /sys/kernel/mm/transparent_hugepage/enabled madvise "THP: opt-in only" || rc=1
+    try_write /sys/kernel/mm/transparent_hugepage/shmem_enabled advise "THP shmem: opt-in" || true
+    # defer+madvise: never stall the allocating thread synchronously on compaction.
+    # This is the setting that prevents multi-hundred-millisecond hitches.
+    try_write /sys/kernel/mm/transparent_hugepage/defrag defer+madvise "THP: never stall the allocator" || true
+fi
+
+# --- zswap ------------------------------------------------------------------
+# OFF. We swap to zram. Running zswap in front of zram means compressing a page
+# to put it in a cache that fronts a device that compresses it again -- pure
+# double work. If a kernel ships zswap on by default, turn it off here.
+try_write /sys/module/zswap/parameters/enabled N "zswap off: zram is the swap device" || true
+
+# --- Read-ahead on the read-only system partition ---------------------------
+# erofs random reads are page-fault driven binary loading. Large readahead reads
+# pages nobody wants and evicts pages somebody does.
+for dev in /sys/block/*/queue/read_ahead_kb; do
+    [[ -e "$dev" ]] || continue
+    parent="${dev%/queue/read_ahead_kb}"
+    # Only touch rotational=0 devices; spinning rust genuinely wants readahead.
+    if [[ -r "$parent/queue/rotational" ]] && [[ "$(cat "$parent/queue/rotational")" == "0" ]]; then
+        try_write "$dev" 128 "SSD readahead: 128 KiB" || true
+    fi
+done
+
+# --- Report -----------------------------------------------------------------
+if [[ -r /sys/kernel/mm/lru_gen/enabled ]]; then
+    log "verify: lru_gen/enabled = $(cat /sys/kernel/mm/lru_gen/enabled)"
+fi
+if [[ -r /sys/kernel/mm/transparent_hugepage/enabled ]]; then
+    log "verify: thp/enabled = $(cat /sys/kernel/mm/transparent_hugepage/enabled)"
+fi
+
+# Exit 1 signals "some knobs were unavailable" without failing the unit
+# (SuccessExitStatus=0 1). Exit 0 means everything applied.
+exit "$rc"

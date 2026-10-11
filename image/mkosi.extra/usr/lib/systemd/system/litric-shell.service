@@ -1,0 +1,106 @@
+[Unit]
+Description=LitricOS desktop shell
+Documentation=file:///usr/share/doc/litric/adr/0017-framebuffer-shell.md
+
+# HONEST SCOPE, 2026-08-29.
+#
+# This unit previously described the compositor in ADR-0009: Type=notify, a
+# `litric` user, a PAM session, seatd, DRM and input device access, a watchdog.
+# None of that existed, and the unit could not start; it was a description of an
+# intention wearing the clothes of a service.
+#
+# What exists now is the display half plus a real input stack: litric-shell
+# discovers the framebuffer and the input devices, renders the desktop in
+# software, routes keyboard and pointer events through a window manager, and
+# writes only the rows that changed. It still hosts no client windows, so it
+# needs no seat and no PAM session and is given neither. The unit grows back
+# toward the one above one capability at a time, each because something needs
+# it -- input devices were added when there was something to read them.
+
+After=basic.target litric-sysd.service
+Wants=litric-sysd.service
+
+# The kernel's framebuffer console and a login prompt both draw on the same
+# pixels. The shell unbinds fbcon itself; the getty has to be displaced here,
+# because two programs owning tty1 is a fight neither wins.
+Conflicts=getty@tty1.service
+
+# Without a framebuffer there is nothing to draw on, and starting anyway would
+# produce a failed unit on every headless CI boot. That is noise, not a finding.
+ConditionPathExists=/dev/fb0
+
+[Service]
+Type=simple
+# No interval: the shell runs an event loop that blocks on input and repaints
+# only what changed. An idle desktop presents nothing at all, which is where
+# Adaptive Idle's saving actually comes from.
+ExecStart=/usr/bin/litric-shell
+
+RuntimeDirectory=litric
+RuntimeDirectoryMode=0755
+# Both litric-sysd and litric-shell declare /run/litric. Without this, systemd
+# deletes the directory when EITHER unit stops -- taking the other one's socket
+# or status file with it, and producing a shell that cannot reach a daemon that
+# is still running. Preserving it is not laziness about cleanup: /run is tmpfs
+# and the whole directory is gone at reboot regardless.
+RuntimeDirectoryPreserve=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+Restart=on-failure
+RestartSec=1s
+
+# --- sandbox ---------------------------------------------------------------
+# It needs exactly three things: the framebuffer, sysfs to find it and to
+# release the console, and the sysd socket under /run. Everything else is off.
+#
+# THREAT ACCEPTED: write access to /dev/fb0 is write access to the screen, so a
+# compromised shell can draw anything, including a convincing password prompt.
+# That is inherent to any display server. The mitigations are that it holds no
+# capabilities, cannot open a network socket, cannot execute anything, and has
+# no access to the user's files at all -- so what it can do is limited to
+# lying on the screen, and it cannot act on what it learns.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=no
+DeviceAllow=/dev/fb0 rw
+DeviceAllow=char-drm rw
+# Read-only on input. The shell must see what the user does; it must never be
+# able to synthesise an event, which write access to an evdev node would allow.
+DeviceAllow=char-input r
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+# ProtectKernelTunables would make /sys read-only, and releasing the framebuffer
+# console is a write to /sys/class/vtconsole/vtconN/bind. It is off for that one
+# write and nothing else; the sandbox above still denies every other route.
+ProtectKernelTunables=no
+
+# Two 4 MB canvases at 1280x800 -- the wallpaper and the composed scene -- plus
+# blur scratch and a row buffer. If it ever needs eight times that, something is
+# wrong and it should fail here rather than become the reason the machine is
+# short of memory.
+MemoryMax=96M
+# One thread per input device plus the main loop. A machine with a dozen input
+# devices is unusual; a shell with a hundred threads is a bug.
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+[package]
+name        = "litric-envd"
+description = "LitricOS environment daemon: executes what litric-env decides — QEMU launch plans, guest supervision, suspend/resume"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+litric-core = { path = "../litric-core" }
+litric-env  = { path = "../litric-env" }
+
+[lib]
+name = "litric_envd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "litric-envd"
+path = "src/main.rs"

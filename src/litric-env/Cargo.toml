@@ -1,0 +1,13 @@
+[package]
+name        = "litric-env"
+description = "LitricOS environment manager: states, transitions, switching policy and resource budgets for LitricOS, Windows and Linux environments"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+litric-core = { path = "../litric-core" }

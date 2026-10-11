@@ -1,0 +1,20 @@
+[package]
+name        = "litric-files"
+description = "Litric Files: confined file operations, freedesktop trash and archives, served by litric-filesd"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+litric-core    = { path = "../litric-core" }
+litric-storage = { path = "../litric-storage" }
+litric-trash   = { path = "../litric-trash" }
+litric-locale  = { path = "../litric-locale" }
+
+[lib]
+name = "litric_files"
+path = "src/lib.rs"

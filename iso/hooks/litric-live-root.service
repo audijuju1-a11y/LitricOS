@@ -1,0 +1,22 @@
+[Unit]
+Description=LitricOS live root assembly
+Documentation=file:///usr/share/doc/litric/adr/0010-iso-delivery.md
+DefaultDependencies=no
+ConditionKernelCommandLine=litric.live=1
+After=systemd-udev-settle.service dev-mapper-litric\x2dsys.device
+Wants=systemd-udev-settle.service
+Before=initrd-root-fs.target sysroot.mount
+Conflicts=shutdown.target initrd-switch-root.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/litric/live-root
+StandardOutput=journal+console
+StandardError=journal+console
+# Fail closed: if root assembly fails we land in the initrd emergency shell with
+# the printed reason, rather than switch-rooting into something unverified.
+FailureAction=none
+
+[Install]
+WantedBy=initrd-root-fs.target

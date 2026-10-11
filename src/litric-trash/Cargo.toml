@@ -1,0 +1,13 @@
+[package]
+name        = "litric-trash"
+description = "LitricOS Trash: freedesktop.org-compatible deletion, restore and retention policy"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+litric-storage = { path = "../litric-storage" }

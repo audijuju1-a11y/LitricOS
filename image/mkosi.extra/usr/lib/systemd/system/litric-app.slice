@@ -1,0 +1,19 @@
+[Unit]
+Description=LitricOS sandboxed application slice
+Before=slices.target
+
+[Slice]
+MemoryAccounting=yes
+# No global cap: applications are what the machine is for.  Per-app limits come
+# from the manifest resource-class (light/standard/game/ai) and are applied to
+# the per-app scope by litric-capd at launch.
+CPUAccounting=yes
+CPUWeight=100
+IOAccounting=yes
+IOWeight=100
+
+# oomd eligibility: when the machine is under real memory pressure, this is the
+# slice that gives.  The shell and system services are protected.
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=60%
+ManagedOOMSwap=kill

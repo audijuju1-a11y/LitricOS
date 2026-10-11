@@ -1,0 +1,28 @@
+[package]
+name        = "litric-shell"
+description = "LitricOS shell: the desktop that appears at boot"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+litric-design = { path = "../litric-design" }
+litric-sysd   = { path = "../litric-sysd" }
+litric-input  = { path = "../litric-input" }
+litric-wm     = { path = "../litric-wm" }
+litric-locale = { path = "../litric-locale" }
+litric-files  = { path = "../litric-files" }
+litric-defender = { path = "../litric-defender" }
+litric-core = { path = "../litric-core" }
+
+[lib]
+name = "litric_shell"
+path = "src/lib.rs"
+
+[[bin]]
+name = "litric-shell"
+path = "src/main.rs"

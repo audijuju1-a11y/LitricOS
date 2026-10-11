@@ -1,0 +1,16 @@
+# The workspace denies unwrap/expect/panic/indexing: a panic in the capability
+# broker is a security bug, because a dead broker is a broker that cannot deny.
+#
+# In test code the same calls are the assertion mechanism -- a test that cannot
+# panic cannot fail. Clippy distinguishes the two contexts natively, so the
+# production rule stays absolute rather than being weakened with scattered
+# #[allow] attributes that then leak back into shipping code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests  = true
+
+# Colour and motion maths is inherently floating point, and float arithmetic
+# cannot silently wrap to a wrong value the way integer arithmetic can -- it
+# saturates to infinity or NaN, which is visible. The deny stays absolute for
+# integers, where the failure mode is a wrong number that looks plausible.
+arithmetic-side-effects-allowed = ["f64", "f32"]

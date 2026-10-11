@@ -1,0 +1,38 @@
+[Unit]
+Description=LitricOS self test and measurement
+Documentation=file:///usr/share/doc/litric/PERF-budget.md
+
+# Ordering note, learned the hard way.
+#
+# This previously said `After=multi-user.target` together with
+# `WantedBy=multi-user.target`. That is a circular arrangement: the target pulls
+# the unit in as a dependency, while the unit orders itself after the target
+# that is waiting for it. systemd breaks the cycle by dropping the ordering and
+# the unit simply never ran -- enabled, condition satisfied, and silent.
+#
+# Ordering after basic.target instead means it runs as part of reaching
+# multi-user.target, which is what was wanted.
+After=basic.target
+
+# Never runs on a normal boot. The nano profile sets this flag because nano is
+# the CI and measurement profile; no other profile does. The unit file itself
+# ships everywhere, so this condition is the thing keeping it out of a desktop.
+ConditionKernelCommandLine=litric.selftest
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/litric/selftest
+# The serial console is the only channel out of a headless VM, so the report
+# goes there rather than only to the journal.
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=180
+
+# Deliberately unsandboxed. This reads /proc, /sys, the journal and systemd
+# state in order to report what the system actually is; a sandbox would make it
+# report what the sandbox looks like instead. It runs only when explicitly
+# requested on the kernel command line, and never in a shipped desktop image.
+
+[Install]
+WantedBy=multi-user.target

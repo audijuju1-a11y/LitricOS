@@ -1,0 +1,14 @@
+[package]
+name        = "litric-storage"
+description = "LitricOS storage namespace broker: resolves logical URIs to real paths under capability control"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+litric-core = { path = "../litric-core" }
+litric-caps = { path = "../litric-caps" }

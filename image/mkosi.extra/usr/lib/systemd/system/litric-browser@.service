@@ -1,0 +1,61 @@
+[Unit]
+Description=Litric Browser engine broker (connection %i)
+Documentation=file:///usr/share/doc/litric/adr/0018-browser-engine-chromium.md
+CollectMode=inactive-or-failed
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/litric-browserd --stdio --profile /run/litric-browser/profile --downloads /run/litric-browser/Downloads
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+
+# Chromium refuses its sandbox as uid 0; the broker and the engine run as the
+# desktop user.
+User=litric
+Group=litric
+
+# The engine's writable state lives on /run: the root filesystem is erofs
+# behind dm-verity and cannot grow a /var/home, and a browser profile is
+# cache-class state anyway — honest to be ephemeral on this image. systemd
+# creates the directory (owned by User=) before the mount namespace is set
+# up, so ReadWritePaths names a path that provably exists.
+RuntimeDirectory=litric-browser
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+
+# --- sandbox ---------------------------------------------------------------
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# The web needs IP. AF_NETLINK is how Chromium learns about network changes.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# The engine's world: the runtime directory only (see RuntimeDirectory above).
+ReadWritePaths=/run/litric-browser
+
+# Deliberately NOT set, each for a named reason:
+#   RestrictNamespaces       Chromium's sandbox creates user, PID and network
+#                            namespaces for every renderer.
+#   MemoryDenyWriteExecute   V8 compiles JavaScript to machine code.
+#   SystemCallFilter         Chromium installs its own seccomp-bpf policy per
+#                            process type; a second filter here has not been
+#                            measured against it, and a guessed one breaks
+#                            renderers in ways that look like page bugs.
+
+# A runaway page must not take the desktop's memory with it.
+MemoryMax=1536M
+TasksMax=512

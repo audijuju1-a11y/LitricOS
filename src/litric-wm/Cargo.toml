@@ -1,0 +1,12 @@
+[package]
+name        = "litric-wm"
+description = "LitricOS window manager: windows, focus, z-order, workspaces and interaction, with no rendering in it"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]

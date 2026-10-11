@@ -1,0 +1,55 @@
+[Unit]
+Description=LitricOS capability broker (litric.caps)
+Documentation=file:///usr/share/doc/litric/API-00-contracts.md
+Requires=litric-capd.socket
+After=litric-capd.socket dbus-broker.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/litric-capd --systemd-socket
+Restart=always
+RestartSec=200ms
+# The broker is the authority for every capability decision on the system. If it
+# is down, the correct behaviour is deny-by-default, which is what clients see
+# when the socket has no listener. It is never "allow because the broker is gone".
+WatchdogSec=30s
+
+Slice=system.slice
+MemoryAccounting=yes
+MemoryMax=24M
+TasksMax=32
+
+# --- sandbox ---------------------------------------------------------------
+# A privileged decision-maker gets the strictest profile that still lets it work.
+User=litric-capd
+Group=litric-capd
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# THREAT ACCEPTED: AF_UNIX only. The broker must never speak to a network, so a
+# compromise cannot exfiltrate the capability ledger or call home.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=
+AmbientCapabilities=
+# The grant ledger is append-only and must survive a broker restart.
+StateDirectory=litric/caps
+StateDirectoryMode=0700

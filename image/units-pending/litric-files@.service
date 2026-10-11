@@ -1,0 +1,45 @@
+[Unit]
+Description=Litric Files daemon (connection %i)
+Documentation=file:///usr/share/doc/litric/adr/0019-litric-files.md
+CollectMode=inactive-or-failed
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/litric-filesd --stdio --root /var/home/litric
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+User=litric
+Group=litric
+
+# --- sandbox ---------------------------------------------------------------
+# It reads and writes the user's home and nothing else, needs no network, no
+# devices, no namespaces and no generated code.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/home/litric
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+MemoryMax=256M
+TasksMax=16

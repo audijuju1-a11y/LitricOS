@@ -1,0 +1,71 @@
+[Unit]
+Description=LitricOS environment daemon (guest supervisor)
+Documentation=file:///usr/share/doc/litric/adr/0015-multi-environment-switching.md
+
+After=basic.target
+
+# A guest is launched only onto a system that is up: the daemon derives its
+# launch plans from budgets the manager approved, and the manager runs in
+# litric-sysd. Ordering after sysd means a boot never shows a switcher whose
+# backend does not exist yet.
+After=litric-sysd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/litric-envd
+
+# /run/litric is declared by litric-sysd too; the Preserve on that unit is
+# what keeps this one's status files alive across either daemon restarting.
+RuntimeDirectory=litric
+RuntimeDirectoryPreserve=yes
+
+StandardOutput=journal+console
+StandardError=journal+console
+
+Restart=on-failure
+RestartSec=1s
+
+# --- sandbox ---------------------------------------------------------------
+# The daemon spawns and signals QEMU processes and owns their monitor
+# sockets. That is a bigger surface than litric-sysd has, and the sandbox
+# says exactly that instead of pretending otherwise: it may see the host's
+# device tree (to decide KVM vs TCG) and signal its children, and it may do
+# nothing else. No network, no write outside /run, no kernel tuning, and the
+# same no-JIT and native-arch limits as every other Litric daemon.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# PrivateDevices stays OFF on purpose: the daemon probes for /dev/kvm to pick
+# the accelerator and hands QEMU nothing else. A daemon that must see one
+# device node should not be given the choice of seeing none at all -- it
+# should be limited to the nodes it names.
+PrivateDevices=no
+DeviceAllow=char-kvm rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# AF_UNIX for the monitor sockets and the control path; AF_NETLINK is not
+# needed and QEMU's own network namespace belongs to the child, not here.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+# A supervisor that swells is a supervisor that thrashes guests; fail loudly.
+MemoryMax=128M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

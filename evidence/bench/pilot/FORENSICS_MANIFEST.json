@@ -1,0 +1,15 @@
+{
+  "artifacts": [
+    {"name": "RUN_SUMMARY.json", "bytes": 553},
+    {"name": "RUN_SUMMARY.csv", "bytes": 221},
+    {"name": "DETECTIONS.csv", "bytes": 12352},
+    {"name": "MISSES.csv", "bytes": 134417},
+    {"name": "REGRESSIONS.csv", "bytes": 4},
+    {"name": "RESOURCE_USAGE.csv", "bytes": 91},
+    {"name": "CRASHES.csv", "bytes": 34},
+    {"name": "RECOVERY.csv", "bytes": 41},
+    {"name": "RULE_GAPS.csv", "bytes": 1648},
+    {"name": "REPORT.md", "bytes": 6747},
+    {"name": "EVENTS.jsonl", "bytes": 509202}
+  ]
+}

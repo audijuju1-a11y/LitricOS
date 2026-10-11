@@ -1,0 +1,94 @@
+# =============================================================================
+# LitricOS โ€” native system workspace
+#
+# HARD RULE: the crates in `core-crates` below have ZERO third-party
+# dependencies. std only.
+#
+# Two reasons, both load-bearing:
+#   1. Supply chain. Every dependency in a system component is code that runs
+#      with that component's authority. The capability broker decides what every
+#      application on the machine may do; it does not get to pull 200 transitive
+#      crates from the internet.
+#   2. They compile and test anywhere, including on the Windows development host,
+#      with no network and no Linux. That is what makes the logic VERIFIABLE
+#      today rather than "verified once we have a build server".
+#
+# Platform crates (litric-shell, litric-defender) DO take dependencies -- you do
+# not hand-write a Wayland compositor -- and are Linux-only.
+# =============================================================================
+[workspace]
+resolver = "2"
+members = [
+    # --- core: zero-dependency, platform-independent, tested on any host ------
+    "litric-core",
+    "litric-caps",
+    "litric-env",
+    "litric-design",
+    "litric-storage",
+    "litric-trash",
+    "litric-files",
+    "litric-manifest",
+    "litric-winbridge",
+
+    # --- runtime: runs inside the OS, Unix transport, still no third-party deps -
+    "litric-sysd",
+    "litric-envd",
+    "litric-input",
+    "litric-wm",
+    "litric-locale",
+
+    # --- defender: ADR-0022. Phase 0 is the pure policy core -- no I/O, no
+    # execution, zero dependencies of any kind. The Linux fanotify transport
+    # arrives in Phase 2 and is what makes this a platform crate. --------------
+    "litric-defender",
+
+    # --- applications ---------------------------------------------------------
+    "litric-browser",
+
+    # --- native ecosystem: the desktop itself ---------------------------------
+    "litric-shell",
+
+    # --- benchmark: ADR pending. Destructive-equivalent adversarial testing;
+    # zero deps; drives the real defender engine (MASTER prompt framework) ---
+    "litric-bench",
+]
+
+[workspace.package]
+version      = "0.2.0"
+edition      = "2021"
+rust-version = "1.85"
+license      = "Apache-2.0"
+repository   = "https://github.com/litricos/litricos"
+authors      = ["LitricOS"]
+
+[workspace.lints.rust]
+missing_docs                = "warn"
+unsafe_code                 = "forbid"
+unused_must_use             = "deny"
+# A lint GROUP must carry a lower priority than the individual lints beside
+# it, or Cargo refuses the table (the order of keys is not significant).
+rust_2018_idioms            = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+# ADR-0009 mitigation 1, applied workspace-wide rather than to the shell alone.
+# A panic in a system service is an availability bug; in the capability broker it
+# is a security bug, because a dead broker is a broker that cannot say "deny".
+unwrap_used          = "deny"
+expect_used          = "deny"
+panic                = "deny"
+indexing_slicing     = "deny"
+integer_division     = "warn"
+arithmetic_side_effects = "warn"
+
+[profile.release]
+opt-level     = 2
+lto           = "fat"
+codegen-units = 1
+strip         = "symbols"
+panic         = "unwind"   # ADR-0009 mitigation 2 requires catch_unwind
+overflow-checks = true     # a wrapped length in a parser is a memory-safety bug
+                           # in waiting; the cycles are worth it
+
+[profile.release-size]
+inherits      = "release"
+opt-level     = "z"

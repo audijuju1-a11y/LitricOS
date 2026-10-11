@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LitricOS Desktop Tour — 114 Screenshots</title>
+<style>
+  :root {
+    --bg: #16181d; --surface: rgba(255,255,255,0.06); --border: rgba(255,255,255,0.10);
+    --text: #f5f5f7; --muted: rgba(245,245,247,0.60); --accent: #0a84ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 -apple-system, "SF Pro Text", "Segoe UI", system-ui, sans-serif; }
+  header { position: sticky; top: 0; backdrop-filter: blur(20px) saturate(1.8);
+    background: rgba(22,24,29,0.72); border-bottom: 1px solid var(--border);
+    padding: 14px 22px; z-index: 10; }
+  header h1 { margin: 0; font-size: 17px; font-weight: 600; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+  nav { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  nav a { color: var(--accent); text-decoration: none; font-size: 12px;
+    padding: 4px 10px; border-radius: 999px; background: var(--surface);
+    border: 1px solid var(--border); }
+  nav a:hover { background: rgba(10,132,255,0.15); }
+  main { padding: 18px 22px 60px; }
+  section { margin-bottom: 40px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 26px 0 4px; }
+  .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  figure { margin: 0; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
+  figure img { display: block; width: 100%; height: auto; background: #000; }
+  figcaption { padding: 8px 12px; font-size: 12px; color: var(--muted); }
+  figcaption b { color: var(--text); font-weight: 600; }
+  .badge { display: inline-block; font-size: 10.5px; padding: 1px 8px; border-radius: 999px;
+    background: rgba(10,132,255,0.18); color: var(--accent); margin-left: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LitricOS Desktop Tour <span class="badge">114 screenshots</span></h1>
+  <p>QEMU screendump จริงทุกภาพ · ขับด้วย QMP input-send-event (absolute pointer + qcode keys)
+     → evdev จริง → litric-shell · รัน 2026-09-19 บน image desktop (Chromium 153)</p>
+  <nav id="toc"></nav>
+</header>
+<main id="content"></main>
+<script>
+const RUNS = [
+  { dir: "20260919-193610-real", title: "A · Precision tour (code-derived coordinates)", note:
+    "คลิกตามพิกัดจากโค้ดจริง (icon grid col-major, Meta-launcher) — เลือกไอคอน, เปิดทุกแอป 6 ตัว (หน้าต่างต่างกันยืนยันด้วย pixel-diff), context menu ในแอป, launcher พิมพ์ค้น, browser search, files ops, defender" },
+  { dir: "20260919-192133-apps", title: "B · App tour (launcher sequence)", note:
+    "เปิดแอปผ่าน launcher, ถ่ายหน้าต่าง/แอปเมนู/คลิกขวา/Ctrl+A ต่อแอป 8 ภาพ × 6 แอป" },
+  { dir: "20260919-191602", title: "C · Full feature tour (menus, dock, trash, dialogs)", note:
+    "เมนูทั้ง 6 ของ menu bar + navigation, desktop context menu, Files sidebar/toolbar, dialogs, keyboard, Defender, Browser (Google search 2 ครั้ง + back/forward), Trash, dock sweep, settings" },
+  { dir: "20260919-120407", title: "D · First sweep (HMP input — pointer ไม่ถึง shell)", note:
+    "ทัวร์แรกด้วย HMP mouse_move (relative) — ภาพเดสก์ท็อปสถิตใช้เป็น baseline ได้ แต่ interaction ไม่เปลี่ยน; เก็บไว้เทียบกับทัวร์ A-C ที่ input ถึงจริง" },
+];
+const SECTION_NOTES = {
+  "00-boot": "บูต: OVMF → kernel → litric-shell เรนเดอร์เดสก์ท็อป",
+  "01-desktop": "เดสก์ท็อป: ไอคอน, การเลือก",
+  "02-menubar-menus": "Menu bar: เมนูทุกตัวเปิด/เลื่อน",
+  "03-context-desktop": "คลิกขวาบนพื้นเดสก์ท็อป",
+  "04-files-app": "Files: หน้าต่าง, sidebar, toolbar",
+  "05-new-folder-dialog": "Dialog: สร้างโฟลเดอร์/ไฟล์, ตั้งชื่อ",
+  "06-keyboard": "คีย์บอร์ด: refresh, select-all, ปิดหน้าต่าง",
+  "07-defender": "Defender: หน้าต่างและปุ่มสแกน",
+  "08-browser": "Browser: omnibox, พิมพ์ค้น Google, back/forward",
+  "09-trash": "Trash",
+  "10-dock": "Dock: hover/launch ตามตำแหน่ง",
+  "11-settings": "Settings",
+  "12-final": "ปิดทัวร์",
+  "20-launcher": "Launcher (Meta)",
+  "21-activity": "Activity Monitor",
+  "21-browser": "Browser",
+  "21-defender": "Defender",
+  "21-environments": "Environments",
+  "21-files": "Files",
+  "21-terminal": "Terminal",
+  "22-final": "หลังปิดครบ",
+  "30-real-desktop": "เดสก์ท็อป idle (พิกัดจริง)",
+  "31-icon-files": "ไอคอน Files → เปิด/ctx/ปิด",
+  "31-icon-browser": "ไอคอน Browser",
+  "31-icon-terminal": "ไอคอน Terminal",
+  "31-icon-defender": "ไอคอน Defender",
+  "31-icon-settings": "ไอคอน Settings",
+  "31-icon-trash": "ไอคอน Trash",
+  "32-launcher": "Meta-launcher: พิมพ์ browser → Enter",
+  "33-browser-use": "Browser: omnibox จริง + search",
+  "34-files-ops": "Files: ctx → New Folder → ตั้งชื่อ → สร้าง",
+  "35-defender": "Defender เปิดจากไอคอน",
+  "36-desktop-ops": "Desktop ctx: เดิน row, wallpaper/display",
+  "37-final": "จบทัวร์",
+};
+const toc = document.getElementById('toc');
+const content = document.getElementById('content');
+for (const run of RUNS) {
+  const a = document.createElement('a');
+  a.href = '#' + run.dir;
+  a.textContent = run.title.split('·')[0].trim() + ' — ' + run.dir.slice(-14);
+  toc.appendChild(a);
+  const sec = document.createElement('section');
+  sec.id = run.dir;
+  const h = document.createElement('h2');
+  h.textContent = run.title;
+  const p = document.createElement('p'); p.className = 'sub'; p.textContent = run.note;
+  sec.appendChild(h); sec.appendChild(p);
+  const grid = document.createElement('div'); grid.className = 'grid';
+  sec.appendChild(grid);
+  content.appendChild(sec);
+}
+let idx = 0;
+const files = [];
+for (const run of RUNS) {
+  fetch(`photos-${run.dir}.json`).then(r => r.json()).then(groups => {
+    const sec = document.getElementById(run.dir);
+    const grid = sec.querySelector('.grid');
+    for (const [group, names] of Object.entries(groups)) {
+      const h = document.createElement('h2');
+      h.textContent = group + (SECTION_NOTES[group] ? '' : '');
+      const note = SECTION_NOTES[group];
+      const p = document.createElement('p'); p.className = 'sub'; p.textContent = note || '';
+      sec.appendChild(h); if (note) sec.appendChild(p);
+      for (const n of names) {
+        idx++;
+        const fig = document.createElement('figure');
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.src = `${run.dir}/${group}/${n}`;
+        const cap = document.createElement('figcaption');
+        const clean = n.replace(/\.png$/, '').replace(/^\d+-/, '');
+        cap.innerHTML = `<b>#${idx}</b> ${group}/${clean}`;
+        fig.appendChild(img); fig.appendChild(cap);
+        grid.appendChild(fig);
+      }
+    }
+  });
+}
+</script>
+</body>
+</html>

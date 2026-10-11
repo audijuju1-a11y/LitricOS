@@ -1,0 +1,81 @@
+[Unit]
+Description=LitricOS system daemon
+Documentation=file:///usr/share/doc/litric/adr/0016-system-daemon.md
+
+# After basic.target, not multi-user.target. Ordering a unit after the target
+# that pulls it in is a dependency cycle; systemd resolves it by dropping the
+# ordering and the unit never runs -- enabled, no error, no output. That exact
+# mistake already cost this project a debugging session on litric-selftest.
+After=basic.target
+
+# Nothing above this exists yet. When litric-shell does, it will order itself
+# after this unit, because a shell that draws a trash icon before there is a
+# trash behind it is drawing a picture.
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock
+
+# The socket is a runtime object and must not survive a reboot. It could not
+# live anywhere else anyway: / is a read-only dm-verity root.
+RuntimeDirectory=litric
+RuntimeDirectoryMode=0755
+# Both litric-sysd and litric-shell declare /run/litric. Without this, systemd
+# deletes the directory when EITHER unit stops -- taking the other one's socket
+# or status file with it, and producing a shell that cannot reach a daemon that
+# is still running. Preserving it is not laziness about cleanup: /run is tmpfs
+# and the whole directory is gone at reboot regardless.
+RuntimeDirectoryPreserve=yes
+
+# Measurements reach the serial console as well as the journal. On a headless
+# VM the console is the only channel out, and a daemon that started and said
+# nothing cannot be told apart from one that never started.
+StandardOutput=journal+console
+StandardError=journal+console
+
+Restart=on-failure
+RestartSec=1s
+
+# --- sandbox ---------------------------------------------------------------
+# The daemon reads /proc and /sys, binds one Unix socket, and holds decision
+# state in memory. It opens no files on the user's behalf, talks to no network,
+# and needs no capability at all -- so it is given none of them.
+#
+# Each line below is a claim that will be tested by booting, not by reading.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# No JIT and no generated code: the binary is ahead-of-time compiled Rust with
+# no interpreter in it, so this costs nothing and closes the usual route from a
+# memory-write primitive to code execution.
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# AF_UNIX only. The daemon has no reason to reach the network and, having no
+# reason, is not permitted to discover one.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+# A resource ceiling on the thing that measures resources. If the daemon ever
+# grows past this it should fail loudly here rather than quietly become the
+# reason the machine is short of memory.
+MemoryMax=64M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

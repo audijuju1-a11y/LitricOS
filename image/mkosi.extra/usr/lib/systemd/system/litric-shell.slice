@@ -1,0 +1,21 @@
+[Unit]
+Description=LitricOS shell and compositor resource slice
+Before=slices.target
+
+[Slice]
+# Budget line 8.  MemoryHigh throttles and reclaims; MemoryMax kills.  The gap
+# between them is deliberate: a shell that briefly spikes (a large wallpaper, a
+# 4K screenshot) should be reclaimed, not killed.
+MemoryAccounting=yes
+MemoryHigh=110M
+MemoryMax=140M
+MemorySwapMax=64M
+
+# The highest weight on the system.  If anything is going to get CPU during
+# contention, it is the thing drawing the frame the user is looking at.
+CPUAccounting=yes
+CPUWeight=1000
+
+IOAccounting=yes
+IOWeight=500
+TasksMax=512

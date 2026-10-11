@@ -1,0 +1,62 @@
+{
+ "30-real-desktop": [
+  "00-idle.png"
+ ],
+ "31-icon-browser": [
+  "00-selected.png",
+  "02-ctx.png",
+  "03-appmenu-ctx.png",
+  "04-closed.png"
+ ],
+ "31-icon-defender": [
+  "00-selected.png",
+  "02-ctx.png",
+  "03-appmenu-ctx.png"
+ ],
+ "31-icon-files": [
+  "00-selected.png",
+  "02-ctx.png",
+  "03-appmenu-ctx.png",
+  "04-closed.png"
+ ],
+ "31-icon-settings": [
+  "00-selected.png",
+  "02-ctx.png",
+  "03-appmenu-ctx.png"
+ ],
+ "31-icon-terminal": [
+  "00-selected.png",
+  "02-ctx.png",
+  "03-appmenu-ctx.png"
+ ],
+ "31-icon-trash": [
+  "00-selected.png",
+  "02-ctx.png",
+  "03-appmenu-ctx.png"
+ ],
+ "32-launcher": [
+  "00-open.png",
+  "02-browser-launched.png"
+ ],
+ "33-browser-use": [
+  "00-omnibox-click.png",
+  "02-search-run.png"
+ ],
+ "34-files-ops": [
+  "00-files-open.png",
+  "01-ctx-blank.png",
+  "02-new-folder-dialog.png",
+  "04-created.png"
+ ],
+ "35-defender": [
+  "00-window.png",
+  "01-ctx.png",
+  "02-appmenu.png"
+ ],
+ "36-desktop-ops": [
+  "00-ctx-desktop.png"
+ ],
+ "37-final": [
+  "00-done.png"
+ ]
+}

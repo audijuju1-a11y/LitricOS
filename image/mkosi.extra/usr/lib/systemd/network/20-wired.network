@@ -1,0 +1,25 @@
+# LitricOS — wired network on the virtual (and any real) NIC.
+#
+# Without a .network match, systemd-networkd never configures an interface:
+# the guest booted with a virtio-net device, a kernel driver (CONFIG_VIRTIO_NET
+# is builtin), and no address — the browser engine could spawn Chromium but had
+# nowhere to fetch from, and every page honestly reported a network error.
+# DHCP=yes covers QEMU slirp (10.0.2.15/24, DNS 10.0.2.3) and any real LAN.
+#
+# Both naming schemes are matched because a minimal image may not run udev's
+# predictable renaming: "eth0" before udev, "enp0s*t*" after it.
+
+[Match]
+Name=en* eth*
+
+[Network]
+# Static slirp addressing is deliberate: the kernel refuses a DHCP OFFER
+# addressed to 255.255.255.255 while the interface has no address yet (logged
+# as a martian source, observed live at every boot), so the lease never
+# completes and the browser engine starts with a dead network. QEMU's slirp
+# NAT answers ARP for 10.0.2.2 itself, so a static address needs no exchange
+# at all — the address, gateway and resolver are simply true on this bus.
+Address=10.0.2.15/24
+Gateway=10.0.2.2
+DNS=10.0.2.3
+IPv6AcceptRA=yes

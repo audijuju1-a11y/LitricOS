@@ -1,0 +1,15 @@
+# Dependencies that a workspace member is allowed to take from outside this
+# workspace, one `crate: dependency` pair per line.
+#
+# This file is empty on purpose. `src/Cargo.toml` states that the core crates
+# take no third-party dependencies at all, and every dependency in every member
+# is a path dependency today, so nothing needs an exception.
+#
+# A line here is a decision, not a convenience: it means someone accepted that a
+# system component now runs other people's code inside its own authority, or that
+# the workspace can no longer build offline. Say why on the same line.
+#
+# Format:  <member>: <dependency>    # why, and which ADR or issue records it
+#
+# Example (do not add without a reason):
+#   litric-shell: smithay    # ADR-0005 revisit; see docs/adr/0005-compositor.md

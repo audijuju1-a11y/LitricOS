@@ -1,0 +1,72 @@
+{
+ "00-boot": [
+  "00-boot-t12.png",
+  "01-boot-t20.png"
+ ],
+ "01-desktop": [
+  "00-start.png",
+  "01-icon-select.png"
+ ],
+ "02-menubar-menus": [
+  "00-menu-app.png",
+  "02-menu-file.png",
+  "04-menu-edit.png",
+  "06-menu-view.png",
+  "08-menu-window.png",
+  "09-menu-window-navigated.png",
+  "10-menu-help.png",
+  "12-status-area.png",
+  "13-clock-area.png"
+ ],
+ "03-context-desktop": [
+  "00-ctx-desktop.png",
+  "02-ctx-desktop-2.png",
+  "03-ctx-item-clicked.png"
+ ],
+ "04-files-app": [
+  "00-files-window.png",
+  "01-files-ctx-blank.png",
+  "02-files-sidebar-home.png",
+  "03-files-sidebar-docs.png",
+  "04-files-sidebar-downloads.png",
+  "05-files-sidebar-desktop.png",
+  "06-files-toolbar-view.png",
+  "07-files-navigated.png"
+ ],
+ "05-new-folder-dialog": [
+  "00-ctx-before-new-folder.png",
+  "01-new-folder-dialog.png",
+  "04-rename-active.png"
+ ],
+ "06-keyboard": [
+  "00-kbd-refresh.png",
+  "02-kbd-close-window.png"
+ ],
+ "07-defender": [
+  "00-defender-window.png",
+  "01-defender-scan-click1.png",
+  "02-defender-scan-click2.png",
+  "05-defender-ctx.png"
+ ],
+ "08-browser": [
+  "00-browser-open.png",
+  "01-browser-omnibox-focus.png",
+  "02-browser-typed-google.png",
+  "07-browser-back.png",
+  "08-browser-forward.png"
+ ],
+ "09-trash": [
+  "00-trash-open.png"
+ ],
+ "10-dock": [
+  "00-dock-hover-0.png"
+ ],
+ "11-settings": [
+  "00-settings-open.png",
+  "01-settings-body.png"
+ ],
+ "12-final": [
+  "00-desktop-final.png",
+  "01-final-ctx.png"
+ ]
+}

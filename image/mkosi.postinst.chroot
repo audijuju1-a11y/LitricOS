@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# =============================================================================
+# LitricOS — post-installation, executed INSIDE the image
+#
+# The `.chroot` suffix is load-bearing.
+#
+#   mkosi.postinst          runs on the BUILD HOST, image mounted at $BUILDROOT.
+#                           A bare path like /etc/foo means the BUILD HOST's /etc.
+#   mkosi.postinst.chroot   runs INSIDE the image. A bare path means the image.
+#
+# The first version of this script was named `mkosi.postinst` and used bare
+# paths, so it ran `find /etc /usr/lib/systemd -exec chmod` against the BUILD
+# HOST and `systemctl enable` against the BUILD HOST's systemd. No damage
+# resulted -- the chmod only touched *.conf and *.service files, which are 0644
+# anyway, and the enable was skipped because its guard could not find the unit
+# on the host -- but that was luck. The guard below makes it impossible rather
+# than unlikely.
+# =============================================================================
+set -euo pipefail
+
+say() { printf '\033[1;35m[postinst]\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31m[postinst]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# --- 0. Refuse to run anywhere except inside a LitricOS image ---------------
+[[ -f /usr/lib/litric/selftest ]] \
+    || die "refusing to run: /usr/lib/litric/selftest is absent, so this is not
+  a LitricOS image root. If you are seeing this on a build host, the script was
+  invoked as mkosi.postinst instead of mkosi.postinst.chroot."
+
+# --- 1. Enable units --------------------------------------------------------
+#
+# NOT with `systemctl enable`. That writes into /etc/systemd/system/*.wants/,
+# and a later mkosi phase regenerates /etc: the enable reports success, the
+# symlink is absent from the finished image, and the unit silently never runs.
+# Verified by mounting the built image and finding the symlink missing.
+#
+# NOT by committing a .wants symlink in mkosi.extra either. A symlink created on
+# a Windows filesystem arrives as a regular FILE, and systemd rejects it with
+# "Wants dependency dropin ... is not a symlink, ignoring" -- one informational
+# line in a wall of boot output.
+#
+# So: create a real symlink, here, inside the chroot, under /usr/lib, which is
+# part of the read-only image and is not regenerated.
+enable_unit() {
+    local unit="$1" target="$2"
+    if [[ ! -f "/usr/lib/systemd/system/${unit}" ]]; then
+        say "absent, not enabling: ${unit}"
+        return 0
+    fi
+    local wants="/usr/lib/systemd/system/${target}.wants"
+    mkdir -p "$wants"
+    ln -sf "../${unit}" "${wants}/${unit}"
+    [[ -L "${wants}/${unit}" ]] || die "failed to create the .wants symlink for ${unit}"
+    say "enabled ${unit} (wanted by ${target})"
+}
+
+enable_unit litric-selftest.service multi-user.target
+enable_unit litric-mm-tune.service  sysinit.target
+enable_unit litric-sysd.service     multi-user.target
+# The guest supervisor: every launch of Windows or Linux as an environment
+# goes through this daemon (ADR-0015). Enabled alongside sysd, ordered after
+# it, and useless-but-harmless until a guest disk exists.
+enable_unit litric-envd.service     multi-user.target
+enable_unit litric-shell.service    multi-user.target
+enable_unit litric-drop-caches.service  multi-user.target
+# Socket-activated per connection (ADR-0018, ADR-0019): enabling the socket is
+# what makes the daemon reachable; the @.service template is never enabled.
+enable_unit litric-browser.socket   sockets.target
+# NOT enabled: litric-files.socket. Its ExecStart is /usr/bin/litric-filesd and no
+# crate produces that binary, so the socket would accept connections and then
+# fail to spawn a daemon -- a broken service that a healthy boot log hides,
+# because a socket unit needs no binary to start. The units are kept, with the
+# reason, in image/units-pending/; re-enable this line in the same change that
+# gives litric-filesd a real binary target.
+# Lab diagnostic console: an autologin shell on the second serial port, so a
+# disposable image can answer "why did this unit die" from inside. The
+# production profile ships without this drop-in and with root locked.
+#
+# enable_unit() cannot do this one: it checks for /usr/lib/systemd/system/$unit
+# and the instance serial-getty@ttyS1.service is generated from the TEMPLATE
+# serial-getty@.service at boot, so that file never exists at build time and
+# the guard would skip it forever. Template instances are enabled by symlinking
+# the instance name directly, which is exactly what `systemctl enable
+# serial-getty@ttyS1` would do.
+if [[ -f /usr/lib/systemd/system/serial-getty@.service ]]; then
+    mkdir -p /usr/lib/systemd/system/getty.target.wants
+    ln -sf ../serial-getty@.service \
+        /usr/lib/systemd/system/getty.target.wants/serial-getty@ttyS1.service
+    [[ -L /usr/lib/systemd/system/getty.target.wants/serial-getty@ttyS1.service ]] \
+        || die "failed to enable serial-getty@ttyS1"
+    say "enabled serial-getty@ttyS1 (template instance, wanted by getty.target)"
+else
+    say "absent, not enabling: serial-getty@.service template"
+fi
+# The network stack: networkd leases an address (DHCP on the virtio NIC),
+# resolved answers DNS on the 127.0.0.53 stub. Without them the browser
+# engine boots into a world with no route and every page reports a network
+# error — honest, but useless. Files ship via mkosi.extra; the enable is
+# done here, in the chroot, for the same reason every other unit is.
+enable_unit systemd-networkd.service multi-user.target
+enable_unit systemd-resolved.service multi-user.target
+
+# --- 2. Repair permissions inherited from the Windows filesystem ------------
+#
+# NTFS carries no Unix mode bits, so everything copied from the host arrives
+# 0777 and executable. systemd and journald both warn about world-writable and
+# executable configuration, and they are right to: a world-writable unit file is
+# a privilege escalation waiting for a writable moment.
+# --- 2.5. Configure mkinitcpio to include essential boot modules -----------
+#
+# On Arch, mkinitcpio uses MODULES=() from /etc/mkinitcpio.conf.
+# An empty MODULES=() means NO modules in the initrd, so dm-verity setup
+# fails and /dev/mapper/root never appears.  The nano profile's
+# KernelModulesInitrdInclude is NOT passed to mkinitcpio by mkosi, so we
+# must set it here before mkosi invokes mkinitcpio.
+say "configuring mkinitcpio modules for nano boot"
+
+MODULES_LIST="dm_mod dm-verity erofs virtio_blk virtio_pci sd_mod ahci overlay loop vfat fat btrfs ext4"
+
+# Replace MODULES=() line in mkinitcpio.conf
+if [[ -f /etc/mkinitcpio.conf ]]; then
+    sed -i "s|^MODULES=(.*|MODULES=( ${MODULES_LIST} )|" /etc/mkinitcpio.conf
+    say "mkinitcpio MODULES set to: ${MODULES_LIST}"
+fi
+
+# --- 3. Repair permissions inherited from the Windows filesystem -----------
+say "normalising permissions on shipped configuration"
+
+find /usr/lib/systemd /usr/lib/sysctl.d /usr/lib/modprobe.d \
+     /usr/lib/modules-load.d /usr/lib/tmpfiles.d /usr/lib/udev \
+     -type f \( -name '*.conf'    -o -name '*.service' -o -name '*.slice' \
+             -o -name '*.socket'  -o -name '*.target'  -o -name '*.network' \
+             -o -name '*.rules' \) \
+     -exec chmod 0644 {} + 2>/dev/null || true
+
+# Our own helper programs and system binaries: executable, not writable by
+# others. /usr/bin matters as much as /usr/lib here -- a 0777 daemon binary on a
+# read-only root is still a 0777 binary the moment anything remounts.
+for prog in /usr/lib/litric/* /usr/bin/litric-*; do
+    [[ -f "$prog" ]] && chmod 0755 "$prog"
+done
+
+say "done"

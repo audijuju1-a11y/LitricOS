@@ -1,0 +1,16 @@
+[Unit]
+Description=LitricOS game slice
+Before=slices.target
+
+[Slice]
+MemoryAccounting=yes
+CPUAccounting=yes
+# Just under the shell.  A game should get everything except the ability to stop
+# the compositor from presenting — that is how you get a frozen machine that
+# "runs at 200 FPS".
+CPUWeight=800
+IOAccounting=yes
+IOWeight=800
+# Games legitimately allocate enormous amounts; killing one on pressure loses
+# unsaved progress.  We shed elsewhere first.
+ManagedOOMMemoryPressure=auto

@@ -1,0 +1,24 @@
+[Unit]
+Description=LitricOS Defender resource slice
+Documentation=file:///usr/share/doc/litric/PERF-budget.md
+Before=slices.target
+
+[Slice]
+# Budget line 10.  This is a HARD cap, not a target: if the scanner leaks or a
+# YARA rule set explodes, the defender dies and restarts rather than pushing the
+# desktop into swap.  A security tool that degrades the system it protects gets
+# turned off by users, and then protects nothing.
+MemoryAccounting=yes
+MemoryHigh=56M
+MemoryMax=64M
+MemorySwapMax=0
+
+# Below the shell in CPU weight.  A full-tree scan must never cost a frame.
+CPUAccounting=yes
+CPUWeight=20
+CPUQuota=60%
+
+IOAccounting=yes
+IOWeight=20
+
+TasksMax=64

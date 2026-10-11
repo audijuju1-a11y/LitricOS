@@ -1,0 +1,25 @@
+[package]
+name        = "litric-sysd"
+description = "LitricOS system daemon: the first LitricOS code that runs inside the OS"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+litric-core    = { path = "../litric-core" }
+litric-caps    = { path = "../litric-caps" }
+litric-env     = { path = "../litric-env" }
+litric-storage = { path = "../litric-storage" }
+litric-trash   = { path = "../litric-trash" }
+
+[lib]
+name = "litric_sysd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "litric-sysd"
+path = "src/main.rs"

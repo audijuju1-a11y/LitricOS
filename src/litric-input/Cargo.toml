@@ -1,0 +1,28 @@
+[package]
+name        = "litric-input"
+description = "LitricOS input: devices, events, keymaps and pointer state, independent of any renderer"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints.rust]
+# This crate carries the kernel's one sanctioned unsafe: the EVIOCGABS ioctl
+# that asks an absolute pointer for its real coordinate range (see
+# backend::absinfo). Guessing that range was a real shipped bug — every click
+# landed at half its coordinates — so asking the device is not optional.
+# `deny` keeps the discipline; the two call sites opt out explicitly and
+# loudly. Everything else in the crate remains unsafe-free.
+unsafe_code                 = "deny"
+missing_docs                = "warn"
+unused_must_use             = "deny"
+rust_2018_idioms            = { level = "warn", priority = -1 }
+
+[lints.clippy]
+unwrap_used          = "deny"
+expect_used          = "deny"
+panic                = "deny"
+indexing_slicing     = "deny"
+integer_division     = "warn"
+
+[dependencies]

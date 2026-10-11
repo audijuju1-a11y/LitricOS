@@ -1,0 +1,40 @@
+[package]
+name        = "litric-browser"
+description = "Litric Browser: tabs, history, URLs and the privacy policy that governs them"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+# The broker is a Unix daemon: it owns a Chromium process and serves a Unix
+# socket. It builds only where it can run, so Windows CI compiles the library
+# (tabs, URLs, policy, decoders) without it.
+[[bin]]
+name = "litric-browserd"
+path = "src/bin/browserd.rs"
+required-features = ["broker"]
+
+[lints.rust]
+# The broker's CDP pipe is wired to Chromium's fixed contract — messages on
+# the child's fd 3/4 — which needs three fd primitives (pipe2/dup2/close) in
+# one audited module (`cdp_fd` in browserd.rs). A pipe on the wrong descriptor
+# looks from the outside like "the engine died"; the unsafe is confined so the
+# wiring stays provable. Everything else in the crate remains unsafe-free.
+unsafe_code                 = "deny"
+missing_docs                = "warn"
+unused_must_use             = "deny"
+rust_2018_idioms            = { level = "warn", priority = -1 }
+
+[lints.clippy]
+unwrap_used          = "deny"
+expect_used          = "deny"
+panic                = "deny"
+indexing_slicing     = "deny"
+integer_division     = "warn"
+
+[features]
+broker = []
+
+[dependencies]
+litric-caps = { path = "../litric-caps" }
+litric-core = { path = "../litric-core" }

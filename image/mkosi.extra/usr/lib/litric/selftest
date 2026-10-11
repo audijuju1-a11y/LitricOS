@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# =============================================================================
+# LitricOS — in-guest self test and measurement
+#
+# Runs once after multi-user.target and prints a structured report to the
+# console. This is how anything inside a booted LitricOS gets measured: the
+# serial log is the only channel out of a headless VM, so the report is designed
+# to be greppable rather than pretty.
+#
+# It reports what IS, including what is broken. A self test that only prints
+# good news is a self test that hides the thing you needed to know.
+#
+# Enabled by litric-selftest.service, which is gated on litric.selftest=1 in the
+# kernel command line. It never runs on a normal boot.
+# =============================================================================
+set -uo pipefail
+
+# A stable marker so a harness can find the report in a wall of boot output.
+BEGIN="LITRIC-SELFTEST-BEGIN"
+END="LITRIC-SELFTEST-END"
+
+say() { printf '%s\n' "$*"; }
+kv()  { printf 'litric.%s=%s\n' "$1" "$2"; }
+
+say "$BEGIN"
+
+# --- identity ---------------------------------------------------------------
+kv "hostname"    "$(hostnamectl --static 2>/dev/null || cat /etc/hostname 2>/dev/null || echo unknown)"
+kv "kernel"      "$(uname -r)"
+kv "arch"        "$(uname -m)"
+
+# --- boot timing ------------------------------------------------------------
+# systemd-analyze is the authority here; the kernel timestamp only tells you
+# when the last message was printed, not when the system became usable.
+if command -v systemd-analyze >/dev/null 2>&1; then
+    analyze="$(systemd-analyze time 2>/dev/null | head -1 || true)"
+    kv "boot.summary" "${analyze:-unavailable}"
+    # Machine-readable split.
+    for field in firmware loader kernel initrd userspace; do
+        v="$(printf '%s' "$analyze" | grep -oE "[0-9.]+m?s \(${field}\)" | grep -oE '^[0-9.]+m?s' || true)"
+        [[ -n "$v" ]] && kv "boot.${field}" "$v"
+    done
+fi
+
+# --- unit health ------------------------------------------------------------
+# The number that matters. A boot that reaches a login prompt with eight failed
+# units has not really booted.
+failed_count="$(systemctl --failed --no-legend --plain 2>/dev/null | wc -l || echo -1)"
+kv "units.failed" "$failed_count"
+if (( failed_count > 0 )); then
+    say "--- failed units ---"
+    systemctl --failed --no-legend --plain 2>/dev/null | awk '{print "litric.unit.failed=" $1}'
+    say "--- why each failed (first line) ---"
+    systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | while read -r u; do
+        [[ -n "$u" ]] || continue
+        reason="$(systemctl status "$u" --no-pager -n 0 2>/dev/null | grep -m1 -E 'Active:|Process:' | sed 's/^ *//' || true)"
+        printf 'litric.unit.reason.%s=%s\n' "$u" "${reason:-unknown}"
+    done
+    say "--- journal errors ---"
+    journalctl -p err -b --no-pager -n 25 2>/dev/null | sed 's/^/litric.journal: /' || true
+
+    # The full unit log for each failure. `journalctl -p err` shows systemd's
+    # own "Failed to start X" line but usually NOT the underlying error from the
+    # process that failed, which is the line that actually says what went wrong.
+    # Chasing a mount failure without it means guessing.
+    say "--- full log per failed unit ---"
+    systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}' | while read -r u; do
+        [[ -n "$u" ]] || continue
+        printf 'litric.unitlog.begin=%s
+' "$u"
+        journalctl -u "$u" -b --no-pager -o cat 2>/dev/null | tail -20 | sed "s|^|litric.unitlog.${u}: |" || true
+        printf 'litric.unitlog.end=%s
+' "$u"
+    done
+fi
+
+# --- memory: the headline budget -------------------------------------------
+# PERF-budget section 3. Measured after a settle so that page cache and lazy
+# initialisation have finished moving.
+sleep 5
+if [[ -r /proc/meminfo ]]; then
+    total_kb="$(awk '/^MemTotal:/{print $2}'     /proc/meminfo)"
+    avail_kb="$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)"
+    # Used = total - available. This is the number a user recognises as
+    # "RAM in use", and the one the budget is written against. MemFree alone
+    # would flatter us by counting reclaimable cache as used.
+    used_kb=$(( total_kb - avail_kb ))
+    kv "mem.total_mb" "$(( total_kb / 1024 ))"
+    kv "mem.used_mb"  "$(( used_kb  / 1024 ))"
+    kv "mem.avail_mb" "$(( avail_kb / 1024 ))"
+fi
+
+# --- process and thread count ----------------------------------------------
+kv "proc.count"   "$(ps -e --no-headers 2>/dev/null | wc -l)"
+kv "thread.count" "$(ps -eL --no-headers 2>/dev/null | wc -l)"
+
+# --- storage -----------------------------------------------------------------
+kv "root.fstype"   "$(findmnt -n -o FSTYPE / 2>/dev/null || echo unknown)"
+kv "root.source"   "$(findmnt -n -o SOURCE / 2>/dev/null || echo unknown)"
+kv "root.readonly" "$(findmnt -n -o OPTIONS / 2>/dev/null | grep -qE '(^|,)ro(,|$)' && echo yes || echo no)"
+
+# --- verity: is the integrity chain actually live? --------------------------
+# The whole read-only-and-verified design is worth nothing if verity silently
+# did not engage, and a booted system looks identical either way.
+if command -v dmsetup >/dev/null 2>&1; then
+    vt="$(dmsetup table 2>/dev/null | grep -c verity || echo 0)"
+    kv "verity.targets" "$vt"
+    [[ "$vt" -gt 0 ]] && kv "verity.active" "yes" || kv "verity.active" "no"
+else
+    kv "verity.active" "unknown"
+fi
+
+# --- LSM: are the modules we configured actually running? -------------------
+# The kernel silently ignores an unknown name in the LSM list, so the only way
+# to know which LSMs are live is to ask the kernel.
+if [[ -r /sys/kernel/security/lsm ]]; then
+    kv "lsm.active" "$(cat /sys/kernel/security/lsm)"
+else
+    kv "lsm.active" "unavailable"
+fi
+
+# --- kernel features the LitricOS design depends on -------------------------
+[[ -r /sys/kernel/mm/lru_gen/enabled ]] \
+    && kv "kernel.mglru" "$(cat /sys/kernel/mm/lru_gen/enabled)" \
+    || kv "kernel.mglru" "absent"
+[[ -d /sys/kernel/sched_ext ]] && kv "kernel.sched_ext" "present" || kv "kernel.sched_ext" "absent"
+[[ -e /dev/ntsync ]]           && kv "kernel.ntsync"    "present" || kv "kernel.ntsync"    "absent"
+kv "kernel.zram" "$( [[ -e /dev/zram0 ]] && echo present || echo absent )"
+
+# --- litric-sysd: is OUR code actually running in here? ---------------------
+#
+# Everything above measures the distribution we assembled. This section is the
+# first that measures LitricOS itself. Until litric-sysd existed, every layer
+# above the kernel was code that had never executed inside the operating system
+# it was written for.
+SOCK=/run/litric/sysd.sock
+if [[ ! -x /usr/bin/litric-sysd ]]; then
+    kv "sysd.binary" "absent"
+elif [[ ! -S "$SOCK" ]]; then
+    kv "sysd.binary" "present"
+    kv "sysd.socket"  "absent"
+    kv "sysd.state"   "$(systemctl is-active litric-sysd.service 2>/dev/null || echo unknown)"
+else
+    kv "sysd.binary" "present"
+    kv "sysd.socket" "present"
+    kv "sysd.rss_kb" "$(awk '/^VmRSS:/{print $2}' "/proc/$(systemctl show -p MainPID --value litric-sysd.service 2>/dev/null)/status" 2>/dev/null || echo unknown)"
+
+    # Ask the daemon, over its real socket, using its own client. A test that
+    # only checks the socket file exists proves that bind() ran, not that
+    # anything is answering.
+    ping="$(/usr/bin/litric-sysd --query PING --socket "$SOCK" 2>&1 | tail -1)"
+    kv "sysd.ping" "${ping:-no-reply}"
+
+    envs="$(/usr/bin/litric-sysd --query 'ENV LIST' --socket "$SOCK" 2>/dev/null | grep -c '^env=' || echo 0)"
+    kv "sysd.environments" "$envs"
+
+    # A read with no grant must be refused. If this ever answers OK, the
+    # capability layer has stopped being a capability layer.
+    deny="$(/usr/bin/litric-sysd --query 'RESOLVE com.example.probe user://Documents/x read' --socket "$SOCK" 2>&1 | head -1)"
+    case "$deny" in
+        ERR*) kv "sysd.denies_ungranted_read" "yes" ;;
+        *)    kv "sysd.denies_ungranted_read" "NO -- $deny" ;;
+    esac
+fi
+
+# --- display: is there a framebuffer to draw a desktop on? ------------------
+#
+# Layer 5 needs somewhere to put pixels. On a headless QEMU (-nographic) there
+# is no display device at all and this correctly reports absent; the point of
+# measuring it is that "the shell drew nothing" and "there was nothing to draw
+# on" are different failures and must not look alike in a log.
+if [[ -d /sys/class/graphics/fb0 ]]; then
+    kv "fb.present"  "yes"
+    kv "fb.size"     "$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null || echo unknown)"
+    kv "fb.bpp"      "$(cat /sys/class/graphics/fb0/bits_per_pixel 2>/dev/null || echo unknown)"
+    kv "fb.stride"   "$(cat /sys/class/graphics/fb0/stride 2>/dev/null || echo unknown)"
+    kv "fb.name"     "$(cat /sys/class/graphics/fb0/name 2>/dev/null || echo unknown)"
+    kv "fb.writable" "$( [[ -w /dev/fb0 ]] && echo yes || echo no )"
+else
+    kv "fb.present" "no"
+fi
+kv "drm.cards" "$(ls -1 /dev/dri/card* 2>/dev/null | tr '
+' ' ' || echo none)"
+kv "drm.modules" "$(lsmod 2>/dev/null | awk '/^(bochs|virtio_gpu|simpledrm|drm)/{printf "%s ", $1}' || echo none)"
+
+# --- litric-shell: did a desktop actually get drawn? ------------------------
+if [[ -x /usr/bin/litric-shell ]]; then
+    kv "shell.binary" "present"
+    kv "shell.state"  "$(systemctl is-active litric-shell.service 2>/dev/null || echo inactive)"
+    kv "shell.result" "$(systemctl show -p Result --value litric-shell.service 2>/dev/null || echo unknown)"
+    if [[ -r /run/litric/shell.status ]]; then
+        while read -r l; do printf 'litric.shell.%s
+' "$l"; done < /run/litric/shell.status
+    fi
+else
+    kv "shell.binary" "absent"
+fi
+
+say "$END"

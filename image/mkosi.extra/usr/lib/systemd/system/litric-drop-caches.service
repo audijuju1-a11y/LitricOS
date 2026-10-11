@@ -1,0 +1,12 @@
+[Unit]
+Description=Drop page cache for low idle RAM
+After=multi-user.target
+Documentation=https://www.kernel.org/doc/Documentation/sysctl/vm.txt
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo 3 > /proc/sys/vm/drop_caches'
+ExecStart=/bin/sh -c 'cat /proc/meminfo | head -5 | logger -t litric-drop-caches'
+
+[Install]
+WantedBy=multi-user.target

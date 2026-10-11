@@ -1,0 +1,206 @@
+LitricOS nano profile, booted in QEMU with a VGA display, 2026-08-29.
+Captured by tools/screen-test.sh. The screenshot beside this file is the
+guest's own framebuffer, read out through the QEMU monitor.
+
+--- selftest report -------------------------------------------------
+[    9.039575] selftest[382]: LITRIC-SELFTEST-BEGIN
+[[0;32m  OK  [0m] Started [0;1;39mLitricOS desktop shell[0m.
+         Starting [0;1;39mHome Area Manager[0m...
+         Starting [0;1;39mUser Login Management[0m...
+         Starting [0;1;39mHostname Service[0m...
+[[0;32m  OK  [0m] Started [0;1;39mHome Area Manager[0m.
+[[0;32m  OK  [0m] Finished [0;1;39mHome Area Activation[0m.
+[    9.527397] Console: switching to colour dummy device 80x25
+         Starting [0;1;39mPermit User Sessions[0m...
+[[0;32m  OK  [0m] Finished [0;1;39mPermit User Sessions[0m.
+[    9.154498] litric-sysd[383]: litric.sysd.version=0.2.0
+[    9.155967] litric-sysd[383]: litric.sysd.socket=/run/litric/sysd.sock
+[    9.159329] litric-sysd[383]: litric.mem.total_kb=969256
+[    9.161056] litric-sysd[383]: litric.mem.available_kb=306488
+[    9.162544] litric-sysd[383]: litric.mem.used_kb=662768
+[    9.165127] litric-sysd[383]: litric.mem.cached_kb=427708
+[    9.166496] litric-sysd[383]: litric.mem.swap_used_kb=0
+[    9.168401] litric-sysd[383]: litric.uptime_secs=9.15
+[    9.169333] litric-sysd[383]: litric.load1=0.00
+[    9.171273] litric-sysd[383]: litric.tasks=151
+[    9.172102] litric-sysd[383]: litric.cpus=2
+[    9.172953] litric-sysd[383]: litric.sysd.rss_kb=2324
+[    9.174947] litric-sysd[383]: litric.mglru=on
+[    9.176216] litric-sysd[383]: litric.cpu.busy_since_boot_pct=48.4
+[    9.177870] litric-sysd[383]: litric.root.verity=on
+[    9.178892] litric-sysd[383]: litric.lsm=landlock,lockdown,yama,safesetid,integrity,bpf
+[    9.182589] litric-sysd[383]: litric.sysd.ready=1
+[[0;32m  OK  [0m] Started [0;1;39mSerial Getty on ttyS0[0m.
+[[0;32m  OK  [0m] Reached target [0;1;39mLogin Prompts[0m.
+[[0;32m  OK  [0m] Started [0;1;39mUser Login Management[0m.
+[[0;32m  OK  [0m] Started [0;1;39mHostname Service[0m.
+[    9.222991] selftest[382]: litric.hostname=litricos
+[    9.226719] selftest[382]: litric.kernel=7.1.11-arch1-1
+[    9.230396] selftest[382]: litric.arch=x86_64
+[    9.244890] selftest[382]: litric.boot.summary=unavailable
+[    9.283974] selftest[382]: litric.units.failed=0
+[    9.464207] litric-shell[385]: litric.shell.version=0.2.0
+[    9.465352] litric-shell[385]: litric.shell.canvas=1280x800
+[    9.466636] litric-shell[385]: litric.shell.theme=dark
+[    9.467772] litric-shell[385]: litric.shell.source=direct /proc read (litric-sysd did not answer)
+[    9.469470] litric-shell[385]: litric.shell.mean_luminance=0.0346
+[    9.470665] litric-shell[385]: litric.shell.worst_contrast=5.19
+[    9.471782] litric-shell[385]: litric.shell.aa_pass=true
+[    9.472892] litric-shell[385]: litric.shell.glass.menubar=18%
+[    9.475072] litric-shell[385]: litric.shell.glass.activity=18%
+[    9.476558] litric-shell[385]: litric.shell.glass.switcher=18%
+[    9.478036] litric-shell[385]: litric.shell.glass.dock=18%
+[    9.479369] litric-shell[385]: litric.shell.target=framebuffer
+[    9.480591] litric-shell[385]: litric.shell.fbcon=released=1
+[    9.481647] litric-shell[385]: litric.shell.fb=1280x800 32bpp stride=5120 format=Xrgb8888 driver=bochs-drmdrmfb
+[    9.483435] litric-shell[385]: litric.shell.fb.sysfs=/sys/class/graphics/fb0
+[    9.484811] litric-shell[385]: litric.shell.fb.device=/dev/fb0
+[    9.485905] litric-shell[385]: litric.shell.drawn=1
+[   11.731483] litric-shell[385]: litric.shell.version=0.2.0
+[   11.732778] litric-shell[385]: litric.shell.canvas=1280x800
+[   11.734097] litric-shell[385]: litric.shell.theme=dark
+[   11.735301] litric-shell[385]: litric.shell.source=litric-sysd
+[   11.736634] litric-shell[385]: litric.shell.mean_luminance=0.0346
+[   11.737957] litric-shell[385]: litric.shell.worst_contrast=5.19
+[   11.739221] litric-shell[385]: litric.shell.aa_pass=true
+[   11.740620] litric-shell[385]: litric.shell.glass.menubar=18%
+[   11.742160] litric-shell[385]: litric.shell.glass.activity=18%
+[   11.743647] litric-shell[385]: litric.shell.glass.switcher=18%
+[   11.744885] litric-shell[385]: litric.shell.glass.dock=18%
+[   11.745965] litric-shell[385]: litric.shell.target=framebuffer
+[   11.747634] litric-shell[385]: litric.shell.fbcon=released=1
+[   11.748853] litric-shell[385]: litric.shell.fb=1280x800 32bpp stride=5120 format=Xrgb8888 driver=bochs-drmdrmfb
+[   11.750633] litric-shell[385]: litric.shell.fb.sysfs=/sys/class/graphics/fb0
+[   11.751946] litric-shell[385]: litric.shell.fb.device=/dev/fb0
+[   11.753060] litric-shell[385]: litric.shell.drawn=1
+[   14.119986] litric-shell[385]: litric.shell.version=0.2.0
+[   14.121317] litric-shell[385]: litric.shell.canvas=1280x800
+[   14.122644] litric-shell[385]: litric.shell.theme=dark
+[   14.124728] litric-shell[385]: litric.shell.source=litric-sysd
+[   14.127422] litric-shell[385]: litric.shell.mean_luminance=0.0346
+[   14.129165] litric-shell[385]: litric.shell.worst_contrast=5.19
+[   14.130783] litric-shell[385]: litric.shell.aa_pass=true
+[   14.131886] litric-shell[385]: litric.shell.glass.menubar=18%
+[   14.133296] litric-shell[385]: litric.shell.glass.activity=18%
+[   14.134588] litric-shell[385]: litric.shell.glass.switcher=18%
+[   14.135811] litric-shell[385]: litric.shell.glass.dock=18%
+[   14.136958] litric-shell[385]: litric.shell.target=framebuffer
+[   14.138135] litric-shell[385]: litric.shell.fbcon=released=1
+[   14.139654] litric-shell[385]: litric.shell.fb=1280x800 32bpp stride=5120 format=Xrgb8888 driver=bochs-drmdrmfb
+[   14.144146] litric-shell[385]: litric.shell.fb.sysfs=/sys/class/graphics/fb0
+[   14.145754] litric-shell[385]: litric.shell.fb.device=/dev/fb0
+[   14.147141] litric-shell[385]: litric.shell.drawn=1
+[!p]104\[0m[?7h[1G[0J7[32766;32766H[6n8[   14.317283] selftest[382]: litric.mem.total_mb=946
+[   14.321774] selftest[382]: litric.mem.used_mb=646
+[   14.327662] selftest[382]: litric.mem.avail_mb=299
+[   14.338783] selftest[382]: litric.proc.count=144
+[   14.349743] selftest[382]: litric.thread.count=144
+[   14.355748] selftest[382]: litric.root.fstype=erofs
+[   14.362413] selftest[382]: litric.root.source=/dev/mapper/root
+[   14.368539] selftest[382]: litric.root.readonly=yes
+[   14.376185] selftest[382]: litric.verity.targets=1
+[   14.377532] selftest[382]: litric.verity.active=yes
+[   14.379339] selftest[382]: litric.lsm.active=capability,landlock,lockdown,yama,safesetid,bpf
+[   14.381547] selftest[382]: litric.kernel.mglru=0x0007
+[   14.382778] selftest[382]: litric.kernel.sched_ext=present
+[   14.383906] selftest[382]: litric.kernel.ntsync=absent
+[   14.384942] selftest[382]: litric.kernel.zram=absent
+[   14.385947] selftest[382]: litric.sysd.binary=present
+[   14.386936] selftest[382]: litric.sysd.socket=present
+[   14.397881] selftest[382]: litric.sysd.rss_kb=2636
+[   14.401377] selftest[382]: litric.sysd.ping=pong
+[   14.403879] selftest[382]: litric.sysd.environments=3
+[   14.411267] selftest[382]: litric.sysd.denies_ungranted_read=yes
+[   14.413809] selftest[382]: litric.fb.present=yes
+[   14.415643] selftest[382]: litric.fb.size=1280,800
+[   14.418069] selftest[382]: litric.fb.bpp=32
+[   14.419468] selftest[382]: litric.fb.stride=5120
+[   14.420757] selftest[382]: litric.fb.name=bochs-drmdrmfb
+[   14.421890] selftest[382]: litric.fb.writable=yes
+[   14.431106] selftest[382]: litric.drm.cards=/dev/dri/card0
+[   14.436097] selftest[382]: litric.drm.modules=bochs
+[   14.437148] selftest[382]: litric.shell.binary=present
+[   14.445157] selftest[382]: litric.shell.state=active
+[   14.454422] selftest[382]: litric.shell.result=success
+[   14.454535] selftest[382]: litric.shell.version=0.2.0
+[   14.454754] selftest[382]: litric.shell.canvas=1280x800
+[   14.454960] selftest[382]: litric.shell.theme=dark
+[   14.455506] selftest[382]: litric.shell.source=litric-sysd
+[   14.455687] selftest[382]: litric.shell.mean_luminance=0.0346
+[   14.455960] selftest[382]: litric.shell.worst_contrast=5.19
+[   14.456688] selftest[382]: litric.shell.aa_pass=true
+[   14.457765] selftest[382]: litric.shell.glass.menubar=18%
+[   14.465754] selftest[382]: litric.shell.glass.activity=18%
+[   14.467287] selftest[382]: litric.shell.glass[   14.877401] kauditd_printk_skb: 207 callbacks suppressed
+.switcher=18%[   14.877410] audit: type=1130 audit(1787966774.644:209): pid=1 uid=0 auid=4294967295 ses=4294967295 msg='unit=litric-selftest comm="systemd" exe="/usr/lib/systemd/systemd" hostname=? addr=? terminal=? res=success'
+
+[   14.472318] selftest[382]: litric.shell.glass.dock=18%
+[   14.474324] selftest[382]: litric.shell.target=framebuffer
+[   14.476359] selftest[382]: litric.shell.fbcon=released=1
+[   14.478311] selftest[382]: litric.shell.fb=1280x800 32bpp stride=5120 format=Xrgb8888 driver=bochs-drmdrmfb
+[   14.481665] selftest[382]: litric.shell.fb.sysfs=/sys/class/graphics/fb0
+[   14.481832] selftest[382]: litric.shell.fb.device=/dev/fb0
+[   14.482495] selftest[382]: litric.shell.drawn=1
+[   14.483113] selftest[382]: LITRIC-SELFTEST-END
+
+--- litric-sysd and litric-shell on the console ---------------------
+[    9.154498] litric-sysd[383]: litric.sysd.version=0.2.0
+[    9.155967] litric-sysd[383]: litric.sysd.socket=/run/litric/sysd.sock
+[    9.159329] litric-sysd[383]: litric.mem.total_kb=969256
+[    9.161056] litric-sysd[383]: litric.mem.available_kb=306488
+[    9.162544] litric-sysd[383]: litric.mem.used_kb=662768
+[    9.165127] litric-sysd[383]: litric.mem.cached_kb=427708
+[    9.166496] litric-sysd[383]: litric.mem.swap_used_kb=0
+[    9.168401] litric-sysd[383]: litric.uptime_secs=9.15
+[    9.169333] litric-sysd[383]: litric.load1=0.00
+[    9.171273] litric-sysd[383]: litric.tasks=151
+[    9.172102] litric-sysd[383]: litric.cpus=2
+[    9.172953] litric-sysd[383]: litric.sysd.rss_kb=2324
+[    9.174947] litric-sysd[383]: litric.mglru=on
+[    9.176216] litric-sysd[383]: litric.cpu.busy_since_boot_pct=48.4
+[    9.177870] litric-sysd[383]: litric.root.verity=on
+[    9.178892] litric-sysd[383]: litric.lsm=landlock,lockdown,yama,safesetid,integrity,bpf
+[    9.182589] litric-sysd[383]: litric.sysd.ready=1
+[    9.464207] litric-shell[385]: litric.shell.version=0.2.0
+[    9.465352] litric-shell[385]: litric.shell.canvas=1280x800
+[    9.466636] litric-shell[385]: litric.shell.theme=dark
+[    9.467772] litric-shell[385]: litric.shell.source=direct /proc read (litric-sysd did not answer)
+[    9.469470] litric-shell[385]: litric.shell.mean_luminance=0.0346
+[    9.470665] litric-shell[385]: litric.shell.worst_contrast=5.19
+[    9.471782] litric-shell[385]: litric.shell.aa_pass=true
+[    9.472892] litric-shell[385]: litric.shell.glass.menubar=18%
+[    9.475072] litric-shell[385]: litric.shell.glass.activity=18%
+[    9.476558] litric-shell[385]: litric.shell.glass.switcher=18%
+[    9.478036] litric-shell[385]: litric.shell.glass.dock=18%
+[    9.479369] litric-shell[385]: litric.shell.target=framebuffer
+[    9.480591] litric-shell[385]: litric.shell.fbcon=released=1
+[    9.481647] litric-shell[385]: litric.shell.fb=1280x800 32bpp stride=5120 format=Xrgb8888 driver=bochs-drmdrmfb
+[    9.483435] litric-shell[385]: litric.shell.fb.sysfs=/sys/class/graphics/fb0
+[    9.484811] litric-shell[385]: litric.shell.fb.device=/dev/fb0
+[    9.485905] litric-shell[385]: litric.shell.drawn=1
+[   11.731483] litric-shell[385]: litric.shell.version=0.2.0
+[   11.732778] litric-shell[385]: litric.shell.canvas=1280x800
+[   11.734097] litric-shell[385]: litric.shell.theme=dark
+[   11.735301] litric-shell[385]: litric.shell.source=litric-sysd
+[   11.736634] litric-shell[385]: litric.shell.mean_luminance=0.0346
+[   11.737957] litric-shell[385]: litric.shell.worst_contrast=5.19
+[   11.739221] litric-shell[385]: litric.shell.aa_pass=true
+[   11.740620] litric-shell[385]: litric.shell.glass.menubar=18%
+[   11.742160] litric-shell[385]: litric.shell.glass.activity=18%
+[   11.743647] litric-shell[385]: litric.shell.glass.switcher=18%
+[   11.744885] litric-shell[385]: litric.shell.glass.dock=18%
+[   11.745965] litric-shell[385]: litric.shell.target=framebuffer
+[   11.747634] litric-shell[385]: litric.shell.fbcon=released=1
+[   11.748853] litric-shell[385]: litric.shell.fb=1280x800 32bpp stride=5120 format=Xrgb8888 driver=bochs-drmdrmfb
+[   11.750633] litric-shell[385]: litric.shell.fb.sysfs=/sys/class/graphics/fb0
+[   11.751946] litric-shell[385]: litric.shell.fb.device=/dev/fb0
+[   11.753060] litric-shell[385]: litric.shell.drawn=1
+[   14.119986] litric-shell[385]: litric.shell.version=0.2.0
+[   14.121317] litric-shell[385]: litric.shell.canvas=1280x800
+[   14.122644] litric-shell[385]: litric.shell.theme=dark
+[   14.124728] litric-shell[385]: litric.shell.source=litric-sysd
+[   14.127422] litric-shell[385]: litric.shell.mean_luminance=0.0346
+[   14.129165] litric-shell[385]: litric.shell.worst_contrast=5.19
+[   14.130783] litric-shell[385]: litric.shell.aa_pass=true
+[   14.131886] litric-shell[385]: litric.shell.glass.menubar=18%
+[   14.133296] litric-shell[385]: litric.shell.glass.activity=18%

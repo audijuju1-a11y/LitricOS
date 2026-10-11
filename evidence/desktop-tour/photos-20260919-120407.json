@@ -1,0 +1,46 @@
+{
+ "00-boot": [
+  "00-boot-t12.png",
+  "01-boot-t20.png"
+ ],
+ "01-desktop": [
+  "00-start.png"
+ ],
+ "02-menubar-menus": [
+  "00-menu-app.png",
+  "01-menu-file.png"
+ ],
+ "03-context-desktop": [
+  "00-ctx-desktop.png"
+ ],
+ "04-files-app": [
+  "00-files-window.png"
+ ],
+ "05-new-folder-dialog": [
+  "00-dialog-new-folder.png",
+  "02-dialog-confirmed.png"
+ ],
+ "06-keyboard": [
+  "00-kbd-refresh.png",
+  "02-kbd-close-window.png"
+ ],
+ "07-defender": [
+  "00-defender-window.png"
+ ],
+ "08-browser": [
+  "00-browser-open.png",
+  "06-browser-search-2.png"
+ ],
+ "09-trash": [
+  "00-trash-open.png"
+ ],
+ "10-dock": [
+  "00-dock-app1.png"
+ ],
+ "11-wallpaper": [
+  "00-settings-open.png"
+ ],
+ "12-final": [
+  "00-desktop-final.png"
+ ]
+}
