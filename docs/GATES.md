@@ -470,3 +470,46 @@ Nothing about whether the system builds, boots or performs. The last recorded
 test result (941 passed, host-only, 2026-09-20) is untouched and unverified
 here, `docs/EVIDENCE.md` remains stale by its own note, and every figure in
 `docs/PERF-budget.md` remains a target rather than a measurement.
+
+---
+
+## Wave 0 corrections and the first clean full gate run — 2026-10-11 — **NOT A GATE**
+
+The Stage A pass above ended with five findings a later gate would have to answer.
+This is the pass that answered them, and the first full `ci/verify.sh` run since
+2026-09-20. It is not a gate: nothing here boots the system.
+
+### Commands actually executed
+
+| Command | Result |
+|---|---|
+| `bash ci/verify.sh --evidence` | **PASS — 25 pass, 0 fail, 5 skipped**, exit 0. The five skips are the image build and the four boot measurements, all of which need a Linux host |
+| `cargo clippy --offline --all-targets -- -D warnings` | **FAIL on the first run** — 14 diagnostics in `litric-shell`: indexing in `src/litric-shell/src/taskmgr.rs`, arithmetic side effects in `src/litric-shell/tests/text_layout_audit.rs` and `src/litric-shell/examples/frame_dump.rs`, `panic!` and indexing in `src/litric-shell/tests/font_standards.rs`, and `assertions_on_constants`. All 14 fixed at the sites; no lint lowered, allowed or skipped. **PASS** after the fix |
+| `cargo test --offline` | **PASS — 1046 passed, 0 failed, 44 suites** |
+| `python3 ci/lint-deps.py` and its `--self-test` | **PASS** — 16 of 18 members covered by the policy, 0 violations; 9 self-test cases including "an unknown manifest group fails closed" |
+| `python3 ci/lint-unit-binaries.py` and its `--self-test` | **PASS** — every installed unit starts a binary the workspace builds; the dead-unit fixture fails |
+| `git init -b main` and the first commits | **DONE** — `c70f3ba` records 637 files; `docs/RISK-00.md` RISK-015 records the gap and how it closed |
+| image build, QEMU boot, GUI, hardware | **NOT RUN** — no Linux host |
+
+### The five Stage A findings, closed
+
+| Finding | State |
+|---|---|
+| no version control | closed: `git init`, `.gitignore`, and `.gitattributes` pinning LF — the host's Git had `core.autocrlf=true`, and a checkout would otherwise have rewritten the line endings that `ci/lint-line-endings.py` fails the gate for |
+| no backend for network, Bluetooth, audio, power or authentication | **unchanged, and unchanged on purpose**: these stay design-first, so no code was written for them |
+| units naming binaries that do not exist | the five units and `litric-defender.slice` are parked in `image/units-pending/`, with the reason each is waiting and the condition for its return; gate section [3g] now fails when an installed unit names a binary no crate builds |
+| documents contradicting the tree | corrected: `docs/ARCH-00-boundaries.md`, `docs/REPO-00-layout.md`, `docs/master-plan/24-feature-parity.md` and `docs/RISK-00.md` (RISK-010 marked not applicable) |
+| the zero-dependency rule unenforced | gate section [3h]: `ci/lint-deps.py` derives coverage from `src/Cargo.toml`'s own group comments, fails closed on a group with no decision, refuses an in-workspace build-dependency, and requires a path dependency to point at a declared member |
+
+Two further defects were found by running things rather than reading them, and are
+recorded because this is the pattern the repository keeps hitting: `ci/verify.sh
+--evidence` overwrote `docs/EVIDENCE.md` whole, so running it would have deleted
+the VM, benchmark and design-system records it sits beside; and three documents
+said the workspace has 19 crates where `src/Cargo.toml` lists 18.
+
+### What this does not establish
+
+Nothing about whether LitricOS boots. No image was built and nothing was booted,
+so GATE 01 stays BLOCKED, the numbers in `docs/PERF-budget.md` remain targets
+rather than measurements, and 1046 passing tests are behaviour under test on a
+Windows host — not a runtime claim about a booted system.
