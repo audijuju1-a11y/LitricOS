@@ -2670,7 +2670,17 @@ mod tests {
         // The wiring the whole module exists for: a preference has to reach the
         // text a person reads, not just a struct field.
         let m = manager();
-        let p = &m.rows[1];
+        // Found by pid rather than `m.rows[1]`: the workspace lints deny
+        // indexing everywhere, and the fixture's order is not what this test is
+        // about. The assertion states the fixture dependency, so a change to
+        // `manager()` fails here with a sentence instead of a compile error.
+        assert!(
+            m.rows.iter().any(|p| p.pid == 2),
+            "the fixture must contain process 2"
+        );
+        let Some(p) = m.rows.iter().find(|p| p.pid == 2) else {
+            return; // unreachable while the assertion above holds
+        };
         let mut prefs = Prefs::default();
         assert_eq!(Column::Cpu.cell(p, &prefs, Some(8192)), "50.0");
         assert_eq!(Column::Memory.cell(p, &prefs, Some(8192)), "512 MB");

@@ -36,7 +36,15 @@ const PRINTABLE: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTU
 
 /// The vertical extent of a glyph's stroke paths, in font units.
 fn path_box(ch: char) -> (f32, f32) {
-    let g = font::glyph(ch).unwrap_or_else(|| panic!("no glyph for {ch:?}"));
+    // `assert!` followed by a let-else rather than
+    // `unwrap_or_else(|| panic!(...))`: `clippy::panic` is denied workspace-wide
+    // in every target including tests, and an assertion is the form the lint
+    // allows. The value returned in the else arm is the empty box, which the
+    // assertion above has already made unreachable.
+    assert!(font::glyph(ch).is_some(), "no glyph for {ch:?}");
+    let Some(g) = font::glyph(ch) else {
+        return (f32::MAX, f32::MIN);
+    };
     let (mut lo, mut hi) = (f32::MAX, f32::MIN);
     let mut see = |y: f32| {
         lo = lo.min(y);
@@ -137,10 +145,7 @@ fn the_side_bearing_holds_at_every_size_the_shell_sets() {
             } else {
                 Style::new(size, 0xFFFFFFFF)
             };
-            let worst = tight_pairs(&style)
-                .into_iter()
-                .next()
-                .map(|(gap, a, b)| (gap, a, b));
+            let worst = tight_pairs(&style).into_iter().next();
             if let Some((gap, a, b)) = worst {
                 assert!(
                     gap > 0.0,
@@ -157,17 +162,22 @@ fn figures_are_tabular() {
     // a defect: Explorer, the monitor and the Defender all print columns of
     // them. Tabular figures are not a style choice here, they are what the
     // interface's tables assume.
-    let mut widths: Vec<(char, f32)> = ('0'..='9')
+    let widths: Vec<(char, f32)> = ('0'..='9')
         .map(|c| (c, font::glyph(c).unwrap().adv))
         .collect();
-    let first = widths[0].1;
+    // `.first()` rather than `widths[0]`: indexing is denied by the workspace
+    // lints. The assertion names the reason an empty list would be a failure
+    // rather than letting the else arm pass silently.
+    assert!(!widths.is_empty(), "the digits must have glyphs to compare");
+    let Some(&(_, first)) = widths.first() else {
+        return;
+    };
     let odd: Vec<String> = widths
         .iter()
         .filter(|(_, w)| (*w - first).abs() > 0.01)
         .map(|(c, w)| format!("{c} advances {w} against {first}"))
         .collect();
     assert!(odd.is_empty(), "digits are not tabular: {odd:?}");
-    widths.clear();
 }
 
 #[test]
@@ -220,9 +230,14 @@ fn the_face_uses_standard_sans_proportions() {
             "stem weight {w} is outside the 0.115-0.20 band"
         );
     }
+    // Compared through the styles the interface actually builds rather than the
+    // two constants side by side: `clippy::assertions_on_constants` is right that
+    // a comparison between two literals is dead code, and this form also checks
+    // the wiring that gives a style its weight.
+    let (regular, bold) = (Style::new(13.0, 0), Style::bold(13.0, 0));
     assert!(
-        WEIGHT_BOLD > WEIGHT_REGULAR,
-        "the bold weight must be heavier than the regular one"
+        bold.weight > regular.weight,
+        "the bold style must be heavier than the regular one"
     );
 }
 

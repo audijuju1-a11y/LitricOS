@@ -119,7 +119,10 @@ fn build() -> Rig {
     shell.sample(first);
     let mut second = shell.facts.clone();
     second.cpu_ticks = Some((1_144, 4_800));
-    second.core_ticks = CORE_BUSY.iter().map(|b| (100 + b, 600)).collect();
+    second.core_ticks = CORE_BUSY
+        .iter()
+        .map(|b| (100_u64.saturating_add(*b), 600))
+        .collect();
     second.processes = processes(1);
     shell.sample(second);
     shell.environments = vec![
@@ -167,7 +170,12 @@ fn processes(step: u64) -> Vec<ProcRow> {
             state: "sleeping".to_owned(),
             ppid: 1,
             threads,
-            ticks: ticks.0 + (ticks.1 - ticks.0) * step,
+            // Saturating: `clippy::arithmetic_side_effects` is denied workspace
+            // wide in every target, and a tick counter that ran past its type is
+            // a fixture that should stop at the ceiling rather than wrap.
+            ticks: ticks
+                .0
+                .saturating_add(ticks.1.saturating_sub(ticks.0).saturating_mul(step)),
             rss_mb: Some(rss),
             uid: Some(uid),
             cpu: None,

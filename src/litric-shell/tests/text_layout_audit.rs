@@ -235,16 +235,26 @@ fn process(pid: u32, name: &str, ticks: u64, rss_mb: u64) -> ProcRow {
     }
 }
 
+/// `base + rate * step`, saturating.
+///
+/// `clippy::arithmetic_side_effects` is denied workspace-wide in every target,
+/// test fixtures included, and it is right to be: a tick counter that overflowed
+/// would make the rate under test depend on the width of the integer. Saturating
+/// keeps the sample monotonic, which is the property these fixtures assert.
+fn ticks_at(base: u64, rate: u64, step: u64) -> u64 {
+    base.saturating_add(rate.saturating_mul(step))
+}
+
 /// Two samples of a machine with a process table, so the Activity window has
 /// live rates to draw rather than dashes.
 fn sample_processes(shell: &mut Shell, first: bool) {
     let step = u64::from(!first);
     let mut sample = shell.facts.clone();
-    sample.cpu_ticks = Some((1_000 + 400 * step, 4_000 + 800 * step));
-    sample.core_ticks = vec![(100 + 40 * step, 500 + 100 * step); 8];
+    sample.cpu_ticks = Some((ticks_at(1_000, 400, step), ticks_at(4_000, 800, step)));
+    sample.core_ticks = vec![(ticks_at(100, 40, step), ticks_at(500, 100, step)); 8];
     sample.processes = vec![
-        process(1, "litric-sysd", 100 + 200 * step, 64),
-        process(2, "litric-shell", 500 + 50 * step, 4096),
+        process(1, "litric-sysd", ticks_at(100, 200, step), 64),
+        process(2, "litric-shell", ticks_at(500, 50, step), 4096),
         process(3, "a-process-with-a-very-long-name-indeed", 20, 8),
     ];
     shell.sample(sample);
