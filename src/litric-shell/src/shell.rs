@@ -32,6 +32,7 @@ use litric_locale::Regional;
 use litric_wm::{HitZone, Rect as WmRect, WindowId, WindowManager, WindowState};
 
 use crate::canvas::Rect;
+use crate::lock::Secret;
 use crate::shortcuts::{Action, App, MetaTap, Shortcuts};
 use crate::ui::{Hotspots, Tokens};
 
@@ -131,14 +132,18 @@ impl LifeState {
             Self::Idle => 33,
             // Nothing is moving. Wake often enough for the clock, no more.
             Self::DeepIdle => 500,
-            Self::Locked => 200,
+            // A locked screen is not an idle one any more: its colour fields
+            // drift and the clock breathes, which is the whole design of the
+            // surface. 30 FPS, the same budget as an idle desktop, because
+            // what is on screen is a slow drift rather than a drag.
+            Self::Locked => 33,
         }
     }
 
     /// Whether animation should run at all in this state.
     #[must_use]
     pub const fn animates(self) -> bool {
-        matches!(self, Self::Active | Self::WindowInteraction)
+        matches!(self, Self::Active | Self::WindowInteraction | Self::Locked)
     }
 }
 
@@ -223,6 +228,36 @@ impl Overlay {
     }
 }
 
+/// The shortcut chips across the top of the expanded launcher.
+///
+/// One list in one place: the draw side labels the buttons and the shell
+/// performs them, so a chip that is drawn is a chip that works — the same
+/// contract the context menu has.
+///
+/// The launcher's tiles are the applications; these are the *actions*, which is
+/// the addition this system makes to the prototype's design: the prototype put
+/// a link to its lock screen at the top right and left the rest to the grid.
+/// Here the row carries the things a launcher is for — the terminal, the file
+/// manager, settings, the monitor, the trash, the scanner.
+pub const SHORTCUT_CHIPS: [Action; 6] = [
+    Action::Open(App::Terminal),
+    Action::Open(App::Files),
+    Action::Open(App::Settings),
+    Action::Open(App::Activity),
+    Action::Open(App::Trash),
+    Action::OpenDefender,
+];
+
+/// The label on a shortcut chip.
+#[must_use]
+pub fn chip_label(action: Action) -> String {
+    match action {
+        Action::Open(app) => app.title().to_owned(),
+        Action::OpenDefender => App::Defender.title().to_owned(),
+        other => other.describe(),
+    }
+}
+
 /// Something in the interface that can be clicked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -292,12 +327,43 @@ pub enum Hot {
     DesktopIcon(usize),
     /// A context-menu row.
     MenuRow(crate::apps::MenuAction),
+    /// One of the session rows in quick settings (suspend, restart, power off).
+    QuickPowerAction(u8),
     /// A row in the Trash window.
     TrashRow(usize),
     /// The Trash window's Empty button.
     TrashEmpty,
     /// The Trash window's Restore button.
     TrashRestore,
+    /// The lock screen's full-surface catcher: a click wakes the password
+    /// field.
+    LockWake,
+    /// The lock screen's password field.
+    LockEntry,
+    /// The lock screen's submit button.
+    LockSubmit,
+    /// The lock screen's customize button.
+    LockCustomize,
+    /// A tab in the lock screen's customize sheet.
+    LockTab(u8),
+    /// A preset button in the customize sheet: `(group, option)`.
+    LockOption(u8, u8),
+    /// A switch in the customize sheet.
+    LockSwitch(u8),
+    /// Reset the customize sheet to the shipped look.
+    LockReset,
+    /// Close the customize sheet.
+    LockDone,
+    /// The dock's launcher button: expands the dock into the launcher.
+    DockToggle,
+    /// The dock's search bubble.
+    DockSearch,
+    /// Collapse the expanded dock back to its resting pill.
+    DockCollapse,
+    /// A shortcut chip across the top of the expanded launcher.
+    LauncherShortcut(u8),
+    /// The lock button at the top of the expanded launcher.
+    DockLock,
     /// A dialog's confirm button.
     DialogConfirm,
     /// A dialog's cancel button.
@@ -491,6 +557,87 @@ impl PowerProfile {
     }
 }
 
+/// A machine transition the session can ask for.
+///
+/// Distinct from [`PowerProfile`], and deliberately not folded into it: a
+/// profile is a *policy* the machine may or may not honour, and this is an
+/// instruction to PID 1 that either happens or does not. They occupy different
+/// places on screen for the same reason — a profile is a segmented control
+/// that takes effect as you click it, and these are three rows behind a
+/// confirmation that names the action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PowerCommand {
+    /// Suspend to RAM. Resumable, and the only one of the three that is.
+    Suspend,
+    /// Restart.
+    Restart,
+    /// Power off.
+    PowerOff,
+}
+
+impl PowerCommand {
+    /// Every command, in menu order: the reversible one first, the one that
+    /// leaves the machine off last.
+    pub const ALL: [Self; 3] = [Self::Suspend, Self::Restart, Self::PowerOff];
+
+    /// The name shown to the user.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Suspend => "Suspend",
+            Self::Restart => "Restart",
+            Self::PowerOff => "Power off",
+        }
+    }
+
+    /// The word the daemon's protocol uses.
+    ///
+    /// `Restart` is `REBOOT` there because that is the name of the thing being
+    /// asked for at that layer. The two vocabularies are translated here, once,
+    /// rather than the shell building a request line out of two constants that
+    /// happen to look alike today.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Suspend => "SUSPEND",
+            Self::Restart => "REBOOT",
+            Self::PowerOff => "POWEROFF",
+        }
+    }
+
+    /// The question the confirm step asks.
+    #[must_use]
+    pub const fn question(self) -> &'static str {
+        match self {
+            Self::Suspend => "Suspend the machine?",
+            Self::Restart => "Restart the machine?",
+            Self::PowerOff => "Power the machine off?",
+        }
+    }
+
+    /// What the user is about to lose, said plainly.
+    #[must_use]
+    pub const fn consequence(self) -> &'static str {
+        match self {
+            Self::Suspend => "This session stays open and the machine can be woken again.",
+            Self::Restart => "Everything running stops, and the machine comes back up.",
+            Self::PowerOff => "Everything running stops, and the machine stays off.",
+        }
+    }
+
+    /// The request line the daemon answers.
+    ///
+    /// Built here and nowhere else, so the confirmation word exists in exactly
+    /// one place in this process. A shell that assembled the string at each
+    /// call site could send a request without it and believe it had confirmed
+    /// something.
+    #[must_use]
+    pub fn request_line(self) -> String {
+        format!("POWER {} CONFIRM", self.token())
+    }
+}
+
 /// The state quick settings shows and changes.
 ///
 /// Every field here is a **request**. Whether the system honoured it is a
@@ -639,6 +786,23 @@ pub struct SystemFacts {
     pub processes_truncated: bool,
     /// Where these numbers came from.
     pub source: String,
+    /// What can verify a password on this machine: `unix-chkpwd`, `pam-helper`
+    /// or `none` (or absent, when the daemon did not answer at all).
+    ///
+    /// The token is carried as the daemon spelled it rather than as a booleans,
+    /// so that the shell and the daemon cannot disagree about *why* a lock is
+    /// refused: [`Shell::can_lock`] asks the same parser the daemon builds the
+    /// fact with.
+    pub auth_available: Option<String>,
+    /// Whether the daemon says locking is refused (`auth.lock=refused`).
+    ///
+    /// `None` when the line was not in the reply at all, which is what a
+    /// daemon that did not answer looks like. Absent and "not refused" are the
+    /// same thing to a lock screen: without a verifier there is nothing to
+    /// unlock with, so [`Shell::can_lock`] refuses in both cases.
+    pub auth_lock: Option<bool>,
+    /// The user logged in on this machine, from logind's session record.
+    pub session_user: Option<String>,
 }
 
 /// One process as the system monitor shows it.
@@ -776,16 +940,36 @@ impl Shell {
 pub enum Effect {
     /// Ask the environment manager to switch.
     SwitchEnvironment(u8),
-    /// Lock the session. Not implemented: there is no authentication
-    /// subsystem, and the shell says so rather than drawing a password box
-    /// that accepts anything.
+    /// Lock the session.
+    ///
+    /// The caller locks the shell only when [`Shell::can_lock`] is true — a
+    /// machine that can check a password *and* a daemon that did not refuse —
+    /// and otherwise shows [`Shell::lock_refusal`] as it stands.
     RequestLock,
+    /// Check this password, and unlock if it verifies.
+    ///
+    /// The secret leaves the shell here and nowhere else. It is a [`Secret`] so
+    /// that a diagnostic that prints an effect cannot print the password, and
+    /// the caller that receives it builds the daemon's request from it directly
+    /// rather than storing it.
+    VerifyPassword {
+        /// The account, from the session logind reports.
+        user: String,
+        /// What the user typed.
+        secret: Secret,
+    },
     /// Adjust the volume by a step.
     Volume(i8),
     /// Adjust the brightness by a step.
     Brightness(i8),
     /// A power profile was requested.
     SetPowerProfile(PowerProfile),
+    /// A power transition was confirmed by the user and must be carried out.
+    ///
+    /// This effect only exists after the confirm step has been answered, so the
+    /// caller that receives it is the one that asks the daemon — nothing else
+    /// in the shell can produce it.
+    Power(PowerCommand),
     /// A window was opened for an application the shell does not implement.
     Launched(App),
 }
@@ -868,14 +1052,15 @@ impl Shell {
         Vec::new()
     }
 
-    /// The bridge the shell's file surfaces share. On a host with no root
-    /// filesystem (Windows CI) there is no bridge; callers show the refusal
-    /// in place rather than panicking in the render loop.
+    /// The bridge the shell's file surfaces share, rooted at [`Self::files_root`].
+    /// On a host with no root filesystem (Windows CI) there is no bridge;
+    /// callers show the refusal in place rather than panicking in the render
+    /// loop.
     fn try_files_bridge(
         &self,
         zone: litric_locale::TimeZone,
     ) -> Result<crate::fsbridge::FsBridge, crate::fsbridge::FsError> {
-        crate::fsbridge::FsBridge::open(std::path::Path::new("/"), zone)
+        crate::fsbridge::FsBridge::open(&self.files_root, zone)
     }
 
     /// Scan a bounded slice of the queue synchronously. Called between
@@ -1302,7 +1487,7 @@ impl Shell {
 
     /// Execute a context-menu action.
     pub fn perform_menu(&mut self, action: crate::apps::MenuAction) -> Vec<Effect> {
-        use crate::apps::{DialogKind, MenuAction as MA};
+        use crate::apps::MenuAction as MA;
         match action {
             MA::NewFolder => {
                 let in_files = self.context_menu.as_ref().is_some_and(|m| {
@@ -1314,7 +1499,7 @@ impl Shell {
                 if in_files {
                     self.files.ask_new_folder();
                 } else {
-                    self.desktop_dialog = Some(DialogKind::NewFolder);
+                    self.desktop_dialog = Some(crate::apps::DesktopDialog::NewFolder);
                     self.desktop_dialog_field.clear();
                     self.desktop_dialog_selection = None;
                 }
@@ -1536,16 +1721,22 @@ impl Shell {
         self.trash.listed = true;
     }
 
-    /// Submit the desktop's own dialog (New folder on the wallpaper).
-    fn submit_desktop_dialog(&mut self) {
-        if let Some(crate::apps::DialogKind::NewFolder) = self.desktop_dialog {
+    /// Submit the desktop's own dialog.
+    ///
+    /// Returns the effects the submission produced, which is what makes the
+    /// power confirmation a decision rather than a drawing: the effect leaves
+    /// this function only after the user answered the prompt that named the
+    /// action.
+    fn submit_desktop_dialog(&mut self) -> Vec<Effect> {
+        use crate::apps::DesktopDialog;
+        if let Some(DesktopDialog::NewFolder) = self.desktop_dialog {
             let name = self.desktop_dialog_field.clone();
             let zone = self.regional.zone.clone();
             let Ok(bridge) = self.try_files_bridge(zone) else {
-                self.desktop_dialog = Some(crate::apps::DialogKind::Error(
+                self.desktop_dialog = Some(DesktopDialog::Error(
                     "the file service is not available on this platform".to_owned(),
                 ));
-                return;
+                return Vec::new();
             };
             match bridge.mkdir("/Documents", &name) {
                 Ok(()) => {
@@ -1560,13 +1751,19 @@ impl Shell {
                     );
                 }
                 Err(e) => {
-                    self.desktop_dialog = Some(crate::apps::DialogKind::Error(e.to_string()));
+                    self.desktop_dialog = Some(DesktopDialog::Error(e.to_string()));
                 }
             }
-        } else {
-            self.desktop_dialog = None;
+            self.request_full_redraw();
+            return Vec::new();
         }
+        let confirmed = match self.desktop_dialog {
+            Some(DesktopDialog::PowerConfirm { command }) => Some(command),
+            _ => None,
+        };
+        self.desktop_dialog = None;
         self.request_full_redraw();
+        confirmed.map_or_else(Vec::new, |command| vec![Effect::Power(command)])
     }
 }
 
@@ -1598,6 +1795,15 @@ pub struct Shell {
     pub activity: crate::taskmgr::TaskManager,
     /// The Files application model (Explorer-style places, history, table).
     pub files: crate::apps::FilesApp,
+    /// The host root every file surface reads and writes through.
+    ///
+    /// `/` on a booted machine, and what `--root` moves: the shell already
+    /// reads `/proc`, `/sys` and `/dev` through that root, but its file
+    /// surfaces used to hardcode `/`, so a shell pointed at a fixture tree
+    /// still wrote to the machine it was running on. It is also the seam a
+    /// test needs: a journey that creates a folder can aim at a temporary
+    /// directory instead of the real root.
+    pub files_root: std::path::PathBuf,
     /// The Litric Browser window model (Chrome-style tab strip + omnibox).
     pub browser: crate::apps::BrowserApp,
     /// The Defender application model and its scan state.
@@ -1616,7 +1822,7 @@ pub struct Shell {
     /// The desktop's icon grid.
     pub desktop_icons: crate::apps::DesktopIcons,
     /// An open dialog on the desktop itself (new folder on the wallpaper).
-    pub desktop_dialog: Option<crate::apps::DialogKind>,
+    pub desktop_dialog: Option<crate::apps::DesktopDialog>,
     /// The desktop dialog's text field.
     pub desktop_dialog_field: String,
     /// The desktop dialog field's selection.
@@ -1631,6 +1837,10 @@ pub struct Shell {
     pub diagnostics: bool,
     /// When to go idle.
     pub idle_policy: IdlePolicy,
+    /// The lock screen: whether the session is locked, what has been typed, and
+    /// the look. Every field it holds while locked is invisible to every other
+    /// surface, because while it is locked nothing else is drawn at all.
+    pub lock: crate::lock::LockState,
 
     hot: Hotspots<Hot>,
     pointer: Point,
@@ -1673,6 +1883,7 @@ impl Shell {
             facts: SystemFacts::default(),
             activity: crate::taskmgr::TaskManager::new(),
             files: crate::apps::FilesApp::default(),
+            files_root: std::path::PathBuf::from("/"),
             browser: crate::apps::BrowserApp::default(),
             defender: DefenderState::default(),
             trash: crate::apps::TrashApp::default(),
@@ -1689,6 +1900,7 @@ impl Shell {
             browser_frame: None,
             diagnostics: false,
             idle_policy: IdlePolicy::default(),
+            lock: crate::lock::LockState::default(),
             hot: Hotspots::default(),
             pointer: Point::new(width / 2.0, height / 2.0),
             hovered: None,
@@ -1773,6 +1985,11 @@ impl Shell {
     /// The current life state.
     #[must_use]
     pub fn life(&self) -> LifeState {
+        // Locked outranks everything: nothing else is drawn, so nothing else
+        // decides how often a frame is worth composing.
+        if self.lock.locked {
+            return LifeState::Locked;
+        }
         if self.wm.is_dragging() {
             return LifeState::WindowInteraction;
         }
@@ -1789,9 +2006,247 @@ impl Shell {
         self.life().frame_interval_ms()
     }
 
+    // ---- the lock ---------------------------------------------------------
+
+    /// What can verify a password on this machine, as the daemon reports it.
+    ///
+    /// `None` when nothing said — no daemon, or a daemon too old to have the
+    /// fact. Parsed with the daemon's own parser, so the shell cannot hold an
+    /// opinion the daemon would contradict.
+    #[must_use]
+    pub fn verifier(&self) -> Option<litric_sysd::platform::session::Verifier> {
+        self.facts
+            .auth_available
+            .as_deref()
+            .map(litric_sysd::platform::session::Verifier::parse)
+    }
+
+    /// Whether the lock may be offered: a password can be checked **and** the
+    /// daemon did not refuse the lock.
+    ///
+    /// Two facts, both required, and the pairing is the point. A lock surface on
+    /// a machine that cannot verify a credential is a screen with no way out —
+    /// the failure `docs/design/wave1/04-authentication.md` §5 U1 names — and a
+    /// daemon that was never reached reports neither fact, so it refuses too.
+    #[must_use]
+    pub fn can_lock(&self) -> bool {
+        self.verifier()
+            .is_some_and(litric_sysd::platform::session::Verifier::can_lock)
+            && self.facts.auth_lock == Some(false)
+    }
+
+    /// Why locking is refused, in the daemon's own words.
+    #[must_use]
+    pub fn lock_refusal(&self) -> String {
+        self.verifier().map_or_else(
+            || {
+                "The system daemon did not answer, so this session cannot check a \
+                 password and will not pretend to lock the screen."
+                    .to_owned()
+            },
+            |v| v.refusal().to_owned(),
+        )
+    }
+
+    /// Lock the session. Returns whether the lock was taken.
+    ///
+    /// While locked the shell draws one surface and refuses input to everything
+    /// else; the content that was on the screen is gone from the frame buffer on
+    /// the next frame, because the lock surface starts by clearing it. The
+    /// account the password is checked against is the one logind says is logged
+    /// in, not a name typed anywhere.
+    pub fn lock_now(&mut self) -> bool {
+        if !self.can_lock() {
+            return false;
+        }
+        self.lock.locked = true;
+        self.lock.back();
+        self.lock.verdict = crate::lock::Verdict::Idle;
+        self.lock.user = self.facts.session_user.clone().unwrap_or_default();
+        self.lock.flow_ms = 0;
+        self.pointer = Point::new(self.wm.screen().w / 2.0, self.wm.screen().h / 2.0);
+        // Every overlay is a surface the lock does not draw, so an open menu
+        // must not still be on the shell's mind when the session comes back.
+        self.overlay = Overlay::None;
+        self.context_menu = None;
+        self.request_full_redraw();
+        true
+    }
+
+    /// Leave the lock, because a password was verified.
+    pub fn unlock(&mut self) {
+        self.lock.locked = false;
+        self.lock.back();
+        self.lock.verdict = crate::lock::Verdict::Idle;
+        self.request_full_redraw();
+    }
+
+    /// The daemon refused an attempt. The lock stays on, and the reason is the
+    /// daemon's own sentence rather than a paraphrase.
+    pub fn lock_failed(&mut self, reason: &str) {
+        self.lock.verdict = crate::lock::Verdict::Failed(reason.to_owned());
+        self.request_full_redraw();
+    }
+
+    /// The attempt to check: the account and the secret, taken out of the shell
+    /// so the plain text exists in exactly one place for as long as it takes to
+    /// hand it over.
+    pub fn take_unlock(&mut self) -> Option<(String, crate::lock::Secret)> {
+        if !self.lock.locked {
+            return None;
+        }
+        let secret = self.lock.take_secret();
+        if secret.is_empty() {
+            return None;
+        }
+        self.lock.verdict = crate::lock::Verdict::Checking;
+        self.request_full_redraw();
+        Some((self.lock.user.clone(), secret))
+    }
+
+    /// Say that this machine cannot check a password, which the lock screen
+    /// shows instead of collecting one it could never use.
+    pub fn lock_no_verifier(&mut self, reason: &str) {
+        self.lock.verdict = crate::lock::Verdict::NoVerifier(reason.to_owned());
+        self.request_full_redraw();
+    }
+
+    /// Handle one event while the session is locked.
+    ///
+    /// The lock surface owns the keyboard and the pointer: nothing else in the
+    /// shell sees an event while this returns `true`, which is what "locked"
+    /// means on a framebuffer desktop with no client surfaces to hide.
+    fn locked_input(&mut self, ev: &InputEvent) -> Vec<Effect> {
+        match ev {
+            InputEvent::KeyDown { key, repeat, .. } => {
+                if *repeat {
+                    return Vec::new();
+                }
+                match key {
+                    Key::Char(_) | Key::Backspace | Key::Enter | Key::Escape => self.lock_key(*key),
+                    // Tab cycles the sheet's tabs, which is the one piece of
+                    // navigation a mouse-only user cannot discover.
+                    Key::Tab => {
+                        if self.lock.edit {
+                            let next = self.lock.tab.index().wrapping_add(1) % 4;
+                            self.lock.tab = crate::lock::Tab::from_index(next);
+                            self.request_full_redraw();
+                        }
+                        Vec::new()
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            InputEvent::TextInput { text } => {
+                self.lock.push(text);
+                self.request_full_redraw();
+                Vec::new()
+            }
+            InputEvent::PointerMove { at, .. } => {
+                self.pointer = *at;
+                let now = self.hot.hit(at.x, at.y);
+                if now != self.hovered {
+                    for id in [self.hovered, now].into_iter().flatten() {
+                        if let Some(r) = self.hot.rect_of(id) {
+                            self.damage.push(r.inflate(2.0));
+                        }
+                    }
+                    self.hovered = now;
+                }
+                let s = self.tokens.scale;
+                self.damage.push(crate::ui::cursor_bounds(at.x, at.y, s));
+                Vec::new()
+            }
+            InputEvent::PointerButton {
+                button,
+                pressed,
+                at,
+                ..
+            } => {
+                self.pointer = *at;
+                if *button != PointerButton::Primary {
+                    return Vec::new();
+                }
+                if !*pressed {
+                    let released_on = self.hot.hit(at.x, at.y);
+                    let was = self.pressed.take();
+                    if let (Some(a), Some(b)) = (was, released_on) {
+                        if a == b {
+                            return self.activate(a);
+                        }
+                    }
+                    return Vec::new();
+                }
+                if let Some(hit) = self.hot.hit(at.x, at.y) {
+                    self.pressed = Some(hit);
+                    if let Some(r) = self.hot.rect_of(hit) {
+                        self.damage.push(r.inflate(2.0));
+                    }
+                }
+                Vec::new()
+            }
+            // Scrolling and every event this build does not know are nothing
+            // while locked: there is no other surface for them to mean.
+            _ => Vec::new(),
+        }
+    }
+
+    /// One key press on the lock screen.
+    fn lock_key(&mut self, key: Key) -> Vec<Effect> {
+        match key {
+            Key::Escape => {
+                if self.lock.edit {
+                    self.lock.edit = false;
+                } else {
+                    self.lock.back();
+                }
+                self.request_full_redraw();
+                Vec::new()
+            }
+            // Space and Enter both bring the field out, which is the design's
+            // "press Space or Enter" hint. Space is a character, not a key of
+            // its own, in this input layer.
+            Key::Char(' ') | Key::Enter if self.lock.stage == crate::lock::Stage::Idle => {
+                self.lock.wake();
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Key::Enter => self.submit_unlock(),
+            Key::Backspace => {
+                self.lock.backspace();
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Key::Char(_) => Vec::new(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Ask the caller to check the typed password.
+    fn submit_unlock(&mut self) -> Vec<Effect> {
+        if !self.lock.locked || self.lock.stage != crate::lock::Stage::Entry {
+            return Vec::new();
+        }
+        if !self.can_lock() {
+            let reason = self.lock_refusal();
+            self.lock_no_verifier(&reason);
+            return Vec::new();
+        }
+        self.take_unlock().map_or_else(Vec::new, |(user, secret)| {
+            vec![Effect::VerifyPassword { user, secret }]
+        })
+    }
+
     /// Move time forward without any input, for the idle timers and the clock.
     pub fn tick(&mut self, now_ms: u64) {
         self.set_now(now_ms);
+        // The lock screen's colour fields drift on the same monotonic clock, and
+        // a locked frame is always damage: the fields have moved and the clock
+        // may be breathing, so the compositor cannot idle behind it.
+        if self.lock.locked {
+            self.lock.advance(now_ms);
+            self.request_full_redraw();
+        }
         // The dock reveals when the pointer rests near the bottom edge, or
         // stays open when pinned. Hotspots for it are gated on full reveal.
         {
@@ -1806,8 +2261,11 @@ impl Shell {
         // The overlay springs follow the overlay state and advance one step.
         // sync() is idempotent, so doing it here means no call site that
         // opens or closes an overlay has to remember the animation exists.
-        self.anims
-            .sync(self.overlay.is_open(), self.context_menu.is_some());
+        self.anims.sync(
+            self.overlay.is_open(),
+            self.context_menu.is_some(),
+            matches!(self.overlay, Overlay::Launcher { .. }),
+        );
         // Focus elevation belongs to tick for the same reason: the window
         // list is state, the draw side only samples values.
         {
@@ -1996,6 +2454,13 @@ impl Shell {
         }
         if !self.mode.is_interactive() {
             return Vec::new();
+        }
+        // The lock owns every event while it is on. Nothing below this line --
+        // an overlay, a focused window, a global shortcut -- can see one, which
+        // is what hiding the session means on a framebuffer desktop with no
+        // client surfaces to take away.
+        if self.lock.locked {
+            return self.locked_input(ev);
         }
 
         match ev {
@@ -2364,8 +2829,20 @@ impl Shell {
     }
 
     fn text_input(&mut self, text: &str) {
-        // A focused app text field eats characters before overlays do — the
-        // omnibox, the Files filter, dialog name fields and the desktop dialog.
+        // A modal dialog on the desktop owns the keyboard, and it is asked
+        // **first** — before any window, focused or not. It used to be reached
+        // only through `text_into_app`, which returns early when no window has
+        // focus, so a name typed into the new-folder dialog of an empty desktop
+        // went nowhere and the dialog then refused an empty name. Found by
+        // `journey_right_click_desktop_menu_creates_a_folder_via_dialog`, which
+        // is the only test that opens a desktop dialog without a window first.
+        let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+        if self.desktop_dialog.is_some() && !clean.is_empty() {
+            self.desktop_dialog_field.push_str(&clean);
+            return;
+        }
+        // Otherwise a focused app text field eats characters before overlays do —
+        // the omnibox, the Files filter and the Files dialogs.
         if self.text_into_app(text) {
             return;
         }
@@ -2653,6 +3130,45 @@ impl Shell {
             Hot::StatusClock => self.perform(Action::ToggleNotifications),
             Hot::StatusUser => self.perform(Action::Open(App::Settings)),
             Hot::LauncherSearch => Vec::new(),
+            Hot::LockWake => {
+                self.lock.wake();
+                Vec::new()
+            }
+            Hot::LockEntry => Vec::new(),
+            Hot::LockSubmit => self.submit_unlock(),
+            Hot::LockCustomize => {
+                self.lock.edit = true;
+                Vec::new()
+            }
+            Hot::LockTab(i) => {
+                self.lock.tab = crate::lock::Tab::from_index(i);
+                Vec::new()
+            }
+            Hot::LockOption(group, option) => {
+                self.lock.tweaks.choose(group, option);
+                Vec::new()
+            }
+            Hot::LockSwitch(index) => {
+                self.lock.tweaks.toggle(index);
+                Vec::new()
+            }
+            Hot::LockReset => {
+                self.lock.tweaks = crate::lock::Tweaks::default();
+                Vec::new()
+            }
+            Hot::LockDone => {
+                self.lock.edit = false;
+                Vec::new()
+            }
+            // The dock and the launcher it becomes.
+            Hot::DockToggle => self.perform(Action::ToggleLauncher),
+            Hot::DockSearch => self.perform(Action::ToggleLauncher),
+            Hot::DockCollapse => self.perform(Action::CloseOverlay),
+            Hot::DockLock => self.perform(Action::Lock),
+            Hot::LauncherShortcut(i) => {
+                let action = SHORTCUT_CHIPS.get(usize::from(i)).copied();
+                action.map_or_else(Vec::new, |a| self.perform(a))
+            }
             Hot::LauncherItem(i) => {
                 let query = match &self.overlay {
                     Overlay::Launcher { query, .. } => query.clone(),
@@ -2689,6 +3205,22 @@ impl Shell {
                     .unwrap_or(PowerProfile::Balanced);
                 self.quick.power = profile;
                 vec![Effect::SetPowerProfile(profile)]
+            }
+            Hot::QuickPowerAction(n) => {
+                // Clicking a row asks; it does not do. The panel closes and the
+                // confirmation takes the screen, because a menu row that
+                // suspends a machine on one click is the defect the live-consent
+                // rule exists to prevent.
+                if let Some(command) = PowerCommand::ALL.get(usize::from(n)).copied() {
+                    self.overlay_damage();
+                    self.overlay = Overlay::None;
+                    self.desktop_dialog =
+                        Some(crate::apps::DesktopDialog::PowerConfirm { command });
+                    self.desktop_dialog_field.clear();
+                    self.desktop_dialog_selection = None;
+                    self.request_full_redraw();
+                }
+                Vec::new()
             }
             Hot::QuickEnvironment(n) => vec![Effect::SwitchEnvironment(n.saturating_add(1))],
             // Browser chrome clicks delegate to the model; a navigation the
@@ -2759,11 +3291,11 @@ impl Shell {
             Hot::TrashRestore => self.perform_menu(crate::apps::MenuAction::Restore),
             Hot::DialogConfirm => {
                 if self.desktop_dialog.is_some() {
-                    self.submit_desktop_dialog();
+                    self.submit_desktop_dialog()
                 } else {
                     self.submit_files_dialog();
+                    Vec::new()
                 }
-                Vec::new()
             }
             Hot::DialogCancel => {
                 if self.desktop_dialog.is_some() {
@@ -3198,7 +3730,12 @@ fn activity_view(f: &SystemFacts) -> (SystemFacts, Option<String>) {
 /// industry-standard harmless proof that a detection path works end to end.
 #[must_use]
 pub fn eicar_denylist() -> litric_defender::denylist::Denylist {
-    let eicar = b"X5O!P%@AP[4\\\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+    // One literal backslash: `\\` in a Rust byte string. Escaped twice, this
+    // hashed a sequence no EICAR file contains, so the shell's own denylist
+    // could not match the standard test file while every other copy of the
+    // constant in this workspace could — a scan of a real EICAR file reported
+    // clean. The e2e journey below caught it.
+    let eicar = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
     let digest = litric_defender::sha256::digest(eicar);
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     let mut list = litric_defender::denylist::Denylist::new();
@@ -3396,6 +3933,46 @@ mod tests {
     use super::*;
     use litric_design::{Theme, ThemeKind};
     use litric_input::keys::Side;
+
+    #[test]
+    fn every_power_command_names_itself_for_the_user_and_for_the_daemon() {
+        // Two vocabularies that must not drift apart: the word on the button
+        // and the word in the request. `Restart` is `REBOOT` on the wire, and
+        // this is where that is decided.
+        let words: Vec<(&str, &str)> = PowerCommand::ALL
+            .iter()
+            .map(|c| (c.title(), c.token()))
+            .collect();
+        assert_eq!(
+            words,
+            vec![
+                ("Suspend", "SUSPEND"),
+                ("Restart", "REBOOT"),
+                ("Power off", "POWEROFF"),
+            ]
+        );
+        for c in PowerCommand::ALL {
+            assert!(!c.question().is_empty());
+            assert!(!c.consequence().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_power_request_carries_the_confirmation_word() {
+        // The one string the daemon needs and the shell can get wrong. A
+        // request without `CONFIRM` is refused by the broker, so this asserts
+        // the shell never builds one that way.
+        for c in PowerCommand::ALL {
+            let line = c.request_line();
+            assert!(line.starts_with("POWER "), "{line}");
+            assert!(line.ends_with(" CONFIRM"), "{line}");
+            assert!(line.contains(c.token()), "{line}");
+        }
+        assert_eq!(
+            PowerCommand::PowerOff.request_line(),
+            "POWER POWEROFF CONFIRM"
+        );
+    }
 
     fn proc(pid: u32, ticks: u64, rss_mb: Option<u64>) -> ProcRow {
         ProcRow {

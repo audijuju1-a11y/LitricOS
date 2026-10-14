@@ -239,6 +239,27 @@ fn gather_facts(args: &Args) -> SystemFacts {
         f.volumes = parse_volumes(&lines);
         f.processes = parse_processes(&lines);
         f.processes_truncated = field(&lines, "litric.proc.truncated") == Some("1");
+        // Authentication, and who is logged in. Three facts from the platform
+        // half of the reply that the lock screen cannot do without: what can
+        // check a password, whether the daemon refuses the lock, and the account
+        // a password would be checked against. `auth.lock=refused` is only
+        // present while locking is refused, so its absence is the claim that the
+        // lock can be unlocked again -- which is why the boolean is derived from
+        // the whole reply rather than from one line.
+        f.auth_available = field(&lines, "auth.available").map(str::to_owned);
+        // The line is written only while locking is refused, so its presence is
+        // the refusal — the shell reads whether the daemon said anything, not
+        // the word it said.
+        f.auth_lock = Some(field(&lines, "auth.lock").is_none());
+        f.session_user = lines
+            .iter()
+            .find_map(|l| l.strip_prefix("session.id "))
+            .and_then(|rest| {
+                rest.split_whitespace()
+                    .find_map(|kv| kv.strip_prefix("user="))
+                    .filter(|u| *u != "-")
+                    .map(str::to_owned)
+            });
         f.source = "litric-sysd".to_owned();
     }
 
@@ -703,14 +724,87 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
                     Some(5_000),
                 );
             }
+            // Locking is taken only when the machine can unlock it again: a
+            // verifier exists and the daemon did not refuse. When it cannot, the
+            // reason shown is the daemon's own sentence -- verbatim, the same
+            // rule the power path follows.
             Effect::RequestLock => {
-                shell.notify(
-                    "Session",
-                    "Lock is not available",
-                    "There is no authentication subsystem yet, and a lock screen that accepts anything is worse than none.",
-                    Priority::High,
-                    Some(8_000),
-                );
+                if !shell.lock_now() {
+                    let reason = shell.lock_refusal();
+                    shell.notify(
+                        "Session",
+                        "Locking is refused",
+                        &reason,
+                        Priority::High,
+                        Some(8_000),
+                    );
+                }
+            }
+            // A password was typed on the lock screen. `AUTH VERIFY` is the one
+            // request that carries a secret, it is sent from here and nowhere
+            // else, and it is sent with `CONFIRM` because `AuthSession` is a
+            // live-consent capability and the password the user just typed is
+            // the answer to that prompt.
+            Effect::VerifyPassword { user, secret } => {
+                let request = format!("AUTH VERIFY {user} {} CONFIRM", secret.hex());
+                match ask(&args.socket, &request) {
+                    Some(reply) if reply.starts_with("ERR ") => {
+                        // The reply says which of "not authorised", "the helper
+                        // refused" and "the helper is missing" happened, in its
+                        // own words. It never contains the password, and neither
+                        // does this: what is shown is the daemon's line, trimmed.
+                        shell.lock_failed(reply.trim());
+                    }
+                    Some(_) => shell.unlock(),
+                    None => shell.lock_failed(
+                        "The system daemon did not answer, so this password could \
+                         not be checked. The screen stays locked.",
+                    ),
+                }
+            }
+            // The user answered a prompt naming this action, so the daemon is
+            // asked for real: `POWER <verb> CONFIRM` is the only form that
+            // carries the confirmation the broker's live-consent rule needs,
+            // and it is sent from here and nowhere else in the shell.
+            Effect::Power(command) => {
+                let request = command.request_line();
+                match ask(&args.socket, &request) {
+                    // The daemon refused, or it ran the tool and the tool
+                    // refused. Either way the machine is still up, and the
+                    // reason it gives is the answer to show — verbatim, because
+                    // a paraphrase of `needs-live-consent` helps nobody.
+                    Some(reply) if reply.starts_with("ERR ") => {
+                        shell.notify(
+                            "Power",
+                            "The machine did not act",
+                            reply.trim(),
+                            Priority::High,
+                            Some(10_000),
+                        );
+                    }
+                    Some(reply) => {
+                        let lines: Vec<&str> = reply.lines().collect();
+                        shell.notify(
+                            "Power",
+                            &format!(
+                                "{} requested",
+                                field(&lines, "action").unwrap_or(command.title())
+                            ),
+                            &format!("applied={}", field(&lines, "applied").unwrap_or("unknown")),
+                            Priority::Normal,
+                            Some(10_000),
+                        );
+                    }
+                    None => {
+                        shell.notify(
+                            "Power",
+                            "litric-sysd did not answer",
+                            "Nothing was asked of the machine: the system service is unreachable.",
+                            Priority::High,
+                            Some(10_000),
+                        );
+                    }
+                }
             }
             Effect::Volume(_) => {
                 shell.notify(
@@ -842,6 +936,10 @@ fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
     let regional = Regional::detect(&args.root, |k| std::env::var(k).ok());
     let tokens = Tokens::new(theme, scale);
     let mut shell = Shell::new(tokens, width as f32, height as f32, regional);
+    // The same root the facts, the framebuffer and the input devices are read
+    // through, so a shell started against a fixture tree reads its files
+    // there too instead of reaching into the machine's real root.
+    shell.files_root = args.root.clone();
 
     shell.sample(gather_facts(args));
     shell.environments = gather_environments(args);

@@ -216,11 +216,11 @@ impl FsBridge {
                         .modified()
                         .ok()
                         .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| u64::try_from(d.as_secs()).unwrap_or(0))
+                        .map(|d| d.as_secs())
                         .unwrap_or(0),
                 });
             }
-            out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            out.sort_by_key(|e| e.name.to_lowercase());
             Ok(out)
         }
     }
@@ -514,7 +514,19 @@ impl FsBridge {
                 let restore_dir = original
                     .strip_prefix("file://")
                     .and_then(|p| p.rsplit_once('/'))
-                    .map(|(dir, _)| dir.to_owned())
+                    // A file that lived in the root has an empty directory part,
+                    // and `""` is not a path: the entry would be listed with
+                    // nowhere to go back to, and `host_path("")` would resolve it
+                    // to the root directory rather than to `/`. Found by
+                    // `trash_write_list_restore_and_purge`, the one test that
+                    // trashes a file from the top of the share.
+                    .map(|(dir, _)| {
+                        if dir.is_empty() {
+                            "/".to_owned()
+                        } else {
+                            dir.to_owned()
+                        }
+                    })
                     .unwrap_or_else(|| "/".to_owned());
                 let is_dir = files.join(&name).is_dir();
                 out.push(TrashEntry {
@@ -1016,7 +1028,7 @@ fn unpct_path(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes.get(i) == Some(&b'%') {
-            if let Some(hex) = s.get(i + 1..i + 3) {
+            if let Some(hex) = s.get(i.saturating_add(1)..i.saturating_add(3)) {
                 if let Ok(b) = u8::from_str_radix(hex, 16) {
                     out.push(b);
                     i = i.saturating_add(3);
@@ -1064,10 +1076,15 @@ mod tests {
         let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).expect("bridge");
         assert_eq!(b.list_dir("/").expect("empty"), Vec::new());
         b.mkdir("/", "Work").expect("mkdir");
-        assert_eq!(b.list_dir("/").unwrap()[0].kind, FileKind::Dir);
+        assert_eq!(
+            b.list_dir("/").unwrap().first().map(|e| e.kind),
+            Some(FileKind::Dir)
+        );
         b.new_file("/Work", "a.txt").expect("new file");
         b.write_text("/Work", "b.txt", "hello สวัสดี").expect("write");
-        assert_eq!(b.read_text("/Work/b.txt").as_deref(), Some("hello สวัสดี"));
+        // `read_text` answers a `Result`, so `as_deref` yields `Result<&str, &FsError>`
+        // and the expectation is `Ok`, not `Some`.
+        assert_eq!(b.read_text("/Work/b.txt").as_deref(), Ok("hello สวัสดี"));
         assert!(matches!(b.new_file("/Work", "a.txt"), Err(FsError::Exists)));
         b.rename("/Work", "a.txt", "c.txt").expect("rename");
         assert!(!b.exists("/Work/a.txt").unwrap());
@@ -1106,8 +1123,8 @@ mod tests {
         b.trash("/gone.txt", 1_900_000_000).expect("trash");
         let list = b.trash_list().expect("list");
         assert_eq!(list.len(), 1);
-        assert_eq!(list[0].name, "gone.txt");
-        assert_eq!(list[0].restore_dir, "/");
+        assert_eq!(list.first().map(|i| i.name.as_str()), Some("gone.txt"));
+        assert_eq!(list.first().map(|i| i.restore_dir.as_str()), Some("/"));
         assert!(!b.exists("/gone.txt").unwrap());
         b.trash_restore("gone.txt").expect("restore");
         assert!(b.exists("/gone.txt").unwrap());
@@ -1146,9 +1163,9 @@ mod tests {
         b.extract("/site.zip").expect("unzip");
         assert_eq!(
             b.read_text("/site/Site/index.html").as_deref(),
-            Some("<h1>litric</h1>")
+            Ok("<h1>litric</h1>")
         );
-        assert_eq!(b.read_text("/site/Site/img/logo.txt").as_deref(), Some("O"));
+        assert_eq!(b.read_text("/site/Site/img/logo.txt").as_deref(), Ok("O"));
         std::fs::remove_dir_all(&root).ok();
     }
 

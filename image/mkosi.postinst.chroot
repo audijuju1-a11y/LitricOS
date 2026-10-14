@@ -99,6 +99,14 @@ fi
 # done here, in the chroot, for the same reason every other unit is.
 enable_unit systemd-networkd.service multi-user.target
 enable_unit systemd-resolved.service multi-user.target
+# The two providers the wave-1 write half speaks to, enabled in the same change
+# that gave `litric-sysd` something to ask them. `iwd` owns Wi-Fi and holds the
+# credentials of known networks in /var/lib/iwd (`NET WIFI JOIN` writes one);
+# Bluetooth is `bluez`'s daemon, which `bluetoothctl` talks to. Both start and
+# idle harmlessly on a machine with no radio, which is why the facts reply — not
+# a service's state — is what the interface reports.
+enable_unit iwd.service         multi-user.target
+enable_unit bluetooth.service   multi-user.target
 
 # --- 2. Repair permissions inherited from the Windows filesystem ------------
 #

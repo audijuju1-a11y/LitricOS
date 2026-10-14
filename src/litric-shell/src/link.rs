@@ -361,19 +361,25 @@ mod tests {
         Box::new(|| {})
     }
 
+    /// Wait for the reader thread to deliver a frame the predicate accepts.
+    ///
+    /// A wait that runs out is an assertion failure naming what arrived rather
+    /// than an `expect`/`panic` — those two are denied in this crate and the
+    /// denial is not weakened for a helper: `assert!` is what a test fails with.
     fn wait_for(link: &Link, pred: impl Fn(&[Incoming]) -> bool) -> Vec<Incoming> {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(5))
-            .expect("a deadline five seconds out");
+        let budget = Duration::from_secs(5);
+        let started = Instant::now();
         let mut seen = Vec::new();
-        while Instant::now() < deadline {
+        let mut satisfied = false;
+        while !satisfied && Instant::now().saturating_duration_since(started) < budget {
             seen.extend(link.drain());
-            if pred(&seen) {
-                return seen;
+            satisfied = pred(&seen);
+            if !satisfied {
+                thread::sleep(Duration::from_millis(5));
             }
-            thread::sleep(Duration::from_millis(5));
         }
-        panic!("timed out; saw {seen:?}");
+        assert!(satisfied, "timed out; saw {seen:?}");
+        seen
     }
 
     fn closed(s: &[Incoming]) -> bool {

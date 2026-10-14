@@ -57,6 +57,19 @@ survive:
 A fourth was a host-side write: `unit=1` pflash was handed the firmware's own
 variable store, which QEMU writes to (boot order, NVRAM). tools/boot-test.sh
 copies the template to a scratch file first; so does this file now.
+
+A fifth was the console it listened to. The image deliberately runs **no getty
+on ttyS0** — that port is the kernel and systemd log — and gets an autologin
+shell on ttyS1 from `image/mkosi.postinst.chroot` plus the drop-in in
+`image/mkosi.extra/usr/lib/systemd/system/serial-getty@ttyS1.service.d/`. This
+harness attached only ttyS0, so the prompt it waited for was never written to
+the stream it read. Measured 2026-10-11: a 300 s run reached userspace and 78
+targets and reported TIMEOUT, while `python3 tools/console-probe.py` found
+`[root@litricos ~]#` waiting on ttyS1 the whole time. The harness now opens the
+second serial port as a unix socket and reads ttyS1 too, and its prompt pattern
+matches what `/etc/bash.bashrc` actually prints — `[root@litricos ~]# `, with a
+leading bracket — rather than an idealised `root@host$`. See
+[docs/bugs/BUG-0017](../docs/bugs/BUG-0017-smoke-test-listened-to-the-wrong-console.md).
 """
 
 from __future__ import annotations
@@ -64,6 +77,7 @@ from __future__ import annotations
 import queue
 import shlex
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -84,13 +98,49 @@ PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 BUILD_DIR = PROJECT_ROOT / "build"
 LOGS_DIR = PROJECT_ROOT / "tools" / "logs"
 
-# Boot timeout (seconds)
-BOOT_TIMEOUT = 60
+# Boot timeout (seconds).
+#
+# Overridable, because acceleration is not: the command line below boots under
+# TCG (`-machine q35,accel=tcg`), which is deliberate — the same image must boot
+# identically on a host with no KVM — and emulation is 20-40x slower than KVM.
+# Sixty seconds is the right deadline for the real machine and too short for a
+# TCG host, and a harness whose only answer to "the deadline was too short" is
+# editing this constant makes the number a matter of opinion that changes with
+# whoever ran it last.
+#
+# A value that is not a positive integer is ignored rather than raising: a typo
+# in an environment variable must not look like a failed boot.
+def _timeout_from_env() -> int:
+    raw = os.environ.get("LITRIC_BOOT_TIMEOUT")
+    if raw is None:
+        return 60
+    try:
+        value = int(raw)
+    except ValueError:
+        return 60
+    return value if value > 0 else 60
+
+
+BOOT_TIMEOUT = _timeout_from_env()
 
 # The QEMU invocation, overridable so the harness itself can be exercised
 # without a VM. Available, and used, since 2026-10-09: a harness with no seam
 # is a harness that cannot be tested, which is how BUG-0002 happened.
 QEMU_CMD = shlex.split(os.environ.get("LITRIC_QEMU", "qemu-system-x86_64"))
+
+# Acceleration, and the CPU model that goes with it.
+#
+# `tcg` stays the default because it is the only mode that exists on every
+# host, and a gate that only runs where nested virtualisation is configured is
+# not a gate. It is also 20-40x slower than the real thing: measured
+# 2026-10-11, a TCG boot reached `System Initialization` at 160 s and did not
+# finish inside 300 s, while the same image under KVM had the login shell up at
+# 75 s. `LITRIC_ACCEL=kvm` is therefore the switch for a host that has it, and
+# a result recorded under KVM says so on the same line.
+#
+# `kernel-irqchip=off` is TCG-only; KVM rejects it outright, which is why the
+# two modes carry different machine arguments rather than one.
+ACCEL = os.environ.get("LITRIC_ACCEL", "tcg")
 
 # Candidate image paths, in the order the pipeline actually produces them:
 # mkosi writes build/out/litricos.raw (image/mkosi.conf ImageId=litricos,
@@ -122,6 +172,12 @@ FIRMWARE_VARS_CANDIDATES = [
     Path("/usr/share/edk2-ovmf/x64/OVMF_VARS.fd"),
 ]
 
+# The interactive console, ttyS1, exposed as a unix socket that this harness
+# connects to. QEMU's first serial port (ttyS0) carries the boot log; the login
+# shell is on the second one. In the project directory for the same reason the
+# variable store is: nothing a test does belongs outside it.
+CONSOLE_SOCKET = BUILD_DIR / "smoke-console.sock"
+
 # UEFI variable store, copied from the template before every boot.
 # QEMU opens unit=1 pflash writable and OVMF stores NVRAM in it, so handing it
 # the distribution's file mutates the host's firmware variables -- and GATE 01
@@ -138,6 +194,11 @@ SHELL_PATTERNS = [
     re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]* login:\s*$"),          # getty
     re.compile(r"^root@[A-Za-z0-9._-]+[:~][^\n]*[#$]\s*$"),         # PS1, root
     re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^\n]*[#$]\s*$"),  # PS1, any user
+    # What this image actually prints. Arch's /etc/bash.bashrc sets
+    # `PS1='[\u@\h \W]\$ '`, so the prompt is `[root@litricos ~]# ` and the
+    # three patterns above -- all anchored on the user name -- match none of
+    # it. Added with the measured string, not a guess: see BUG-0017.
+    re.compile(r"^\[root@[A-Za-z0-9._-]+[^\]]*\][#$]\s*$"),
 ]
 
 # Serial output that means the boot cannot reach one, even though the guest is
@@ -254,6 +315,12 @@ class QemuRunner:
         self._queue = None
         self._reader = None
         self._reader_eof = threading.Event()
+        # The console reader thread, and whether it managed to attach. A
+        # harness that silently reads only ttyS0 is the bug this fixes, so the
+        # state is recorded rather than assumed.
+        self._console_reader = None
+        self.console_connected = False
+        self._stopping = False
         # How far the boot got, for a timeout that says where it stopped
         # rather than only that nothing arrived.
         self.stages = {"firmware": False, "kernel": False}
@@ -281,9 +348,14 @@ class QemuRunner:
         self.log_file = LOGS_DIR / f"smoke-{ts}.log"
         vars_path = self._prepare_vars()
 
+        if ACCEL == "kvm":
+            machine, cpu = "q35,accel=kvm", "host"
+        else:
+            machine, cpu = "q35,accel=tcg,kernel-irqchip=off", "max"
+
         return QEMU_CMD + [
-            "-machine", "q35,accel=tcg,kernel-irqchip=off",
-            "-cpu", "max",
+            "-machine", machine,
+            "-cpu", cpu,
             "-smp", str(self.smp),
             "-m", self.mem,
             "-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={self.code}",
@@ -293,12 +365,18 @@ class QemuRunner:
             "-device", "virtio-net-pci,netdev=n0",
             "-netdev", "user,id=n0",
             "-serial", "mon:stdio",
+            # The second serial port is the login shell (see CONSOLE_SOCKET and
+            # the module docstring). It is a separate device, not a second
+            # reader on the same one, because the kernel routes them by
+            # console= and the image puts the getty on ttyS1.
+            "-chardev", f"socket,id=cons1,path={CONSOLE_SOCKET},server=on,wait=off",
+            "-serial", "chardev:cons1",
             "-nographic",
             "-no-reboot",
             # No -append: QEMU only honours it with -kernel (direct kernel
             # boot). This image boots a UKI from the ESP, whose command line
-            # is baked into the signed PE. console=ttyS0 is set there instead
-            # (see image/mkosi.conf KernelCommandLine=).
+            # is baked into the signed PE. console=tty0 console=ttyS0 is set
+            # there instead (see image/mkosi.conf KernelCommandLine=).
         ]
 
     def _read_loop(self, stream):
@@ -350,8 +428,59 @@ class QemuRunner:
             target=self._read_loop, args=(self.process.stdout,), daemon=True
         )
         self._reader.start()
+        self._console_reader = threading.Thread(
+            target=self._read_console_loop, args=(CONSOLE_SOCKET,), daemon=True
+        )
+        self._console_reader.start()
 
         return self.process
+
+    def _read_console_loop(self, path):
+        """Read the interactive console (ttyS1) into the same queue as ttyS0.
+
+        One queue, because the test asks one question -- "did this machine
+        reach a usable prompt" -- and both ports are evidence for it. A prompt
+        that arrives on ttyS1 with no trailing newline is the normal case on a
+        serial console, so the tail of the buffer is flushed whenever it looks
+        like a prompt; waiting for a newline that never comes is exactly how
+        the previous version of this file missed the line it was looking for.
+        """
+        sock = None
+        attach_deadline = time.time() + 30.0
+        while sock is None and time.time() < attach_deadline and not self._stopping:
+            try:
+                candidate = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                candidate.settimeout(1.0)
+                candidate.connect(str(path))
+                sock = candidate
+            except OSError:
+                time.sleep(0.25)
+        if sock is None:
+            return
+        self.console_connected = True
+        buf = ""
+        try:
+            while not self._stopping:
+                try:
+                    chunk = sock.recv(4096)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                buf += chunk.decode("utf-8", "replace")
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    self._queue.put(line.rstrip("\r"))
+                if buf and any(p.search(buf) for p in SHELL_PATTERNS):
+                    self._queue.put(buf.rstrip("\r"))
+                    buf = ""
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     @staticmethod
     def classify(line: str) -> str:
@@ -457,7 +586,8 @@ class QemuRunner:
         return "nothing above the serial port"
 
     def stop(self):
-        """Stop the QEMU process and the reader thread."""
+        """Stop the QEMU process and the reader threads."""
+        self._stopping = True
         if self.process and self.process.poll() is None:
             try:
                 if hasattr(os, "killpg"):
@@ -475,6 +605,15 @@ class QemuRunner:
                     pass
         if self._reader is not None:
             self._reader.join(timeout=2)
+        if self._console_reader is not None:
+            self._console_reader.join(timeout=2)
+        # The socket belongs to QEMU; it removes it on exit, and a leftover
+        # file would make the next run's chardev fail to bind. Removing it here
+        # is what makes the next run start from the same state as this one.
+        try:
+            CONSOLE_SOCKET.unlink()
+        except OSError:
+            pass
 
     def _save_log(self):
         """Save captured output to log file."""
@@ -576,7 +715,7 @@ class TestBootSmoke:
 
             runner.stop()
 
-    def test_smoke_test_can_actually_fail(self, check_prereqs, tmp_path):
+    def test_smoke_test_can_actually_fail(self, check_prereqs):
         """The test that tests the test.
 
         GATE 01 requires the smoke test to "fail correctly when a deliberate
@@ -621,23 +760,38 @@ class TestBootSmoke:
                 f"({fmt}): a file offset is not a guest offset in that format"
             )
 
-        broken = tmp_path / "litricos-corrupt.raw"
-        shutil.copy2(image, broken)
-        size = broken.stat().st_size
+        # The corrupted copy goes BESIDE the image, not in pytest's temporary
+        # directory. Measured 2026-10-11 on the builder: /tmp is a 3.9 GB tmpfs
+        # while the image is 3.4 GB, so `shutil.copy2` filled it and this
+        # control failed with `ENOSPC` -- a verdict about disk space reported
+        # as a failure of the boot check. The image's own directory is the one
+        # place guaranteed to hold a file the size of the image, because the
+        # image is already there. See BUG-0017.
+        broken = image.with_name(image.name + ".corrupt.raw")
+        try:
+            shutil.copy2(image, broken)
+            size = broken.stat().st_size
 
-        def smash(offset: int, length: int, byte: int = 0xFF) -> None:
-            with open(broken, "r+b") as fh:
-                fh.seek(offset)
-                fh.write(bytes([byte]) * length)
+            def smash(offset: int, length: int, byte: int = 0xFF) -> None:
+                with open(broken, "r+b") as fh:
+                    fh.seek(offset)
+                    fh.write(bytes([byte]) * length)
 
-        smash(0, 8 * 1024)                      # MBR + primary GPT
-        smash(size - 8 * 1024, 8 * 1024)        # backup GPT
-        smash(1024 * 1024, 4 * 1024)            # ESP FAT boot sector
-        with open(broken, "r+b") as fh:         # verity probe span
-            fh.seek(64 * 1024 * 1024)
-            fh.write(bytes([0xDE, 0xAD, 0xBE, 0xEF]) * 4096)
+            smash(0, 8 * 1024)                      # MBR + primary GPT
+            smash(size - 8 * 1024, 8 * 1024)        # backup GPT
+            smash(1024 * 1024, 4 * 1024)            # ESP FAT boot sector
+            with open(broken, "r+b") as fh:         # verity probe span
+                fh.seek(64 * 1024 * 1024)
+                fh.write(bytes([0xDE, 0xAD, 0xBE, 0xEF]) * 4096)
 
-        runner = QemuRunner(smp=1, mem="1G", timeout=BOOT_TIMEOUT)
+            runner = QemuRunner(smp=1, mem="1G", timeout=BOOT_TIMEOUT)
+            self._assert_a_broken_image_fails(runner, broken)
+        finally:
+            # A 3.4 GB file left behind is how a build host runs out of room
+            # during somebody else's build.
+            broken.unlink(missing_ok=True)
+
+    def _assert_a_broken_image_fails(self, runner, broken):
         runner.image = broken
         try:
             runner.start()

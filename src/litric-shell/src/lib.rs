@@ -41,6 +41,7 @@ pub mod font;
 pub mod fsbridge;
 pub mod icons;
 pub mod link;
+pub mod lock;
 pub mod monitor;
 pub mod shell;
 pub mod shortcuts;

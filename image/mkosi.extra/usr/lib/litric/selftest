@@ -161,7 +161,90 @@ else
         ERR*) kv "sysd.denies_ungranted_read" "yes" ;;
         *)    kv "sysd.denies_ungranted_read" "NO -- $deny" ;;
     esac
+
+    # A power transition with no consent must be refused by the broker.
+    #
+    # The request is deliberately the UNCONFIRMED form: `POWER POWEROFF` with
+    # no `CONFIRM` word can never reach `systemctl`, which is what makes it safe
+    # to ask for during a boot. What it proves is that the live-consent rule is
+    # live in the running system rather than a sentence in a document: a reply
+    # of OK here would mean a single text line could power the machine off.
+    consent="$(/usr/bin/litric-sysd --query 'POWER POWEROFF' --socket "$SOCK" 2>&1 | head -1)"
+    case "$consent" in
+        *needs-live-consent*) kv "sysd.refuses_unconfirmed_poweroff" "yes" ;;
+        *)                    kv "sysd.refuses_unconfirmed_poweroff" "NO -- $consent" ;;
+    esac
+
+    # --- the wave-1 write half, asked from inside the guest ---------------
+    #
+    # Four providers, four probes, and each one is here because its answer is a
+    # fact about the running system rather than about the source tree:
+    #
+    #   * a link change is the only one this VM can really perform (loopback
+    #     exists on every kernel), so it is the positive control; a reply that
+    #     is not OK elsewhere in this block means the action path is broken;
+    #   * an unconfirmed verification must be refused by the broker before the
+    #     helper is reached — the same rule as the power-off above, and the one
+    #     that decides whether a password check needs the user's answer;
+    #   * a confirmed verification of a wrong password must fail against the
+    #     real shadow entry. This image ships root with a locked password
+    #     (`RootPassword=!locked`), so the correct answer is a refusal, and an
+    #     OK here would be the worst outcome in this whole report: a verifier
+    #     that accepts a password that is not one;
+    #   * audio and Bluetooth are expected to *fail* on this machine, and what
+    #     the lines record is that they fail with the tool's own error rather
+    #     than reporting a change that did not happen.
+    ask() { /usr/bin/litric-sysd --query "$1" --socket "$SOCK" 2>&1 | head -1; }
+
+    link="$(ask 'NET LINK lo up')"
+    case "$link" in
+        OK*) kv "sysd.net_link_lo" "ok" ;;
+        *)   kv "sysd.net_link_lo" "NO -- $link" ;;
+    esac
+
+    unconfirmed="$(ask 'AUTH VERIFY root 00')"
+    case "$unconfirmed" in
+        *needs-live-consent*) kv "sysd.refuses_unconfirmed_verify" "yes" ;;
+        *)                    kv "sysd.refuses_unconfirmed_verify" "NO -- $unconfirmed" ;;
+    esac
+
+    # hex of "wrong" — a password this image does not have, for an account
+    # whose password is locked. Anything but a refusal is a defect.
+    confirmed="$(ask 'AUTH VERIFY root 77726f6e67 CONFIRM')"
+    case "$confirmed" in
+        ERR*action-failed*) kv "sysd.refuses_wrong_password" "yes" ;;
+        *)                  kv "sysd.refuses_wrong_password" "NO -- $confirmed" ;;
+    esac
+
+    audio="$(ask 'AUDIO MUTE ON')"
+    case "$audio" in
+        OK*)            kv "sysd.audio_mute" "ok" ;;
+        ERR*action-failed*) kv "sysd.audio_mute" "unavailable -- no sound server in this VM" ;;
+        *)              kv "sysd.audio_mute" "unexpected -- $audio" ;;
+    esac
+
+    bt="$(ask 'BT POWER ON')"
+    case "$bt" in
+        OK*)            kv "sysd.bt_power" "ok" ;;
+        ERR*action-failed*) kv "sysd.bt_power" "unavailable -- no Bluetooth radio in this VM" ;;
+        *)              kv "sysd.bt_power" "unexpected -- $bt" ;;
+    esac
 fi
+
+# --- the tools the write half runs ------------------------------------------
+#
+# A provider action is only as real as the tool behind it. These lines name what
+# is actually in the image, so a reply that says "unavailable" can be told apart
+# from a daemon that never looked.
+for tool in /usr/bin/wpctl /usr/bin/iwctl /usr/bin/bluetoothctl /usr/bin/networkctl /usr/bin/ip /usr/bin/unix_chkpwd /usr/bin/systemctl; do
+    if [[ -x "$tool" ]]; then
+        # setuid matters for exactly one of them: unix_chkpwd reads /etc/shadow
+        # for a caller that is not root. `4755` is the mode it is installed with.
+        kv "tool$(printf '%s' "$tool" | tr '/' '.')" "present mode=$(stat -c '%a' "$tool" 2>/dev/null || echo unknown)"
+    else
+        kv "tool$(printf '%s' "$tool" | tr '/' '.')" "absent"
+    fi
+done
 
 # --- display: is there a framebuffer to draw a desktop on? ------------------
 #

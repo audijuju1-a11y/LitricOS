@@ -125,7 +125,7 @@ impl DiskTrash {
             pct_path(&original_uri),
             deleted_iso
         );
-        let name = self.reserve_info(&logical.file_name().to_owned(), &record)?;
+        let name = self.reserve_info(logical.file_name(), &record)?;
         if let Err(e) = fs::rename(&host, self.files_dir.join(&name)) {
             // Nothing left its place, so the reservation has to go too: an
             // info file with no item behind it would list nowhere and

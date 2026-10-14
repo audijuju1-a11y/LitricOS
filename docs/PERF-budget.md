@@ -100,6 +100,7 @@ below surfaced.
 | 13 | headroom / slack | 27 MB | — | absorbs kernel version drift |
 | 14 | litric-sysd | unset | `MemoryMax=64M` | enabled at boot, so resident at idle, and it has **no budget line** - BUG-0008 |
 | 15 | litric-envd | unset | `MemoryMax=128M` | enabled at boot, so resident at idle, and it has **no budget line** - BUG-0008 |
+| 16 | bluetoothd (`bluez`) | 5 MB | TARGET (not enforced: no drop-in supplies it - BUG-0008) | added 2026-10-12 with the wave-1 write half. Enabled at boot, so resident at idle. **The 320 MB TOTAL below was written before this row**, so it is 5 MB optimistic until the headroom row (13) is re-derived; the guest's own `mem.used_mb` in the GATE 01 entry of 2026-10-12 is the measurement, and it is a floor — no radio, no scanning, no traffic |
 | | **TOTAL** | **320 MB** | `ci/check-memory-budget.py` — static policy presence, not a runtime measurement | |
 
 #### Correction — 2026-10-09 (later the same day): what the checker found
@@ -219,6 +220,30 @@ enforced here as a number.
 Also gated: **input-to-present p99 ≤ 2 frames**, and **zero missed flips** over a
 60 s animation. `litric-shell` logs a warning on every over-budget frame; the
 warning count is itself a CI metric.
+
+#### Measured on the development host — 2026-10-12
+
+First measurements of this path. Tool: `cargo run --release -p litric-shell
+--example render_bench`, 15 runs per line, release build, 1280x800, WSL2 on the
+development machine (8 vCPU), software renderer, no GPU in the path. The raw
+lines are in `docs/EVIDENCE.md`; the two bugs are [BUG-0015](bugs/BUG-0015-a-frame-with-a-window-costs-206ms.md)
+and [BUG-0018](bugs/BUG-0018-a-locked-frame-costs-half-a-second.md).
+
+| Frame | median | mean ± stddev | n | Budget | Status |
+|---|---:|---:|---:|---:|---|
+| Desktop, two windows open | 185.339 ms | 188.834 ± 11.291 ms | 15 | 16.67 ms | **NOT MET** — 11.1x (BUG-0015) |
+| After one pointer move | 183.525 ms | 185.027 ± 8.807 ms | 15 | 16.67 ms | **NOT MET** |
+| After opening a window | 423.675 ms | 427.174 ± 11.557 ms | 15 | 16.67 ms | **NOT MET** — 25.4x (BUG-0015) |
+| Locked, shipped look (interval 33 ms) | 569.664 ms | 608.179 ± 90.267 ms | 15 | 16.67 ms | **NOT MET** — 34.2x (BUG-0018) |
+| Locked, customize sheet open | 804.543 ms | 820.711 ± 49.188 ms | 15 | 16.67 ms | **NOT MET** — 48.3x (BUG-0018) |
+| Full-screen blur, two passes | 91.202 ms (r10) | 92.329 ± 5.928 ms | 15 | — | the renderer's largest single cost |
+| Present a full frame (4 096 000 B) | 3.471 ms | 3.552 ± 0.428 ms | 15 | — | not the bottleneck |
+| Present one damage band (163 840 B) | 0.104 ms | 0.113 ± 0.026 ms | 15 | — | not the bottleneck |
+
+These are **host numbers, not target numbers**, and they are presented as the
+failures they are: every frame path on this list is over the gate, and the two
+bugs above are open. They are recorded here because a budget that is only ever
+compared against nothing is a wish.
 
 ---
 

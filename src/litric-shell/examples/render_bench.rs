@@ -6,6 +6,11 @@
 //! pointer move, the frame after opening a window, and presenting to a regular
 //! file that stands in for `/dev/fb0`.
 //!
+//! The lock screen is measured last and in four states -- as it opens, with the
+//! password field out, with the customize sheet open, and with motion off --
+//! because a locked shell composes in full on every tick and is therefore the
+//! most expensive steady state the shell has.
+//!
 //! The system facts are fixed numbers set here, not readings: the benchmark
 //! measures drawing, and drawing the same text on every run is what makes two
 //! runs comparable.
@@ -30,6 +35,7 @@ use litric_locale::Regional;
 use litric_shell::canvas::{rgb, Canvas, Rect};
 use litric_shell::desktop;
 use litric_shell::fb::{FbInfo, Framebuffer};
+use litric_shell::lock::Stage;
 use litric_shell::shell::{DesktopMode, EnvRow, Shell};
 use litric_shell::shortcuts::App;
 use litric_shell::ui::Tokens;
@@ -155,11 +161,61 @@ fn frame(b: &mut Bench) -> Frame {
     }
 }
 
+/// Time the lock screen in whatever state it is in now, and say what one frame
+/// of it did.
+///
+/// The interval is the one [`litric_shell::shell::LifeState::Locked`] asks the
+/// loop for, so the frames are spaced the way the loop spaces them.
+fn lock_frames(b: &mut Bench, now: &mut u64, name: &str) {
+    let mut times = Vec::with_capacity(RUNS);
+    let mut full = false;
+    let mut damage = 0_usize;
+    let mut restored = 0.0_f64;
+    let mut visited = 0_u64;
+    for _ in 0..RUNS {
+        *now = (*now).saturating_add(33);
+        b.shell.tick(*now);
+        let t = Instant::now();
+        let f = frame(b);
+        times.push(elapsed_ms(t));
+        full = f.full;
+        damage = f.damage.len();
+        restored = f.restored_px;
+        visited = f.visited_px;
+    }
+    println!(
+        "{name}.full={full} damage_rects={damage} restored_px={restored:.0} visited_px={visited}"
+    );
+    report(name, times);
+}
+
 fn elapsed_ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0
 }
 
+/// Print the statistics a budget line needs.
+///
+/// `docs/PERF-budget.md` Appendix §3: a target becomes a measurement only with
+/// the tool, the environment, `n`, the mean and the standard deviation. The
+/// median and the minimum were here first and stay: on a shared development host
+/// an outlier inflates the mean, and the median is the number that describes the
+/// code rather than the machine's mood.
 fn report(name: &str, mut v: Vec<f64>) {
+    let n = v.len();
+    #[allow(clippy::cast_precision_loss)]
+    let count = n as f64;
+    let mean = if n > 0 {
+        v.iter().sum::<f64>() / count.max(1.0)
+    } else {
+        f64::NAN
+    };
+    // The population deviation (divide by n, not n-1): these are all the runs
+    // there were, not a sample of a larger set.
+    let variance = if n > 0 {
+        v.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / count.max(1.0)
+    } else {
+        f64::NAN
+    };
     v.sort_by(f64::total_cmp);
     let min = v.first().copied().unwrap_or(f64::NAN);
     let median = v
@@ -168,7 +224,9 @@ fn report(name: &str, mut v: Vec<f64>) {
         .unwrap_or(f64::NAN);
     println!("{name}.min_ms={min:.3}");
     println!("{name}.median_ms={median:.3}");
-    println!("{name}.runs={}", v.len());
+    println!("{name}.mean_ms={mean:.3}");
+    println!("{name}.stddev_ms={:.3}", variance.sqrt());
+    println!("{name}.runs={n}");
 }
 
 fn changed(a: &[u32], b: &[u32]) -> usize {
@@ -328,5 +386,41 @@ fn main() -> ExitCode {
     report("present_pointer_damage", times);
 
     let _ = fs::remove_file(&dev);
+
+    // ---- the lock screen --------------------------------------------------
+    //
+    // A locked shell composes in full on every tick: its colour fields drift
+    // and the clock breathes, so the lock is the most expensive steady state
+    // LitricOS has, and this is the number `docs/PERF-budget.md` holds the lock
+    // surface to. Each variant is the same drawing path in a different state,
+    // so the difference between them is what that state costs.
+    let mut locked = build();
+    locked.shell.facts.auth_available = Some("unix-chkpwd".to_owned());
+    locked.shell.facts.auth_lock = Some(false);
+    locked.shell.facts.session_user = Some("root".to_owned());
+    if !locked.shell.lock_now() {
+        eprintln!("render_bench: the fixture cannot check a password, so it cannot lock");
+        return ExitCode::FAILURE;
+    }
+    println!("lock.interval_ms={}", locked.shell.frame_interval_ms());
+    lock_frames(&mut locked, &mut now, "lock_frame");
+
+    // The password field out: a glass sheet over the same drifting frame.
+    locked.shell.lock.stage = Stage::Entry;
+    lock_frames(&mut locked, &mut now, "lock_frame_entry");
+
+    // And with everything the screen can put on one frame at once: the
+    // customize sheet over the drifting fields, password field still out.
+    locked.shell.lock.edit = true;
+    lock_frames(&mut locked, &mut now, "lock_frame_customize");
+
+    // "Still" stops the drift, and the clock stops breathing with it. The loop
+    // still composes one full frame per interval while the session is locked,
+    // so this is what a locked screen with no motion costs.
+    locked.shell.lock.edit = false;
+    locked.shell.lock.tweaks.motion = 0;
+    locked.shell.lock.tweaks.breathe = false;
+    lock_frames(&mut locked, &mut now, "lock_frame_still");
+
     ExitCode::SUCCESS
 }

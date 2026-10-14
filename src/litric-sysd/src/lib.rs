@@ -16,7 +16,14 @@
 //!
 //! # What is real, and what is not
 //!
+//! * [`providers`] is the write half of audio, network, Bluetooth and
+//!   authentication: validated arguments, a base tool per provider, and a plan
+//!   that a test can read without running anything.
 //! * [`facts`] measures the running machine. Real, and tested against fixtures.
+//! * [`platform`] reports what the machine *is*: interfaces, sound cards,
+//!   power, Bluetooth radios, sessions. Real, and tested against fixtures.
+//! * [`action`] is the one thing a session can *do* to the machine: a power
+//!   transition, through a runner the tests substitute, gated by the broker.
 //! * [`proto`] is the wire format. Real, and tested.
 //! * [`state`] answers requests from the live subsystems. Real, and tested.
 //! * [`server`] is the Unix socket transport. Real on Unix; absent elsewhere.
@@ -27,8 +34,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod action;
 pub mod facts;
+pub mod platform;
 pub mod proto;
+pub mod providers;
 pub mod state;
 
 #[cfg(unix)]

@@ -77,6 +77,23 @@ pub enum CapabilityId {
     SystemSettings,
     /// Attach a debugger to another process.
     ProcessDebug,
+    /// Change how the machine reaches the network: a `networkd` drop-in, an
+    /// `iwd` credential file, bringing an interface up or down.
+    ///
+    /// Added in wave 1 (ADR-0023). `SystemSettings` is too broad to be the
+    /// only thing standing between an application and the machine's routing.
+    NetConfigure,
+    /// Change an audio level: output volume, or a capture level with
+    /// [`Self::Microphone`]'s separate grant.
+    AudioSet,
+    /// Suspend, restart, power off, change a backlight, hold an idle inhibit.
+    PowerControl,
+    /// Lock the display for a session. Held by the shell, never by an
+    /// application.
+    AuthSession,
+    /// Change adapter-level Bluetooth state: power, discoverability, pairing.
+    /// Distinct from [`Self::DeviceBluetooth`], which is *use* a device.
+    BluetoothAdmin,
 }
 
 impl CapabilityId {
@@ -110,6 +127,11 @@ impl CapabilityId {
             Self::SecureStorage => "secure.storage",
             Self::SystemSettings => "system.settings",
             Self::ProcessDebug => "process.debug",
+            Self::NetConfigure => "net.configure",
+            Self::AudioSet => "audio.set",
+            Self::PowerControl => "power.control",
+            Self::AuthSession => "auth.session",
+            Self::BluetoothAdmin => "device.bluetooth.admin",
         }
     }
 
@@ -143,6 +165,11 @@ impl CapabilityId {
             "secure.storage" => Self::SecureStorage,
             "system.settings" => Self::SystemSettings,
             "process.debug" => Self::ProcessDebug,
+            "net.configure" => Self::NetConfigure,
+            "audio.set" => Self::AudioSet,
+            "power.control" => Self::PowerControl,
+            "auth.session" => Self::AuthSession,
+            "device.bluetooth.admin" => Self::BluetoothAdmin,
             _ => return None,
         })
     }
@@ -177,6 +204,11 @@ impl CapabilityId {
             Self::SecureStorage,
             Self::SystemSettings,
             Self::ProcessDebug,
+            Self::NetConfigure,
+            Self::AudioSet,
+            Self::PowerControl,
+            Self::AuthSession,
+            Self::BluetoothAdmin,
         ]
     }
 
@@ -201,6 +233,7 @@ impl CapabilityId {
                 | Self::AiCloud
                 | Self::ProcessDebug
                 | Self::SystemSettings
+                | Self::AuthSession
         )
     }
 
@@ -235,9 +268,19 @@ impl CapabilityId {
     pub const fn scoping(self) -> Scoping {
         match self {
             Self::FsRead | Self::FsWrite | Self::FsList => Scoping::Required,
-            Self::NetClient | Self::NetServer | Self::DeviceUsb | Self::DeviceBluetooth => {
-                Scoping::Optional
-            }
+            // Wave 1's system providers. All of them take a resource scope —
+            // one network, one interface, one card — because "change the
+            // volume" and "change *this* card's capture level" are different
+            // grants and the model has to be able to say which one was given.
+            Self::NetClient
+            | Self::NetServer
+            | Self::DeviceUsb
+            | Self::DeviceBluetooth
+            | Self::NetConfigure
+            | Self::AudioSet
+            | Self::PowerControl
+            | Self::AuthSession
+            | Self::BluetoothAdmin => Scoping::Optional,
             _ => Scoping::Never,
         }
     }
@@ -275,6 +318,11 @@ impl CapabilityId {
             Self::SecureStorage => "store passwords in your keyring",
             Self::SystemSettings => "change system settings",
             Self::ProcessDebug => "inspect other running programs",
+            Self::NetConfigure => "change how this computer connects to the network",
+            Self::AudioSet => "change your sound volume",
+            Self::PowerControl => "suspend, restart or power off this computer",
+            Self::AuthSession => "lock the screen",
+            Self::BluetoothAdmin => "pair and manage Bluetooth devices",
         }
     }
 
@@ -289,7 +337,9 @@ impl CapabilityId {
             | Self::AiCloud
             | Self::SystemSettings
             | Self::FsWrite
-            | Self::SecureStorage => Risk::High,
+            | Self::SecureStorage
+            | Self::NetConfigure
+            | Self::AuthSession => Risk::High,
             Self::FsRead
             | Self::FsList
             | Self::NetServer
@@ -297,7 +347,10 @@ impl CapabilityId {
             | Self::DeviceUsb
             | Self::DeviceBluetooth
             | Self::Autostart
-            | Self::Background => Risk::Medium,
+            | Self::Background
+            | Self::AudioSet
+            | Self::PowerControl
+            | Self::BluetoothAdmin => Risk::Medium,
             Self::NetClient
             | Self::NetLocal
             | Self::Gpu
@@ -354,6 +407,15 @@ pub enum Scope {
     Host(String),
     /// A device identifier.
     Device(String),
+    /// A system resource, e.g. `wifi://home`, `iface://eth0`,
+    /// `backlight://intel_backlight`, `bt://hci0/00:1a:7d:da:71:13`,
+    /// `power://system/suspend`.
+    ///
+    /// Separate from [`Self::Uri`] because these are not storage: the storage
+    /// schemes are resolved by the storage broker against a sandbox root, and
+    /// mixing a network's name into that namespace would give two different
+    /// resolvers an opinion about one string.
+    Resource(String),
 }
 
 /// Why a scope string was rejected.
@@ -385,6 +447,35 @@ impl fmt::Display for ScopeError {
 }
 
 impl std::error::Error for ScopeError {}
+
+/// System-resource schemes, from the wave-1 provider designs
+/// (`docs/design/wave1/`). Each is the unit a grant can name:
+///
+/// ```text
+///   wifi://<ssid>            one known network
+///   iface://<name>           one interface
+///   bt://<adapter>[/<bdaddr>] one adapter, or one device on it
+///   capture://<card>         the microphone side of one card
+///   backlight://<device>     one backlight
+///   profile://<name>         a power profile
+///   inhibit://<holder>       an idle inhibitor
+///   lock://<session>         one login session's display
+///   switch://<uid>           switching to one user
+///   power://system/<verb>    suspend, reboot, poweroff
+/// ```
+const RESOURCE_SCHEMES: &[&str] = &[
+    "wifi://",
+    "iface://",
+    "audio://",
+    "bt://",
+    "capture://",
+    "backlight://",
+    "profile://",
+    "inhibit://",
+    "lock://",
+    "switch://",
+    "power://",
+];
 
 /// Storage URI schemes, from RUNTIME section 17.
 const URI_SCHEMES: &[&str] = &[
@@ -470,6 +561,76 @@ impl Scope {
         Ok(Self::Host(raw.to_ascii_lowercase()))
     }
 
+    /// Parse and normalise a system-resource scope.
+    ///
+    /// # Errors
+    /// [`ScopeError`] naming the rule that was violated.
+    ///
+    /// # Security
+    /// The same rule as [`Self::parse_uri`], for the same reason: a `..`
+    /// segment is refused rather than resolved, so `iface://../../etc/passwd`
+    /// never reaches a place that constructs a path from it. The scheme must
+    /// be one of the ten above — an unrecognised scheme is not a resource this
+    /// system knows how to authorise, and guessing would grant something the
+    /// user was never shown.
+    ///
+    /// An empty path is legal and means "any resource of this kind":
+    /// `wifi://` is every Wi-Fi network, the counterpart of `user://` for
+    /// storage. It is written that way on purpose, so a grant that covers
+    /// everything reads as covering everything.
+    pub fn parse_resource(raw: &str) -> Result<Self, ScopeError> {
+        if raw.is_empty() {
+            return Err(ScopeError::Empty);
+        }
+        if raw.len() > Self::MAX_LEN {
+            return Err(ScopeError::TooLong);
+        }
+        if raw.bytes().any(|b| b.is_ascii_control()) {
+            return Err(ScopeError::IllegalCharacter);
+        }
+        let scheme = RESOURCE_SCHEMES
+            .iter()
+            .find(|s| raw.starts_with(**s))
+            .ok_or(ScopeError::UnknownScheme)?;
+        let path = raw.get(scheme.len()..).unwrap_or("");
+        for segment in path.split('/') {
+            if segment == "." || segment == ".." {
+                return Err(ScopeError::NotNormalised);
+            }
+        }
+        Ok(Self::Resource(format!(
+            "{scheme}{}",
+            path.trim_end_matches('/')
+        )))
+    }
+
+    /// Whether this scope is destructive to the running session.
+    ///
+    /// `power://system/suspend` and its two siblings end or interrupt what the
+    /// user is doing, and a grant of *one* of them must not be treated like a
+    /// grant to change the brightness — which is also `PowerControl`, which is
+    /// why this cannot be a flag on the capability alone. See
+    /// [`Capability::requires_live_consent`].
+    ///
+    /// The test is **containment, not a prefix match on one string**: a grant of
+    /// `power://` covers the three that end the session, so consenting to it is
+    /// consenting to those, and a rule that only matched the leaf form would let
+    /// the broadest grant in the vocabulary be the one that skips the prompt.
+    #[must_use]
+    pub fn is_destructive(&self) -> bool {
+        const DESTRUCTIVE: [&str; 3] = [
+            "power://system/suspend",
+            "power://system/reboot",
+            "power://system/poweroff",
+        ];
+        match self {
+            Self::Resource(_) => DESTRUCTIVE
+                .iter()
+                .any(|d| self.contains(&Self::Resource((*d).to_owned()))),
+            _ => false,
+        }
+    }
+
     /// Whether `self` (a grant's scope) authorises `other` (a request's scope).
     ///
     /// Containment is **path-segment aware**. This is the subtle part and it is
@@ -506,6 +667,11 @@ impl Scope {
 
             (Self::Device(grant), Self::Device(req)) => grant == req,
 
+            // Segment-aware like a storage URI, for the same reason: a grant of
+            // `bt://hci0` covers a device on that adapter and must not cover an
+            // adapter whose name merely begins with it.
+            (Self::Resource(grant), Self::Resource(req)) => path_contains(grant, req),
+
             // Different scope kinds never match. A filesystem grant does not
             // authorise a network request, however similar the strings look.
             _ => false,
@@ -517,7 +683,7 @@ impl Scope {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Any => "*",
-            Self::Uri(s) | Self::Host(s) | Self::Device(s) => s,
+            Self::Uri(s) | Self::Host(s) | Self::Device(s) | Self::Resource(s) => s,
         }
     }
 }
@@ -604,6 +770,19 @@ impl Capability {
     #[must_use]
     pub fn authorises(&self, request: &Self) -> bool {
         self.id == request.id && self.scope.contains(&request.scope)
+    }
+
+    /// Whether this grant needs a live user action, consulting the capability
+    /// **and** the scope.
+    ///
+    /// [`CapabilityId::requires_live_consent`] can only speak about the kind of
+    /// action; suspending a machine and dimming its screen are the same kind
+    /// and must not be asked about the same way, so the destructive scopes are
+    /// consulted here. Callers that ask the capability alone get an answer that
+    /// is wrong for exactly the case that matters most.
+    #[must_use]
+    pub fn requires_live_consent(&self) -> bool {
+        self.id.requires_live_consent() || self.scope.is_destructive()
     }
 }
 
@@ -965,6 +1144,150 @@ mod tests {
         // Same capability, outside scope.
         let outside = Capability::new(CapabilityId::FsRead, uri("user://Pictures")).expect("v");
         assert!(!grant.authorises(&outside));
+    }
+
+    // ---- wave-1 system resources ------------------------------------------
+
+    fn res(s: &str) -> Scope {
+        Scope::parse_resource(s).expect("valid resource scope")
+    }
+
+    #[test]
+    fn resource_scopes_parse_into_their_own_kind() {
+        for good in [
+            "wifi://home",
+            "wifi://Cafe Guest",
+            "iface://eth0",
+            "bt://hci0",
+            "bt://hci0/00:1a:7d:da:71:13",
+            "capture://0",
+            "backlight://intel_backlight",
+            "profile://balanced",
+            "inhibit://audio",
+            "lock://c1",
+            "switch://1000",
+            "power://system/suspend",
+            // The whole class, spelled out rather than implied.
+            "wifi://",
+        ] {
+            let s = Scope::parse_resource(good).unwrap_or_else(|e| panic!("{good}: {e}"));
+            // Normalisation happens once: re-parsing the normalised form gives
+            // the same scope, so a grant and a request written differently
+            // cannot disagree about which resource they name.
+            assert_eq!(Scope::parse_resource(s.as_str()), Ok(s.clone()), "{good}");
+        }
+        assert_eq!(res("wifi://home/").as_str(), "wifi://home");
+    }
+
+    #[test]
+    fn resource_scopes_reject_what_they_cannot_authorise() {
+        assert_eq!(Scope::parse_resource(""), Err(ScopeError::Empty));
+        // A storage scheme is not a system resource, and vice versa: the two
+        // namespaces must not silently accept one another's strings.
+        assert_eq!(
+            Scope::parse_resource("user://Documents"),
+            Err(ScopeError::UnknownScheme)
+        );
+        assert_eq!(
+            Scope::parse_uri("wifi://home"),
+            Err(ScopeError::UnknownScheme)
+        );
+        assert_eq!(
+            Scope::parse_resource("/etc/shadow"),
+            Err(ScopeError::UnknownScheme)
+        );
+        assert_eq!(
+            Scope::parse_resource("iface://../../etc/passwd"),
+            Err(ScopeError::NotNormalised)
+        );
+        assert_eq!(
+            Scope::parse_resource("wifi://a\0b"),
+            Err(ScopeError::IllegalCharacter)
+        );
+    }
+
+    #[test]
+    fn resource_containment_is_segment_aware() {
+        // An adapter grant covers devices on that adapter...
+        let adapter = res("bt://hci0");
+        assert!(adapter.contains(&res("bt://hci0")));
+        assert!(adapter.contains(&res("bt://hci0/00:1a:7d:da:71:13")));
+        // ...and not an adapter whose name merely starts with the same letters.
+        assert!(!adapter.contains(&res("bt://hci0x")));
+        assert!(!adapter.contains(&res("bt://hci1")));
+
+        // One network's password is not another network's.
+        let home = res("wifi://home");
+        assert!(!home.contains(&res("wifi://home2")));
+        assert!(!home.contains(&res("wifi://Home")));
+        // The bare scheme is every network of that kind.
+        assert!(res("wifi://").contains(&home));
+        assert!(!home.contains(&res("wifi://")));
+
+        // And a resource grant never matches a storage or host grant.
+        assert!(!home.contains(&Scope::parse_uri("user://home").expect("v")));
+        assert!(!home.contains(&Scope::parse_host("home").expect("v")));
+    }
+
+    #[test]
+    fn suspending_a_machine_is_not_the_same_grant_as_dimming_it() {
+        // Both are `power.control`; only one may be done without the user
+        // saying yes in that moment.
+        let dim = Capability::new(
+            CapabilityId::PowerControl,
+            res("backlight://intel_backlight"),
+        )
+        .expect("v");
+        let suspend =
+            Capability::new(CapabilityId::PowerControl, res("power://system/suspend")).expect("v");
+        let reboot =
+            Capability::new(CapabilityId::PowerControl, res("power://system/reboot")).expect("v");
+        assert!(!dim.requires_live_consent());
+        assert!(suspend.requires_live_consent());
+        assert!(reboot.requires_live_consent());
+        assert!(res("power://system/suspend").is_destructive());
+        assert!(!res("profile://performance").is_destructive());
+
+        // A whole-class power grant is destructive too: it contains the three
+        // that end the session, so consenting to it is consenting to those.
+        assert!(res("power://").is_destructive());
+    }
+
+    #[test]
+    fn locking_the_screen_always_needs_the_user_in_the_moment() {
+        let lock = Capability::new(CapabilityId::AuthSession, res("lock://c1")).expect("v");
+        assert!(lock.requires_live_consent());
+        let switch = Capability::new(CapabilityId::AuthSession, res("switch://1000")).expect("v");
+        assert!(switch.requires_live_consent());
+
+        // And the wave-1 capabilities are all scoped or unscoped as declared.
+        for id in [
+            CapabilityId::NetConfigure,
+            CapabilityId::AudioSet,
+            CapabilityId::PowerControl,
+            CapabilityId::AuthSession,
+            CapabilityId::BluetoothAdmin,
+        ] {
+            assert_eq!(id.scoping(), Scoping::Optional, "{id}");
+            assert!(Capability::unscoped(id).is_some(), "{id}");
+        }
+    }
+
+    #[test]
+    fn the_new_capabilities_are_not_silently_the_old_ones() {
+        // `device.bluetooth.admin` is not `device.bluetooth`, and
+        // `net.configure` is not `system.settings`: if a token were reused, one
+        // of these grants would silently become the other.
+        let admin = Capability::unscoped(CapabilityId::BluetoothAdmin).expect("v");
+        let useit = Capability::unscoped(CapabilityId::DeviceBluetooth).expect("v");
+        assert!(!admin.authorises(&useit));
+        assert!(!useit.authorises(&admin));
+        assert_ne!(
+            CapabilityId::NetConfigure.token(),
+            CapabilityId::SystemSettings.token()
+        );
+        assert_eq!(CapabilityId::NetConfigure.risk(), Risk::High);
+        assert_eq!(CapabilityId::AudioSet.risk(), Risk::Medium);
     }
 
     #[test]

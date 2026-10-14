@@ -32,6 +32,22 @@ Every capability string, its default state, who grants, revocability, and audit 
 | `secure_storage` | DENIED | User consent | YES | YES |
 | `system.settings` | DENIED | Admin only | YES | YES |
 | `service.background` | DENIED | User consent | YES | YES |
+| `net.configure` | DENIED | System (policy grant to the shell) | YES | YES |
+| `audio.set` | DENIED | System (policy grant to the shell) | YES | YES |
+| `power.control` | DENIED | System + live consent for `power://system/*` | YES | YES |
+| `auth.session` | DENIED | System + live consent | YES | YES |
+| `device.bluetooth.admin` | DENIED | System (policy grant to the shell) | YES | YES |
+
+**The five rows above were added on 2026-10-12**, when the wave-1 provider actions
+became real (`src/litric-caps/src/capability.rs`, enforced by the broker the shell
+receives them from in `src/litric-sysd/src/state.rs`). They were in the code and
+not in this table, which is the kind of drift this document exists to prevent.
+Their scopes are the resource schemes in `Scope::parse_resource`:
+`iface://<name>`, `wifi://<ssid>` (both `net.configure`), `audio://default-sink`,
+`bt://` and `bt://<bdaddr>`, `lock://<user>`, and `power://system/<verb>`. A
+scheme with no path covers every resource of its kind — `wifi://` is every Wi-Fi
+network — and a scope this document does not list is not one a grant can be
+narrowed to.
 
 ## 2. Capability Classes
 

@@ -18,17 +18,65 @@
 
 use std::path::{Path, PathBuf};
 
-use litric_caps::{Broker, Capability};
+use litric_caps::{Broker, Capability, CapabilityId, Grant, Issuer, Scope};
 use litric_core::AppId;
 use litric_env::{EnvironmentId, EnvironmentManager, SwitchOutcome};
 use litric_storage::{Access, Layout, StorageBroker, StorageUri};
 use litric_trash::{Retention, Trash};
 
+use crate::action::{self, PowerAction, Runner, SystemRunner};
 use crate::facts::{read_facts, Facts};
 use crate::proto::{AccessWord, Request, Response};
+use crate::providers::{self, SystemAction};
+
+/// The application the local session client is, for capability purposes.
+///
+/// This is a fact about the daemon's own configuration, **not** a claim from a
+/// request: the socket is `0600` and owned by the daemon's user, so in Phase 1
+/// there is exactly one kind of local client, and the daemon names it here
+/// rather than asking the caller to name itself. A request that could choose
+/// its own identity could choose the shell's, which is the confused-deputy
+/// mistake the capability layer exists to prevent (ADR-0008, ADR-0016).
+///
+/// It is a constant rather than an argument because a daemon that could be
+/// told which application it is speaking for would grant the caller whatever
+/// the caller asked to be. When the authentication helper exists and peers can
+/// be identified by credential (`SO_PEERCRED`), this becomes a per-connection
+/// lookup and this constant becomes the fallback for an unidentified peer.
+pub const LOCAL_CLIENT: &str = "os.litric.shell";
+
+/// The local session client's identity, or `None` if the constant above is not
+/// a valid application id.
+///
+/// `None` is a fail-closed answer rather than a panic: the daemon starts and
+/// refuses every action, which is the correct behaviour for a build whose own
+/// identity is malformed. A test asserts the `Some` case, so the failure is a
+/// test failure rather than a discovery on a user's machine.
+fn session_client() -> Option<AppId> {
+    // `os.litric.*` is the platform's reserved namespace, which the ordinary
+    // parser refuses on purpose — that refusal is what stops a third-party
+    // package from impersonating a system component in a permission dialog.
+    AppId::parse_platform_reserved(LOCAL_CLIENT).ok()
+}
 
 /// Seconds since the Unix epoch.
 pub type Timestamp = u64;
+
+/// The provider scopes the local session client holds, each with the capability
+/// that owns it.
+///
+/// A table rather than a list of constructions so that a grant and the scope it
+/// covers cannot drift apart, and so the test that counts grants has one place to
+/// read. `iface://` and `wifi://` are two grants of one capability: a link and a
+/// network are different resources with different consequences, and a single
+/// grant covering both would make narrowing one impossible later.
+pub const PROVIDER_GRANTS: [(CapabilityId, &str); 5] = [
+    (CapabilityId::AudioSet, "audio://"),
+    (CapabilityId::NetConfigure, "iface://"),
+    (CapabilityId::NetConfigure, "wifi://"),
+    (CapabilityId::BluetoothAdmin, "bt://"),
+    (CapabilityId::AuthSession, "lock://"),
+];
 
 /// The whole daemon, minus its transport.
 #[derive(Debug)]
@@ -39,6 +87,11 @@ pub struct Sysd {
     storage: StorageBroker,
     /// Where `/proc` and `/sys` are rooted. `/` in production.
     root: PathBuf,
+    /// Who the local session client is, or `None` when [`LOCAL_CLIENT`] is not
+    /// a valid id. `None` means no action is granted to anyone.
+    client: Option<AppId>,
+    /// How a program is run. Real spawning in production, a recorder in tests.
+    runner: Box<dyn Runner>,
 }
 
 impl Sysd {
@@ -48,13 +101,36 @@ impl Sysd {
     /// from.
     #[must_use]
     pub fn new(total_cpus: u32, total_memory_mb: u32, home: &str, root: &Path) -> Self {
+        let client = session_client();
+        let mut caps = Broker::new();
+        if let Some(c) = &client {
+            Self::grant_local_session(&mut caps, c);
+        }
         Self {
             env: EnvironmentManager::new(total_cpus, total_memory_mb),
             trash: Trash::new(Retention::default()),
-            caps: Broker::new(),
+            caps,
             storage: StorageBroker::new(Layout::for_home(home)),
             root: root.to_path_buf(),
+            client,
+            runner: Box::new(SystemRunner),
         }
+    }
+
+    /// Replace the command runner.
+    ///
+    /// The seam that makes every action reachable from a test: the alternative
+    /// is a suite that suspends the machine it runs on.
+    #[must_use]
+    pub fn with_runner(mut self, runner: Box<dyn Runner>) -> Self {
+        self.runner = runner;
+        self
+    }
+
+    /// Which application this daemon treats as its local client.
+    #[must_use]
+    pub const fn client(&self) -> Option<&AppId> {
+        self.client.as_ref()
     }
 
     /// Build the daemon by measuring the machine it is running on.
@@ -118,7 +194,142 @@ impl Sysd {
             Request::TrashList => Response::ok(self.trash_list()),
             Request::TrashPlanEmpty => Response::ok(self.trash_plan_empty(now)),
             Request::CapsAudit => Response::ok(self.caps_audit()),
+            Request::Power { action, consent } => self.power(*action, *consent, now),
+            Request::Action { action, consent } => self.action(action, *consent, now),
             Request::Resolve { app, uri, access } => self.resolve(app, uri, *access, now),
+        }
+    }
+
+    /// Perform a power transition, if the client may and the user said yes.
+    ///
+    /// Two questions, asked in this order and both by the broker: does the
+    /// local client hold `PowerControl` scoped to *this* verb, and did the user
+    /// consent in the moment. A grant is permission to ask; consent is the
+    /// answer to one ask. Neither substitutes for the other, which is why this
+    /// goes through [`Broker::check_with_consent`] rather than `check`.
+    fn power(&mut self, action: PowerAction, consent: bool, now: Timestamp) -> Response {
+        let Some(capability) = action.capability() else {
+            // Unreachable for the three constants, and refused rather than
+            // panicked if a fourth verb is ever added without a scope.
+            return Response::err("bad-argument", format!("no scope for {action}"));
+        };
+        let Some(client) = self.client.clone() else {
+            return Response::err("refused", "this build has no local client identity");
+        };
+        let decision = self
+            .caps
+            .check_with_consent(&client, &capability, consent, now);
+        if !decision.is_allowed() {
+            // The reason token is the machine-readable half: a shell can tell
+            // `needs-live-consent` (show the prompt) from `no-grant` (this build
+            // cannot do it at all) without parsing prose.
+            return Response::err(
+                "refused",
+                format!("{} {capability}", decision.reason().token()),
+            );
+        }
+        let outcome = action::power(action, self.runner.as_ref());
+        if outcome.applied {
+            Response::ok(outcome.lines)
+        } else {
+            // The transition was authorised and did not happen. That is a
+            // failure the caller must see as one: a shell that reported "the
+            // machine is going down" over a machine that is still up would be
+            // lying at the one moment the user is watching.
+            let detail = outcome
+                .lines
+                .iter()
+                .find_map(|l| l.strip_prefix("detail="))
+                .unwrap_or("the transition did not happen")
+                .to_owned();
+            Response::err("action-failed", detail)
+        }
+    }
+
+    /// Perform a provider action: sound, the network, Bluetooth, a credential
+    /// check.
+    ///
+    /// The same two-part question as [`Sysd::power`] — may this client ask, and
+    /// did the user say yes — and the same broker answers it. The consent half
+    /// only decides anything for a verification, whose capability is a
+    /// live-consent one; for the reversible three it is reported and ignored, so
+    /// that one code path serves all four families.
+    fn action(&mut self, action: &SystemAction, consent: bool, now: Timestamp) -> Response {
+        let Some(capability) = action.capability() else {
+            return Response::err("bad-argument", "no scope for this action");
+        };
+        let Some(client) = self.client.clone() else {
+            return Response::err("refused", "this build has no local client identity");
+        };
+        let decision = self
+            .caps
+            .check_with_consent(&client, &capability, consent, now);
+        if !decision.is_allowed() {
+            return Response::err(
+                "refused",
+                format!("{} {capability}", decision.reason().token()),
+            );
+        }
+        // The root is the daemon's own, never a request's: the same rule as the
+        // facts reader. A caller that could choose the root could choose which
+        // credential file `iwd` is told about.
+        let outcome = providers::perform(action, self.runner.as_ref(), &self.root);
+        if outcome.applied {
+            return Response::ok(outcome.lines);
+        }
+        let reason = outcome
+            .lines
+            .iter()
+            .find_map(|l| l.strip_prefix("reason="))
+            .unwrap_or("unknown");
+        let detail = outcome
+            .lines
+            .iter()
+            .find_map(|l| l.strip_prefix("detail="))
+            .unwrap_or("the action did not happen")
+            .to_owned();
+        // A value the caller got wrong is the caller's error; everything else —
+        // a tool that is not there, a helper that refused, a file that could not
+        // be written — is the action failing, which is a different token for the
+        // same reason the refusal reasons are: a client can tell "you sent
+        // nonsense" from "this machine said no" without reading prose.
+        let kind = if reason == "bad-argument" {
+            "bad-argument"
+        } else {
+            "action-failed"
+        };
+        Response::err(kind, detail)
+    }
+
+    /// Grant the local session client the capabilities this build can honour.
+    ///
+    /// Nothing here invents authority: the set is exactly the actions that have
+    /// an implementation, and each of them is still subject to consent in the
+    /// moment. The issuer is [`Issuer::Policy`] and not `User` because nobody
+    /// answered a prompt for it — saying otherwise in the audit log would make
+    /// the log say the user agreed to something they were never shown.
+    ///
+    /// Four of the five scopes are the broad form on purpose: the shell does not
+    /// know which SSID, which device or which interface a user is about to choose
+    /// when the grant is issued, and the narrower form would make every such
+    /// choice a request for a new grant. `Scope::parse_resource` spells that as
+    /// an empty path (`wifi://`), which reads as "every network" rather than as
+    /// a prefix match. Each individual request is still checked and audited.
+    fn grant_local_session(broker: &mut Broker, client: &AppId) {
+        broker.register(client.clone());
+        for action in PowerAction::ALL {
+            if let Some(capability) = action.capability() {
+                broker.grant(client, Grant::new(capability, Issuer::Policy, 0));
+            }
+        }
+        for (id, raw) in PROVIDER_GRANTS {
+            let Ok(scope) = Scope::parse_resource(raw) else {
+                continue;
+            };
+            let Some(capability) = Capability::new(id, scope) else {
+                continue;
+            };
+            broker.grant(client, Grant::new(capability, Issuer::Policy, 0));
         }
     }
 
@@ -480,6 +691,303 @@ mod tests {
             NOW,
         );
         assert!(r.encode().starts_with("ERR bad-app-id"), "{}", r.encode());
+    }
+
+    // ---- the write half: power transitions --------------------------------
+
+    use crate::action::testing::RecordingRunner;
+    use crate::action::{PowerAction, SYSTEMCTL};
+
+    /// A daemon that runs no command, plus the record of what it would have
+    /// run. The clone is the point: the daemon takes one, the test keeps the
+    /// other.
+    fn sysd_with(runner: &RecordingRunner) -> Sysd {
+        sysd().with_runner(Box::new(runner.clone()))
+    }
+
+    #[test]
+    fn the_local_client_is_the_platform_shell_and_holds_only_implemented_actions() {
+        let s = sysd();
+        let client = s.client().expect("the constant is a valid platform id");
+        assert!(client.is_platform(), "{client}");
+        let held = s.caps.grants_for(client).len();
+        assert_eq!(
+            held,
+            PowerAction::ALL.len() + PROVIDER_GRANTS.len(),
+            "exactly the actions with an implementation are granted"
+        );
+    }
+
+    #[test]
+    fn a_power_request_without_consent_never_runs_anything() {
+        // The property the whole design turns on: the grant is permission to
+        // ask, and asking is not doing.
+        let r = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&r);
+        let reply = s.handle(
+            &Request::Power {
+                action: PowerAction::PowerOff,
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(!reply.is_ok(), "{}", reply.encode());
+        assert!(
+            reply.encode().contains("needs-live-consent"),
+            "{}",
+            reply.encode()
+        );
+        assert!(
+            r.calls().is_empty(),
+            "an unconfirmed request must not reach the tool: {:?}",
+            r.calls()
+        );
+    }
+
+    #[test]
+    fn a_confirmed_power_request_runs_the_base_tool_once() {
+        let r = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&r);
+        let reply = s.handle(
+            &Request::Power {
+                action: PowerAction::Suspend,
+                consent: true,
+            },
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(r.calls().len(), 1, "exactly one transition was asked for");
+        assert!(
+            line(&reply, "applied=true").is_some(),
+            "{:?}",
+            reply.lines()
+        );
+        assert_eq!(
+            line(&reply, "command="),
+            Some(&format!("command={SYSTEMCTL} suspend")),
+            "{:?}",
+            reply.lines()
+        );
+    }
+
+    #[test]
+    fn a_transition_that_did_not_happen_is_an_error_not_a_success() {
+        let r = RecordingRunner::failing(std::io::ErrorKind::NotFound, "no such file");
+        let mut s = sysd_with(&r);
+        let reply = s.handle(
+            &Request::Power {
+                action: PowerAction::Reboot,
+                consent: true,
+            },
+            NOW,
+        );
+        assert!(!reply.is_ok(), "a machine that is still up is not a reboot");
+        assert!(
+            reply.encode().starts_with("ERR action-failed"),
+            "{}",
+            reply.encode()
+        );
+    }
+
+    #[test]
+    fn a_revoked_grant_cannot_power_the_machine_off() {
+        // Consent does not manufacture authority, and neither does a grant that
+        // has been taken back: revoking every grant and then confirming the
+        // power-off must refuse, and must not reach the tool.
+        let r = RecordingRunner::succeeding(0);
+        let mut s = Sysd::new(8, 16_384, "/home/alice", Path::new("no-such-root"))
+            .with_runner(Box::new(r.clone()));
+        let client = s.client().expect("client").clone();
+        s.caps_mut().revoke_all(&client, NOW);
+        let reply = s.handle(
+            &Request::Power {
+                action: PowerAction::PowerOff,
+                consent: true,
+            },
+            NOW,
+        );
+        assert!(!reply.is_ok(), "{}", reply.encode());
+        assert!(reply.encode().contains("revoked"), "{}", reply.encode());
+        assert!(r.calls().is_empty(), "nothing may run without a grant");
+    }
+
+    #[test]
+    fn every_power_request_appears_in_the_audit_log() {
+        let r = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&r);
+        let before = s.caps.audit_log().len();
+        let _ = s.handle(
+            &Request::Power {
+                action: PowerAction::Suspend,
+                consent: false,
+            },
+            NOW,
+        );
+        let log = s.caps.audit_log();
+        assert_eq!(log.len(), before + 1, "a refusal is a decision too");
+        assert!(log.last().is_some_and(|e| !e.allowed));
+    }
+
+    // ---- the write half: providers ----------------------------------------
+
+    #[test]
+    fn an_authorised_volume_change_runs_the_audio_tool_once() {
+        use crate::providers::{AudioAction, SystemAction};
+        let r = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&r);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Audio(AudioAction::Volume(25)),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(r.calls().len(), 1);
+        assert!(
+            line(&reply, "command=/usr/bin/wpctl").is_some(),
+            "{:?}",
+            reply.lines()
+        );
+    }
+
+    #[test]
+    fn a_provider_action_without_a_grant_runs_nothing() {
+        // The grant is what makes a second client unable to change the volume,
+        // the network or the radio on this machine.
+        use crate::providers::{AudioAction, SystemAction};
+        let r = RecordingRunner::succeeding(0);
+        let mut s = Sysd::new(8, 16_384, "/home/alice", Path::new("no-such-root"))
+            .with_runner(Box::new(r.clone()));
+        let client = s.client().expect("client").clone();
+        s.caps_mut().revoke_all(&client, NOW);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Audio(AudioAction::Volume(25)),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(!reply.is_ok(), "{}", reply.encode());
+        assert!(reply.encode().contains("revoked"), "{}", reply.encode());
+        assert!(r.calls().is_empty(), "{:?}", r.calls());
+    }
+
+    #[test]
+    fn a_verification_without_the_confirmation_word_never_reaches_the_helper() {
+        // `AuthSession` is a live-consent capability, and this is the request
+        // that proves it is enforced at the daemon rather than by the caller's
+        // good manners: a line carrying a password and no `CONFIRM` word must
+        // not be checked against anything.
+        use crate::providers::{AuthAction, SystemAction};
+        let r = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&r);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Auth(AuthAction::Verify {
+                    user: "alice".to_owned(),
+                    password: "correct horse".to_owned(),
+                }),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(!reply.is_ok(), "{}", reply.encode());
+        assert!(
+            reply.encode().contains("needs-live-consent"),
+            "{}",
+            reply.encode()
+        );
+        assert!(r.calls().is_empty(), "nothing may run: {:?}", r.calls());
+        assert_eq!(r.stdin_len(), None, "not even fed to a helper");
+    }
+
+    #[test]
+    fn a_confirmed_verification_reaches_the_helper_with_the_password_on_stdin() {
+        use crate::providers::{AuthAction, SystemAction};
+        let r = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&r);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Auth(AuthAction::Verify {
+                    user: "alice".to_owned(),
+                    password: "correct horse".to_owned(),
+                }),
+                consent: true,
+            },
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(r.stdin_len(), Some(14), "thirteen characters and a newline");
+        let encoded = reply.encode();
+        assert!(
+            !encoded.contains("correct horse"),
+            "a password must not come back in a reply: {encoded}"
+        );
+    }
+
+    #[test]
+    fn a_provider_action_that_failed_is_an_error_and_says_which_kind() {
+        use crate::providers::{AudioAction, SystemAction};
+        let r = RecordingRunner::succeeding(1);
+        let mut s = sysd_with(&r);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Audio(AudioAction::Mute(true)),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(!reply.is_ok(), "a tool that exited 1 did not do the thing");
+        assert!(
+            reply.encode().starts_with("ERR action-failed"),
+            "{}",
+            reply.encode()
+        );
+    }
+
+    #[test]
+    fn a_provider_action_with_an_illegal_argument_is_the_callers_error() {
+        use crate::providers::{NetAction, SystemAction};
+        let r = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&r);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Net(NetAction::SetLink {
+                    iface: "eth/0".to_owned(),
+                    up: true,
+                }),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(
+            reply.encode().starts_with("ERR bad-argument"),
+            "{}",
+            reply.encode()
+        );
+        assert!(r.calls().is_empty(), "{:?}", r.calls());
+    }
+
+    #[test]
+    fn every_provider_request_appears_in_the_audit_log() {
+        use crate::providers::{AudioAction, SystemAction};
+        let r = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&r);
+        let before = s.caps.audit_log().len();
+        let _ = s.handle(
+            &Request::Action {
+                action: SystemAction::Audio(AudioAction::Volume(10)),
+                consent: false,
+            },
+            NOW,
+        );
+        let log = s.caps.audit_log();
+        assert_eq!(log.len(), before + 1);
+        assert!(
+            log.last().is_some_and(|e| e.allowed),
+            "an allowed action is a decision too"
+        );
     }
 
     #[test]

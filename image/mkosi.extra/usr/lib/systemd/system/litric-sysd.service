@@ -38,15 +38,34 @@ RestartSec=1s
 
 # --- sandbox ---------------------------------------------------------------
 # The daemon reads /proc and /sys, binds one Unix socket, and holds decision
-# state in memory. It opens no files on the user's behalf, talks to no network,
-# and needs no capability at all -- so it is given none of them.
+# state in memory. It opens no files of its own, and reaches no network.
+#
+# It is NOT true, however, that it needs no capability at all, and that sentence
+# used to be here. The read half needs none; the write half owns the plans the
+# shell asks for, and `NET LINK` execs `/usr/bin/ip link set <iface> up`, which
+# goes through an AF_NETLINK socket and needs CAP_NET_ADMIN. Booting the image is
+# what proved it: with an empty bounding set and AF_UNIX-only, the in-guest probe
+# answered `litric.sysd.net_link_lo=NO -- ERR action-failed /usr/bin/ip exited 1`
+# while every host-side test passed, because none of them runs `ip` inside this
+# sandbox. The capability is therefore granted, one, with the reason recorded
+# here as PHASE-02's `CapabilityBoundingSet=  # empty unless justified` requires.
 #
 # Each line below is a claim that will be tested by booting, not by reading.
 NoNewPrivileges=yes
-CapabilityBoundingSet=
-AmbientCapabilities=
+CapabilityBoundingSet=CAP_NET_ADMIN
+# AmbientCapabilities as well as the bounding set: an exec'd tool inherits the
+# ambient set regardless of how it is reached, so the grant does not silently
+# depend on the call path.
+AmbientCapabilities=CAP_NET_ADMIN
 ProtectSystem=strict
 ProtectHome=yes
+# `NET WIFI JOIN` writes the passphrase iwd reads into iwd's own directory, and
+# ProtectSystem=strict would fail that write with EROFS. Exactly one directory is
+# opened for writing, the same pattern litric-mm-tune uses for /sys/kernel/mm;
+# image/mkosi.extra/usr/lib/tmpfiles.d/litric-iwd.conf guarantees it exists
+# before this unit's mount namespace is set up, so ReadWritePaths never names a
+# path that is absent -- systemd fails the unit outright when it does.
+ReadWritePaths=/var/lib/iwd
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
@@ -66,9 +85,10 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-# AF_UNIX only. The daemon has no reason to reach the network and, having no
-# reason, is not permitted to discover one.
-RestrictAddressFamilies=AF_UNIX
+# AF_UNIX for the shell's socket, AF_NETLINK for `ip`. Still no INET: the daemon
+# has no reason to reach the network and, having no reason, is not permitted to
+# discover one (IPAddressDeny=any below is the belt to this pair of braces).
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
 IPAddressDeny=any
 
 # A resource ceiling on the thing that measures resources. If the daemon ever

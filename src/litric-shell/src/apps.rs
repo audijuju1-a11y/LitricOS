@@ -184,7 +184,29 @@ pub enum DialogKind {
         /// The action to carry out on confirm.
         action: FilesOp,
     },
+
     /// An error to acknowledge.
+    Error(String),
+}
+
+/// A dialog the desktop itself owns, as opposed to one a window owns.
+///
+/// Deliberately a different type from [`DialogKind`], not a variant of it. The
+/// two dialogs share a look and share nothing else: a Files dialog's action is a
+/// [`FilesOp`], which names a path inside the storage sandbox, and this one's is
+/// a power transition, which names the machine. One enum would let a file
+/// operation be retargeted at the machine and a power transition be handed to a
+/// window, and the compiler could not tell the difference.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DesktopDialog {
+    /// Create a folder under `/Documents`.
+    NewFolder,
+    /// Confirm a power transition named by the user.
+    PowerConfirm {
+        /// Which transition, from [`crate::shell::PowerCommand::ALL`].
+        command: crate::shell::PowerCommand,
+    },
+    /// Something the desktop tried to do failed.
     Error(String),
 }
 

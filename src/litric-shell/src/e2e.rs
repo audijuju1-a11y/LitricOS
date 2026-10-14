@@ -10,7 +10,8 @@ use litric_input::keys::{Key, Modifiers};
 use crate::apps::{DialogKind, FilesHot, MenuAction, ScanState};
 use crate::canvas::{luminance, rgb, Canvas, Rect};
 use crate::desktop;
-use crate::shell::{DesktopMode, Effect, Hot, Priority, Shell};
+use crate::shell::{DesktopMode, Effect, Hot, LifeState, Overlay, Priority, Shell};
+use crate::shortcuts::{Action, App};
 use crate::ui::Tokens;
 use litric_design::{Theme, ThemeKind};
 use litric_locale::Regional;
@@ -20,6 +21,19 @@ fn shell() -> Shell {
     let mut s = Shell::new(tokens, 1280.0, 800.0, Regional::fallback("test"));
     s.mode = DesktopMode::Ready;
     s
+}
+
+/// A fresh temporary root for a journey that reaches the filesystem.
+///
+/// These journeys drive the shell the way a user does, so the ones that touch
+/// files would otherwise touch the machine's real root: the folder the
+/// next-folder dialog creates is a real directory, and a test may not put one
+/// in `/`. Tagged with the process id so two test processes cannot share one.
+fn e2e_root(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("litric-shell-e2e-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a fixture root");
+    dir
 }
 
 fn click(s: &mut Shell, x: f32, y: f32) -> Vec<Effect> {
@@ -163,6 +177,12 @@ fn journey_the_desktop_has_icons_and_one_opens_files() {
 #[test]
 fn journey_right_click_desktop_menu_creates_a_folder_via_dialog() {
     let mut s = shell();
+    // The dialog writes through the shell's root, so point that at a fixture
+    // and assert on the result there. On a host with no filesystem the dialog
+    // still has to explain itself, which is the first arm below.
+    let root = e2e_root("newfolder");
+    std::fs::create_dir_all(root.join("Documents")).unwrap();
+    s.files_root = root.clone();
     // Right-click the wallpaper.
     right_click(&mut s, 700.0, 650.0);
     assert!(s.context_menu.is_some(), "a context menu opened");
@@ -178,7 +198,10 @@ fn journey_right_click_desktop_menu_creates_a_folder_via_dialog() {
         .rect_of(Hot::MenuRow(MenuAction::NewFolder))
         .unwrap();
     click(&mut s, r.center().0, r.center().1);
-    assert!(matches!(s.desktop_dialog, Some(DialogKind::NewFolder)));
+    assert!(matches!(
+        s.desktop_dialog,
+        Some(crate::apps::DesktopDialog::NewFolder)
+    ));
     // Type a name and confirm. The dialog's buttons exist once drawn.
     type_text(&mut s, "Trip 2026");
     let frame = draw_frame(&mut s);
@@ -188,15 +211,21 @@ fn journey_right_click_desktop_menu_creates_a_folder_via_dialog() {
     // On Windows there is no filesystem; the dialog must say so, honestly,
     // and never pretend the folder exists.
     match &s.desktop_dialog {
-        Some(DialogKind::Error(msg)) => assert!(msg.contains("available"), "{msg}"),
+        Some(crate::apps::DesktopDialog::Error(msg)) => assert!(msg.contains("available"), "{msg}"),
         Some(_) => panic!("dialog stayed open without an explanation"),
+        #[cfg(unix)]
         None => {
-            // Unix: the folder really exists now.
+            // Unix: the folder really exists, in the root the shell was given.
             let zone = s.regional.zone.clone();
-            let bridge = crate::fsbridge::FsBridge::open(std::path::Path::new("/"), zone).unwrap();
+            let bridge = crate::fsbridge::FsBridge::open(&root, zone).unwrap();
             assert!(bridge.exists("/Documents/Trip 2026").unwrap());
         }
+        // A host with no filesystem can never report success: the dialog must
+        // have said why, which the arm above checks.
+        #[cfg(not(unix))]
+        None => panic!("the folder was reported created with no filesystem"),
     }
+    let _ = std::fs::remove_dir_all(&root);
     // The menu is gone after an item was chosen.
     let frame = draw_frame(&mut s);
     assert!(
@@ -753,12 +782,13 @@ fn journey_terminal_runs_a_real_command() {
     assert!(s.terminal.focused);
     type_text(&mut s, "echo litric-ok");
     key_press(&mut s, Key::Enter, Modifiers::NONE);
-    // The command runs on a worker thread; pump until it reports done.
-    for _ in 0..200 {
+    // The command runs on a worker thread, so the pump has to give it real
+    // time: a tick advances the frame clock, which the worker neither reads
+    // nor waits on. Bounded, and short — the command is an `echo`.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while s.terminal.busy && std::time::Instant::now() < deadline {
         s.tick(16_000);
-        if !s.terminal.busy {
-            break;
-        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(!s.terminal.busy, "the command finished within the budget");
     let saw = s.terminal.lines.iter().any(|l| l.contains("litric-ok"));
@@ -877,8 +907,94 @@ fn journey_focus_elevation_glides_instead_of_snapping() {
 }
 
 #[test]
+fn journey_powering_off_asks_first_and_only_a_confirmation_acts() {
+    // The whole point of the session rows: a click asks, and only the answer
+    // to a prompt that names the action produces the effect. Driven through
+    // the pointer, the way a person does it.
+    let mut s = shell();
+    let _ = draw_frame(&mut s);
+    let power = s
+        .hotspots()
+        .rect_of(Hot::StatusPower)
+        .expect("the status area has a power item");
+    click(&mut s, power.center().0, power.center().1);
+    // Two ticks: one to start the reveal spring, one to be past the point
+    // where the rows become clickable.
+    let _ = draw_frame(&mut s);
+    let _ = draw_frame(&mut s);
+
+    let row = s
+        .hotspots()
+        .rect_of(Hot::QuickPowerAction(2))
+        .expect("the Power off row is drawn");
+    let asked = click(&mut s, row.center().0, row.center().1);
+    assert!(
+        asked.is_empty(),
+        "one click must not end the session: {asked:?}"
+    );
+    assert!(
+        matches!(
+            s.desktop_dialog,
+            Some(crate::apps::DesktopDialog::PowerConfirm {
+                command: crate::shell::PowerCommand::PowerOff
+            })
+        ),
+        "clicking the row opened a confirmation for it: {:?}",
+        s.desktop_dialog
+    );
+
+    // Cancelling leaves the machine alone and closes the dialog.
+    let _ = draw_frame(&mut s);
+    let cancel = s
+        .hotspots()
+        .rect_of(Hot::DialogCancel)
+        .expect("the dialog has a cancel button");
+    let cancelled = click(&mut s, cancel.center().0, cancel.center().1);
+    assert!(
+        cancelled.is_empty(),
+        "cancelling does nothing: {cancelled:?}"
+    );
+    assert!(s.desktop_dialog.is_none(), "cancel closed the dialog");
+
+    // Now confirm, and exactly one effect comes out. The panel closed when
+    // the dialog opened — a dialog is the only thing on screen while it is up —
+    // so the journey reopens it the way a person would.
+    let _ = draw_frame(&mut s);
+    let power = s
+        .hotspots()
+        .rect_of(Hot::StatusPower)
+        .expect("the status item is still there");
+    click(&mut s, power.center().0, power.center().1);
+    let _ = draw_frame(&mut s);
+    let _ = draw_frame(&mut s);
+    let row = s
+        .hotspots()
+        .rect_of(Hot::QuickPowerAction(2))
+        .expect("the Power off row is drawn again");
+    let _ = click(&mut s, row.center().0, row.center().1);
+    let _ = draw_frame(&mut s);
+    let ok = s
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the dialog has a confirm button");
+    let confirmed = click(&mut s, ok.center().0, ok.center().1);
+    assert_eq!(
+        confirmed,
+        vec![Effect::Power(crate::shell::PowerCommand::PowerOff)],
+        "confirming produces the one effect that asks the daemon"
+    );
+    assert!(s.desktop_dialog.is_none(), "the dialog was consumed");
+}
+
+#[test]
 fn journey_viewer_opens_text_files_with_scrolling() {
     let mut s = shell();
+    // The listing below is the model's; the viewer reads the bytes from the
+    // shell's root, so the file has to exist there for Enter to open it.
+    let root = e2e_root("viewer");
+    std::fs::create_dir_all(root.join("Documents")).unwrap();
+    std::fs::write(root.join("Documents/readme.md"), "a line\n".repeat(400)).unwrap();
+    s.files_root = root.clone();
     s.open_app(crate::shortcuts::App::Files);
     s.files.rows = vec![crate::apps::FileRow {
         name: "readme.md".to_owned(),
@@ -899,6 +1015,7 @@ fn journey_viewer_opens_text_files_with_scrolling() {
         s.files.dialog.is_some() || s.files.viewer.is_some(),
         "the refusal was shown or the viewer opened"
     );
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -957,7 +1074,7 @@ fn collect(bridge: &crate::fsbridge::FsBridge, dir: &str, out: &mut Vec<String>,
     for e in entries {
         let p = format!("{dir}/{}", e.name);
         if e.kind == crate::apps::FileKind::Dir {
-            collect(bridge, &p, out, depth + 1);
+            collect(bridge, &p, out, depth.saturating_add(1));
         } else if e.kind == crate::apps::FileKind::File {
             out.push(p);
         }
@@ -966,3 +1083,367 @@ fn collect(bridge: &crate::fsbridge::FsBridge, dir: &str, out: &mut Vec<String>,
 
 #[cfg(unix)]
 const EICAR: &[u8] = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+// ---------------------------------------------------------------------------
+// The lock screen
+// ---------------------------------------------------------------------------
+
+/// A shell on a machine that can check a password, as the daemon reports one.
+///
+/// The facts are the daemon's own words (`AUTH VERIFY` is answered through
+/// `unix_chkpwd`), because the question "may this session be locked" is decided
+/// by them and by nothing else.
+fn lockable_shell() -> Shell {
+    let mut s = shell();
+    s.facts.auth_available = Some("unix-chkpwd".to_owned());
+    s.facts.auth_lock = Some(false);
+    s.facts.session_user = Some("root".to_owned());
+    s
+}
+
+/// A frame drawn over a sentinel backdrop instead of a wallpaper.
+///
+/// The lock surface owes the user a cleared frame: nothing that was on screen
+/// may still be in it. Filling the canvas with a colour that appears nowhere
+/// else makes that checkable -- if any sentinel pixel survives, the lock did
+/// not cover the screen.
+fn draw_frame_over(s: &mut Shell, sentinel: u32) -> Canvas {
+    s.tick(16_000);
+    let mut c = Canvas::new(1280, 800, sentinel);
+    crate::views::draw(&mut c, s);
+    c
+}
+
+fn count_colour(c: &Canvas, colour: u32) -> usize {
+    c.pixels()
+        .iter()
+        .filter(|p| (**p & 0x00FF_FFFF) == (colour & 0x00FF_FFFF))
+        .count()
+}
+
+#[test]
+fn journey_a_machine_that_cannot_check_a_password_refuses_to_lock() {
+    // No daemon answered, so neither auth fact arrived. The refusal is the
+    // point: a lock screen on this machine would have no way out.
+    let mut s = shell();
+    assert!(!s.can_lock());
+    assert!(!s.lock_now(), "a lock with no verifier is refused");
+    assert!(!s.lock.locked);
+    assert!(!s.lock_refusal().is_empty());
+
+    // A verifier that the daemon refuses is refused too, even though a password
+    // could be checked: the two facts are separate questions.
+    let mut refused = lockable_shell();
+    refused.facts.auth_lock = Some(true);
+    assert!(!refused.can_lock());
+    assert!(!refused.lock_now());
+
+    // And a machine that can check one, and whose daemon agrees, locks.
+    let mut ok = lockable_shell();
+    assert!(ok.can_lock());
+    assert!(ok.lock_now());
+    assert_eq!(ok.life(), LifeState::Locked);
+}
+
+#[test]
+fn journey_locking_hides_the_session_and_only_a_password_brings_it_back() {
+    let mut s = lockable_shell();
+    s.open_app(App::Files);
+    let _ = draw_frame(&mut s);
+    let window =
+        s.wm.all()
+            .iter()
+            .find(|w| w.app_id == "com.litric.files")
+            .map(|w| w.id)
+            .expect("the session has a window open to hide");
+    assert!(
+        s.hotspots().rect_of(Hot::Window(window)).is_some(),
+        "the window is on screen before the lock"
+    );
+
+    assert!(s.lock_now());
+    let sentinel = rgb(0x00_FF_00);
+    let locked_frame = draw_frame_over(&mut s, sentinel);
+    assert_eq!(
+        count_colour(&locked_frame, sentinel),
+        0,
+        "the lock surface cleared the frame: no pixel of what was underneath is left"
+    );
+    // Every other surface's hotspots are gone with the pixels they were drawn
+    // on, so a click cannot reach a window or a desktop shortcut.
+    for i in 0..8u8 {
+        assert!(s.hotspots().rect_of(Hot::DockItem(i)).is_none());
+    }
+    assert!(s.hotspots().rect_of(Hot::DesktopIcon(0)).is_none());
+    assert!(s.hotspots().rect_of(Hot::LockWake).is_some());
+
+    // The wake hint: Space brings the password field out.
+    let _ = key_press(&mut s, Key::Char(' '), Modifiers::NONE);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.hotspots().rect_of(Hot::LockSubmit).is_some(),
+        "the password field and its submit came out"
+    );
+    assert!(s.hotspots().rect_of(Hot::LockWake).is_none());
+
+    // Typing does not reach the application behind the lock: the Files window
+    // has a filter field, and it is not what the keyboard is talking to.
+    let app_before = s.files.filter.clone();
+    type_text(&mut s, "hunter2");
+    assert_eq!(s.files.filter, app_before, "no keystroke reached the app");
+
+    // Enter hands the password to the caller that owns the socket, and nowhere
+    // else. The effect carries it as a redacted `Secret`: its Debug output is
+    // what a diagnostic would print.
+    let effects = key_press(&mut s, Key::Enter, Modifiers::NONE);
+    let mut seen = 0u32;
+    for e in &effects {
+        if let Effect::VerifyPassword { user, secret } = e {
+            seen = seen.saturating_add(1);
+            assert_eq!(user, "root", "the account logind reported");
+            assert_eq!(secret.hex(), "68756e74657232");
+            let printed = format!("{secret:?}");
+            assert!(!printed.contains("hunter2"), "{printed}");
+            assert!(printed.contains("7 bytes"), "{printed}");
+        }
+    }
+    assert_eq!(seen, 1, "exactly one verification per Enter");
+    assert!(s.lock.locked, "the session stays locked until the answer");
+    assert_eq!(
+        s.lock.typed(),
+        0,
+        "the buffer is emptied as it is handed over"
+    );
+
+    // A refusal keeps the lock and says why, in the daemon's words.
+    s.lock_failed("ERR action-failed unix_chkpwd said no");
+    let _ = draw_frame(&mut s);
+    assert!(s.lock.locked);
+    assert!(s
+        .lock
+        .message()
+        .is_some_and(|m| m.contains("action-failed")));
+
+    // And a verified password puts the session back, with the window that was
+    // open still where it was.
+    s.unlock();
+    let _ = draw_frame(&mut s);
+    assert!(!s.lock.locked);
+    assert_eq!(s.life(), LifeState::Active);
+    assert!(
+        s.hotspots().rect_of(Hot::Window(window)).is_some(),
+        "the session's window is back on screen"
+    );
+    assert!(s.hotspots().rect_of(Hot::LockWake).is_none());
+}
+
+#[test]
+fn journey_the_lock_does_not_collect_a_password_it_could_not_check() {
+    let mut s = lockable_shell();
+    assert!(s.lock_now());
+    // The daemon goes away while the session is locked.
+    s.facts.auth_available = None;
+    s.facts.auth_lock = None;
+    let _ = key_press(&mut s, Key::Char(' '), Modifiers::NONE);
+    type_text(&mut s, "hunter2");
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.hotspots().rect_of(Hot::LockSubmit).is_none(),
+        "no submit button is offered for a password nothing can check"
+    );
+    let effects = key_press(&mut s, Key::Enter, Modifiers::NONE);
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::VerifyPassword { .. })),
+        "no verification is attempted"
+    );
+    assert!(s.lock.locked);
+}
+
+#[test]
+fn journey_the_lock_customize_sheet_changes_the_look_live() {
+    let mut s = lockable_shell();
+    assert!(s.lock_now());
+    let _ = draw_frame(&mut s);
+    let customize = s
+        .hotspots()
+        .rect_of(Hot::LockCustomize)
+        .expect("the customize button is on the lock screen");
+    click(&mut s, customize.center().0, customize.center().1);
+    let _ = draw_frame(&mut s);
+    assert!(s.lock.edit);
+    // The sheet's own controls are what the pointer can reach while it is open;
+    // the full-surface wake catcher is not, or a click inside the sheet would
+    // also bring the password field out behind it.
+    assert!(s.hotspots().rect_of(Hot::LockWake).is_none());
+    assert!(s.hotspots().rect_of(Hot::LockDone).is_some());
+
+    // Effects tab, then the "Dreamy" glow and bloom preset.
+    let effects_tab = s
+        .hotspots()
+        .rect_of(Hot::LockTab(1))
+        .expect("the effects tab is drawn");
+    click(&mut s, effects_tab.center().0, effects_tab.center().1);
+    let _ = draw_frame(&mut s);
+    assert_eq!(s.lock.tab, crate::lock::Tab::Effects);
+    let dreamy = s
+        .hotspots()
+        .rect_of(Hot::LockOption(crate::lock::GROUP_LIGHT, 3))
+        .expect("the glow preset buttons are drawn");
+    click(&mut s, dreamy.center().0, dreamy.center().1);
+    assert_eq!(s.lock.tweaks.glow(), 70.0);
+    assert_eq!(s.lock.tweaks.bloom(), 80.0);
+
+    // A switch, then Done.
+    let _ = draw_frame(&mut s);
+    let breathe = s
+        .hotspots()
+        .rect_of(Hot::LockSwitch(crate::lock::SWITCH_BREATHE))
+        .expect("the breathing switch is drawn");
+    click(&mut s, breathe.center().0, breathe.center().1);
+    assert!(!s.lock.tweaks.breathe);
+
+    let _ = draw_frame(&mut s);
+    let done = s.hotspots().rect_of(Hot::LockDone).expect("Done");
+    click(&mut s, done.center().0, done.center().1);
+    assert!(!s.lock.edit);
+    let _ = draw_frame(&mut s);
+    assert!(s.hotspots().rect_of(Hot::LockWake).is_some());
+}
+
+// ---------------------------------------------------------------------------
+// The dock that becomes the launcher
+// ---------------------------------------------------------------------------
+
+/// Reveal the dock and let its spring arrive, the way a user summons it.
+fn reveal_dock(s: &mut Shell) {
+    move_pointer(s, 640.0, 795.0);
+    for _ in 0..60 {
+        s.tick(16_000);
+        if s.anims().dock.value() >= 0.95 {
+            break;
+        }
+    }
+}
+
+/// Open the launcher the way a user does: summon the dock, press the button,
+/// and wait for the morph spring to arrive.
+fn open_launcher(s: &mut Shell) {
+    reveal_dock(s);
+    s.perform(Action::ToggleLauncher);
+    for _ in 0..60 {
+        s.tick(16_800);
+    }
+}
+
+#[test]
+fn journey_the_dock_grows_into_the_launcher_and_a_tile_opens_the_app() {
+    let mut s = shell();
+    reveal_dock(&mut s);
+    let _ = draw_frame(&mut s);
+    // At rest it is the pill: pinned icons, a search bubble, no tiles.
+    assert!(s.hotspots().rect_of(Hot::DockItem(3)).is_some());
+    assert!(s.hotspots().rect_of(Hot::DockSearch).is_some());
+    assert!(s.hotspots().rect_of(Hot::LauncherItem(3)).is_none());
+    assert!(s.hotspots().rect_of(Hot::LauncherShortcut(0)).is_none());
+
+    // The launcher button expands the same surface.
+    let toggle = s
+        .hotspots()
+        .rect_of(Hot::DockToggle)
+        .expect("launcher button");
+    click(&mut s, toggle.center().0, toggle.center().1);
+    for _ in 0..60 {
+        s.tick(16_800);
+    }
+    let _ = draw_frame(&mut s);
+    assert!(matches!(s.overlay, Overlay::Launcher { .. }));
+    let tile = s
+        .hotspots()
+        .rect_of(Hot::LauncherItem(3))
+        .expect("the app tiles are drawn once the panel is out");
+    // The dock's own row is still there, at the bottom of the same panel: the
+    // icons the user was aiming at have not moved.
+    assert!(s.hotspots().rect_of(Hot::DockItem(3)).is_some());
+    assert!(s.hotspots().rect_of(Hot::DockSearch).is_some());
+
+    click(&mut s, tile.center().0, tile.center().1);
+    assert!(
+        s.wm.all().iter().any(|w| w.app_id == "com.litric.files"),
+        "a tile opens its application"
+    );
+    assert!(matches!(s.overlay, Overlay::None));
+
+    // The panel animates back down to the pill.
+    for _ in 0..60 {
+        s.tick(17_600);
+    }
+    assert!(s.anims().launcher_morph.value() < 0.05);
+}
+
+#[test]
+fn journey_the_shortcut_row_performs_what_it_says() {
+    let mut s = shell();
+    open_launcher(&mut s);
+    let _ = draw_frame(&mut s);
+    // Chip 0 is the terminal, and the list the shell performs from is the list
+    // the view labelled.
+    assert_eq!(
+        crate::shell::chip_label(crate::shell::SHORTCUT_CHIPS[0]),
+        App::Terminal.title()
+    );
+    let chip = s
+        .hotspots()
+        .rect_of(Hot::LauncherShortcut(0))
+        .expect("the shortcut row is drawn");
+    click(&mut s, chip.center().0, chip.center().1);
+    assert!(
+        s.wm.all().iter().any(|w| w.app_id == "com.litric.terminal"),
+        "the terminal chip opened the terminal"
+    );
+}
+
+#[test]
+fn journey_searching_in_the_launcher_filters_and_escape_collapses() {
+    let mut s = shell();
+    open_launcher(&mut s);
+    let _ = draw_frame(&mut s);
+    assert!(s.hotspots().rect_of(Hot::LauncherItem(0)).is_some());
+
+    // Typing switches the panel to its results layer: one row per match, and
+    // not one row per application as the grid had.
+    type_text(&mut s, "term");
+    let _ = draw_frame(&mut s);
+    let matches = App::search("term");
+    assert_eq!(matches.first().copied(), Some(App::Terminal));
+    assert!(s.hotspots().rect_of(Hot::LauncherItem(0)).is_some());
+    assert!(
+        s.hotspots()
+            .rect_of(Hot::LauncherItem(matches.len()))
+            .is_none(),
+        "no row is drawn for a match that does not exist"
+    );
+    assert!(s.hotspots().rect_of(Hot::DockCollapse).is_some());
+
+    // The first result is the terminal.
+    let row = s
+        .hotspots()
+        .rect_of(Hot::LauncherItem(0))
+        .expect("a result");
+    click(&mut s, row.center().0, row.center().1);
+    assert!(
+        s.wm.all().iter().any(|w| w.app_id == "com.litric.terminal"),
+        "the first result opened"
+    );
+
+    // Reopen and Escape: the overlay closes and the panel shrinks back.
+    open_launcher(&mut s);
+    let _ = draw_frame(&mut s);
+    assert!(matches!(s.overlay, Overlay::Launcher { .. }));
+    let _ = key_press(&mut s, Key::Escape, Modifiers::NONE);
+    assert!(matches!(s.overlay, Overlay::None));
+    for _ in 0..60 {
+        s.tick(19_200);
+    }
+    assert!(s.anims().launcher_morph.value() < 0.05);
+}

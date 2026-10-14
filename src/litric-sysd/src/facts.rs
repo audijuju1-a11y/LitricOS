@@ -674,6 +674,10 @@ pub struct Facts {
     /// reader of two samples can difference them; empty when `/proc` is not
     /// mounted, which a container without `--pid=host` can do.
     pub processes: Vec<ProcessFacts>,
+    /// What the machine *is*: interfaces, sound cards, power, Bluetooth
+    /// radios, sessions. Read by [`crate::platform`], which explains why every
+    /// line of it comes from a file rather than from a client library.
+    pub platform: crate::platform::Platform,
 }
 
 fn read(root: &Path, rel: &str) -> Option<String> {
@@ -764,6 +768,7 @@ pub fn read_facts(root: &Path) -> Facts {
             .as_deref()
             .map_or_else(Vec::new, parse_mounts),
         processes: read_processes(root, MAX_PROCESSES),
+        platform: crate::platform::read(root),
     }
 }
 
@@ -890,6 +895,11 @@ impl Facts {
                 out.push("litric.proc.truncated=1".to_owned());
             }
         }
+        // Subsystem facts last, and under their own names (`net.iface`,
+        // `power.supply`, …) rather than under this struct's `litric.` prefix:
+        // they are a different kind of claim about the machine, and the design
+        // notes in `docs/design/wave1/` name them in the form they appear here.
+        out.extend(self.platform.to_lines());
         out
     }
 }

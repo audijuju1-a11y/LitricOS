@@ -351,8 +351,55 @@ impl Broker {
     /// here, from the broker's own records. That is the whole defence, and it
     /// works only because there is no code path in this function that trusts
     /// anything the caller said about itself.
+    ///
+    /// This answers the *grant* question only. A capability whose
+    /// [`Capability::requires_live_consent`] is true needs
+    /// [`Self::check_with_consent`] instead; using this one for an action that
+    /// ends the session would let an hour-old grant stand in for the user
+    /// saying yes now.
     pub fn check(&mut self, app: &AppId, request: &Capability, now: Timestamp) -> Decision {
         let decision = self.evaluate(app, request, now);
+        self.record(AuditEntry {
+            app: app.clone(),
+            request: request.clone(),
+            allowed: decision.allowed,
+            reason: decision.reason.clone(),
+            at: now,
+        });
+        decision
+    }
+
+    /// Decide whether `app` may perform `request` *right now*, given whether
+    /// the user consented in this moment, and record the answer.
+    ///
+    /// The vocabulary has declared live consent since the capability file was
+    /// written — `Camera`, `Microphone`, `AuthSession`, and every scope for
+    /// which [`Scope::is_destructive`] is true — and until this method existed
+    /// [`Reason::NeedsLiveConsent`] had no producer anywhere in the tree. A
+    /// rule that is written down and not enforced is a rule the system
+    /// contradicts, so the prompt is a broker decision rather than a habit of
+    /// whatever caller happens to be drawing a dialog.
+    ///
+    /// `consent` is the *UI layer's* report that the user answered a prompt
+    /// naming this action. It is not authority: a caller with no grant is still
+    /// refused, and consenting does not widen a scope. It only decides the one
+    /// question the grant cannot — whether yes was said this time.
+    pub fn check_with_consent(
+        &mut self,
+        app: &AppId,
+        request: &Capability,
+        consent: bool,
+        now: Timestamp,
+    ) -> Decision {
+        let evaluated = self.evaluate(app, request, now);
+        let decision = if evaluated.allowed && request.requires_live_consent() && !consent {
+            Decision {
+                allowed: false,
+                reason: Reason::NeedsLiveConsent,
+            }
+        } else {
+            evaluated
+        };
         self.record(AuditEntry {
             app: app.clone(),
             request: request.clone(),
@@ -704,7 +751,93 @@ mod tests {
         assert!(b.check(&a, &cam(), T0 + 3).is_allowed());
     }
 
-    // ---- rule 5: everything is audited ------------------------------------
+    // ---- rule 5: consent in the moment ------------------------------------
+
+    fn power(verb: &str) -> Capability {
+        Capability::new(
+            CapabilityId::PowerControl,
+            Scope::parse_resource(&format!("power://system/{verb}")).expect("valid scope"),
+        )
+        .expect("valid capability")
+    }
+
+    #[test]
+    fn a_destructive_scope_without_consent_is_refused_by_the_broker() {
+        // The vocabulary has said since it was written that suspending the
+        // machine needs a yes in the moment. Before check_with_consent existed
+        // nothing produced Reason::NeedsLiveConsent, so the rule was a
+        // document rather than a decision.
+        let mut b = Broker::new();
+        let a = app("com.litric.shell");
+        b.grant(&a, Grant::new(power("poweroff"), Issuer::User, T0));
+
+        let denied = b.check_with_consent(&a, &power("poweroff"), false, T0);
+        assert!(!denied.is_allowed());
+        assert_eq!(*denied.reason(), Reason::NeedsLiveConsent);
+
+        let allowed = b.check_with_consent(&a, &power("poweroff"), true, T0 + 1);
+        assert!(allowed.is_allowed(), "{allowed:?}");
+        assert!(matches!(allowed.reason(), Reason::Granted { .. }));
+    }
+
+    #[test]
+    fn consent_is_not_a_grant() {
+        // Saying yes to a prompt must not manufacture authority: an app with
+        // no grant is still refused, and one granted only the brightness
+        // cannot suspend the machine by asking again.
+        let mut b = Broker::new();
+        let a = app("com.example.app");
+        b.register(a.clone());
+        assert_eq!(
+            *b.check_with_consent(&a, &power("reboot"), true, T0)
+                .reason(),
+            Reason::NoGrant
+        );
+
+        b.grant(
+            &a,
+            Grant::new(
+                Capability::new(
+                    CapabilityId::PowerControl,
+                    Scope::parse_resource("backlight://intel_backlight").expect("v"),
+                )
+                .expect("v"),
+                Issuer::User,
+                T0,
+            ),
+        );
+        let d = b.check_with_consent(&a, &power("reboot"), true, T0 + 1);
+        assert!(!d.is_allowed(), "a backlight grant is not a reboot grant");
+        assert!(
+            matches!(d.reason(), Reason::OutOfScope { .. }),
+            "{:?}",
+            d.reason()
+        );
+    }
+
+    #[test]
+    fn a_capability_that_needs_no_consent_is_unaffected_by_the_flag() {
+        // Reading a file must not start demanding a prompt because it went
+        // through the consent-aware path.
+        let mut b = Broker::new();
+        let a = app("com.example.editor");
+        let c = fs_read("user://Documents");
+        b.grant(&a, Grant::new(c.clone(), Issuer::User, T0));
+        assert!(b.check_with_consent(&a, &c, false, T0).is_allowed());
+    }
+
+    #[test]
+    fn a_refused_consent_is_recorded_with_its_reason() {
+        let mut b = Broker::new();
+        let a = app("com.litric.shell");
+        b.grant(&a, Grant::new(power("suspend"), Issuer::User, T0));
+        let _ = b.check_with_consent(&a, &power("suspend"), false, T0);
+        let last = b.audit_log().last().expect("an entry");
+        assert!(!last.allowed);
+        assert_eq!(last.reason.token(), "needs-live-consent");
+    }
+
+    // ---- rule 6: everything is audited ------------------------------------
 
     #[test]
     fn both_allows_and_denies_are_recorded() {

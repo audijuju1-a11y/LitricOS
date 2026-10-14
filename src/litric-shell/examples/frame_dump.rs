@@ -14,6 +14,12 @@
 //! into a PNG. Nothing here reimplements drawing, so a frame dumped here differs
 //! from a frame on the machine only by the facts that were fed in.
 //!
+//! The scenes are the desktop, the windows overlapping, one per application, the
+//! dock grown into the launcher, and the lock surface in three states — as it
+//! opens, with the password field out, and with its customize sheet open. The
+//! lock is the one surface that replaces the whole composition, so a dumped
+//! frame is the only way to see it before the image boots.
+//!
 //! What it is not: a replacement for the VM photographs. A frame produced here
 //! proves what the composition does with fixed inputs; it cannot prove that the
 //! machine boots, that the framebuffer is the right depth, or that the typeface
@@ -40,11 +46,13 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use litric_design::{Theme, ThemeKind};
+use litric_input::event::{InputEvent, Point};
 use litric_locale::Regional;
 use litric_shell::canvas::{rgb, Canvas, Rect};
 use litric_shell::desktop;
+use litric_shell::lock::Stage;
 use litric_shell::shell::{DesktopMode, EnvRow, ProcRow, Shell};
-use litric_shell::shortcuts::App;
+use litric_shell::shortcuts::{Action, App};
 use litric_shell::ui::Tokens;
 use litric_shell::views;
 
@@ -87,6 +95,13 @@ fn build() -> Rig {
     shell.facts.cpu_fraction = Some(0.07);
     shell.facts.root_fs = Some("erofs".to_owned());
     shell.facts.verity = Some(true);
+    // The same three auth facts the daemon reports on a machine whose image has
+    // `/usr/bin/unix_chkpwd`: a password can be checked, the lock is not
+    // refused, and root is the account logged in. Without them the lock scenes
+    // would photograph a refusal instead of a lock screen.
+    shell.facts.auth_available = Some("unix-chkpwd".to_owned());
+    shell.facts.auth_lock = Some(false);
+    shell.facts.session_user = Some("root".to_owned());
     shell.facts.source = "frame-dump fixture".to_owned();
     // The system monitor's own data. Fixed numbers, so the frame is
     // reproducible; the point of the fixture is that the monitor shows every
@@ -258,6 +273,48 @@ fn scene_app(app: App) -> impl Fn(&mut Rig) {
     }
 }
 
+/// The desktop with the dock grown into the launcher, at rest.
+///
+/// Two springs have to settle before the frame is the design rather than a frame
+/// of an animation: the dock's reveal, which follows the pointer's distance from
+/// the bottom edge, and the morph from pill to panel. So the pointer is put where
+/// a user puts it to call the dock up, and then the clock is advanced far enough
+/// for both to arrive — ninety sixteen-millisecond steps is nearly a second and a
+/// half, longer than either takes.
+fn scene_launcher(rig: &mut Rig) {
+    let _ = rig.shell.handle(
+        &InputEvent::PointerMove {
+            at: Point::new(W as f32 / 2.0, H as f32 - 5.0),
+            delta: Point::new(1.0, 1.0),
+        },
+        1_000,
+    );
+    let _ = rig.shell.perform(Action::ToggleLauncher);
+    for _ in 0..90 {
+        rig.shell.tick(2_000);
+    }
+}
+
+/// The lock surface as it opens: drifting fields, the glass clock, the widgets.
+fn scene_locked(rig: &mut Rig) {
+    if !rig.shell.lock_now() {
+        eprintln!("frame_dump: the fixture cannot lock, so 11-lock would be the desktop");
+    }
+}
+
+/// The lock surface with the password field out, which is what a key press
+/// shows: the same frame with a glass sheet over it.
+fn scene_locked_entry(rig: &mut Rig) {
+    scene_locked(rig);
+    rig.shell.lock.stage = Stage::Entry;
+}
+
+/// The lock surface with the customize sheet open on its first tab.
+fn scene_locked_customize(rig: &mut Rig) {
+    scene_locked(rig);
+    rig.shell.lock.edit = true;
+}
+
 /// Compose one full frame and report what drawing it cost.
 ///
 /// Returns the draw time, the pixels painted, and the text-layout audit for the
@@ -319,9 +376,16 @@ fn main() -> ExitCode {
     }
 
     type Scene = (&'static str, fn(&mut Rig));
-    let scenes: [Scene; 2] = [
+    // The lock scenes are dumped here rather than in the app list because the
+    // lock is not an application: it replaces the whole composition, which makes
+    // this example the only way to look at it without booting the image.
+    let scenes: [Scene; 6] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
+        ("11-lock", scene_locked),
+        ("12-lock-password", scene_locked_entry),
+        ("13-lock-customize", scene_locked_customize),
+        ("14-launcher", scene_launcher),
     ];
     let app_scenes: [(App, &str); 7] = [
         (App::Files, "04-files"),

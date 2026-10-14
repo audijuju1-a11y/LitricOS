@@ -501,11 +501,20 @@ This is the pass that answered them, and the first full `ci/verify.sh` run since
 | documents contradicting the tree | corrected: `docs/ARCH-00-boundaries.md`, `docs/REPO-00-layout.md`, `docs/master-plan/24-feature-parity.md` and `docs/RISK-00.md` (RISK-010 marked not applicable) |
 | the zero-dependency rule unenforced | gate section [3h]: `ci/lint-deps.py` derives coverage from `src/Cargo.toml`'s own group comments, fails closed on a group with no decision, refuses an in-workspace build-dependency, and requires a path dependency to point at a declared member |
 
-Two further defects were found by running things rather than reading them, and are
-recorded because this is the pattern the repository keeps hitting: `ci/verify.sh
+Three further defects were found by running things rather than reading them, and
+are recorded because this is the pattern the repository keeps hitting: `ci/verify.sh
 --evidence` overwrote `docs/EVIDENCE.md` whole, so running it would have deleted
-the VM, benchmark and design-system records it sits beside; and three documents
-said the workspace has 19 crates where `src/Cargo.toml` lists 18.
+the VM, benchmark and design-system records it sits beside; three documents said
+the workspace has 19 crates where `src/Cargo.toml` lists 18; and
+`image/mkosi.profiles/desktop.conf` claimed an enforcement (a budget linter,
+lint-budget.sh in ci/) that has never existed, alongside two binaries no crate
+builds.
+
+### The image, built from this tree on the WSL builder
+
+The audit's §8 rows were all `HISTORICAL` because every recorded boot predated the
+tree. This entry adds the first build and boot of the current tree; see the section
+below for exactly what was and was not observed.
 
 ### What this does not establish
 
@@ -513,3 +522,219 @@ Nothing about whether LitricOS boots. No image was built and nothing was booted,
 so GATE 01 stays BLOCKED, the numbers in `docs/PERF-budget.md` remain targets
 rather than measurements, and 1046 passing tests are behaviour under test on a
 Windows host — not a runtime claim about a booted system.
+
+> **Correction, later the same day:** this section is superseded by the entry
+> below. An image *was* built from this tree and booted, and GATE 01 condition 3
+> now runs. The rows above were true when written and are kept because the log is
+> append-only; what they said about the build host is no longer the case.
+
+---
+
+## Wave 1 system providers, the first image built from this tree, and the first boot — 2026-10-11
+
+**Verdict for GATE 01: still BLOCKED, but three of its conditions moved. The
+image builds, it boots to a login shell, and the smoke test runs and passes on
+the real artifact — including its own negative control.** What keeps the gate
+blocked is listed under *not established* below, and none of it is wording.
+
+### What was implemented in this pass
+
+| Area | Where | State |
+|---|---|---|
+| Network facts | `src/litric-sysd/src/platform/net.rs` | interfaces, addresses (v4 + v6), routes, DNS, fixture-tested |
+| Audio facts | `src/litric-sysd/src/platform/audio.rs` | cards, PCM devices, sound-server presence; `audio.control=none` says out loud that no level can be set |
+| Power facts | `src/litric-sysd/src/platform/power.rs` | supplies, thermal zones, cooling devices, backlights |
+| Bluetooth facts | `src/litric-sysd/src/platform/bluetooth.rs` | adapters, `rfkill` hard/soft blocks, `bluetoothd` presence, a four-word verdict |
+| Session facts | `src/litric-sysd/src/platform/session.rs` | `systemd-logind` session records, and `auth.available=none` with `auth.lock=refused` |
+| Capabilities | `src/litric-caps/src/capability.rs` | `net.configure`, `audio.set`, `power.control`, `auth.session`, `device.bluetooth.admin`, plus `Scope::parse_resource` for `wifi://`, `iface://`, `bt://`, `capture://`, `backlight://`, `lock://`, `power://system/*` and the rest |
+
+The write half is **not** implemented and each design note says so in its own §8:
+the `networkd` drop-in writer, the `iwd` credential file, the ALSA mixer helper,
+the power menu and the PAM helper are all still decisions rather than code.
+
+### Commands actually executed
+
+| Command | Result |
+|---|---|
+| `cargo test -p litric-caps -p litric-sysd --locked` (on the WSL builder) | **PASS — 49 + 94 + 5 tests, 0 failed.** The three pre-existing tests that assert an unreadable root reports nothing rather than zeroes still pass, which is what forced `Platform::unreadable` to exist rather than emitting `net.iface.count=0` for a machine nobody read |
+| `./tools/build.sh --profile desktop` (builder, profile `core desktop`) | **PASS, exit 0.** `litricos.raw.zst` 1,639,964,553 B; `litricos.system.raw.zst` 1,151,049,092 B; `litricos.verity.raw.zst` 153,713,037 B; `litricos.esp.raw.zst` 334,386,506 B; `initrd.cpio.zst` 64,511,633 B; `SHA256SUMS` written |
+| QEMU boot, both serial ports captured (KVM, q35) | **PASS.** Kernel 7.2.9-arch1-1, dm-verity on (`litric.root.verity=on`), 78 `Reached target` lines, `bochs-drm` framebuffer, `systemd-networkd` up, and `litric-shell` reporting `frames=34` / `rows_presented=26400` |
+| Login shell on the image's own console (ttyS1) | **PASS.** `litricos login: root (automatic login)` then `[root@litricos ~]#` |
+| `litric-sysd --report` **inside the booted guest** | **PASS.** Real values, not fixtures — see the excerpt below |
+| `pytest tests/smoke_boot.py` with `LITRIC_ACCEL=kvm LITRIC_BOOT_TIMEOUT=150` | **PASS — 4 passed, 180.66 s**, including `test_smoke_test_can_actually_fail` against a corrupted image |
+
+### The running guest's own facts
+
+Read out of the booted image with `tools/console-probe.py` (which exists because
+of [BUG-0017](bugs/BUG-0017-smoke-test-listened-to-the-wrong-console.md)):
+
+```
+litric.root.verity=on
+net.iface.count=2
+net.iface enp0s2 state=up carrier=1 mac=52:54:00:12:34:56 mtu=1500 rx=626 tx=1952
+net.addr enp0s2 family=4 addr=10.0.2.15 prefix=24 scope=global
+net.addr enp0s2 family=6 addr=fe80::5054:ff:fe12:3456 prefix=64 scope=link
+net.route destination=0.0.0.0/0 via=10.0.2.2 dev=enp0s2 metric=0
+net.route destination=10.0.2.0/24 via=- dev=enp0s2 metric=0
+net.dns nameserver=10.0.2.3
+net.dns.source=resolved
+net.addr.v4=iproute2
+audio.card.count=0
+audio.state server=none socket=-
+audio.control=none
+power.battery.count=0
+thermal.cooling name=cooling_device0 type=Processor state=0
+bt.adapter.count=0
+bt.state=no-adapter
+bt.daemon=absent
+session.count=2
+session.logind=present
+auth.available=none
+auth.lock=refused
+session.id 1 user=root uid=0 seat=- type=tty state=active tty=ttyS1 display=- leader=482
+```
+
+Every one of those lines is consistent with what the machine is: QEMU's slirp
+address on the virtio NIC, the sentinel gateway written as `-` for the directly
+connected route, no sound hardware and no Bluetooth radio in this VM, and an
+autologin session on ttyS1 that says `auth.available=none` because it is true.
+
+### The build host, and why every earlier build died
+
+Recorded because it cost the most time and is not obvious from any log:
+
+- The image builder is a WSL2 Arch distribution. Its disk is a dynamically
+expanding VHD on `C:`, and `C:` had **0.26 GB free**. Builds died one to three
+minutes in, mid-`pacman`, every time, because the VHD could not grow — the guest
+reported 935 GB free, the host had none, and the failure looked like a killed VM.
+- Fixing it: 4.45 GB of caches cleared, the guest's own stale build artifacts
+removed (6 GB inside the filesystem), and the VHD compacted from **37.52 GB to
+15.55 GB** with `diskpart compact vdisk`, which needs elevation once. `C:` then
+had 30 GB free and the build completed on the first attempt.
+- Also learned, and applied: the WSL VM shuts down after the last `wsl.exe` client
+exits, which kills a build started in the background. `vmIdleTimeout` is now set
+in `%USERPROFILE%\.wslconfig`; builds are launched detached and survive.
+
+### What this does not establish
+
+| Claim | Why it is not established |
+|---|---|
+| GATE 01 condition 3 as a *default* run | the pass above used `LITRIC_ACCEL=kvm` and a 150 s deadline. Under the harness's default TCG acceleration the same boot did not reach a prompt inside 300 s. TCG is the default for a reason (it needs no nested virtualisation) and this host cannot yet run the gate the way CI would |
+| the ≤3.5 s boot budget | measured ~75 s to a shell under KVM in QEMU. A VM boot is not the hardware the budget describes, but the budget is **not met** and no number from this pass may be quoted as meeting it |
+| idle RAM and idle CPU (`docs/PERF-budget.md` rows) | not measured. `litric-sysd` reports its own RSS; nothing in this pass sampled the machine at idle from inside |
+| the providers actually managing anything | every subsystem above is read-only in this pass. No interface was configured, no volume set, no device paired, no session locked |
+| hardware beyond QEMU | the only machine this has run on is QEMU with virtio devices, which is why `audio.card.count=0` and `bt.state=no-adapter` are the *expected* readings there and not evidence about a laptop |
+
+---
+
+## The wave-1 write half, and the first boot that asked the system to *do* something — 2026-10-12
+
+**Verdict for GATE 01: still BLOCKED. Two conditions moved, and the boot found
+two defects that no test on a host could have found.** What keeps the gate
+blocked is listed under *not established*, and none of it is wording.
+
+### What was implemented in this pass
+
+| Area | Where | State |
+|---|---|---|
+| Audio control | `src/litric-sysd/src/providers.rs` (`AudioAction`) | `/usr/bin/wpctl set-volume --limit 1.0 @DEFAULT_AUDIO_SINK@ <0.00-1.00>` and `set-mute ... 0\|1`; the percentage is clamped in code |
+| Network actions | same (`NetAction`) | `ip link set <iface> up\|down`, `networkctl reconfigure <iface>`, `iwd` credential file + `iwctl station <iface> connect <ssid>`, and forgetting one |
+| Bluetooth | same (`BtAction`), `image/mkosi.profiles/desktop.conf` | `bluez` + `bluez-utils` in the profile; `bluetoothctl` for radio power, discovery, pair, connect, forget; `bluetooth.service` enabled in the chroot |
+| Authentication | same (`AuthAction`), `src/litric-sysd/src/platform/session.rs` | `/usr/bin/unix_chkpwd <user> nonull` with the password on **stdin**; `auth.available` is now read from the filesystem (`unix-chkpwd` or `none`) |
+| Protocol | `src/litric-sysd/src/proto.rs` | `AUDIO VOLUME\|MUTE`, `NET LINK\|RECONFIGURE\|WIFI JOIN\|WIFI FORGET`, `BT POWER\|SCAN\|PAIR\|CONNECT\|FORGET`, `AUTH VERIFY ... CONFIRM` |
+| Capabilities | `src/litric-caps/src/capability.rs`, `src/litric-sysd/src/state.rs` | `audio://` added to the resource schemes; the shell is granted `audio://`, `iface://`, `wifi://`, `bt://` and `lock://`, and each request is still checked and audited |
+| Bounded waits | `src/litric-sysd/src/action.rs` | `Runner::run(program, args, stdin, timeout_secs)`; a tool that outlives its deadline is killed and reported as `reason=timeout` |
+| In-guest probes | `image/mkosi.extra/usr/lib/litric/selftest` | four provider probes and a table of the tools that are actually in the image |
+
+### Commands actually executed
+
+| Command | Result |
+|---|---|
+| `cargo test -p litric-sysd -p litric-caps` (builder) | **PASS — 154 + 53 + 5 tests, 0 failed.** Includes the stdin plumbing against a real program (`/bin/sh -c 'read line && [ "$line" = secret ]'`), a real timeout (`/bin/sleep 30` killed at 1 s, asserted to return `TimedOut`), and the whole provider decision path with a recording runner |
+| `ci/lint-mkosi.py`, `ci/lint-line-endings.py`, `ci/lint-doc-refs.py`, `ci/lint-unit-binaries.py` (builder) | **PASS** — 5 mkosi files, 242 files all LF, 398 citations across 114 documents, 11 program references (6 resolvable, 5 skipped, 0 broken) |
+| `./tools/build.sh --profile desktop` (builder, profile `core desktop`) | artifacts produced: `litricos.raw.zst` 1,644,797,212 B, `litricos.system.raw.zst` 1,155,348,213 B, `litricos.esp.raw.zst` 334,303,142 B, `litricos.efi` 343,182,264 B, `initrd.cpio.zst` 64,452,621 B. `zstd -t` on the disk image, the ESP and the initrd: **all three intact** (3,392,213,504 / 536,870,912 / 190,169,600 bytes). **The build script did not finish**: the detached process was killed while mkosi was compressing the disk image, so `SHA256SUMS` is empty and the build's own closing report was never written. The artifacts above were integrity-tested instead, and the boot below is the evidence that they work |
+| `tools/console-probe.py --accel kvm` booting `build/boot/litricos.raw` and running `/usr/lib/litric/selftest` in the guest | **PASS as a boot; one probe failed and one never returned** — see the defect table |
+
+### The running guest's own report
+
+```
+litric.kernel=7.2.9-arch1-1
+litric.boot.summary=Startup finished in 2.535s (kernel) + 3.113s (initrd) + 6.386s (userspace) = 12.035s
+litric.units.failed=0
+litric.mem.total_mb=2892
+litric.mem.used_mb=845
+litric.mem.avail_mb=2047
+litric.proc.count=180
+litric.thread.count=184
+litric.root.fstype=erofs
+litric.root.readonly=yes
+litric.verity.active=yes
+litric.sysd.binary=present
+litric.sysd.rss_kb=3052
+litric.sysd.ping=pong
+litric.sysd.denies_ungranted_read=yes
+litric.sysd.refuses_unconfirmed_poweroff=yes
+litric.sysd.net_link_lo=NO -- ERR bad-argument on/off cannot be up
+litric.sysd.refuses_unconfirmed_verify=yes
+litric.sysd.refuses_wrong_password=yes
+litric.sysd.audio_mute=unavailable -- no sound server in this VM
+```
+
+`litric.mem.used_mb=845` is the first idle-ish memory number this project has ever
+had from inside its own image; it is **not** yet a budget result. It is a 3 GiB
+QEMU guest with a framebuffer, a shell, `bluez`, `iwd` and the daemon, and the
+`docs/PERF-budget.md` targets are for a smaller footprint than this VM; the
+comparison needs a run with the same geometry as the target. The `bluez` row
+added to that ledger the same day says the same thing.
+
+### The three defects this boot found
+
+| # | What the guest said | What it was | Fix, and the test that would catch it again |
+|---|---|---|---|
+| 1 | `sysd.net_link_lo=NO -- ERR bad-argument on/off cannot be up` | the protocol's `NET LINK` arm accepted `on`/`off` while the design note, the action and the self test all say `up`/`down`. A host-side test that only checked "a link request parses" would have passed, because it would have been written against the parser | `up_down` in `proto.rs`; `a_link_takes_up_and_down_and_not_on_and_off` asserts the three cases (up, DOWN, and a refusal for `on`) |
+| 2 | the self test *stopped* after `sysd.audio_mute=…`: no Bluetooth line, no tool table, no report | `bluetoothctl` on a machine with no radio waits for a D-Bus name that never appears. The daemon had no deadline on a child process, so the action never returned and the report never continued | `Runner::run` now takes `timeout_secs`; every plan sets one (10 s for a socket round trip, 15 s for a local change, 30 s where a radio or a device may answer); a killed tool is `reason=timeout` and not an exit status. `a_tool_that_never_exits_is_killed_and_reported_as_a_timeout` runs `/bin/sleep 30` with a 1 s deadline and asserts the elapsed time |
+
+| 3 | `litric.sysd.net_link_lo=NO -- ERR action-failed /usr/bin/ip exited 1` | `image/mkosi.extra/usr/lib/systemd/system/litric-sysd.service` said, in as many words, "needs no capability at all -- so it is given none of them", and gave it an empty `CapabilityBoundingSet` and `RestrictAddressFamilies=AF_UNIX`. That was true of the daemon that only read `/proc` and `/sys`; the write half arrived later and kept the sentence. `ip link set <iface> up` goes through an `AF_NETLINK` socket and needs `CAP_NET_ADMIN`, so the action was refused by the kernel before `ip` could do anything. The unit's own comment was a claim about a daemon that no longer existed, and only a boot inside the unit's namespace could falsify it | `CapabilityBoundingSet=CAP_NET_ADMIN` and `AmbientCapabilities=CAP_NET_ADMIN` (ambient as well, so the grant does not depend on the call path), `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, and `ReadWritePaths=/var/lib/iwd` for the `NET WIFI JOIN` credential write that `ProtectSystem=strict` would otherwise fail with `EROFS`. Each is justified in the unit with the reason, as `03-PHASE-02-CORE.md` requires of a non-empty bounding set, and `image/mkosi.extra/usr/lib/tmpfiles.d/litric-iwd.conf` guarantees the one writable path exists before the namespace is built — systemd fails a unit whose `ReadWritePaths` is absent. What catches it again is the in-guest probe: `litric.sysd.net_link_lo` can only read `ok` when the sandbox actually permits the action |
+
+None of the three was reachable from the host, and none would have appeared in a
+`cargo test` run: every one needed the action to be asked for **inside the
+system**, which is the argument for the in-guest probes existing at all.
+
+### The corrected build, booted
+
+The three fixes above were made, the tree re-synced (`tools/sync-builder.sh`,
+which verified 662 files identical), the image rebuilt and booted again.
+
+| Step | Result |
+|---|---|
+| `./tools/build.sh --profile desktop` | **PASS, 5 m 37 s, exit 0** — and this time the build finished its own closing report, so `build/out/SHA256SUMS` holds eleven real hashes. The earlier attempt's was empty because the process was killed mid-compression |
+| `zstd -d` of the disk image | `litricos.raw` 3,392,221,696 B, decompressed from `litricos.raw.zst` 1,644,904,629 B |
+| `tools/console-probe.py --accel kvm`, then `/usr/lib/litric/selftest` in the guest | **PASS** — the lines below are that transcript |
+| `pytest tests/smoke_boot.py -v` with `LITRIC_ACCEL=kvm LITRIC_BOOT_TIMEOUT=150 LITRIC_SMOKE_IMAGE=build/out/litricos.raw` | **PASS — 4 passed in 175.78 s (0:02:55)**, including `test_smoke_test_can_actually_fail` against its corrupted-image stub. This retires the row below that said the smoke test had not been run against this image |
+| an earlier attempt at the same two commands in parallel | **FAILED, and worth recording**: `pytest` reported `Boot did not reach a shell. Status: TIMEOUT` with `qemu-system-x86_64: -drive ...: Failed to get "write" lock`. QEMU takes an exclusive write lock on the image, and `console-probe.py` was still holding it. Two boots of one image must be serialised; a `TIMEOUT` whose detail names a lock is that, and not a boot failure |
+
+| Probe | Result |
+|---|---|
+| `litric.sysd.net_link_lo` | **`ok`** — `ip link set lo up` really ran, once the unit's sandbox permitted it (defect 3) |
+| `litric.sysd.bt_power` | `unavailable -- no Bluetooth radio in this VM`. Before the deadline fix this probe never returned at all |
+| `litric.sysd.audio_mute` | `unavailable -- no sound server in this VM` |
+| `litric.sysd.refuses_wrong_password` / `refuses_unconfirmed_verify` / `refuses_unconfirmed_poweroff` / `denies_ungranted_read` | `yes`, `yes`, `yes`, `yes` |
+| `litric.units.failed` | `0` |
+| `litric.boot.summary` | `1.868s (kernel) + 2.803s (initrd) + 5.810s (userspace) = 10.482s`; a second boot of the same image measured `2.043 + 2.926 + 5.925` |
+| `litric.mem.total_mb` / `used_mb` / `avail_mb` | `2892` / `849` / `2043` in a 3 GiB guest — the first idle-ish memory reading from inside this image, and still not a budget result |
+| `litric.shell.state` / `.result` / `.version` / `.canvas` | `active` / `success` / `0.2.0` / `1280x800` |
+| `litric.tool.usr.bin.*` | `wpctl`, `iwctl`, `bluetoothctl`, `networkctl`, `ip`, `systemctl` all `present mode=755`; `unix_chkpwd` `present mode=6755` |
+
+The raw lines are reproduced in [docs/EVIDENCE.md](EVIDENCE.md).
+
+### What this does not establish
+
+| Claim | Why it is not established |
+|---|---|
+| that Wi-Fi, Bluetooth or audio *work* | the VM has no radio and no sound device. Every one of those actions was asked for and answered honestly, which is evidence about the answer path and **not** evidence about a laptop |
+| that a correct password verifies | no account in this image has a known password, deliberately (`RootPassword=!locked`). What is established is the refusal direction: a wrong password is refused, an unconfirmed request never reaches the helper, and the helper is present and setuid |
+| that a person can reach any of this | **no Settings pane exists for Network, Bluetooth or Audio** (`src/litric-shell/src/views.rs` says so in the interface). Everything in this entry is reachable from the console and the daemon's socket, and from nowhere else. This is the largest honest gap in the pass |
+| that the lock screen is meaningful | there is still no lock screen, and `auth.lock=refused` is still in the reply even though a password can now be verified |
+| the smoke test under the harness's *default* `accel=tcg` | the 4-case pass above used `LITRIC_ACCEL=kvm` and a 150 s deadline. TCG needs no nested virtualisation, which is why it is the default, and this host has not completed a boot under it inside 300 s — so the gate cannot yet be run the way CI would run it |
+| the ≤3.5 s boot budget | 12.035 s to `systemd-analyze`'s userspace anchor inside a 3 GiB QEMU guest. Better than the ~75 s to a *login prompt* recorded on 2026-10-11 (different anchors, so not comparable), and still **not the budget**: that budget describes hardware this has never run on |
+| idle CPU | not measured. Nothing in the guest sampled CPU at idle |

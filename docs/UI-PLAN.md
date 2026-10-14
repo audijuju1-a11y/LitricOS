@@ -77,6 +77,46 @@ Settings app window: sidebar+detail layout; About window: centered, glass, versi
 stamp. Theme switch (light/dark) flips token set, not code.
 Accept: E2E toggle dark↔light; overflow audit 0 both themes.
 
+### P10 — Lock Liquid Glass (ported 2026-10-12)
+The prototype's lock screen (`screens/lock/liquid` in the design pack) as a real
+surface: three colour fields drifting on 28/34/40 s keyframes over the
+wallpaper; a glass clock that blurs what is behind it in software (two box-blur
+passes through `canvas::blur_region`, the renderer's honest stand-in for
+`backdrop-filter`), with **glow and bloom adjustable 0–100**; a clock that can
+breathe; a widget row (uptime, network, battery) drawn from measured system
+facts; and a customize sheet whose four tabs — Look, Effects, Glass, Widgets —
+edit all of it live, with a reset. Motion is a preset (Still / Slow / Normal /
+Fast) rather than a free number, and "Still" leaves the fields where they are
+instead of snapping them home.
+
+Accept: E2E — Space raises the password field, Enter submits once, the sheet
+changes the look live, a machine that cannot verify a password refuses to lock
+and says why; a locked frame is composed in full every tick, so its cost is
+measured by `src/litric-shell/examples/render_bench.rs` in four states.
+
+Status: **shipped on the host** — `src/litric-shell/src/lock.rs`. The numbers
+are in `docs/EVIDENCE.md`; the booted-image half is still open
+(`docs/design/wave1/04-authentication.md` §7).
+
+### P11 — Dock that grows into the launcher (ported 2026-10-12)
+The prototype's Desktop B (`screens/desktop/b-dock-morph`) as one surface rather
+than two: the resting pill (launcher button, pinned icons, search bubble, clock)
+morphs into a 900 px panel on a spring — same width centre, same bottom edge, so
+the icons the user was aiming at do not move — carrying a title row, **a row of
+action chips** (Terminal, Files, Settings, Activity, Trash, Defender: the
+addition this system makes to the prototype, which put a single link to its lock
+screen at the top right), the app grid, and the dock's own row at the bottom of
+the panel.
+
+Search is the same surface contracted rather than a second panel: typing filters
+the grid, the pinned icons fold away, and an X collapses it — a launcher with no
+matches still offers a way back.
+
+Accept: E2E — the pill grows, a tile opens its app, a chip performs what its
+label says, typing filters, Esc and the X collapse the spring back to rest.
+
+Status: **shipped on the host** — `views::dock` + `shell::SHORTCUT_CHIPS`.
+
 ## Sequencing & risk
 
 - P0→P1→P2 first: they define the visual grammar everything else reuses.
@@ -89,5 +129,7 @@ Accept: E2E toggle dark↔light; overflow audit 0 both themes.
 - Every phase ends: cargo test --workspace + overflow audit 0 + PNG evidence.
 
 ## Non-goals v1
-GPU blur/refraction (renderer constraint), multiple Spaces, window snapping grid
-beyond maximize, Dock on screen edges other than bottom.
+GPU blur/refraction (renderer constraint — P10 approximates the glass with two
+box-blur passes, and the tint and specular layers are what carry the look when
+it is off), multiple Spaces, window snapping grid beyond maximize, Dock on
+screen edges other than bottom.

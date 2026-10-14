@@ -21,6 +21,9 @@
 
 use core::fmt;
 
+use crate::action::PowerAction;
+use crate::providers::{self, AudioAction, AuthAction, BtAction, NetAction, SystemAction};
+
 /// The longest request line accepted, in bytes.
 ///
 /// A client that sends more than this is malfunctioning or hostile; either way
@@ -72,6 +75,32 @@ pub enum Request {
     TrashPlanEmpty,
     /// The capability audit log.
     CapsAudit,
+    /// Ask the machine for a power transition.
+    ///
+    /// `consent` is the UI's report that the user answered a prompt naming
+    /// this action. Without it the broker refuses a destructive scope, so the
+    /// protocol cannot be used to power the machine off by sending a line.
+    Power {
+        /// Which transition.
+        action: PowerAction,
+        /// Whether the user confirmed in the moment.
+        consent: bool,
+    },
+    /// Ask a provider to change something: sound, the network, Bluetooth, or a
+    /// credential check.
+    ///
+    /// `consent` is the same report as [`Request::Power`]'s and means the same
+    /// thing, but only one of these actions needs it: `AuthSession` is a
+    /// live-consent capability, so a verification without the `CONFIRM` word is
+    /// refused by the broker. The three providers are reversible, and a volume
+    /// slider that opened a dialog would be a worse interface for the same
+    /// safety.
+    Action {
+        /// What to do.
+        action: SystemAction,
+        /// Whether the user answered a prompt naming this action.
+        consent: bool,
+    },
     /// Resolve a storage URI for an application.
     Resolve {
         /// The application asking. Supplied by the daemon's caller, never by
@@ -184,6 +213,49 @@ impl Request {
         };
         let arg = |i: usize| -> &str { args.get(i).copied().unwrap_or_default() };
 
+        // The two words that appear as a second argument in several verbs. They
+        // are matched case-insensitively, like verbs and unlike path arguments.
+        let on_off = |word: &str| -> Result<bool, ProtoError> {
+            match word.to_ascii_lowercase().as_str() {
+                "on" => Ok(true),
+                "off" => Ok(false),
+                other => Err(ProtoError::BadArgument {
+                    name: "on/off",
+                    value: other.to_owned(),
+                }),
+            }
+        };
+
+        // A link takes the interface's own two words. This is a second closure
+        // rather than a reuse of `on_off` because the first booted image proved
+        // the difference: the in-guest self test sent `NET LINK lo up`, the
+        // parser wanted `on`, and the reply was
+        // `ERR bad-argument on/off cannot be up` — a real defect that only an
+        // action asked for from inside the system could have found.
+        let up_down = |word: &str| -> Result<bool, ProtoError> {
+            match word.to_ascii_lowercase().as_str() {
+                "up" => Ok(true),
+                "down" => Ok(false),
+                other => Err(ProtoError::BadArgument {
+                    name: "up/down",
+                    value: other.to_owned(),
+                }),
+            }
+        };
+
+        // Decode one hex field into text, refusing anything else without
+        // repeating it. A secret that failed to decode is still a secret.
+        let hex_text = |raw: &str, name: &'static str| -> Result<String, ProtoError> {
+            let bytes = providers::unhex(raw).ok_or_else(|| ProtoError::BadArgument {
+                name,
+                value: "<not hex>".to_owned(),
+            })?;
+            String::from_utf8(bytes).map_err(|_| ProtoError::BadArgument {
+                name,
+                value: "<not utf-8>".to_owned(),
+            })
+        };
+
         match verb_lower.as_str() {
             "ping" => {
                 arity("PING", 0)?;
@@ -239,6 +311,182 @@ impl Request {
                     value: other.to_owned(),
                 }),
             },
+            "audio" => match arg(0).to_ascii_lowercase().as_str() {
+                "volume" => {
+                    arity("AUDIO VOLUME", 2)?;
+                    let percent = arg(1).parse::<u8>().map_err(|_| ProtoError::BadArgument {
+                        name: "volume percent",
+                        value: arg(1).to_owned(),
+                    })?;
+                    Ok(Self::Action {
+                        action: SystemAction::Audio(AudioAction::Volume(percent)),
+                        consent: false,
+                    })
+                }
+                "mute" => {
+                    arity("AUDIO MUTE", 2)?;
+                    Ok(Self::Action {
+                        action: SystemAction::Audio(AudioAction::Mute(on_off(arg(1))?)),
+                        consent: false,
+                    })
+                }
+                other => Err(ProtoError::BadArgument {
+                    name: "AUDIO subcommand",
+                    value: other.to_owned(),
+                }),
+            },
+            "net" => match arg(0).to_ascii_lowercase().as_str() {
+                "link" => {
+                    arity("NET LINK", 3)?;
+                    Ok(Self::Action {
+                        action: SystemAction::Net(NetAction::SetLink {
+                            iface: arg(1).to_owned(),
+                            up: up_down(arg(2))?,
+                        }),
+                        consent: false,
+                    })
+                }
+                "reconfigure" => {
+                    arity("NET RECONFIGURE", 2)?;
+                    Ok(Self::Action {
+                        action: SystemAction::Net(NetAction::Reconfigure(arg(1).to_owned())),
+                        consent: false,
+                    })
+                }
+                "wifi" => match arg(1).to_ascii_lowercase().as_str() {
+                    // A network name and a passphrase are hex on the wire: the
+                    // protocol splits on whitespace, and a passphrase is a
+                    // string a person typed. A value that is not hex is refused
+                    // with `<not hex>` rather than echoed, so a malformed line
+                    // cannot put a secret in an ERR reply.
+                    "join" => {
+                        arity("NET WIFI JOIN", 4)?;
+                        Ok(Self::Action {
+                            action: SystemAction::Net(NetAction::JoinWifi {
+                                ssid: hex_text(arg(2), "network name")?,
+                                passphrase: hex_text(arg(3), "passphrase")?,
+                            }),
+                            consent: false,
+                        })
+                    }
+                    "forget" => {
+                        arity("NET WIFI FORGET", 3)?;
+                        Ok(Self::Action {
+                            action: SystemAction::Net(NetAction::ForgetWifi(hex_text(
+                                arg(2),
+                                "network name",
+                            )?)),
+                            consent: false,
+                        })
+                    }
+                    other => Err(ProtoError::BadArgument {
+                        name: "NET WIFI subcommand",
+                        value: other.to_owned(),
+                    }),
+                },
+                other => Err(ProtoError::BadArgument {
+                    name: "NET subcommand",
+                    value: other.to_owned(),
+                }),
+            },
+            "bt" | "bluetooth" => {
+                let sub = arg(0).to_ascii_lowercase();
+                let action = match sub.as_str() {
+                    "power" | "scan" => {
+                        arity("BT POWER", 2)?;
+                        let on = on_off(arg(1))?;
+                        if sub == "power" {
+                            BtAction::Power(on)
+                        } else {
+                            BtAction::Scan(on)
+                        }
+                    }
+                    "pair" | "connect" | "forget" => {
+                        arity("BT PAIR", 2)?;
+                        let addr = arg(1).to_owned();
+                        match sub.as_str() {
+                            "pair" => BtAction::Pair(addr),
+                            "connect" => BtAction::Connect(addr),
+                            _ => BtAction::Forget(addr),
+                        }
+                    }
+                    other => {
+                        return Err(ProtoError::BadArgument {
+                            name: "BT subcommand",
+                            value: other.to_owned(),
+                        })
+                    }
+                };
+                Ok(Self::Action {
+                    action: SystemAction::Bluetooth(action),
+                    consent: false,
+                })
+            }
+            "auth" => match arg(0).to_ascii_lowercase().as_str() {
+                "verify" => {
+                    // `AUTH VERIFY <user> <password-hex> [CONFIRM]`. The
+                    // password is hex for the same reason a passphrase is, and
+                    // it is never echoed: the reply for a bad line says the
+                    // argument was not hex, not what it was.
+                    if args.len() < 3 || args.len() > 4 {
+                        return Err(ProtoError::BadArity {
+                            verb: "AUTH VERIFY",
+                            expected: 3,
+                            got: args.len(),
+                        });
+                    }
+                    let consent = match args.get(3) {
+                        None => false,
+                        Some(w) if w.eq_ignore_ascii_case("confirm") => true,
+                        Some(other) => {
+                            return Err(ProtoError::BadArgument {
+                                name: "auth confirmation",
+                                value: (*other).to_owned(),
+                            })
+                        }
+                    };
+                    Ok(Self::Action {
+                        action: SystemAction::Auth(AuthAction::Verify {
+                            user: arg(1).to_owned(),
+                            password: hex_text(arg(2), "password")?,
+                        }),
+                        consent,
+                    })
+                }
+                other => Err(ProtoError::BadArgument {
+                    name: "AUTH subcommand",
+                    value: other.to_owned(),
+                }),
+            },
+            "power" => {
+                if args.is_empty() || args.len() > 2 {
+                    return Err(ProtoError::BadArity {
+                        verb: "POWER",
+                        expected: 1,
+                        got: args.len(),
+                    });
+                }
+                let action = PowerAction::parse(arg(0)).ok_or_else(|| ProtoError::BadArgument {
+                    name: "power action",
+                    value: arg(0).to_owned(),
+                })?;
+                // The confirmation word is optional and must be exactly
+                // `confirm`. Anything else is a refusal rather than a
+                // best-effort interpretation: a request that misspells the
+                // word it needs to end the session must not be read as if it
+                // had said it.
+                let consent = match args.get(1) {
+                    None => false,
+                    Some(w) if w.eq_ignore_ascii_case("confirm") => true,
+                    Some(other) => {
+                        return Err(ProtoError::BadArgument {
+                            name: "power confirmation",
+                            value: (*other).to_owned(),
+                        })
+                    }
+                };
+                Ok(Self::Power { action, consent })
+            }
             "resolve" => {
                 arity("RESOLVE", 3)?;
                 let access = AccessWord::parse(&arg(2).to_ascii_lowercase()).ok_or_else(|| {
@@ -358,6 +606,133 @@ mod tests {
         assert_eq!(Request::parse("CAPS AUDIT"), Ok(Request::CapsAudit));
     }
 
+    // ---- the write half: provider actions ---------------------------------
+
+    fn action(request: &str) -> SystemAction {
+        match Request::parse(request) {
+            Ok(Request::Action { action, .. }) => action,
+            other => panic!("{request} did not parse to an action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_link_takes_up_and_down_and_not_on_and_off() {
+        // The shape the in-guest self test uses, and the shape the parser must
+        // accept. `on`/`off` is what this verb said before the first booted
+        // image disagreed with it.
+        assert_eq!(
+            action("NET LINK lo up"),
+            SystemAction::Net(NetAction::SetLink {
+                iface: "lo".to_owned(),
+                up: true
+            })
+        );
+        assert_eq!(
+            action("net link eth0 DOWN"),
+            SystemAction::Net(NetAction::SetLink {
+                iface: "eth0".to_owned(),
+                up: false
+            })
+        );
+        let refused = Request::parse("NET LINK eth0 on").expect_err("a link is not on or off");
+        assert_eq!(refused.kind(), "bad-argument");
+    }
+
+    #[test]
+    fn the_radio_takes_on_and_off() {
+        assert_eq!(
+            action("BT POWER ON"),
+            SystemAction::Bluetooth(BtAction::Power(true))
+        );
+        assert_eq!(
+            action("bluetooth scan off"),
+            SystemAction::Bluetooth(BtAction::Scan(false))
+        );
+        assert_eq!(
+            action("BT CONNECT aa:bb:cc:dd:ee:ff"),
+            SystemAction::Bluetooth(BtAction::Connect("aa:bb:cc:dd:ee:ff".to_owned()))
+        );
+        // An address that is not one is refused by the action, not by the
+        // parser: the parser's job is the shape of the line, and the action's is
+        // whether a value makes sense. Both are refusals before anything runs.
+        assert!(Request::parse("BT PAIR --help").is_ok());
+    }
+
+    #[test]
+    fn audio_parses_a_percentage_and_a_mute_word() {
+        assert_eq!(
+            action("AUDIO VOLUME 40"),
+            SystemAction::Audio(AudioAction::Volume(40))
+        );
+        assert_eq!(
+            action("audio mute on"),
+            SystemAction::Audio(AudioAction::Mute(true))
+        );
+        assert!(Request::parse("AUDIO VOLUME loud").is_err());
+        assert!(Request::parse("AUDIO VOLUME 500").is_err(), "not a u8");
+    }
+
+    #[test]
+    fn a_wifi_join_decodes_hex_and_never_echoes_a_secret() {
+        // "Home" and "correct horse" in hex.
+        let request = "NET WIFI JOIN 486f6d65 636f727265637420686f727365";
+        assert_eq!(
+            action(request),
+            SystemAction::Net(NetAction::JoinWifi {
+                ssid: "Home".to_owned(),
+                passphrase: "correct horse".to_owned()
+            })
+        );
+        let refused =
+            Request::parse("NET WIFI JOIN zz 636f727265637420686f727365").expect_err("not hex");
+        let text = refused.to_string();
+        assert!(text.contains("<not hex>"), "{text}");
+        assert!(
+            !text.contains("correct horse") && !text.contains("636f7272"),
+            "a malformed line must not put a secret in the reply: {text}"
+        );
+    }
+
+    #[test]
+    fn a_verification_carries_its_confirmation_or_it_does_not_carry_one() {
+        match Request::parse("AUTH VERIFY alice 77726f6e67 CONFIRM") {
+            Ok(Request::Action {
+                action: SystemAction::Auth(AuthAction::Verify { user, password }),
+                consent,
+            }) => {
+                assert_eq!(user, "alice");
+                assert_eq!(password, "wrong");
+                assert!(consent, "the word is the answer to the prompt");
+            }
+            other => panic!("did not parse: {other:?}"),
+        }
+        match Request::parse("AUTH VERIFY alice 77726f6e67") {
+            Ok(Request::Action { consent, .. }) => {
+                assert!(!consent, "no word, no consent");
+            }
+            other => panic!("did not parse: {other:?}"),
+        }
+        // A misspelled confirmation is a refusal, not a best-effort read.
+        assert!(Request::parse("AUTH VERIFY alice 77726f6e67 sure").is_err());
+        let refused =
+            Request::parse("AUTH VERIFY alice 77726f6e67 CONFIRM CONFIRM").expect_err("too many");
+        assert_eq!(refused.kind(), "bad-arity");
+    }
+
+    #[test]
+    fn unknown_provider_subcommands_are_refused_by_name() {
+        for line in [
+            "AUDIO LOUDER 5",
+            "NET FLUSH eth0",
+            "NET WIFI FORGET-EVERYTHING now",
+            "BT DISCOVER",
+            "AUTH FORGET alice",
+        ] {
+            let err = Request::parse(line).expect_err(line);
+            assert_eq!(err.kind(), "bad-argument", "{line}");
+        }
+    }
+
     #[test]
     fn resolve_parses_all_three_access_words() {
         for (w, want) in [
@@ -388,6 +763,59 @@ mod tests {
         };
         assert_eq!(app, "Com.Litric.Files");
         assert_eq!(uri, "app://Notes/A.md");
+    }
+
+    #[test]
+    fn power_actions_parse_and_carry_consent() {
+        for (word, action) in [
+            ("SUSPEND", PowerAction::Suspend),
+            ("reboot", PowerAction::Reboot),
+            ("PowerOff", PowerAction::PowerOff),
+        ] {
+            assert_eq!(
+                Request::parse(&format!("POWER {word}")),
+                Ok(Request::Power {
+                    action,
+                    consent: false
+                })
+            );
+            assert_eq!(
+                Request::parse(&format!("power {word} confirm")),
+                Ok(Request::Power {
+                    action,
+                    consent: true
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_power_request_that_is_not_understood_is_refused_rather_than_guessed() {
+        // `hibernate` is a real verb of the tool and not an action this system
+        // has: it must fail loudly, not be folded into the nearest action.
+        assert!(matches!(
+            Request::parse("POWER HIBERNATE"),
+            Err(ProtoError::BadArgument {
+                name: "power action",
+                ..
+            })
+        ));
+        // A misspelled confirmation is not consent.
+        assert!(matches!(
+            Request::parse("POWER POWEROFF yes"),
+            Err(ProtoError::BadArgument {
+                name: "power confirmation",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("POWER"),
+            Err(ProtoError::BadArity { verb: "POWER", .. })
+        ));
+        assert!(matches!(
+            Request::parse("POWER POWEROFF confirm please"),
+            Err(ProtoError::BadArity { verb: "POWER", .. })
+        ));
     }
 
     #[test]

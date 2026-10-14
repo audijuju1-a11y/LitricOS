@@ -1045,10 +1045,16 @@ mod tests {
         let (dir, root) = open_root("replace-fails");
         fs::write(dir.join("Documents/keep.txt"), b"old").expect("destination");
         fs::create_dir(dir.join("Documents/src")).expect("source dir");
+        // The incoming item is a *tree* named `keep.txt`, because only a tree
+        // makes `copy_into` walk into something it cannot copy. Writing a
+        // plain file here would have made the whole test pass for the wrong
+        // reason: a single regular file always copies.
+        fs::create_dir(dir.join("Documents/src/keep.txt")).expect("source tree");
         // A unix socket is neither a file, a directory nor a link, so
         // `copy_into` refuses the tree with `unsupported-archive`. It also
         // needs no unsafe code or libc to create, unlike a FIFO.
-        let _socket = UnixListener::bind(dir.join("Documents/src/pipe.sock")).expect("socket");
+        let _socket =
+            UnixListener::bind(dir.join("Documents/src/keep.txt/pipe.sock")).expect("socket");
         let dest_dir = root.resolve(&logical("/Documents")).expect("dest dir");
         let err = root
             .copy_item(

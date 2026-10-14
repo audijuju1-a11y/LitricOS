@@ -54,6 +54,15 @@ pub struct ShellAnims {
     pub context_menu: Anim,
     /// The dock's slide-up from the bottom edge.
     pub dock: Anim,
+    /// The dock's expansion into the launcher, 0 = pill, 1 = panel.
+    ///
+    /// Its own spring rather than the launcher overlay's, because the two are
+    /// not the same question: *which* overlay is open decides what is drawn,
+    /// while this decides how far the morph has travelled. The launcher's
+    /// overlay spring is also raised by quick settings and the notification
+    /// list, and a dock that expanded when a notification arrived would be a
+    /// bug with a nice animation.
+    pub launcher_morph: Anim,
     /// Per-window elevation, for the focus transition.
     pub focus: FocusAnims,
 }
@@ -68,6 +77,7 @@ impl ShellAnims {
             notifications: Anim::at(0.0, Motion::FAST),
             context_menu: Anim::at(0.0, Motion::INSTANT),
             dock: Anim::at(0.0, Motion::NORMAL),
+            launcher_morph: Anim::at(0.0, Motion::NORMAL),
             focus: FocusAnims::default(),
         }
     }
@@ -76,11 +86,12 @@ impl ShellAnims {
     /// calling it every frame with no state change is a no-op by
     /// [`Anim::set_target`]'s contract, and it is called from `tick`, so the
     /// shell never has to remember which call site opened what.
-    pub fn sync(&mut self, overlay_open: bool, menu_open: bool) {
+    pub fn sync(&mut self, overlay_open: bool, menu_open: bool, launcher_open: bool) {
         self.launcher.set_target(f32::from(overlay_open));
         self.quick_settings.set_target(f32::from(overlay_open));
         self.notifications.set_target(f32::from(overlay_open));
         self.context_menu.set_target(f32::from(menu_open));
+        self.launcher_morph.set_target(f32::from(launcher_open));
     }
 
     /// Step every spring; returns whether any of them still moves.
@@ -94,6 +105,7 @@ impl ShellAnims {
         moving |= self.notifications.step(dt_ms);
         moving |= self.context_menu.step(dt_ms);
         moving |= self.dock.step(dt_ms);
+        moving |= self.launcher_morph.step(dt_ms);
         moving |= self.focus.step(dt_ms);
         moving
     }
@@ -105,7 +117,8 @@ impl ShellAnims {
             && self.quick_settings.settled()
             && self.notifications.settled()
             && self.context_menu.settled()
-            && self.dock.settled())
+            && self.dock.settled()
+            && self.launcher_morph.settled())
             || self.focus.animating()
     }
 }

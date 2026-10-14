@@ -174,4 +174,261 @@ evidence/desktop-tour-after/index.html.
 
 STILL NOT RUN: item_primary rollout beyond list_item (Wave 0.3 list); golden
 screen baselines (Wave 5).
+
+## Wave 1 system providers, image build and first boot of this tree — 2026-10-11
+
+Built and booted on the WSL2 Arch builder (`~/litricos`, synced from this tree by
+`tools/sync-builder.sh`, which verified 657 files identical before the build).
+The full gate record, including what is not established, is in
+`docs/GATES.md` under the same date. Commands and raw numbers:
+
+| Result | Check | Command / Evidence |
+|---|---|---|
+| PASS | `litric-caps` — 49 tests | `cargo test -p litric-caps --locked` |
+| PASS | `litric-sysd` — 94 lib + 5 integration tests | `cargo test -p litric-sysd --locked` |
+| PASS | desktop image builds, exit 0 | `./tools/build.sh --profile desktop`; `litricos.raw.zst` 1,639,964,553 B, `litricos.system.raw.zst` 1,151,049,092 B, `litricos.verity.raw.zst` 153,713,037 B, `litricos.esp.raw.zst` 334,386,506 B, `initrd.cpio.zst` 64,511,633 B |
+| PASS | QEMU boot to userspace, dm-verity on, 78 targets, framebuffer, networkd | serial `ttyS0`, `tools/logs/smoke-*.log` |
+| PASS | the shell runs in the image | `litric-shell`: `litric.shell.frames=34`, `litric.shell.rows_presented=26400`, `litric.shell.locale.tag=C` |
+| PASS | login shell on ttyS1 | `litricos login: root (automatic login)` … `[root@litricos ~]#` |
+| PASS | the guest's own fact report | `python3 tools/console-probe.py --image build/boot/litricos.raw` (transcript below) |
+| PASS | `tests/smoke_boot.py` — 4 passed, 180.66 s | `LITRIC_ACCEL=kvm LITRIC_BOOT_TIMEOUT=150 python3 -m pytest tests/smoke_boot.py -v`, including the corrupted-image negative control |
+| FIXED | the smoke test could never see a prompt: it read ttyS0, the image's getty is on ttyS1, and the prompt pattern did not match `[root@litricos ~]#` | [BUG-0017](bugs/BUG-0017-smoke-test-listened-to-the-wrong-console.md) |
+
+### Raw transcript from inside the booted image
+
+`litric-sysd --report` over the ttyS1 console, unedited apart from the terminal
+control sequences (and the shell echo of the command itself):
+
+```
+litric.root.verity=on
+net.iface.count=2
+net.iface enp0s2 state=up carrier=1 mac=52:54:00:12:34:56 mtu=1500 rx=626 tx=1952
+net.iface lo state=unknown carrier=1 mac=00:00:00:00:00:00 mtu=65536 rx=0 tx=0
+net.addr enp0s2 family=4 addr=10.0.2.15 prefix=24 scope=global
+net.addr enp0s2 family=6 addr=fe80::5054:ff:fe12:3456 prefix=64 scope=link
+net.addr enp0s2 family=6 addr=fec0::5054:ff:fe12:3456 prefix=64 scope=site
+net.addr lo family=4 addr=127.0.0.1 prefix=8 scope=host
+net.addr lo family=6 addr=::1 prefix=128 scope=host
+net.route destination=0.0.0.0/0 via=10.0.2.2 dev=enp0s2 metric=0
+net.route destination=10.0.2.0/24 via=- dev=enp0s2 metric=0
+net.dns nameserver=10.0.2.3
+net.dns search=.
+net.dns.source=resolved
+net.addr.v4=iproute2
+audio.card.count=0
+audio.state server=none socket=-
+audio.control=none
+power.battery.count=0
+thermal.cooling name=cooling_device0 type=Processor state=0
+thermal.cooling name=cooling_device1 type=Processor state=0
+bt.adapter.count=0
+bt.state=no-adapter
+bt.daemon=absent
+session.count=2
+session.logind=present
+auth.available=none
+auth.lock=refused
+session.id 1 user=root uid=0 seat=- type=tty state=active tty=ttyS1 display=- leader=482
+session.id 2 user=root uid=0 seat=- type=unspecified state=active tty=- display=- leader=512
+```
+
+### NOT RUN for this record
+
+| Check | Reason |
+|---|---|
+| the smoke test under its default `accel=tcg` | TCG reached `System Initialization` at 160 s and had not reached multi-user at 300 s; the KVM result is recorded above instead, and says so |
+| idle RAM / idle CPU / boot-time budgets | requires an idle sample from inside the guest; this pass only booted and queried it |
+| anything on hardware other than QEMU | the builders and the guest are a Windows host, a WSL2 VM and a QEMU VM. `audio.card.count=0` and `bt.state=no-adapter` are what those devices are |
+| any provider *writing* anything | the wave-1 pass implemented facts and capability vocabulary only; every write path is listed as unimplemented in `docs/design/wave1/*.md` §8 |
+
+---
+
+## 2026-10-12 — the wave-1 write half, and the first boot asked to act
+
+The four providers that had facts and no actions (audio, network, Bluetooth,
+authentication) now have actions, and the booted image was asked to perform them
+from inside. Full entry, including the two defects the boot found:
+[docs/GATES.md](GATES.md), *The wave-1 write half, and the first boot that asked
+the system to do something — 2026-10-12*.
+
+| Result | Check | Command / evidence |
+|---|---|---|
+| PASS | unit + integration of the new action path, on the builder | `cargo test -p litric-sysd -p litric-caps` — **154 + 53 + 5 passed, 0 failed**. Covers: a refused action runs nothing; an unconfirmed verification never reaches the helper; a confirmed one is fed the password on stdin while the argv holds only `<user> nonull`; a wrong password (exit 7) is a failure; a missing tool is `action-failed`; a tool that outlived its deadline is `reason=timeout` |
+| PASS | repository linters | `ci/lint-mkosi.py`, `ci/lint-line-endings.py`, `ci/lint-doc-refs.py`, `ci/lint-unit-binaries.py` — all exit 0 on this tree |
+| PASS | the image builds, and its artifacts are intact | `./tools/build.sh --profile desktop`; `litricos.raw.zst` 1,644,797,212 B, verified with `zstd -t` (3,392,213,504 B decompressed) |
+| PASS | the image boots, with the new packages and units | `tools/console-probe.py --accel kvm` — `litric.units.failed=0`, dm-verity active, `litric.boot.summary=…= 12.035s` |
+| FIXED | the in-guest probe of a link change was refused: `ERR bad-argument on/off cannot be up` | the protocol wanted `on`/`off` where the action, the note and the probe all say `up`/`down`; the parser was corrected and three cases are asserted |
+| FIXED | the report stopped at the Bluetooth probe: `bluetoothctl` waits forever for a D-Bus name that never appears | `Runner::run` now takes a deadline per action (10 / 15 / 30 s); a killed tool answers `reason=timeout`, and `/bin/sleep 30` with a 1 s deadline is a test |
+| NOT RUN | the smoke test against this new image | the last `4 passed, 180.66 s` result is from the 2026-10-11 artifact. Recorded as NOT RUN rather than inherited |
+| NOT VERIFIED | anything about real radios, real sound hardware or a correct password | the VM has no adapter and no sound device, and no account in the image has a known password by design. The refusals are verified; the successes are not |
+| NOT IMPLEMENTED | a way for a person to reach any of it | no Settings pane exists for Network, Bluetooth or Audio |
+---
+
+## 2026-10-12 (later) — the corrected build, booted, and the smoke test run on it
+
+Three fixes made after the boot above, the tree re-synced (`tools/sync-builder.sh`
+verified 662 files identical), the image rebuilt and booted again. The gate record,
+including what this does not establish, is in [docs/GATES.md](GATES.md), *The
+corrected build, booted*.
+
+| Result | Check | Command / evidence |
+|---|---|---|
+| PASS | the whole workspace, on the builder | `cargo test --workspace --locked` — **1194 passed, 0 failed** across every crate and every test binary |
+| FIXED | the shell's own EICAR signature could never match a real EICAR file | `eicar_denylist()` in `src/litric-shell/src/shell.rs` built the test string with `\\\\` in source — two literal backslashes — while every other copy of that constant in the repository uses one, so the digest it denylisted belonged to a string no EICAR file contains and a scan of the standard test file would have answered `clean`. `journey_defender_scans_and_reports_eicar_end_to_end` caught it: it asserts exactly one detection among two files and was reading `0` |
+| FIXED | four e2e journeys reached into, or assumed, the machine's real root | the shell hardcoded `/` in `try_files_bridge` and in `views.rs::refresh_files` while every other thing it reads already goes through `--root`, so the New-folder dialog created a directory in `/` and the viewer read `/Documents/readme.md`. `Shell::files_root` now carries that root and `main.rs` sets it from `--root`; a journey aims the folder at a fixture. The terminal journey's wait for its worker thread now gives it real time instead of 200 zero-cost ticks |
+| PASS | the desktop image builds, exit 0, **5 m 37 s** | `./tools/build.sh --profile desktop`; `litricos.raw.zst` 1,644,904,629 B, `litricos.system.raw.zst` 1,155,387,476 B, `litricos.verity.raw.zst` 154,480,314 B, `litricos.esp.raw.zst` 334,293,077 B, `litricos.efi` 343,182,264 B, `initrd.cpio.zst` 64,452,622 B. `build/out/SHA256SUMS` written, 11 entries — the previous attempt's was empty because the process was killed |
+| PASS | the image boots to a login shell | `python3 tests/smoke_boot.py` standalone against `build/out/litricos.raw`: `status: SHELL`, `detail: litricos login:` |
+| PASS | `tests/smoke_boot.py` — **4 passed in 175.78 s (0:02:55)** | `LITRIC_ACCEL=kvm LITRIC_BOOT_TIMEOUT=150 LITRIC_SMOKE_IMAGE=build/out/litricos.raw python3 -m pytest tests/smoke_boot.py -v`, including `test_smoke_test_can_actually_fail` against its corrupted-image stub. This is the first smoke result against *this* artifact |
+| PASS | the guest's own report, read out of the running image | `python3 tools/console-probe.py --image build/out/litricos.raw --accel kvm`, running `/usr/lib/litric/selftest`; transcript below |
+| FIXED | `litric.sysd.net_link_lo=NO -- ERR action-failed /usr/bin/ip exited 1` | `image/mkosi.extra/usr/lib/systemd/system/litric-sysd.service` gave the daemon an empty `CapabilityBoundingSet` and `RestrictAddressFamilies=AF_UNIX`, on the stated grounds that it "needs no capability at all". That was true of the daemon that only read `/proc` and `/sys`; the write half arrived later and kept the sentence. `ip link set lo up` needs `CAP_NET_ADMIN` on an `AF_NETLINK` socket. The unit now grants exactly that (plus `ReadWritePaths=/var/lib/iwd` for the credential `NET WIFI JOIN` writes), and the same probe answers `ok` |
+| FAILED then explained | a parallel run of `console-probe.py` and `pytest` against one image | `Status: TIMEOUT` with `Failed to get "write" lock … Is another process using the image`. QEMU holds an exclusive write lock; two boots of one image must be serialised. Recorded because a `TIMEOUT` whose detail names a lock is a test-harness collision, not a boot failure |
+| NOT VERIFIED | real radios, real sound hardware, a correct password | no Bluetooth adapter and no sound device exist in this VM, and no account in this image has a known password (`RootPassword=!locked`, deliberately). The refusals are verified; the successes are not |
+| NOT RUN | `ci/verify.sh` end to end, a TCG boot, and the idle hardware budgets | see `docs/GATES.md`, *what this does not establish* |
+
+### Raw lines from inside this build
+
+`/usr/lib/litric/selftest` over the ttyS1 console, unedited apart from the terminal
+control sequences:
+
+```
+litric.boot.kernel=2.043s
+litric.boot.initrd=2.926s
+litric.boot.userspace=5.925s
+litric.units.failed=0
+litric.mem.total_mb=2892
+litric.mem.used_mb=849
+litric.mem.avail_mb=2043
+litric.sysd.binary=present
+litric.sysd.socket=present
+litric.sysd.rss_kb=3120
+litric.sysd.ping=pong
+litric.sysd.environments=3
+litric.sysd.denies_ungranted_read=yes
+litric.sysd.refuses_unconfirmed_poweroff=yes
+litric.sysd.net_link_lo=ok
+litric.sysd.refuses_unconfirmed_verify=yes
+litric.sysd.refuses_wrong_password=yes
+litric.sysd.audio_mute=unavailable -- no sound server in this VM
+litric.sysd.bt_power=unavailable -- no Bluetooth radio in this VM
+litric.tool.usr.bin.wpctl=present mode=755
+litric.tool.usr.bin.iwctl=present mode=755
+litric.tool.usr.bin.bluetoothctl=present mode=755
+litric.tool.usr.bin.networkctl=present mode=755
+litric.tool.usr.bin.ip=present mode=755
+litric.tool.usr.bin.unix_chkpwd=present mode=6755
+litric.tool.usr.bin.systemctl=present mode=755
+litric.shell.binary=present
+litric.shell.state=active
+litric.shell.result=success
+litric.shell.version=0.2.0
+litric.shell.canvas=1280x800
+litric.shell.scale=1.00
+```
+
+`litric-sysd --report`, the provider facts, same boot:
+
+```
+net.iface enp0s2 state=up carrier=1 mac=52:54:00:12:34:56 mtu=1500 rx=626 tx=1952
+net.iface lo state=unknown carrier=1 mac=00:00:00:00:00:00 mtu=65536 rx=0 tx=0
+net.addr enp0s2 family=4 addr=10.0.2.15 prefix=24 scope=global
+net.addr enp0s2 family=6 addr=fe80::5054:ff:fe12:3456 prefix=64 scope=link
+net.addr enp0s2 family=6 addr=fec0::5054:ff:fe12:3456 prefix=64 scope=site
+net.addr lo family=4 addr=127.0.0.1 prefix=8 scope=host
+net.addr lo family=6 addr=::1 prefix=128 scope=host
+net.route destination=0.0.0.0/0 via=10.0.2.2 dev=enp0s2 metric=0
+net.route destination=10.0.2.0/24 via=- dev=enp0s2 metric=0
+net.dns nameserver=10.0.2.3
+net.dns search=.
+net.dns.source=resolved
+net.addr.v4=iproute2
+audio.card.count=0
+audio.state server=none socket=-
+audio.control=wpctl
+power.battery.count=0
+thermal.cooling name=cooling_device0 type=Processor state=0
+thermal.cooling name=cooling_device1 type=Processor state=0
+thermal.cooling name=cooling_device2 type=Processor state=0
+thermal.cooling name=cooling_device3 type=Processor state=0
+bt.adapter.count=0
+bt.state=no-adapter
+bt.daemon=absent
+session.count=2
+session.logind=present
+auth.available=unix-chkpwd
+auth.lock=refused
+session.id 1 user=root uid=0 seat=- type=tty state=active tty=ttyS1 display=- leader=535
+session.id 2 user=root uid=0 seat=- type=unspecified state=active tty=- display=- leader=562
+```
+
+`audio.control=wpctl` and `auth.available=unix-chkpwd` are the two lines that
+changed from the 2026-10-11 record in the direction the code was changed: the
+first now names the tool that is in the image, and the second reports the helper
+the filesystem actually has rather than a constant.
+
+## 2026-10-12 (evening) — the lock surface, the dock that grows, and clippy on the host that compiles the Unix code
+
+The lock screen (`src/litric-shell/src/lock.rs`) and the dock → launcher morph
+(`views::draw_dock`, `shell::SHORTCUT_CHIPS`) were ported from the prototype pack
+and are described in [docs/UI-PLAN.md](UI-PLAN.md) P10-P11; the tickets behind
+them are in
+[wave 1 authentication](design/wave1/04-authentication.md) §8 ticket 5.
+
+| Result | Check | Command / evidence |
+|---|---|---|
+| PASS | rustfmt, whole workspace | `cargo fmt --all -- --check`, exit 0, on the Linux builder |
+| PASS | **1211 passed, 0 failed** — every crate, every test binary, doc-tests included | `cargo test --workspace` (release of the previous run's target dir, `CARGO_TARGET_DIR=target-test`), 44 `test result:` lines, 0 failures |
+| PASS | clippy on the host that *compiles* the Unix code | `cargo clippy --offline --all-targets -- -D warnings` → `clippy_exit=0`. See the finding below: the 2026-10-11 PASS was produced on Windows, where none of that code is compiled |
+| PASS | the lock surface, driven the way a user drives it | `cargo test -p litric-shell`: `journey_a_machine_that_cannot_check_a_password_refuses_to_lock`, `journey_locking_hides_the_session_and_only_a_password_brings_it_back`, `journey_the_lock_does_not_collect_a_password_it_could_not_check`, `journey_the_lock_customize_sheet_changes_the_look_live` |
+| PASS | the dock grown into the launcher | `journey_the_dock_grows_into_the_launcher_and_a_tile_opens_the_app`, `journey_the_shortcut_row_performs_what_it_says`, `journey_searching_in_the_launcher_filters_and_escape_collapses`, plus 10 `lock::tests` units |
+| **MEASURED, NOT MET** | a locked frame costs 569.664 ms median against the 33 ms interval it asks for | `cargo run --release -p litric-shell --example render_bench`, 15 runs. Rows in the table below; opened as [BUG-0018](bugs/BUG-0018-a-locked-frame-costs-half-a-second.md) |
+| MEASURED | 14 golden frames, including the lock in three states and the grown dock | `cargo run --release -p litric-shell --example frame_dump -- build/frames`; fingerprints and draw times below |
+| NOT RUN | a boot of an image built from this tree, and any measurement on the target | the run above is the development host. The lock has never been seen on a display |
+| NOT VERIFIED | the surface's *look* on the target, and the drift at 30 FPS | the frames were reviewed by the numbers (colour count, brightness, edge density in the regions the panel and the clock occupy), not by eye: this host's preview cannot screenshot. The pictures are in `build/frames.html` |
+
+### Raw lines from `render_bench`, medians over 15 runs
+
+```
+full_frame.median_ms=185.339
+pointer_move_frame.median_ms=183.525
+open_window_frame.median_ms=423.675
+blur_full_screen_r3_2passes.median_ms=92.851
+blur_full_screen_r10_2passes.median_ms=91.202
+present_full.median_ms=3.471
+present_pointer_damage.median_ms=0.104
+lock.interval_ms=33
+lock_frame.full=true damage_rects=0 restored_px=1024000 visited_px=17531985
+lock_frame.median_ms=569.664
+lock_frame_entry.median_ms=612.181
+lock_frame_customize.median_ms=804.543
+lock_frame_still.median_ms=574.577
+```
+
+### Raw lines from `frame_dump`, one frame per scene
+
+```
+scene=11-lock draw_ms=560.66 visited_px=16474045 coverage=16.088 fingerprint=0xed959908bcb83faa
+scene=12-lock-password draw_ms=594.45 visited_px=16684075 coverage=16.293 fingerprint=0xe8fdec07161fec53
+scene=13-lock-customize draw_ms=756.81 visited_px=22006492 coverage=21.491 fingerprint=0x134ca740894af0e6
+scene=14-launcher draw_ms=397.37 visited_px=12486323 coverage=12.194 fingerprint=0x8db37547ee3b2062
+```
+
+The launcher's frame is dark like the desktop around it by design — it is the dock
+that grew, not a panel over the desktop — and the desktop's icons fold away while
+it is open. It was confirmed to be the launcher and not the bare desktop by
+`visited_px` (12.5M against 216 750 for the idle desktop), by its fingerprint,
+and by the edge density inside the panel rectangle (3.06 % against 0.4 %).
+
+### The clippy finding this run produced
+
+The 2026-10-11 record's `PASS cargo clippy` was produced on `MINGW64_NT` (see the
+header of this file). On Windows every `#[cfg(unix)]` and
+`#[cfg(all(test, unix))]` module is **not compiled**, so `--all-targets` never
+linted them. Run on Linux, the same command reported 12 findings in code that the
+Windows run could not see, including two that mattered: a `panic!`/`expect` pair
+in a helper that only exists on Unix, and integer arithmetic in a path decoder.
+All 12 are fixed and the command now exits 0 on the Linux builder. The lesson is
+recorded rather than the fixes alone: a lint result is only as wide as the
+cfg-gates of the host it ran on, and this gate has to be run on Linux to mean
+anything.
+
 <!-- records-end -->
