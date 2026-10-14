@@ -47,7 +47,21 @@ mod tests {
 
     #[test]
     fn the_version_is_stamped_from_the_crate() {
-        assert!(!VERSION.is_empty());
-        assert!(VERSION.contains('.'));
+        // `VERSION` is `env!("CARGO_PKG_VERSION")`, so "is it empty" is decided
+        // at compile time and the assertion could never fail
+        // (clippy::const_is_empty). What is worth checking is the *shape* of
+        // what Cargo stamped in: a version is major.minor.patch, and every
+        // component starts with a digit.
+        let parts: Vec<&str> = VERSION.split('.').collect();
+        assert!(
+            parts.len() >= 3,
+            "a stamped version is major.minor.patch, got {VERSION:?}"
+        );
+        assert!(
+            parts
+                .iter()
+                .all(|p| p.starts_with(|c: char| c.is_ascii_digit())),
+            "every version component starts with a digit, got {VERSION:?}"
+        );
     }
 }

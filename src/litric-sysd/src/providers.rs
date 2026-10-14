@@ -861,7 +861,19 @@ fn first_wireless(root: &Path) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Apply one file change.
-fn apply_file(change: &FileChange) -> std::io::Result<()> {
+///
+/// `root` is the filesystem root the daemon was configured with, and it is
+/// used for one thing: **a removal is refused unless the path is directly
+/// inside the credential directory this daemon builds paths in.** This process
+/// runs as root, so a deletion here has the largest blast radius in the tree
+/// and the smallest test coverage, and the bound on it belongs on the path of
+/// every removal rather than only in the planner that built the path. The
+/// planner already validates the network name (`valid_ssid` refuses `/`, `\`
+/// and a leading `.`), so this is the second, independent check: a future plan
+/// that removes something else fails here, by name, instead of deleting it.
+/// `ci/lint-file-safety.py` requires this site to be reviewed; this is the
+/// review, expressed as code.
+fn apply_file(change: &FileChange, root: &Path) -> std::io::Result<()> {
     match change {
         FileChange::Write {
             path,
@@ -877,13 +889,26 @@ fn apply_file(change: &FileChange) -> std::io::Result<()> {
             }
             Ok(())
         }
-        FileChange::Remove { path } => match fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            // A credential file that is not there is the state the caller asked
-            // for, so forgetting an unknown network is not a failure.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
-        },
+        FileChange::Remove { path } => {
+            let allowed = NetAction::iwd_dir(root);
+            if path.parent() != Some(allowed.as_path()) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "refusing to remove {}: it is not a credential under {}",
+                        path.display(),
+                        allowed.display()
+                    ),
+                ));
+            }
+            match fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                // A credential file that is not there is the state the caller
+                // asked for, so forgetting an unknown network is not a failure.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e),
+            }
+        }
     }
 }
 
@@ -938,7 +963,7 @@ pub fn perform(action: &SystemAction, runner: &dyn Runner, root: &Path) -> Outco
 
     let lines = describe(action, &plan);
     for change in &plan.files {
-        if let Err(e) = apply_file(change) {
+        if let Err(e) = apply_file(change, root) {
             return finish(lines, false, "file", &e.to_string());
         }
     }

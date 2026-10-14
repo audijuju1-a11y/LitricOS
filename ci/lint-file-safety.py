@@ -78,8 +78,14 @@ ALLOWED = {
         "cmd_cleanup": "the explicit cleanup command; the path is the one the CLI was given",
     },
     "src/litric-shell/src/e2e.rs": {
+        "e2e_root": "removes the temporary fixture root it is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
         "journey_defender_scans_and_reports_eicar_end_to_end": "removes the temporary root this journey created",
         "journey_trash_window_restores_after_files_trash": "removes the temporary root this journey created",
+        "journey_right_click_desktop_menu_creates_a_folder_via_dialog": "removes the temporary root this journey created",
+        "journey_viewer_opens_text_files_with_scrolling": "removes the temporary root this journey created",
+    },
+    "src/litric-sysd/src/providers.rs": {
+        "apply_file": "removes one Wi-Fi credential; the path is refused unless it is a direct child of iwd's state directory under the daemon root, and the network name was validated by `valid_ssid` before the path was built",
     },
 }
 

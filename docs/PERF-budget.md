@@ -218,8 +218,13 @@ enforced here as a number.
 | 240 Hz | 4.17 ms | p99 within budget |
 
 Also gated: **input-to-present p99 ≤ 2 frames**, and **zero missed flips** over a
-60 s animation. `litric-shell` logs a warning on every over-budget frame; the
-warning count is itself a CI metric.
+60 s animation. `litric-shell` measures composition-to-presentation against the
+life state's own interval and logs the first ten over-budget frames and every
+hundredth thereafter (one line per frame would make the journal the largest cost
+in a loop that is already over budget); `frames_drawn=` and
+`frames_over_budget=` go into the status file, and that count is the CI metric.
+Added 2026-10-14 — the warning this paragraph described did not exist before
+then, so the metric it named was unobservable.
 
 #### Measured on the development host — 2026-10-12
 

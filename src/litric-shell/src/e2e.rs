@@ -16,6 +16,15 @@ use crate::ui::Tokens;
 use litric_design::{Theme, ThemeKind};
 use litric_locale::Regional;
 
+/// One frame at the pace of an active desktop, in milliseconds.
+///
+/// A journey ticks in **deltas**, not timestamps, and this is the delta it
+/// uses: the shell steps its springs by the wall time that passed, so ticking
+/// forty times with one timestamp is forty frames that advance nothing. That is
+/// what these journeys used to rely on — a constant 16 ms step hid the
+/// difference — and it is why every tick here is `tick_after`.
+const FRAME_MS: u32 = 16;
+
 fn shell() -> Shell {
     let tokens = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
     let mut s = Shell::new(tokens, 1280.0, 800.0, Regional::fallback("test"));
@@ -142,8 +151,9 @@ fn key_press(s: &mut Shell, k: Key, mods: Modifiers) -> Vec<Effect> {
 fn draw_frame(s: &mut Shell) -> Canvas {
     // The real loop is handle → tick → draw, and the tick is what advances
     // the overlay springs the views read. Harnesses that skip it would test
-    // a frame the compositor can never produce, so the tick lives here.
-    s.tick(16_000);
+    // a frame the compositor can never produce, so the tick lives here — one
+    // frame's worth of it, at the pace the active desktop runs at.
+    s.tick_after(FRAME_MS);
     let mut c = Canvas::new(1280, 800, rgb(0x000000));
     desktop::wallpaper(&mut c, &Theme::of(ThemeKind::Dark));
     crate::views::draw(&mut c, s);
@@ -651,7 +661,7 @@ fn journey_dock_click_opens_focuses_then_minimizes() {
     // The dock's reveal is a spring the user waits out for a fraction of a
     // second; tick until it has arrived, then draw.
     for _ in 0..40 {
-        s.tick(16_000);
+        s.tick_after(FRAME_MS);
         if s.anims().dock.value() >= 0.95 {
             break;
         }
@@ -685,7 +695,7 @@ fn journey_dock_click_opens_focuses_then_minimizes() {
 fn journey_hidden_dock_is_not_clickable() {
     let mut s = shell();
     move_pointer(&mut s, 640.0, 300.0); // far from the bottom edge
-    s.tick(16_000);
+    s.tick_after(FRAME_MS);
     let _ = draw_frame(&mut s);
     // Every dock spring must have settled closed; nothing registers.
     for i in 0..8u8 {
@@ -701,7 +711,7 @@ fn journey_dock_is_clickable_while_still_sliding_up() {
     move_pointer(&mut s, 640.0, 780.0); // rest on the bottom edge
     let mut caught = false;
     for _ in 0..60 {
-        s.tick(16);
+        s.tick_after(FRAME_MS);
         let _ = draw_frame(&mut s);
         let reveal = s.anims().dock.value();
         if (0.6..0.95).contains(&reveal) {
@@ -787,7 +797,7 @@ fn journey_terminal_runs_a_real_command() {
     // nor waits on. Bounded, and short — the command is an `echo`.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     while s.terminal.busy && std::time::Instant::now() < deadline {
-        s.tick(16_000);
+        s.tick_after(FRAME_MS);
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(!s.terminal.busy, "the command finished within the budget");
@@ -887,7 +897,7 @@ fn journey_focus_elevation_glides_instead_of_snapping() {
             .map(|w| w.id)
             .expect("the Files window exists");
     assert!(s.wm.focus_window(other), "focus moved");
-    s.tick(16_000);
+    s.tick_after(FRAME_MS);
     // One ticked frame later the previously-focused window is part-way up,
     // not at either endpoint: that is the glide existing and measurable.
     let rising = s.anims_mut().focus.elevation(other, true);
@@ -897,7 +907,7 @@ fn journey_focus_elevation_glides_instead_of_snapping() {
     );
     // It must arrive rather than hover: settle the spring and check 1.0.
     for _ in 0..40 {
-        s.tick(16_000);
+        s.tick_after(FRAME_MS);
     }
     let settled = s.anims_mut().focus.elevation(other, true);
     assert!(
@@ -1107,7 +1117,7 @@ fn lockable_shell() -> Shell {
 /// else makes that checkable -- if any sentinel pixel survives, the lock did
 /// not cover the screen.
 fn draw_frame_over(s: &mut Shell, sentinel: u32) -> Canvas {
-    s.tick(16_000);
+    s.tick_after(FRAME_MS);
     let mut c = Canvas::new(1280, 800, sentinel);
     crate::views::draw(&mut c, s);
     c
@@ -1319,7 +1329,7 @@ fn journey_the_lock_customize_sheet_changes_the_look_live() {
 fn reveal_dock(s: &mut Shell) {
     move_pointer(s, 640.0, 795.0);
     for _ in 0..60 {
-        s.tick(16_000);
+        s.tick_after(FRAME_MS);
         if s.anims().dock.value() >= 0.95 {
             break;
         }
@@ -1332,7 +1342,7 @@ fn open_launcher(s: &mut Shell) {
     reveal_dock(s);
     s.perform(Action::ToggleLauncher);
     for _ in 0..60 {
-        s.tick(16_800);
+        s.tick_after(FRAME_MS);
     }
 }
 
@@ -1354,7 +1364,7 @@ fn journey_the_dock_grows_into_the_launcher_and_a_tile_opens_the_app() {
         .expect("launcher button");
     click(&mut s, toggle.center().0, toggle.center().1);
     for _ in 0..60 {
-        s.tick(16_800);
+        s.tick_after(FRAME_MS);
     }
     let _ = draw_frame(&mut s);
     assert!(matches!(s.overlay, Overlay::Launcher { .. }));
@@ -1376,7 +1386,7 @@ fn journey_the_dock_grows_into_the_launcher_and_a_tile_opens_the_app() {
 
     // The panel animates back down to the pill.
     for _ in 0..60 {
-        s.tick(17_600);
+        s.tick_after(FRAME_MS);
     }
     assert!(s.anims().launcher_morph.value() < 0.05);
 }
@@ -1443,7 +1453,7 @@ fn journey_searching_in_the_launcher_filters_and_escape_collapses() {
     let _ = key_press(&mut s, Key::Escape, Modifiers::NONE);
     assert!(matches!(s.overlay, Overlay::None));
     for _ in 0..60 {
-        s.tick(19_200);
+        s.tick_after(FRAME_MS);
     }
     assert!(s.anims().launcher_morph.value() < 0.05);
 }

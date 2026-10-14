@@ -3644,8 +3644,11 @@ mod tests {
         let mut s = shell();
         s.perform(Action::ToggleQuickSettings);
         // The real loop ticks between input and draw; the spring advances
-        // there, and the panel is clickable from the first ticked frame.
-        s.tick(16_000);
+        // there, and the panel is clickable from the first ticked frame. The
+        // tick has to name the time that passed — one 60 Hz frame — because
+        // the spring moves by the time the tick gives it, not by the number of
+        // times it is called.
+        s.tick_after(16);
         let mut c = canvas();
         draw(&mut c, &mut s);
         for i in 0..4u8 {
@@ -3664,7 +3667,7 @@ mod tests {
     fn the_notification_list_draws_when_empty_and_when_full() {
         let mut s = shell();
         s.perform(Action::ToggleNotifications);
-        s.tick(16_000); // advance the panel's spring, as the loop does
+        s.tick_after(16); // advance the panel's spring, as the loop does
         let mut c = canvas();
         draw(&mut c, &mut s);
         assert!(s.hotspots().rect_of(Hot::NotificationsClear).is_none());

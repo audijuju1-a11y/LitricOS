@@ -481,19 +481,18 @@ fn cmd_chaos(o: &Opts) -> i32 {
     if o.forensic {
         let dir = o.output.join("chaos");
         let _ = std::fs::create_dir_all(&dir);
-        let body = sched
-            .steps
-            .iter()
-            .map(|s| {
-                format!(
-                    "{}, {}, {}, {}\n",
-                    s.seq,
-                    s.class.as_str(),
-                    s.variant,
-                    s.magnitude
-                )
-            })
-            .collect::<String>();
+        use std::fmt::Write as _;
+        let mut body = String::new();
+        for s in &sched.steps {
+            let _ = writeln!(
+                body,
+                "{}, {}, {}, {}",
+                s.seq,
+                s.class.as_str(),
+                s.variant,
+                s.magnitude
+            );
+        }
         let p = dir.join("CHAOS_SCHEDULE.csv");
         let _ = std::fs::write(&p, body);
         println!("schedule written to {}", p.display());

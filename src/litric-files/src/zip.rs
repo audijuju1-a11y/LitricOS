@@ -272,9 +272,9 @@ pub fn read_zip_slice(raw: &[u8], limits: &Limits) -> Result<Vec<ZipEntry>, io::
     if count as u64 > limits.max_entries {
         return Err(Error::new(ErrorKind::Limit, "too many entries").into_io());
     }
-    if !central_offset
+    if central_offset
         .checked_add(central_size)
-        .is_none_or(|end| end <= raw.len())
+        .is_some_and(|end| end > raw.len())
     {
         return Err(corrupt("central directory lies outside the file"));
     }
@@ -285,7 +285,7 @@ pub fn read_zip_slice(raw: &[u8], limits: &Limits) -> Result<Vec<ZipEntry>, io::
     let mut p = central_offset;
     for _ in 0..count {
         let sig_end = p.checked_add(4).ok_or_else(truncated)?;
-        if !p.checked_add(46).is_none_or(|end| end <= raw.len())
+        if p.checked_add(46).is_some_and(|end| end > raw.len())
             || raw.get(p..sig_end) != Some(&SIG_CENTRAL[..])
         {
             return Err(corrupt("central directory entry missing or misaligned"));
@@ -318,7 +318,7 @@ pub fn read_zip_slice(raw: &[u8], limits: &Limits) -> Result<Vec<ZipEntry>, io::
         validate_entry_name(&name)?;
 
         // --- locate the local header and its data ---
-        if !lho.checked_add(30).is_none_or(|e| e <= raw.len())
+        if lho.checked_add(30).is_some_and(|e| e > raw.len())
             || raw.get(lho..lho.checked_add(4).ok_or_else(truncated)?) != Some(&SIG_LOCAL[..])
         {
             return Err(corrupt("local header missing or misaligned"));

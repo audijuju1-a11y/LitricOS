@@ -286,7 +286,14 @@ and the shell's own system is [03-SHELL-SYSTEM.md](DESIGN-SYSTEM-v3/03-SHELL-SYS
 1. **Frame cost.** [BUG-0015](bugs/BUG-0015-a-frame-with-a-window-costs-206ms.md):
    a frame with a window has been measured at 206 ms against a 16.67 ms budget.
    [BUG-0018](bugs/BUG-0018-a-locked-frame-costs-half-a-second.md): a locked frame
-   at half a second. Both are measured, not fixed.
+   at half a second. Both are measured, not fixed. A second host measured a
+   windowed frame at 107 ms and a locked frame at 335 ms on 2026-10-14
+   ([docs/EVIDENCE.md](EVIDENCE.md)); the defect is the surface, not the machine.
+2. **[BUG-0019](bugs/BUG-0019-a-snap-that-changed-the-value-reported-no-frame.md):
+   a spring that snapped to its target reported "nothing moved", so a frame that
+   had to be drawn was not requested and the pixels it drives — a window's focus
+   shadow — stayed stale. Fixed, with regression tests; found by the
+   partial-redraw oracle, which had been passing vacuously.
 2. **The typeface has no Thai glyphs, and the shell prints Thai anyway.**
    Observed live on the running desktop: the terminal's first line,
    [apps.rs:1426](../src/litric-shell/src/apps.rs#L1426)

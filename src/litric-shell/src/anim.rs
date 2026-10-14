@@ -94,10 +94,13 @@ impl ShellAnims {
         self.launcher_morph.set_target(f32::from(launcher_open));
     }
 
-    /// Step every spring; returns whether any of them still moves.
+    /// Step every spring; returns whether any of them moved the value or is
+    /// still moving.
     ///
     /// A false return is the compositor's permission to idle: if no other
-    /// damage exists, there is no frame left worth drawing.
+    /// damage exists, there is no frame left worth drawing. It is therefore a
+    /// claim about the *pixels*, which is why [`Anim::step`] reports a snap that
+    /// changed the value as a move.
     pub fn step(&mut self, dt_ms: u32) -> bool {
         let mut moving = false;
         moving |= self.launcher.step(dt_ms);
@@ -157,7 +160,8 @@ impl FocusAnims {
         spring.value()
     }
 
-    /// Advance every spring; returns whether any still moves.
+    /// Advance every spring; returns whether any moved its value or still
+    /// moves. See [`Anim::step`] for why a snap counts.
     pub fn step(&mut self, dt_ms: u32) -> bool {
         let mut moving = false;
         for spring in self.springs.values_mut() {
@@ -259,16 +263,33 @@ impl Anim {
         self.elapsed_ms = 0;
     }
 
-    /// Advance the spring by `dt_ms`, returning whether it is still moving.
+    /// Advance the spring by `dt_ms`, returning whether it moved the value or
+    /// is still moving.
     ///
     /// `dt_ms` is clamped to [`MAX_STEP_MS`]; the settle budget, not a
     /// stall, decides when the value arrives. Converged springs detect
     /// their own convergence and stop early rather than draining the
     /// budget on frames that would draw the same pixel.
+    ///
+    /// **The return value answers two different questions at once, because the
+    /// caller needs both.** `false` means "this step changed nothing, so the
+    /// pixels this spring drives are already correct" — that is the
+    /// compositor's licence to idle. A regular in-flight step moves the value,
+    /// so it is `true`. The end of an animation is the case that used to lie:
+    /// when the settle budget is reached the spring **snaps** to its target,
+    /// and on a stalled frame (a delta clamped to [`MAX_STEP_MS`] but a budget
+    /// counted in real milliseconds) that jump can be the whole distance. It
+    /// returned `false` because it was no longer *moving*, so the shell drew no
+    /// frame and the surface sat at its old position until the next unrelated
+    /// repaint — a stale window shadow, one frame of a panel in the wrong
+    /// place. A snap that changes the value returns `true`; a snap that lands
+    /// where the value already was returns `false`, because then the pixels
+    /// really are unchanged.
     pub fn step(&mut self, dt_ms: u32) -> bool {
         if self.settled() {
             return false;
         }
+        let before = self.value;
         let dt = f32::from(u16::try_from(dt_ms.min(MAX_STEP_MS)).unwrap_or(u16::MAX)) / 1000.0;
         self.elapsed_ms = self.elapsed_ms.saturating_add(dt_ms);
 
@@ -285,7 +306,7 @@ impl Anim {
             && self.velocity.abs() < SETTLE_VELOCITY;
         if budget_hit || converged {
             self.snap_to(self.target);
-            return false;
+            return self.value != before;
         }
         true
     }
@@ -358,12 +379,51 @@ mod tests {
     fn reduced_motion_arrives_in_one_step_without_travel() {
         let mut a = Anim::at(0.0, Motion::reduced());
         a.set_target(1.0);
-        let moving = a.step(DT);
+        // Arriving *is* a change of value, so the step reports one and the
+        // compositor repaints; what "without travel" means is checked by the
+        // spring being finished, not by the report. (This assertion used to be
+        // `!a.step(DT)`, which conflated "did not move" with "still moving" and
+        // is the confusion BUG-0019 fixed.)
+        let changed = a.step(DT);
+        assert!(changed, "the value moved, so the frame must be repainted");
         assert!(
-            !moving,
+            a.settled(),
             "reduced motion must settle within its 16 ms budget"
         );
         assert_eq!(a.value(), 1.0);
+    }
+
+    #[test]
+    fn a_budget_snap_that_moves_the_value_reports_the_move() {
+        // BUG-0019. A stalled frame clamps the integration delta to 100 ms but
+        // counts the settle budget in real milliseconds, so one step can reach
+        // the budget while the value is still far from its target. The spring
+        // then snaps — the whole remaining distance in one frame — and returned
+        // `false`, which the shell reads as "nothing to draw". The pixels the
+        // spring drives (a window's focus shadow) stayed stale until some
+        // unrelated repaint, which is what
+        // `main::tests::a_partial_redraw_is_pixel_identical_to_a_full_redraw`
+        // caught.
+        let mut a = Anim::at(0.0, Motion::FAST);
+        a.set_target(1.0);
+        let before = a.value();
+        let moved = a.step(10_000);
+        assert_ne!(a.value(), before, "fixture: the snap moved the value");
+        assert!(
+            moved,
+            "a snap that changed the value must report it, or the frame is never drawn"
+        );
+        assert!(a.settled(), "and the spring is finished doing so");
+    }
+
+    #[test]
+    fn a_step_that_changes_nothing_reports_nothing() {
+        // The other half of the contract, and the one the idle path depends on:
+        // a spring already at its target must not keep asking for frames.
+        let mut a = Anim::at(1.0, Motion::FAST);
+        assert!(!a.step(DT));
+        a.set_target(1.0);
+        assert!(!a.step(DT));
     }
 
     #[test]

@@ -177,8 +177,16 @@ impl Error {
             io::ErrorKind::AlreadyExists => ErrorKind::Exists,
             io::ErrorKind::NotADirectory => ErrorKind::NotADirectory,
             io::ErrorKind::IsADirectory => ErrorKind::IsADirectory,
-            io::ErrorKind::InvalidFilename => ErrorKind::InvalidName,
             io::ErrorKind::FileTooLarge => ErrorKind::TooLarge,
+            // `io::ErrorKind::InvalidFilename` is the kind Windows' filesystem
+            // returns for a name it rejects, and it is the one kind this table
+            // needs that is **not stable on the workspace's declared MSRV of
+            // 1.85**: naming it there is `error[E0658]`, which turns
+            // `cargo build` red on a 1.85 toolchain even though it compiles on
+            // current stable. The mapping is preserved by the raw OS code
+            // instead, so the behaviour is identical on the platform that
+            // produces it and the crate builds on every toolchain in range.
+            _ if is_invalid_filename(err) => ErrorKind::InvalidName,
             _ => ErrorKind::Io,
         };
         Self::new(kind, format!("{context}: {err}"))
@@ -190,6 +198,19 @@ impl Error {
     pub fn into_io(self) -> io::Error {
         io::Error::new(io::ErrorKind::InvalidData, self)
     }
+}
+
+/// Whether an I/O error is Windows' "the name is not valid" (`ERROR_INVALID_NAME`).
+///
+/// Windows is the only platform that produces `io::ErrorKind::InvalidFilename`,
+/// and the raw code is used because naming that variant is a compile error on
+/// the workspace's MSRV (see [`Error::from_io`]). On every other platform this
+/// is always `false`, which is what the `io::ErrorKind` variant would have
+/// meant there too.
+#[must_use]
+fn is_invalid_filename(err: &io::Error) -> bool {
+    // winerror.h: `#define ERROR_INVALID_NAME 123L`.
+    cfg!(windows) && err.raw_os_error() == Some(123)
 }
 
 impl fmt::Display for Error {
@@ -346,6 +367,16 @@ mod tests {
         assert_eq!(Error::from_io("x", &ex).kind(), ErrorKind::Exists);
         let other = io::Error::other("boom");
         assert_eq!(Error::from_io("x", &other).kind(), ErrorKind::Io);
+    }
+
+    #[test]
+    fn the_invalid_name_mapping_keys_off_the_raw_os_code() {
+        // `io::ErrorKind::InvalidFilename` is unstable at the declared MSRV, so
+        // the arm cannot name it and matches the raw code instead. Windows is
+        // the only platform where that code means a filename error.
+        let name = io::Error::from_raw_os_error(123);
+        assert_eq!(is_invalid_filename(&name), cfg!(windows));
+        assert!(!is_invalid_filename(&io::Error::from_raw_os_error(2)));
     }
 
     #[test]

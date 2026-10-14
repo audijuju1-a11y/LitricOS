@@ -431,4 +431,88 @@ recorded rather than the fixes alone: a lint result is only as wide as the
 cfg-gates of the host it ran on, and this gate has to be run on Linux to mean
 anything.
 
+### 2026-10-14 — the partial-redraw oracle, the clippy gate, and a renderer baseline
+
+Host: Linux container, 4 vCPU, no GPU. Release build (`opt-level=2`, `lto=fat`,
+`overflow-checks=true`), 1280x800, software renderer. This is **not** the WSL2
+host of the 2026-10-12 entry, so the absolute milliseconds are not comparable
+across the two rows; the ratios and the pixel counts are properties of the code.
+
+```bash
+cd src
+cargo run --release -p litric-shell --example render_bench   # 15 runs per line
+```
+
+| Measurement | median | runs | note |
+|---|---:|---:|---|
+| `full_frame` (two windows open) | **106.808 ms** | 15 | 6.4x the 16.67 ms gate |
+| `pointer_move_frame` | 107.734 ms | 15 | 6.5x |
+| `open_window_frame` | 245.753 ms | 15 | 14.7x |
+| `blur_full_screen_r3_2passes` | 43.173 ms | 15 | |
+| `blur_full_screen_r10_2passes` | 44.753 ms | 15 | |
+| `blur_full_screen_r30_2passes` | 45.005 ms | 15 | flat in radius — bytes-bound, as BUG-0015 found |
+| `present_full` (4 096 000 B) | 3.898 ms | 15 | not the bottleneck |
+| `present_pointer_damage` (163 840 B) | 0.167 ms | 15 | not the bottleneck |
+| `lock_frame` (interval 33 ms) | **334.812 ms** | 15 | 10.1x its own interval |
+| `lock_frame_entry` | 343.618 ms | 15 | |
+| `lock_frame_customize` | 453.997 ms | 15 | 13.8x |
+| `lock_frame_still` | 342.632 ms | 15 | |
+
+`lock_frame` reports `visited_px=17531985` for a 1 024 000-pixel screen (17.1x
+coverage), which is the same shape as the 2026-10-12 measurement and confirms
+BUG-0018 is a property of the surface, not of that host.
+
+Both open renderer defects therefore stand, at smaller absolute numbers:
+**BUG-0015** (a windowed frame), **BUG-0018** (a locked frame).
+
+#### The partial-redraw oracle failed, and the renderer was not at fault
+
+`cargo test -p litric-shell --bin litric-shell a_partial_redraw_is_pixel_identical`
+failed on the first step with `18768` pixels differing from a full redraw within
+`(29,59)-(388,358)`, worst channel difference `42`, while the frame's damage was
+two 20x26 rects. Instrumenting the oracle to redraw twice from the same state
+separated the two hypotheses in one run:
+
+```
+full-vs-full=0   partial-vs-full=18768
+```
+
+A full redraw is idempotent, so the renderer was not producing different pixels
+from the same state — a frame had been composed whose damage did not cover
+everything that had changed. That is [BUG-0019](bugs/BUG-0019-a-snap-that-changed-the-value-reported-no-frame.md):
+`Anim::step` returned `false` on a settle-budget snap that moved the value, and
+`Shell::tick` reads `false` as "nothing to draw". Fixed; after the fix every step
+of every journey reports `partial-vs-full = 0`.
+
+#### The gate
+
+`bash ci/verify.sh`, 2026-10-14, same container:
+
+| Section | Result |
+|---|---|
+| `[5] Native workspace (Rust)` | **5/5 PASS** — build, test, zero warnings, `fmt --check`, `clippy --all-targets -- -D warnings` |
+| `[1]`–`[3]` (repo, docs, linters) | PASS |
+| `[4] Development signing keys` | PASS after `tools/gen-dev-keys.sh` (dev keys are generated locally, never committed) |
+| `[6] Image build and boot` | SKIP — `mkosi` and `qemu-system-x86_64` are not installed in this container |
+
+Before this session the Rust section could not pass at all: `rust-version = 1.85`
+was declared but `litric-files` used `io::ErrorKind::InvalidFilename`, which is
+unstable there (`error[E0658]`), and `clippy --all-targets -- -D warnings`
+reported eight findings in committed code across `litric-files`, `litric-bench`
+and `litric-shell`.
+
+### The frame-budget warning now exists
+
+`docs/PERF-budget.md` §4 claims the shell "logs a warning on every over-budget
+frame". It did not: no code compared a frame's duration to the life state's
+interval. The display loop now measures composition-to-presentation per frame
+against `Shell::frame_interval_ms()` and logs the first ten over-budget frames and
+every hundredth thereafter (rate-limited so a persistently over-budget desktop
+does not make the journal the largest cost in the loop), and writes
+`frames_drawn=` and `frames_over_budget=` into the status file. The rate-limit
+policy is a pure function with its own test
+(`main::tests::over_budget_logging_is_rate_limited_but_never_silent`). No
+end-to-end run of this path exists here — `run_display` needs a framebuffer, and
+this container has none — so the counter's runtime behaviour is **NOT RUN**.
+
 <!-- records-end -->

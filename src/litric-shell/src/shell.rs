@@ -128,7 +128,10 @@ impl LifeState {
             // the window lagging behind the cursor.
             Self::WindowInteraction => 8,
             Self::Active => 16,
-            // 30 FPS: the target agreed for an idle compositor.
+            // 30 FPS, and only while something is still being drawn. This is
+            // a ceiling on the work one frame may take, not a wake-up timer:
+            // an idle desktop with no damage asks for no frame at all (see
+            // [`Shell::wake_after_ms`]), which is where the power goes.
             Self::Idle => 33,
             // Nothing is moving. Wake often enough for the clock, no more.
             Self::DeepIdle => 500,
@@ -1849,6 +1852,16 @@ pub struct Shell {
     meta_tap: MetaTap,
     last_input_ms: u64,
     now_ms: u64,
+    /// The time [`Shell::tick`] last stepped the animation springs from, or
+    /// `None` before the first tick.
+    ///
+    /// Springs are advanced by the wall time that actually passed, never by a
+    /// constant. The loop's frame pace is 8 ms under a dragged window, 16 ms
+    /// active, 33 ms idle and more when nothing is happening at all, so a
+    /// constant step makes every animation in the shell run at a different
+    /// speed on every one of those — and at the intended speed on only the one
+    /// the constant was chosen for.
+    last_step_ms: Option<u64>,
     damage: Vec<Rect>,
     full_redraw: bool,
     frames: u64,
@@ -1908,6 +1921,7 @@ impl Shell {
             meta_tap: MetaTap::default(),
             last_input_ms: 0,
             now_ms: 0,
+            last_step_ms: None,
             damage: Vec::new(),
             full_redraw: true,
             frames: 0,
@@ -2000,10 +2014,109 @@ impl Shell {
             .state_after(self.now_ms.saturating_sub(self.last_input_ms))
     }
 
-    /// How long the compositor may sleep before its next frame.
+    /// The pace the current life state asks for, in milliseconds: how long one
+    /// frame may take while there is something to draw.
+    ///
+    /// This is a **ceiling on work, not the length of the next sleep**.
+    /// [`Shell::wake_after_ms`] answers the sleep question, and it is the one
+    /// the frame loop asks, because a desktop that wakes 30 times a second to
+    /// discover it has nothing to draw is a desktop that spends its battery
+    /// proving it is awake.
     #[must_use]
     pub fn frame_interval_ms(&self) -> u64 {
         self.life().frame_interval_ms()
+    }
+
+    /// Whether a spring is mid-flight, so the next frame would draw something
+    /// new even with no input and no damage of its own.
+    #[must_use]
+    pub fn animating(&self) -> bool {
+        self.anims.animating()
+    }
+
+    /// The longest a frame loop may sleep when nothing needs drawing.
+    ///
+    /// One second. The top bar's clock is the slowest thing on screen that
+    /// changes by itself and it changes on the second, so a longer sleep would
+    /// show a stale clock; and it puts a floor of one wake-up a second under
+    /// this process, against the two `docs/PERF-budget.md` §4 allows.
+    pub const IDLE_SLEEP_CAP_MS: u64 = 1_000;
+
+    /// How long the frame loop may sleep before the shell must be looked at
+    /// again, in milliseconds. Zero means "there is a frame to draw": do not
+    /// sleep at all.
+    ///
+    /// Three answers, in the order the question is asked:
+    ///
+    ///   * **Damage waiting** — draw it. A dragged window outranks everything
+    ///     (dropping one of those frames is visible as the window lagging the
+    ///     pointer); a locked session comes next, and it is the case that needs
+    ///     throttling most, because a locked frame is always damage and would
+    ///     otherwise be asked for as fast as the CPU can produce it (BUG-0018
+    ///     measures one at 570 ms); a spring mid-flight gets the active pace.
+    ///   * **Nothing moving and nothing damaged** — sleep until the next moment
+    ///     the screen can change on its own: the clock's next tick, or the
+    ///     idle timer that would lower the pace. This is the branch that
+    ///     matters on a laptop.
+    ///
+    /// Input is not part of this calculation and does not need to be: the loop
+    /// blocks on the input channel, so a key or a pointer wakes it the instant
+    /// it happens whatever this returns. See `litric_input::Waker`.
+    #[must_use]
+    pub fn wake_after_ms(&self, now_ms: u64) -> u64 {
+        if self.is_dirty() {
+            return match self.life() {
+                LifeState::WindowInteraction => LifeState::WindowInteraction.frame_interval_ms(),
+                LifeState::Locked => LifeState::Locked.frame_interval_ms(),
+                // Motion that outlives the idle timer still runs at the active
+                // pace: a panel opening twenty-five seconds after the last
+                // keypress must not open at half speed.
+                _ if self.animating() => LifeState::Active.frame_interval_ms(),
+                _ => 0,
+            };
+        }
+        let until_clock = self.next_clock_change_ms().saturating_sub(now_ms);
+        until_clock
+            .min(self.ms_until_idle_change(now_ms))
+            .min(Self::IDLE_SLEEP_CAP_MS)
+    }
+
+    /// Milliseconds until the life state would change with no further input,
+    /// or `u64::MAX` when nothing would change it on its own.
+    ///
+    /// Zero is never returned for a state that is still current: [`Self::life`]
+    /// and [`IdlePolicy::state_after`] compare the same elapsed time against the
+    /// same thresholds, so a deadline that has already passed is a state that
+    /// has already moved on.
+    fn ms_until_idle_change(&self, now_ms: u64) -> u64 {
+        if !self.quick.adaptive_idle {
+            // Nothing lowers the pace, so there is no moment to wake for.
+            return u64::MAX;
+        }
+        let quiet = now_ms.saturating_sub(self.last_input_ms);
+        match self.life() {
+            LifeState::Active => self.idle_policy.idle_after_ms.saturating_sub(quiet),
+            LifeState::Idle => self.idle_policy.deep_after_ms.saturating_sub(quiet),
+            // A dragged window and a locked session outrank the idle timers,
+            // and deep idle is already the slowest state there is.
+            _ => u64::MAX,
+        }
+    }
+
+    /// How far the animation clock moved since the last tick, in milliseconds.
+    ///
+    /// Before the first tick there is nothing to measure from: `Shell::new`
+    /// cannot know the time, and treating "unset" as "milliseconds since the
+    /// epoch" would put every spring past its settle budget and snap it to its
+    /// target on the frame it was started. So the first tick establishes the
+    /// clock and steps nothing; [`Shell::tick_after`] is the exception, because
+    /// a caller that names the elapsed time is not guessing at it.
+    fn animation_step_ms(&mut self, now_ms: u64) -> u32 {
+        let dt = self
+            .last_step_ms
+            .map_or(0, |last| now_ms.saturating_sub(last));
+        self.last_step_ms = Some(now_ms);
+        u32::try_from(dt).unwrap_or(u32::MAX)
     }
 
     // ---- the lock ---------------------------------------------------------
@@ -2280,9 +2393,17 @@ impl Shell {
                 self.anims.focus.elevation(id, is_focused);
             }
         }
-        if self.anims.step(16) {
-            // A spring mid-flight is damage: the reveal draws new pixels
-            // every frame it moves.
+        // The springs advance by the wall time that actually passed. The frame
+        // loop decides how much that is — 8 ms under a dragged window, 16 ms
+        // active, 33 ms idle, more when nothing is happening — so the motion
+        // tokens' settle budgets measure milliseconds rather than frames, and
+        // an animation looks the same at every pace.
+        let dt = self.animation_step_ms(now_ms);
+        if self.anims.step(dt) {
+            // A spring that moved is damage (BUG-0019). `step` reports whether
+            // the value changed, not whether it is still going, so a spring
+            // that reaches its settle budget and snaps the rest of the way
+            // in a stalled frame still has pixels that must be drawn.
             self.request_full_redraw();
         }
         // The Defender's scan and the browser's engine pump run between
@@ -2297,6 +2418,24 @@ impl Shell {
         if self.notifications.expire(now_ms) > 0 {
             self.request_full_redraw();
         }
+    }
+
+    /// Tick the shell `dt_ms` after the time of its own last tick.
+    ///
+    /// The frame loop has a wall clock and calls [`Self::tick`] with a real
+    /// timestamp. A caller that has none — a test, a replay, a benchmark, the
+    /// e2e journeys — has to say how much time passed, and this is that: the
+    /// same tick expressed as a delta.
+    ///
+    /// The delta is what the springs see, **including on the first call**,
+    /// because a caller that names the elapsed time is not guessing at it. The
+    /// base is the last *tick* rather than the current time, so a harness that
+    /// hands `handle` its own fixed timestamps cannot drag the animation clock
+    /// backwards and freeze every spring at zero.
+    pub fn tick_after(&mut self, dt_ms: u32) {
+        let base = self.last_step_ms.unwrap_or(self.now_ms);
+        self.last_step_ms = Some(base);
+        self.tick(base.saturating_add(u64::from(dt_ms)));
     }
 
     /// Move the shell's clock, damaging the top bar when the clock text it
@@ -3737,7 +3876,15 @@ pub fn eicar_denylist() -> litric_defender::denylist::Denylist {
     // clean. The e2e journey below caught it.
     let eicar = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
     let digest = litric_defender::sha256::digest(eicar);
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    // `fold` + `write!` rather than `map(format!).collect()`: the latter
+    // allocates a throwaway `String` per byte (clippy::format_collect).
+    // Writing into a `String` cannot fail, so the `Result` is dropped
+    // rather than unwrapped, which the workspace forbids in shipping code.
+    use std::fmt::Write as _;
+    let mut hex = String::with_capacity(digest.len().saturating_mul(2));
+    for b in &digest {
+        let _ = write!(hex, "{b:02x}");
+    }
     let mut list = litric_defender::denylist::Denylist::new();
     list.insert(&hex, "eicar-test-file");
     list
@@ -4530,6 +4677,89 @@ mod tests {
         s.wm.begin_drag(hit, frame.center().0, frame.y + 8.0);
         assert_eq!(s.life(), LifeState::WindowInteraction);
         assert!(s.frame_interval_ms() <= 8);
+    }
+
+    #[test]
+    fn an_idle_desktop_sleeps_instead_of_polling_its_own_frame_rate() {
+        let mut s = shell();
+        let t = 2_000;
+        s.tick(t);
+        let _ = s.take_damage();
+        assert!(!s.is_dirty(), "fixture: nothing should need drawing");
+        assert_eq!(
+            s.life(),
+            LifeState::Active,
+            "fixture: two seconds is not idle"
+        );
+
+        let sleep = s.wake_after_ms(t);
+        assert!(
+            sleep > s.frame_interval_ms(),
+            "a desktop with nothing to draw asked to be woken in {sleep} ms, which is its own \
+             frame pace: the wake-up is the bug, not the frame"
+        );
+        assert!(
+            sleep <= Shell::IDLE_SLEEP_CAP_MS,
+            "{sleep} ms is longer than the clock can be allowed to go stale"
+        );
+        assert!(
+            sleep >= 250,
+            "{sleep} ms is close enough to a frame that the loop is still spinning"
+        );
+    }
+
+    #[test]
+    fn motion_that_outlives_the_idle_timer_still_runs_at_the_active_pace() {
+        let mut s = shell();
+        s.activate(Hot::Logo);
+        let t = 30_000;
+        s.tick(t);
+        assert_eq!(s.life(), LifeState::Idle, "fixture: the desktop is idle");
+        assert!(s.anims().animating(), "fixture: the launcher is opening");
+        assert_eq!(
+            s.wake_after_ms(t),
+            LifeState::Active.frame_interval_ms(),
+            "an opening panel must not run at half speed because nobody has typed"
+        );
+    }
+
+    #[test]
+    fn a_spring_settles_within_its_token_budget_at_every_frame_pace() {
+        // The defect this pins down: `tick` stepped every spring by a constant
+        // 16 ms, so at the idle pace (33 ms) an animation took twice its
+        // token's budget in wall time, and under a drag (8 ms) half of it.
+        // A settle budget is in milliseconds and has to mean milliseconds.
+        for pace in [8_u64, 16, 33, 100] {
+            let mut s = shell();
+            s.activate(Hot::Logo);
+            let mut t = 1_000;
+            s.tick(t);
+            let started = t;
+            assert!(
+                !s.anims().launcher.settled(),
+                "fixture: the launcher's spring should be opening"
+            );
+            let mut steps: u32 = 0;
+            // This waits on the launcher's own spring, whose token is FAST.
+            // `animating()` would also wait for the dock's morph, which is a
+            // different token with a different budget, and this test is about
+            // one budget meaning one number of milliseconds.
+            while !s.anims().launcher.settled() && steps < 400 {
+                t = t.saturating_add(pace);
+                s.tick(t);
+                steps = steps.saturating_add(1);
+            }
+            assert!(
+                s.anims().launcher.settled(),
+                "at a {pace} ms pace the launcher never settled"
+            );
+            let elapsed = t.saturating_sub(started);
+            let budget = u64::from(litric_design::Motion::FAST.settle_ms);
+            assert!(
+                elapsed <= budget.saturating_add(pace),
+                "at a {pace} ms pace the panel took {elapsed} ms to settle, over its {budget} ms budget"
+            );
+        }
     }
 
     #[test]

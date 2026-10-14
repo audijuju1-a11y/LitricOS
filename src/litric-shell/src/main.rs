@@ -1012,6 +1012,22 @@ fn render(session: &mut Session, full: bool, damage: &[Rect]) -> Repaint {
     session.compositor.repaint(&mut session.shell, full, damage)
 }
 
+/// Whether the `n`-th over-budget frame is worth a log line.
+///
+/// On a machine that is over budget, *every* frame is over budget -- the
+/// renderer is over budget today (BUG-0015, BUG-0018) -- so one line per frame
+/// would make the journal the largest cost in the loop and bury the first
+/// measurement, which is the only one that describes the onset. The first ten
+/// lines say what is happening; after that only every hundredth frame reports,
+/// so a long run still states that it is continuing without doing so a
+/// thousand times a minute.
+#[must_use]
+fn should_log_over_budget(n: u64) -> bool {
+    // `checked_rem` rather than `%`: the workspace denies integer arithmetic
+    // side effects, and a remainder is the one place this number is divided.
+    n <= 10 || n.checked_rem(100) == Some(0)
+}
+
 fn run_png(args: &Args) -> Result<Vec<String>, String> {
     let (w, h) = args.size.unwrap_or((1280, 800));
     let scale = args
@@ -1116,6 +1132,14 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
     let mut last_facts = now_ms();
     let mut last_status = now_ms();
     let mut rows_written: u64 = 0;
+    // Frame-budget accounting. `docs/PERF-budget.md` §4 gates the frame time at
+    // the life state's own interval and says the shell logs a warning on every
+    // over-budget frame; that warning did not exist, so the gate it names was
+    // observable only by hand-timing the renderer out of tree. These two
+    // counters make the claim true and put the number in the status file,
+    // which is where the regression CI reads it.
+    let mut frames_drawn: u64 = 0;
+    let mut over_budget: u64 = 0;
 
     loop {
         if let Some(limit) = args.seconds {
@@ -1124,7 +1148,16 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
             }
         }
 
-        let budget = Duration::from_millis(session.shell.frame_interval_ms());
+        // How long the loop may sleep. The shell answers the question (zero
+        // when it has a frame to draw, the life state's pace while something is
+        // moving, and the next moment the screen can change by itself when
+        // nothing is happening); the loop's own periodic duties cap that, since
+        // the facts are re-sampled every FACTS_INTERVAL_MS whatever the shell
+        // is doing. Input does not wait on this: `poll` returns the instant a
+        // key or pointer event arrives.
+        let before = now_ms();
+        let budget =
+            Duration::from_millis(session.shell.wake_after_ms(before).min(FACTS_INTERVAL_MS));
         let events = input.poll(budget);
         let t = now_ms();
 
@@ -1164,6 +1197,12 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
         if session.shell.is_dirty() {
             let full = session.shell.needs_full_redraw();
             let damage = session.shell.take_damage();
+            // The budget is the life state's own interval -- 8 ms under a
+            // dragged window, 16 ms active, 33 ms idle or locked -- measured
+            // from the start of composition to the end of presentation, which
+            // is the input-to-present path the gate names.
+            let budget_ms = session.shell.frame_interval_ms();
+            let compose_started = Instant::now();
             let plan = render(&mut session, full, &damage);
             let scene = &session.compositor.scene;
             let rows = match &plan {
@@ -1172,6 +1211,18 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
             }
             .map_err(|e| format!("present failed: {e}"))?;
             rows_written = rows_written.saturating_add(u64::from(rows));
+            frames_drawn = frames_drawn.saturating_add(1);
+            let took_ms = u64::try_from(compose_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            if took_ms > budget_ms {
+                over_budget = over_budget.saturating_add(1);
+                if should_log_over_budget(over_budget) {
+                    eprintln!(
+                        "litric-shell: frame {frames_drawn} took {took_ms} ms, over the \
+                         {budget_ms} ms budget for {} (over budget {over_budget} time(s))",
+                        session.shell.life().token()
+                    );
+                }
+            }
         }
 
         if t.saturating_sub(last_status) >= STATUS_INTERVAL_MS {
@@ -1180,6 +1231,8 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
             lines.extend(session.shell.diagnostic_lines());
             lines.push(format!("rows_presented={rows_written}"));
             lines.push(format!("frames={}", session.shell.frames()));
+            lines.push(format!("frames_drawn={frames_drawn}"));
+            lines.push(format!("frames_over_budget={over_budget}"));
             report(&args.status, &lines);
         }
     }
@@ -1366,6 +1419,25 @@ mod tests {
             .find(|w| w.app_id == app)
             .map(|w| w.frame)
             .expect("window is open")
+    }
+
+    #[test]
+    fn over_budget_logging_is_rate_limited_but_never_silent() {
+        // The onset is always reported: a regression that appears on frame 1
+        // must reach the log, not be rounded away by the rate limit.
+        for n in 1..=10 {
+            assert!(
+                should_log_over_budget(n),
+                "frame {n} of the onset is reported"
+            );
+        }
+        assert!(
+            !should_log_over_budget(11),
+            "the eleventh over-budget frame is where the limit starts"
+        );
+        assert!(should_log_over_budget(100), "every hundredth still reports");
+        assert!(should_log_over_budget(1_000));
+        assert!(!should_log_over_budget(1_001));
     }
 
     #[test]

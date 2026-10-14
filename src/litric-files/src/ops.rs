@@ -364,11 +364,11 @@ impl Root {
             visited: 0,
             partial: false,
         };
-        self.measure_into(&host, &mut acc, 0);
+        Self::measure_into(&host, &mut acc, 0);
         Ok((acc.bytes, acc.files, acc.dirs, acc.partial))
     }
 
-    fn measure_into(&self, host: &Path, acc: &mut Measure, depth: usize) {
+    fn measure_into(host: &Path, acc: &mut Measure, depth: usize) {
         if acc.visited >= WALK_CAP || depth > COPY_DEPTH_CAP {
             acc.partial = true;
             return;
@@ -396,7 +396,7 @@ impl Root {
                 acc.partial = true;
                 return;
             }
-            self.measure_into(&entry.path(), acc, depth.saturating_add(1));
+            Self::measure_into(&entry.path(), acc, depth.saturating_add(1));
         }
     }
 
@@ -504,7 +504,7 @@ impl Root {
             self.install_staged(&staged, &dest)?;
             return Ok(dest);
         }
-        self.copy_into(&src, &dest, 0)?;
+        Self::copy_into(&src, &dest, 0)?;
         Ok(dest)
     }
 
@@ -516,7 +516,7 @@ impl Root {
     /// As [`Root::copy_into`]; a failed copy removes its own staging entry.
     fn stage_copy(&self, src: &Path, dir: &Path) -> Result<PathBuf, Error> {
         let staged = self.staging_name(dir)?;
-        match self.copy_into(src, &staged, 0) {
+        match Self::copy_into(src, &staged, 0) {
             Ok(()) => Ok(staged),
             Err(e) => {
                 // The staging entry is this operation's own garbage. If even
@@ -635,7 +635,7 @@ impl Root {
                 // Cross-filesystem: copy, then delete the source. A crash
                 // between the two leaves a copy, not a loss — the safe
                 // ordering.
-                self.copy_into(&src, &dest, 0)?;
+                Self::copy_into(&src, &dest, 0)?;
                 self.remove_host(&src)?;
                 Ok(dest)
             }
@@ -702,7 +702,7 @@ impl Root {
         }
     }
 
-    fn copy_into(&self, src: &Path, dest: &Path, depth: usize) -> Result<(), Error> {
+    fn copy_into(src: &Path, dest: &Path, depth: usize) -> Result<(), Error> {
         if depth > COPY_DEPTH_CAP {
             return Err(Error::new(ErrorKind::Limit, "tree is too deep to copy"));
         }
@@ -716,7 +716,7 @@ impl Root {
             fs::create_dir(dest).map_err(|e| Error::from_io("create dir", &e))?;
             let read = fs::read_dir(src).map_err(|e| Error::from_io("read dir", &e))?;
             for entry in read.filter_map(|e| e.ok()) {
-                self.copy_into(
+                Self::copy_into(
                     &entry.path(),
                     &dest.join(entry.file_name()),
                     depth.saturating_add(1),

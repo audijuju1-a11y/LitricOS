@@ -738,3 +738,67 @@ The raw lines are reproduced in [docs/EVIDENCE.md](EVIDENCE.md).
 | the smoke test under the harness's *default* `accel=tcg` | the 4-case pass above used `LITRIC_ACCEL=kvm` and a 150 s deadline. TCG needs no nested virtualisation, which is why it is the default, and this host has not completed a boot under it inside 300 s — so the gate cannot yet be run the way CI would run it |
 | the ≤3.5 s boot budget | 12.035 s to `systemd-analyze`'s userspace anchor inside a 3 GiB QEMU guest. Better than the ~75 s to a *login prompt* recorded on 2026-10-11 (different anchors, so not comparable), and still **not the budget**: that budget describes hardware this has never run on |
 | idle CPU | not measured. Nothing in the guest sampled CPU at idle |
+
+---
+
+## 2026-10-14 — the Rust gate went from red to green, and the partial-redraw oracle found its first real defect
+
+Host: Linux container, 4 vCPU, no GPU, default toolchain `1.85.0`. No QEMU and no
+`mkosi`, so nothing in section [6] could run and every line of it is SKIP, not
+PASS.
+
+### What was red before anything was changed
+
+| Check | Before | After |
+|---|---|---|
+| `cargo build --offline` | **FAIL** — `error[E0658]`: `litric-files` names `io::ErrorKind::InvalidFilename`, which is unstable on the workspace's declared `rust-version = 1.85` | PASS |
+| `cargo clippy --all-targets -- -D warnings` | **FAIL** — 8 findings in committed code (`litric-files` ops/zip, `litric-bench`, `litric-shell`) | PASS |
+| `cargo fmt --all -- --check` | **FAIL** — unformatted code in the uncommitted frame-pacing work | PASS |
+| `cargo test --offline -p litric-shell --bin litric-shell a_partial_redraw_is_pixel_identical` | **FAIL** — `18768` pixels differed from a full redraw | PASS |
+
+The MSRV failure is the one worth naming: the workspace *declares* 1.85, the CI
+toolchain on a developer machine is current stable, and so the declared floor was
+never actually exercised. `--offline` on a 1.85 toolchain is the cheapest test of
+that claim and it did not pass.
+
+### The gate, after
+
+`bash ci/verify.sh`:
+
+| Section | Result |
+|---|---|
+| `[1]`–`[3]` repository, documentation references, linters | PASS |
+| `[4] Development signing keys` | PASS after `tools/gen-dev-keys.sh` — the dev pair is generated locally and is excluded by `keys/.gitignore`, so this is setup, not a committed artifact |
+| `[5] Native workspace (Rust)` | **5/5 PASS** — build, test, zero warnings, `fmt --check`, `clippy --all-targets -- -D warnings` |
+| `[6] Image build and boot` | SKIP x5 — `mkosi` and `qemu-system-x86_64` are not installed |
+
+`summary: 23 pass, 2 fail, 5 skipped` on the first run; `2 fail` was the signing
+key pair, which `tools/gen-dev-keys.sh` supplies. It is not a code defect.
+
+### The defect the oracle found
+
+[BUG-0019](bugs/BUG-0019-a-snap-that-changed-the-value-reported-no-frame.md):
+`Anim::step` reported "nothing moved" on a settle-budget snap that moved the
+value, so `Shell::tick` did not request the frame that would have painted it. It
+is S3, it is fixed, and it has regression tests. The oracle itself had been
+passing **vacuously** — its fixture's 1 016 ms first delta only became reachable
+when the frame pacing started stepping springs by real elapsed time, which is
+also why the defect is older than the change that exposed it.
+
+### The renderer baseline from this host
+
+`cargo run --release -p litric-shell --example render_bench`, 15 runs per line,
+in [docs/EVIDENCE.md](EVIDENCE.md): a windowed full frame **106.8 ms**, an opened
+window **245.8 ms**, a locked frame **334.8 ms** against its own 33 ms interval,
+a full-screen two-pass blur **43–45 ms** and flat in radius, present **3.9 ms**.
+Both renderer defects (BUG-0015, BUG-0018) stand. Nothing in this entry claims
+they are fixed.
+
+### What this entry does not establish
+
+* Nothing about the image. `mkosi` and QEMU are absent here; no boot, no idle
+  RAM, no idle CPU, no boot time was measured.
+* Nothing about the frame-budget warning's runtime behaviour. `run_display` needs
+  a framebuffer; the counter and its rate-limit policy are unit-tested, and the
+  end-to-end path is **NOT RUN**.
+* Nothing about the target hardware. Every number above is a container's.
