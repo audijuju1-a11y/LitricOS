@@ -1061,10 +1061,20 @@ mod tests {
     #[test]
     fn trash_restore_and_purge_round_trip() {
         let (_dir, root) = open_root("trash");
+        let host_root = root.host_root().to_path_buf();
         let mut conn = Connection::new(root);
         one_line(&mut conn, "NEWFILE /Documents memo.txt");
         let trashed = one_line(&mut conn, "TRASH /Documents/memo.txt");
         assert!(trashed.starts_with("trashed=memo.txt"), "got: {trashed}");
+
+        // The on-disk field must be a percent-encoded absolute host path, not
+        // a file:// URI, so standard Linux file managers can read the trash.
+        let info_path = host_root.join(".local/share/Trash/info/memo.txt.trashinfo");
+        let record = std::fs::read_to_string(&info_path).expect("trash info record");
+        let path_line = record.lines().find(|line| line.starts_with("Path=")).expect("Path field");
+        assert!(path_line.starts_with("Path=%2F"), "expected absolute path: {path_line}");
+        assert!(!path_line.contains("file%3A"), "new records must not store a URI");
+
         match conn.dispatch("TRASHLIST", &mut |_, _| {}) {
             Outcome::Reply(lines) => {
                 assert_eq!(lines.len(), 1);
@@ -1073,6 +1083,10 @@ mod tests {
             }
             other => panic!("not a reply: {other:?}"),
         }
+        // Keep entries written by older Litric versions restorable after the
+        // spec-compliant on-disk format changes.
+        let legacy_record = record.replace(path_line, "Path=file%3A%2F%2F%2FDocuments%2Fmemo.txt");
+        std::fs::write(&info_path, legacy_record).expect("write legacy trash record");
         // Restoring to the now-free original location works.
         let restored = one_line(&mut conn, "RESTORE memo.txt");
         assert!(restored.contains("path="), "got: {restored}");
