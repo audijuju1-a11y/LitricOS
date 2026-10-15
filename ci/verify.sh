@@ -37,7 +37,10 @@ check() {
         RESULTS+=("PASS|${name}|$*")
     else
         printf '  %s  %s\n' "$(red FAIL)" "$name"
-        printf '%s\n' "$output" | sed 's/^/         /' | head -25
+        # Show the tail of the captured output so test failures are visible.
+        # tail consumes the whole stream, avoiding SIGPIPE/Broken pipe from
+        # sending a large test log through sed before truncating it.
+        printf '%s\n' "$output" | tail -40 | sed 's/^/         /'
         FAIL=$((FAIL + 1))
         RESULTS+=("FAIL|${name}|$*")
     fi
@@ -242,7 +245,7 @@ echo "[4] Development signing keys"
 if have openssl; then
     keys_valid() {
         local rc=0 f
-        for f in secureboot verity; do
+        for f in secureboot verity pcr; do
             [[ -s "keys/dev/$f.crt" && -s "keys/dev/$f.key" ]] || {
                 echo "missing keys/dev/$f -- run tools/gen-dev-keys.sh"; rc=1; continue; }
             openssl x509 -in "keys/dev/$f.crt" -noout >/dev/null 2>&1 || {
@@ -259,9 +262,10 @@ if have openssl; then
     # Development keys are deliberately git-ignored and must not be committed.
     # A clean clone therefore has none: report an environmental skip rather than
     # failing the entire repository gate. If any key material is present, run
-    # the full pair/parse check so a partial or mismatched pair still fails closed.
+    # the full three-pair/parse check so partial or mismatched keys still fail closed.
     if [[ -e keys/dev/secureboot.crt || -e keys/dev/secureboot.key || \
-          -e keys/dev/verity.crt || -e keys/dev/verity.key ]]; then
+          -e keys/dev/verity.crt || -e keys/dev/verity.key || \
+          -e keys/dev/pcr.crt || -e keys/dev/pcr.key ]]; then
         check "dev key pairs exist, parse, and match" keys_valid
     else
         skip "dev signing keys" "dev-only keys are intentionally absent from a clean checkout"
