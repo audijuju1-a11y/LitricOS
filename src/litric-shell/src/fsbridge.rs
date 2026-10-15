@@ -515,7 +515,13 @@ impl FsBridge {
                 };
                 let restore_dir = logical
                     .rsplit_once('/')
-                    .map(|(dir, _)| if dir.is_empty() { "/".to_owned() } else { dir.to_owned() })
+                    .map(|(dir, _)| {
+                        if dir.is_empty() {
+                            "/".to_owned()
+                        } else {
+                            dir.to_owned()
+                        }
+                    })
                     .unwrap_or_else(|| "/".to_owned());
                 let is_dir = files.join(&name).is_dir();
                 out.push(TrashEntry {
