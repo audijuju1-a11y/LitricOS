@@ -76,7 +76,7 @@ The recorded gate history separates successful Rust tests from image constructio
 ### AUD-006 — Large modules concentrate unrelated behavior and raise change risk
 
 **Severity:** Medium (maintainability; not by itself a functional bug)  
-**Areas:** `src/litric-shell/src/shell.rs` (~193 KB), `views.rs` (~132 KB), `taskmgr.rs` (~121 KB), plus large `canvas.rs`, `sysd/providers.rs` and `lock.rs`.
+**Areas:** `src/litric-shell/src/shell.rs` (~193 KB), `views.rs` (~132 KB), `taskmgr.rs` (~121 KB), plus large `src/litric-shell/src/canvas.rs`, `src/litric-sysd/src/providers.rs` and `src/litric-shell/src/lock.rs`.
 
 The crate boundaries are useful, but several individual modules are large enough that unrelated UI state, rendering, service orchestration and filesystem behaviors can become tightly coupled. Large files also make review and regression localization harder.
 
