@@ -1071,9 +1071,18 @@ mod tests {
         // a file:// URI, so standard Linux file managers can read the trash.
         let info_path = host_root.join(".local/share/Trash/info/memo.txt.trashinfo");
         let record = std::fs::read_to_string(&info_path).expect("trash info record");
-        let path_line = record.lines().find(|line| line.starts_with("Path=")).expect("Path field");
-        assert!(path_line.starts_with("Path=%2F"), "expected absolute path: {path_line}");
-        assert!(!path_line.contains("file%3A"), "new records must not store a URI");
+        let path_line = record
+            .lines()
+            .find(|line| line.starts_with("Path="))
+            .expect("Path field");
+        assert!(
+            path_line.starts_with("Path=%2F"),
+            "expected absolute path: {path_line}"
+        );
+        assert!(
+            !path_line.contains("file%3A"),
+            "new records must not store a URI"
+        );
 
         match conn.dispatch("TRASHLIST", &mut |_, _| {}) {
             Outcome::Reply(lines) => {
