@@ -292,6 +292,12 @@ impl FsBridge {
     /// # Errors
     /// [`FsError::Exists`] when the destination name is taken.
     pub fn rename(&self, parent: &str, old: &str, new: &str) -> Result<(), FsError> {
+        // Validate both segments before joining either one to a host path.
+        // Without this check an absolute `old` path discards `dir` in
+        // PathBuf::join, and `../old` can escape the requested directory.
+        if !valid_name(old) {
+            return reject(old);
+        }
         if !valid_name(new) {
             return reject(new);
         }
@@ -1121,6 +1127,17 @@ mod tests {
         assert!(matches!(b.new_file("/Work", "a.txt"), Err(FsError::Exists)));
         b.rename("/Work", "a.txt", "c.txt").expect("rename");
         assert!(!b.exists("/Work/a.txt").unwrap());
+        assert!(b.exists("/Work/c.txt").unwrap());
+        // The old name is a segment too: neither traversal nor an absolute
+        // path may be joined to the parent and used as a source path.
+        assert!(matches!(
+            b.rename("/Work", "../c.txt", "moved.txt"),
+            Err(FsError::BadName)
+        ));
+        assert!(matches!(
+            b.rename("/Work", "/etc/passwd", "moved.txt"),
+            Err(FsError::BadName)
+        ));
         assert!(b.exists("/Work/c.txt").unwrap());
         assert!(matches!(
             b.rename("/Work", "c.txt", "d/e"),
