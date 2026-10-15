@@ -433,13 +433,9 @@ impl Connection {
                     format!("no such trash entry: {name}"),
                 ));
             };
-            let Some(raw) = item.original_path.strip_prefix("file://") else {
-                return Outcome::Fail(Error::new(
-                    ErrorKind::CorruptArchive,
-                    "trashinfo Path= is not a file URI",
-                ));
-            };
-            let logical = match LogicalPath::parse(raw) {
+            // DiskTrash normalizes both spec-compliant absolute paths and
+            // legacy file:// records into the root's validated logical namespace.
+            let logical = match LogicalPath::parse(&item.original_path) {
                 Ok(p) => p,
                 Err(e) => return Outcome::Fail(invalid(e)),
             };
@@ -1073,7 +1069,7 @@ mod tests {
             Outcome::Reply(lines) => {
                 assert_eq!(lines.len(), 1);
                 assert!(lines[0].starts_with("t name=memo.txt "));
-                assert!(lines[0].contains("original=file%3A%2F%2F%2FDocuments%2Fmemo.txt"));
+                assert!(lines[0].contains("original=%2FDocuments%2Fmemo.txt"));
             }
             other => panic!("not a reply: {other:?}"),
         }
