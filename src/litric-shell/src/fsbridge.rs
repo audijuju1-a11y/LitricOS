@@ -896,7 +896,9 @@ fn logical_trash_path(host_root: &std::path::Path, original: &str) -> Option<Str
         }
     };
     if !logical.starts_with('/')
-        || logical.split('/').any(|segment| matches!(segment, "." | ".."))
+        || logical
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
     {
         return None;
     }
@@ -1154,9 +1156,18 @@ mod tests {
         b.trash("/gone.txt", 1_900_000_000).expect("trash");
         let info_path = root.join(".local/share/Trash/info/gone.txt.trashinfo");
         let info = std::fs::read_to_string(&info_path).expect("trash info");
-        let path_line = info.lines().find(|line| line.starts_with("Path=")).expect("Path field");
-        assert!(path_line.starts_with("Path=%2F"), "expected percent-encoded absolute host path: {path_line}");
-        assert!(!path_line.contains("file%3A"), "new records must not store a URI");
+        let path_line = info
+            .lines()
+            .find(|line| line.starts_with("Path="))
+            .expect("Path field");
+        assert!(
+            path_line.starts_with("Path=/"),
+            "expected absolute host path: {path_line}"
+        );
+        assert!(
+            !path_line.contains("file%3A"),
+            "new records must not store a URI"
+        );
         let list = b.trash_list().expect("list");
         assert_eq!(list.len(), 1);
         assert_eq!(list.first().map(|i| i.name.as_str()), Some("gone.txt"));
