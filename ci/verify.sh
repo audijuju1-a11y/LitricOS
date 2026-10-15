@@ -256,7 +256,16 @@ if have openssl; then
         done
         return $rc
     }
-    check "dev key pairs exist, parse, and match" keys_valid
+    # Development keys are deliberately git-ignored and must not be committed.
+    # A clean clone therefore has none: report an environmental skip rather than
+    # failing the entire repository gate. If any key material is present, run
+    # the full pair/parse check so a partial or mismatched pair still fails closed.
+    if [[ -e keys/dev/secureboot.crt || -e keys/dev/secureboot.key || \
+          -e keys/dev/verity.crt || -e keys/dev/verity.key ]]; then
+        check "dev key pairs exist, parse, and match" keys_valid
+    else
+        skip "dev signing keys" "dev-only keys are intentionally absent from a clean checkout"
+    fi
 else
     skip "dev signing keys" "openssl not on PATH"
 fi
