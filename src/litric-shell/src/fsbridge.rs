@@ -214,7 +214,7 @@ impl FsBridge {
             let mut missing_parent = false;
             for (index, seg) in segments.iter().enumerate() {
                 out.push(seg);
-                if index + 1 == segments.len() || missing_parent {
+                if index.saturating_add(1) == segments.len() || missing_parent {
                     continue;
                 }
                 match std::fs::symlink_metadata(&out) {
@@ -668,8 +668,7 @@ impl FsBridge {
                 return Err(FsError::NotFound);
             };
             let item = files.join(name);
-            let meta =
-                std::fs::symlink_metadata(&item).map_err(|e| map_err("trash purge", &e))?;
+            let meta = std::fs::symlink_metadata(&item).map_err(|e| map_err("trash purge", &e))?;
             if meta.is_dir() && !meta.file_type().is_symlink() {
                 std::fs::remove_dir_all(&item).map_err(|e| map_err("trash purge", &e))?;
             } else {
@@ -901,8 +900,7 @@ impl FsBridge {
         {
             use std::io::Read as _;
             let p = self.host_path(archive)?;
-            let archive_meta =
-                std::fs::symlink_metadata(&p).map_err(|e| map_err("extract", &e))?;
+            let archive_meta = std::fs::symlink_metadata(&p).map_err(|e| map_err("extract", &e))?;
             if archive_meta.file_type().is_symlink() {
                 return Err(FsError::Denied);
             }
@@ -1286,8 +1284,7 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join("dir-link")).expect("directory link");
         std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("file-link"))
             .expect("file link");
-        let bridge =
-            FsBridge::open(&root, litric_locale::TimeZone::utc("test")).expect("bridge");
+        let bridge = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).expect("bridge");
 
         assert!(matches!(
             bridge.read_text("/dir-link/secret.txt"),
@@ -1306,8 +1303,8 @@ mod tests {
             .iter()
             .any(|entry| entry.name == "dir-link" && entry.kind == FileKind::Link));
         assert_eq!(
-            std::fs::read_to_string(outside.join("secret.txt")).as_deref(),
-            Ok("secret")
+            std::fs::read_to_string(outside.join("secret.txt")).expect("outside file remains"),
+            "secret"
         );
 
         std::fs::remove_dir_all(&root).ok();

@@ -63,6 +63,7 @@ ALLOWED = {
         "delete": "permanent removal of a validated logical path the user asked to delete",
         "trash": "rolls back the .trashinfo reservation when the move failed (the BUG-0011 shape, second implementation)",
         "trash_restore": "removes the record of an entry it has just restored",
+        "trash_purge": "permanently removes one validated Trash payload and its paired metadata after checking the Trash directory tree for symlinks",
         "reserve_trash_name": "removes the record it is creating when the write fails",
     },
     "src/litric-browser/src/bin/browserd.rs": {
