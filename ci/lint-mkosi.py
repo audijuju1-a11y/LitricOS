@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 # --- the real mkosi schema -------------------------------------------------
@@ -138,9 +139,34 @@ PATH_KEYS = {
     "SignExpectedPcrKey", "SignExpectedPcrCertificate",
 }
 
+# These six signing artifacts are intentionally generated locally and excluded
+# from Git. A fully clean checkout may omit the whole set; a partial set must
+# still be treated as an error because it cannot produce a signed image.
+DEV_KEY_FILES = (
+    "secureboot.key", "secureboot.crt",
+    "verity.key", "verity.crt",
+    "pcr.key", "pcr.crt",
+)
+
+
 # mkosi discovers these automatically when they sit next to mkosi.conf.
 # Declaring them as well applies them twice.
 AUTO_DISCOVERED = {"mkosi.extra", "mkosi.skeleton", "mkosi.repart", "mkosi.profiles"}
+
+
+def is_absent_dev_key(path: Path, target: str, resolved: Path) -> bool:
+    """Whether a missing reference is one of the intentionally absent dev keys.
+
+    This only suppresses the error when *all six* local-only signing artifacts
+    are absent. Once any key exists, missing companions must fail the check.
+    """
+    if not target.startswith("../keys/dev/") or resolved.name not in DEV_KEY_FILES:
+        return False
+    config_root = path.resolve().parent.parent
+    dev_dir = (config_root / "keys" / "dev").resolve()
+    if resolved.parent != dev_dir:
+        return False
+    return not any((dev_dir / name).exists() for name in DEV_KEY_FILES)
 
 
 def check_path_value(path: Path, lineno: int, key: str, value: str) -> list[Finding]:
@@ -159,6 +185,8 @@ def check_path_value(path: Path, lineno: int, key: str, value: str) -> list[Find
             continue
         resolved = (path.parent / target).resolve()
         if not resolved.exists():
+            if is_absent_dev_key(path, target, resolved):
+                continue
             out.append(Finding(
                 path, lineno, "ERROR",
                 f"{key}= names {target!r}, which does not exist at {resolved}",
@@ -272,6 +300,34 @@ def self_test() -> int:
         rc = 1
     else:
         print("PASS  current config uses only real sections and correct key placement")
+    # Clean checkouts intentionally omit local signing keys, but a partial
+    # set must fail. Test this invariant with a temporary repository fixture.
+    try:
+        with tempfile.TemporaryDirectory(prefix="litric-mkosi-self-test-") as tmp:
+            fixture = Path(tmp)
+            config = fixture / "image" / "mkosi.conf"
+            config.parent.mkdir(parents=True)
+            dev_dir = fixture / "keys" / "dev"
+            dev_dir.mkdir(parents=True)
+            absent = check_path_value(config, 1, "SecureBootKey", "../keys/dev/secureboot.key")
+            if absent:
+                print("FAIL: clean checkout with all dev keys absent was rejected")
+                rc = 1
+            else:
+                print("PASS  clean checkout with all dev keys absent is accepted")
+            (dev_dir / "secureboot.key").write_text("test fixture", encoding="utf-8")
+            partial = check_path_value(
+                config, 1, "SecureBootCertificate", "../keys/dev/secureboot.crt"
+            )
+            if any(f.severity == "ERROR" for f in partial):
+                print("PASS  partial dev key set remains an error")
+            else:
+                print("FAIL: partial dev key set was incorrectly accepted")
+                rc = 1
+    except OSError as exc:
+        print(f"FAIL: could not create self-test fixture: {exc}")
+        rc = 1
+
     return rc
 
 
