@@ -109,6 +109,17 @@ The repository has unusually good negative controls for several static checkers,
 
 **Recommendation:** keep negative-control tests, add behavior tests around every reviewed destructive function, and connect policy ledgers to runtime evidence. For the memory budget, close all acknowledged policy decisions and add a boot-time cgroup measurement gate instead of relying on configuration parsing alone.
 
+### AUD-010 — Shell rename did not validate its source-name segment
+
+**Severity:** High-priority filesystem-boundary bug  
+**File:** `src/litric-shell/src/fsbridge.rs`
+
+`FsBridge::rename(parent, old, new)` checked `new` but joined unvalidated `old` to the host parent. An absolute source path can override the parent in `PathBuf::join`; traversal components can also select a source outside the requested directory.
+
+**Change on this branch:** validate both `old` and `new` with `valid_name` before joining either to a host path. Regression tests assert that traversal and absolute source names return `FsError::BadName` and leave the legitimate source untouched.
+
+**Verification:** code change and tests are present; the full CI gate must pass before merge.
+
 ## Architecture assessment
 
 **Good foundations to preserve**
@@ -144,6 +155,7 @@ The repository has unusually good negative controls for several static checkers,
 | `src/litric-files/src/server.rs` | Restore from normalized logical path; regression test for new format and legacy URI |
 | `src/litric-shell/src/fsbridge.rs` | Update trash writer/reader; root-constrained path normalization; regression test for new format and legacy URI |
 | `docs/bugs/BUG-0009-trash-path-field-is-not-a-location.md` | Update defect status and verification requirements |
+| `docs/bugs/BUG-0020-fsbridge-rename-did-not-validate-source-name.md` | Record source-name path traversal defect and fix |
 | `docs/audit/2026-10-15-comprehensive-audit.md` | This report |
 
 ## Verification status
