@@ -15,7 +15,7 @@ use crate::ops::{unix_time_of, Root};
 use crate::{Error, ErrorKind};
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The directory name the freedesktop specification fixes for the home
 /// trash. `ops.rs` excludes it from `RECENT` under this exact name.
@@ -26,13 +26,9 @@ pub const TRASH_DIR_NAME: &str = ".local/share/Trash";
 pub struct OnDiskItem {
     /// The name inside `Trash/files/`.
     pub name: String,
-    /// The original location, decoded from the entry's `Path=` line. Today
-    /// that value is `file://<logical path>`, which round-trips through
-    /// [`unpct_path`] but is **not** what the trash specification asks for:
-    /// `Path=` must carry the original *location* (an absolute pathname, or
-    /// a relative one measured from the trash directory's parent). Recorded
-    /// as BUG-0009; the format is shared with the shell's own trash writer,
-    /// so it changes in both places or not at all.
+    /// The original location mapped back into this root's logical namespace.
+    /// New records use the absolute host path required by the freedesktop
+    /// Trash specification; legacy `file://` records remain readable.
     pub original_path: String,
     /// The deletion date, ISO 8601 `YYYY-MM-DDThh:mm:ss` as recorded.
     pub deleted_iso: String,
@@ -46,6 +42,7 @@ pub struct OnDiskItem {
 /// The on-disk trash rooted at `<root>/.local/share/Trash`.
 #[derive(Debug, Clone)]
 pub struct DiskTrash {
+    host_root: PathBuf,
     files_dir: PathBuf,
     info_dir: PathBuf,
 }
@@ -76,6 +73,7 @@ impl DiskTrash {
             }
         }
         Ok(Self {
+            host_root: root.host_root().to_path_buf(),
             files_dir,
             info_dir,
         })
@@ -112,7 +110,7 @@ impl DiskTrash {
         let host = root.resolve(logical)?;
         let meta = fs::symlink_metadata(&host).map_err(|e| Error::from_io("trash", &e))?;
         let is_dir = meta.is_dir() && !meta.file_type().is_symlink();
-        let original_uri = format!("file://{}", logical.as_str());
+        let original_path = logical.as_str().to_owned();
         let size = if is_dir {
             let (bytes, _f, _d, _p) = root.measure(logical)?;
             bytes
@@ -122,7 +120,7 @@ impl DiskTrash {
         let deleted_iso = iso_local(root, now);
         let record = format!(
             "[Trash Info]\nPath={}\nDeletionDate={}\n",
-            pct_path(&original_uri),
+            pct_path(&host.to_string_lossy()),
             deleted_iso
         );
         let name = self.reserve_info(logical.file_name(), &record)?;
@@ -135,7 +133,7 @@ impl DiskTrash {
         }
         Ok(OnDiskItem {
             name,
-            original_path: original_uri,
+            original_path,
             deleted_iso,
             is_dir,
             size,
@@ -223,13 +221,44 @@ impl DiskTrash {
         Ok(out)
     }
 
+    /// Convert both the current absolute-host-path format and the historical
+    /// `file://` URI format into a validated logical path. Never allow a
+    /// trash record to restore outside this daemon's namespace.
+    fn normalize_original_path(&self, original: &str) -> Option<String> {
+        let logical = if let Some(legacy) = original.strip_prefix("file://") {
+            legacy.to_owned()
+        } else {
+            let absolute = Path::new(original);
+            let relative = absolute.strip_prefix(&self.host_root).ok()?;
+            if relative.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            }) {
+                return None;
+            }
+            let relative = relative.to_str()?;
+            if relative.is_empty() {
+                "/".to_owned()
+            } else {
+                format!("/{relative}")
+            }
+        };
+        crate::path::LogicalPath::parse(&logical)
+            .ok()
+            .map(|path| path.as_str().to_owned())
+    }
+
     fn read_one(&self, name: &str) -> Option<OnDiskItem> {
         let raw = fs::read_to_string(self.info_dir.join(format!("{name}.trashinfo"))).ok()?;
         let mut original = String::new();
         let mut deleted = String::new();
         for line in raw.lines() {
             if let Some(v) = line.strip_prefix("Path=") {
-                original = unpct_path(v);
+                original = self.normalize_original_path(&unpct_path(v))?;
             } else if let Some(v) = line.strip_prefix("DeletionDate=") {
                 deleted = v.to_owned();
             }
