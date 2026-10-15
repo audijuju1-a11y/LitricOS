@@ -427,10 +427,9 @@ impl FsBridge {
             }
             let name = logical.rsplit('/').next().unwrap_or_default().to_owned();
             let stamp = self.zone.local(i64::try_from(now_secs).unwrap_or(0));
-            let original_uri = format!("file://{logical}");
             let record = format!(
                 "[Trash Info]\nPath={}\nDeletionDate={:04}-{:02}-{:02}T{:02}:{:02}:{:02}\n",
-                crate::fsbridge::pct_path(&original_uri),
+                crate::fsbridge::pct_path(&src.to_string_lossy()),
                 stamp.year,
                 stamp.month,
                 stamp.day,
@@ -509,24 +508,14 @@ impl FsBridge {
                     continue;
                 }
                 let (original, deleted_iso) = raw;
-                // The original URI is `file:///Documents/x`; the restore
-                // destination is the directory part.
-                let restore_dir = original
-                    .strip_prefix("file://")
-                    .and_then(|p| p.rsplit_once('/'))
-                    // A file that lived in the root has an empty directory part,
-                    // and `""` is not a path: the entry would be listed with
-                    // nowhere to go back to, and `host_path("")` would resolve it
-                    // to the root directory rather than to `/`. Found by
-                    // `trash_write_list_restore_and_purge`, the one test that
-                    // trashes a file from the top of the share.
-                    .map(|(dir, _)| {
-                        if dir.is_empty() {
-                            "/".to_owned()
-                        } else {
-                            dir.to_owned()
-                        }
-                    })
+                // Current records carry the absolute host path required by the
+                // freedesktop spec. Accept historical file:// records as well.
+                let Some(logical) = logical_trash_path(&self.host_root, &original) else {
+                    continue;
+                };
+                let restore_dir = logical
+                    .rsplit_once('/')
+                    .map(|(dir, _)| if dir.is_empty() { "/".to_owned() } else { dir.to_owned() })
                     .unwrap_or_else(|| "/".to_owned());
                 let is_dir = files.join(&name).is_dir();
                 out.push(TrashEntry {
@@ -872,6 +861,42 @@ impl FsBridge {
     }
 }
 
+/// Map an absolute host path from a spec-compliant trash record to the
+/// root-relative namespace used by the Files UI. Historical Litric records
+/// used a file:// URI; keep reading those without ever accepting a path that
+/// escapes the bridge root.
+#[cfg(unix)]
+fn logical_trash_path(host_root: &std::path::Path, original: &str) -> Option<String> {
+    let logical = if let Some(legacy) = original.strip_prefix("file://") {
+        legacy.to_owned()
+    } else {
+        let absolute = std::path::Path::new(original);
+        let relative = absolute.strip_prefix(host_root).ok()?;
+        if relative.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        }) {
+            return None;
+        }
+        let relative = relative.to_str()?;
+        if relative.is_empty() {
+            "/".to_owned()
+        } else {
+            format!("/{relative}")
+        }
+    };
+    if !logical.starts_with('/')
+        || logical.split('/').any(|segment| matches!(segment, "." | ".."))
+    {
+        return None;
+    }
+    Some(logical)
+}
+
 /// One entry of the trash, as the Trash window shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrashEntry {
@@ -1121,12 +1146,20 @@ mod tests {
         let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).unwrap();
         b.write_text("/", "gone.txt", "bye").unwrap();
         b.trash("/gone.txt", 1_900_000_000).expect("trash");
+        let info_path = root.join(".local/share/Trash/info/gone.txt.trashinfo");
+        let info = std::fs::read_to_string(&info_path).expect("trash info");
+        let path_line = info.lines().find(|line| line.starts_with("Path=")).expect("Path field");
+        assert!(path_line.starts_with("Path=%2F"), "expected percent-encoded absolute host path: {path_line}");
+        assert!(!path_line.contains("file%3A"), "new records must not store a URI");
         let list = b.trash_list().expect("list");
         assert_eq!(list.len(), 1);
         assert_eq!(list.first().map(|i| i.name.as_str()), Some("gone.txt"));
         assert_eq!(list.first().map(|i| i.restore_dir.as_str()), Some("/"));
         assert!(!b.exists("/gone.txt").unwrap());
-        b.trash_restore("gone.txt").expect("restore");
+        // Existing trash records used a file:// URI. Keep those restorable.
+        let legacy = info.replace(path_line, "Path=file%3A%2F%2F%2Fgone.txt");
+        std::fs::write(&info_path, legacy).expect("write legacy trash info");
+        b.trash_restore("gone.txt").expect("restore legacy entry");
         assert!(b.exists("/gone.txt").unwrap());
         assert_eq!(b.trash_list().unwrap().len(), 0);
         b.trash("/gone.txt", 1_900_000_100).unwrap();
