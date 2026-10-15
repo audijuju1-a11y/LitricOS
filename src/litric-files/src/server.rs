@@ -1076,7 +1076,7 @@ mod tests {
             .find(|line| line.starts_with("Path="))
             .expect("Path field");
         assert!(
-            path_line.starts_with("Path=%2F"),
+            path_line.starts_with("Path=/"),
             "expected absolute path: {path_line}"
         );
         assert!(
