@@ -8,11 +8,14 @@
 
 This repository is a substantial OS prototype, not just a desktop mock-up: it contains a Rust workspace, image/ISO build tooling, systemd units, a software-framebuffer shell, a filesystem service, a browser engine, a capability policy core, a defender policy core, and a large evidence/documentation system. The repository also has several strong engineering controls already: Rust workspace lints forbid `unsafe`, panic/unwrap/indexing in system code are denied by Clippy, archive code has explicit bounds, and `ci/verify.sh` includes negative controls for important static checkers.
 
-This pass made three focused corrections on the audit branch:
+This pass made several focused corrections on the audit branch:
 
 1. Corrected the Trash 1.0 `Path=` field format in **both** writers, normalized new absolute paths into the internal logical-path namespace, retained support for historical `file://` entries, and added regression coverage to both service and shell tests.
 2. Added a GitHub Actions workflow to run the existing verification gate for pushes, pull requests, and manual dispatch. External actions are pinned to full commit SHAs; workflow permissions are read-only.
-3. Changed the local development-key check so a clean checkout skips intentionally absent, git-ignored keys, but still fails if any key material is present and the key-pair validation is incomplete or incorrect.
+3. Changed the local development-key checks so a clean checkout skips intentionally absent, git-ignored keys, while incomplete or mismatched local key pairs still fail. The missing PCR pair is now included in verification.
+4. Fixed the verification-gate output pipeline so test failure logs are not truncated through a broken pipe.
+5. Validated the source-name segment in the shell's filesystem rename operation, preventing absolute/traversal source paths.
+6. Hardened the shell filesystem bridge against existing symlink components and unsafe directory arguments, prohibited reads through final symlinks, validated Trash directories without following symlinks, and removed matching metadata on permanent Trash purge. Regression tests cover those boundaries.
 
 The edits are on a separate branch and have **not** been merged to `main`. CI execution is required before calling the Rust changes verified.
 
@@ -60,7 +63,7 @@ The gate validated development signing key pairs whenever OpenSSL was installed.
 **Severity:** High-priority security design risk; exploitability depends on process permissions and attacker control of directories  
 **Files:** `src/litric-files/src/ops.rs`, `src/litric-shell/src/fsbridge.rs`, ADR-0019.
 
-The daemon checks components with `symlink_metadata` while walking a path, but subsequent filesystem operations reopen paths by name. A directory component can theoretically change between validation and use. The source documentation already identifies this TOCTOU class as an accepted residual risk. The shell bridge also contains direct host-path operations and its trash setup uses `create_dir_all`, unlike the daemon's explicit symlink-aware directory-chain creation. Static inspection does not establish that a practical attack is possible in the shipped privilege model, so this is recorded as a design risk, not as a proven exploit.
+The daemon checks components with `symlink_metadata` while walking a path, and the shell bridge on this audit branch now does the same for existing intermediate components and Trash directory creation. Subsequent operations still reopen paths by name, however, so a directory component can theoretically change between validation and use. The source documentation already identifies this TOCTOU class as an accepted residual risk. Static inspection does not establish that a practical attack is possible in the shipped privilege model, so this is recorded as a design risk, not as a proven exploit.
 
 **Recommendation:** create an ADR and threat-model decision before changing the implementation. Prefer descriptor-relative operations that bind lookup and use together (for example, a carefully audited `openat2`/directory-FD layer with beneath/no-symlink constraints). Keep any unavoidable platform-specific unsafe code isolated in a tiny reviewed boundary; do not sprinkle ad-hoc unsafe calls through the current safe-Rust core. Add race-oriented adversarial tests and tests for symlinked `.local/share/Trash` components.
 
@@ -120,6 +123,26 @@ The repository has unusually good negative controls for several static checkers,
 
 **Verification:** code change and tests are present; the full CI gate must pass before merge.
 
+### AUD-011 — Shell filesystem bridge could follow symbolic links despite its confinement contract
+
+**Severity:** High-priority filesystem-boundary bug  
+**File:** `src/litric-shell/src/fsbridge.rs`; contract: ADR-0019 §3
+
+The bridge's original `host_path()` only rejected `..`; directory arguments could name symlinked parents. Methods such as `read_text()` checked metadata then read via the path, following a final symlink, and the Trash setup used `create_dir_all` which may follow an existing symlink in `.local/share/Trash`. This contradicted the module comment and ADR-0019's no-follow rule.
+
+**Change on this branch:** the bridge rejects dot segments and existing symlink/non-directory intermediate components, validates directory arguments before acting on children, explicitly refuses final symlink reads, lists entries with non-following metadata, and creates/checks each Trash path component without `create_dir_all`. Rename/delete/move/trash can still act on a final symlink as a link rather than its target. Regression tests cover intermediate links, final reads and a symlinked Trash parent.
+
+**Residual:** these checks do not close the same-user TOCTOU race between check and use; that remains AUD-004 and requires a descriptor-relative design.
+
+### AUD-012 — Permanent Trash purge removed payloads but left stale `.trashinfo` files
+
+**Severity:** Medium (metadata leak and name-reservation drift)  
+**File:** `src/litric-shell/src/fsbridge.rs`
+
+`trash_purge()` deleted only `Trash/files/<name>`. The paired metadata remained in `Trash/info/<name>.trashinfo`; `trash_list()` hid the orphan because its payload was missing, so the existing visible-list assertion did not catch the on-disk residue. Stale metadata could accumulate and influence future collision/name reservation behavior.
+
+**Change on this branch:** purge removes the payload without following a symlink, then removes the corresponding metadata file. If metadata cleanup fails after the payload is gone, the operation reports the partial cleanup error rather than silently hiding it. The regression test asserts that the metadata file itself is gone.
+
 ## Architecture assessment
 
 **Good foundations to preserve**
@@ -153,9 +176,11 @@ The repository has unusually good negative controls for several static checkers,
 | `ci/verify.sh` | Clean checkout skips absent ignored development keys; any present key material remains strictly checked |
 | `src/litric-files/src/trash.rs` | Write compliant absolute-path `Path=`; normalize to validated logical path; legacy URI reads retained |
 | `src/litric-files/src/server.rs` | Restore from normalized logical path; regression test for new format and legacy URI |
-| `src/litric-shell/src/fsbridge.rs` | Update trash writer/reader; root-constrained path normalization; regression test for new format and legacy URI |
+| `src/litric-shell/src/fsbridge.rs` | Update trash format; validate source names, reject symlink traversal/read, harden Trash directory handling, remove purge metadata, add regression tests |
 | `docs/bugs/BUG-0009-trash-path-field-is-not-a-location.md` | Update defect status and verification requirements |
 | `docs/bugs/BUG-0020-fsbridge-rename-did-not-validate-source-name.md` | Record source-name path traversal defect and fix |
+| `docs/bugs/BUG-0021-shell-fsbridge-followed-symlinks.md` | Record and fix shell filesystem symlink-confinement defects |
+| `docs/bugs/BUG-0022-trash-purge-left-stale-metadata.md` | Record and fix stale Trash metadata after purge |
 | `docs/audit/2026-10-15-comprehensive-audit.md` | This report |
 
 ## Verification status

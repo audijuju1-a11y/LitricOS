@@ -116,6 +116,42 @@ fn map_err(op: &str, e: &std::io::Error) -> FsError {
     }
 }
 
+#[cfg(unix)]
+fn ensure_real_directory(path: &std::path::Path, op: &str) -> Result<(), FsError> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| map_err(op, &e))?;
+    if meta.file_type().is_symlink() {
+        return Err(FsError::Denied);
+    }
+    if !meta.is_dir() {
+        return Err(FsError::NotADirectory);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_directory_component(
+    path: &std::path::Path,
+    create: bool,
+    op: &str,
+) -> Result<bool, FsError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(FsError::Denied),
+        Ok(meta) if meta.is_dir() => Ok(true),
+        Ok(_) => Err(FsError::NotADirectory),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !create => Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::create_dir(path) {
+                Ok(()) => ensure_real_directory(path, op).map(|()| true),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    ensure_directory_component(path, false, op)
+                }
+                Err(e) => Err(map_err(op, &e)),
+            }
+        }
+        Err(e) => Err(map_err(op, &e)),
+    }
+}
+
 impl FsBridge {
     /// A bridge rooted at `host` (a real directory on disk).
     ///
@@ -141,9 +177,11 @@ impl FsBridge {
         }
     }
 
-    /// The host path of a logical path such as `/Documents`, refusing `..`
-    /// and separators that would escape the root. On non-Unix this always
-    /// fails with [`FsError::Unsupported`]; the caller reports it.
+    /// The host path of a logical path such as `/Documents`. It refuses dot
+    /// segments and existing symlinks/non-directory intermediate components.
+    /// Final symlinks are returned as paths so unlink/move/trash can operate
+    /// on the link itself; read and directory-consuming operations reject them.
+    /// On non-Unix this fails with [`FsError::Unsupported`].
     ///
     /// # Errors
     /// [`FsError::Unsupported`] on non-Unix; [`FsError::BadName`] for a path
@@ -156,15 +194,42 @@ impl FsBridge {
         }
         #[cfg(unix)]
         {
+            let root_meta = std::fs::symlink_metadata(&self.host_root)
+                .map_err(|e| map_err("resolve root", &e))?;
+            if root_meta.file_type().is_symlink() {
+                return Err(FsError::Denied);
+            }
+            if !root_meta.is_dir() {
+                return Err(FsError::NotADirectory);
+            }
+
+            let segments: Vec<&str> = logical.split('/').filter(|seg| !seg.is_empty()).collect();
+            if segments.iter().any(|seg| {
+                *seg == "." || *seg == ".." || seg.chars().any(char::is_control)
+            }) {
+                return Err(FsError::BadName);
+            }
+
             let mut out = self.host_root.clone();
-            for seg in logical.split('/') {
-                if seg.is_empty() {
+            let mut missing_parent = false;
+            for (index, seg) in segments.iter().enumerate() {
+                out.push(seg);
+                if index + 1 == segments.len() || missing_parent {
                     continue;
                 }
-                if seg == ".." {
-                    return Err(FsError::BadName);
+                match std::fs::symlink_metadata(&out) {
+                    Ok(meta) if meta.file_type().is_symlink() => return Err(FsError::Denied),
+                    Ok(meta) if !meta.is_dir() => return Err(FsError::NotADirectory),
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // Creation operations may legitimately target a path
+                        // whose parents do not exist yet. Once a component is
+                        // missing, no deeper component can be reached without
+                        // it; the operation or creator will surface later errors.
+                        missing_parent = true;
+                    }
+                    Err(e) => return Err(map_err("resolve", &e)),
                 }
-                out.push(seg);
             }
             Ok(out)
         }
@@ -183,10 +248,7 @@ impl FsBridge {
         #[cfg(unix)]
         {
             let dir = self.host_path(logical)?;
-            let meta = std::fs::symlink_metadata(&dir).map_err(|e| map_err("list", &e))?;
-            if !meta.is_dir() {
-                return Err(FsError::NotADirectory);
-            }
+            ensure_real_directory(&dir, "list")?;
             let read = std::fs::read_dir(&dir).map_err(|e| map_err("list", &e))?;
             let mut out = Vec::new();
             for entry in read.filter_map(|e| e.ok()) {
@@ -196,7 +258,7 @@ impl FsBridge {
                 if name.starts_with('.') {
                     continue;
                 }
-                let Ok(info) = entry.metadata() else {
+                let Ok(info) = std::fs::symlink_metadata(entry.path()) else {
                     continue;
                 };
                 let kind = if info.is_dir() {
@@ -258,6 +320,7 @@ impl FsBridge {
         #[cfg(unix)]
         {
             let dir = self.host_path(parent)?;
+            ensure_real_directory(&dir, "mkdir")?;
             std::fs::create_dir(dir.join(name)).map_err(|e| map_err("mkdir", &e))
         }
     }
@@ -278,6 +341,7 @@ impl FsBridge {
         #[cfg(unix)]
         {
             let dir = self.host_path(parent)?;
+            ensure_real_directory(&dir, "new file")?;
             std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -309,6 +373,7 @@ impl FsBridge {
         #[cfg(unix)]
         {
             let dir = self.host_path(parent)?;
+            ensure_real_directory(&dir, "rename")?;
             let dest = dir.join(new);
             if std::fs::symlink_metadata(&dest).is_ok() {
                 return Err(FsError::Exists);
@@ -334,6 +399,7 @@ impl FsBridge {
             let _ = std::fs::symlink_metadata(&src).map_err(|e| map_err("copy", &e))?;
             let name = from.rsplit('/').next().unwrap_or_default().to_owned();
             let dest = self.host_path(dest_dir)?;
+            ensure_real_directory(&dest, "copy")?;
             let final_name = if dest.join(&name).exists() {
                 crate::fsbridge::copy_of_name(&name, &|n| dest.join(n).exists())
             } else {
@@ -360,6 +426,7 @@ impl FsBridge {
             let _meta = std::fs::symlink_metadata(&src).map_err(|e| map_err("move", &e))?;
             let name = from.rsplit('/').next().unwrap_or_default().to_owned();
             let dest = self.host_path(dest_dir)?;
+            ensure_real_directory(&dest, "move")?;
             let final_name = if dest.join(&name).exists() {
                 crate::fsbridge::copy_of_name(&name, &|n| dest.join(n).exists())
             } else {
@@ -423,14 +490,9 @@ impl FsBridge {
             // Existence first: a missing source must fail here, before any
             // record exists, not after it has been reserved.
             let _ = std::fs::symlink_metadata(&src).map_err(|e| map_err("trash", &e))?;
-            let base = self.host_root.join(".local/share/Trash");
-            let files = base.join("files");
-            let info = base.join("info");
-            for d in [&files, &info] {
-                if let Err(e) = std::fs::create_dir_all(d) {
-                    return Err(map_err("trash dirs", &e));
-                }
-            }
+            let Some((_base, files, info)) = self.trash_dirs(true)? else {
+                return Err(FsError::NotFound);
+            };
             let name = logical.rsplit('/').next().unwrap_or_default().to_owned();
             let stamp = self.zone.local(i64::try_from(now_secs).unwrap_or(0));
             let record = format!(
@@ -472,12 +534,9 @@ impl FsBridge {
         }
         #[cfg(unix)]
         {
-            let base = self.host_root.join(".local/share/Trash");
-            let info = base.join("info");
-            let files = base.join("files");
-            if !info.is_dir() {
+            let Some((_base, files, info)) = self.trash_dirs(false)? else {
                 return Ok(Vec::new());
-            }
+            };
             let read = std::fs::read_dir(&info).map_err(|e| map_err("trash list", &e))?;
             let mut names: Vec<String> = read
                 .filter_map(|e| e.ok())
@@ -488,7 +547,15 @@ impl FsBridge {
             names.sort();
             let mut out = Vec::new();
             for name in names {
-                let Some(raw) = std::fs::read_to_string(info.join(format!("{name}.trashinfo")))
+                let info_path = info.join(format!("{name}.trashinfo"));
+                let info_meta = match std::fs::symlink_metadata(&info_path) {
+                    Ok(meta) => meta,
+                    Err(_) => continue,
+                };
+                if !info_meta.is_file() || info_meta.file_type().is_symlink() {
+                    continue;
+                }
+                let Some(raw) = std::fs::read_to_string(&info_path)
                     .ok()
                     .and_then(|t| {
                         let mut original = None;
@@ -510,9 +577,10 @@ impl FsBridge {
                 // before writing the record. Shown as absent, exactly as the
                 // daemon's reader treats it, so both implementations of one
                 // directory agree about what is in it.
-                if std::fs::symlink_metadata(files.join(&name)).is_err() {
-                    continue;
-                }
+                let item_meta = match std::fs::symlink_metadata(files.join(&name)) {
+                    Ok(meta) => meta,
+                    Err(_) => continue,
+                };
                 let (original, deleted_iso) = raw;
                 // Current records carry the absolute host path required by the
                 // freedesktop spec. Accept historical file:// records as well.
@@ -529,7 +597,7 @@ impl FsBridge {
                         }
                     })
                     .unwrap_or_else(|| "/".to_owned());
-                let is_dir = files.join(&name).is_dir();
+                let is_dir = item_meta.is_dir() && !item_meta.file_type().is_symlink();
                 out.push(TrashEntry {
                     name,
                     deleted_iso,
@@ -561,15 +629,18 @@ impl FsBridge {
         }
         #[cfg(unix)]
         {
-            let base = self.host_root.join(".local/share/Trash");
-            let src = base.join("files").join(name);
+            let Some((_base, files, info)) = self.trash_dirs(false)? else {
+                return Err(FsError::NotFound);
+            };
+            let src = files.join(name);
             let dest_dir = self.host_path(&entry.restore_dir)?;
+            ensure_real_directory(&dest_dir, "restore")?;
             let dest = dest_dir.join(name);
             if std::fs::symlink_metadata(&dest).is_ok() {
                 return Err(FsError::Exists);
             }
             std::fs::rename(&src, &dest).map_err(|e| map_err("restore", &e))?;
-            let _ = std::fs::remove_file(base.join("info").join(format!("{name}.trashinfo")));
+            let _ = std::fs::remove_file(info.join(format!("{name}.trashinfo")));
             Ok(entry.restore_dir.clone())
         }
     }
@@ -579,11 +650,37 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::delete`] on the trash name.
     pub fn trash_purge(&self, name: &str) -> Result<(), FsError> {
-        if name.starts_with('.') || name.contains('/') {
+        if name.starts_with('.')
+            || name.contains('/')
+            || name.contains('\\')
+            || name.chars().any(char::is_control)
+        {
             return Err(FsError::BadName);
         }
-        let base = format!("/.local/share/Trash/files/{name}");
-        self.delete(&base)
+        #[cfg(not(unix))]
+        {
+            let _ = name;
+            Err(FsError::Unsupported)
+        }
+        #[cfg(unix)]
+        {
+            let Some((_base, files, info)) = self.trash_dirs(false)? else {
+                return Err(FsError::NotFound);
+            };
+            let item = files.join(name);
+            let meta =
+                std::fs::symlink_metadata(&item).map_err(|e| map_err("trash purge", &e))?;
+            if meta.is_dir() && !meta.file_type().is_symlink() {
+                std::fs::remove_dir_all(&item).map_err(|e| map_err("trash purge", &e))?;
+            } else {
+                std::fs::remove_file(&item).map_err(|e| map_err("trash purge", &e))?;
+            }
+            match std::fs::remove_file(info.join(format!("{name}.trashinfo"))) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(map_err("trash purge metadata", &e)),
+            }
+        }
     }
 
     /// Empty the trash. Returns how many entries went.
@@ -616,6 +713,9 @@ impl FsBridge {
             const MAX: u64 = 512 * 1024;
             let p = self.host_path(logical)?;
             let meta = std::fs::symlink_metadata(&p).map_err(|e| map_err("read", &e))?;
+            if meta.file_type().is_symlink() {
+                return Err(FsError::Denied);
+            }
             if meta.len() > MAX {
                 return Err(FsError::Io("file is too large to show".to_owned()));
             }
@@ -641,6 +741,7 @@ impl FsBridge {
         #[cfg(unix)]
         {
             let dir = self.host_path(parent)?;
+            ensure_real_directory(&dir, "write")?;
             use std::io::Write;
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
@@ -800,6 +901,11 @@ impl FsBridge {
         {
             use std::io::Read as _;
             let p = self.host_path(archive)?;
+            let archive_meta =
+                std::fs::symlink_metadata(&p).map_err(|e| map_err("extract", &e))?;
+            if archive_meta.file_type().is_symlink() {
+                return Err(FsError::Denied);
+            }
             let mut bytes = Vec::new();
             std::fs::File::open(&p)
                 .and_then(|mut f| f.read_to_end(&mut bytes))
@@ -870,6 +976,29 @@ impl FsBridge {
     #[must_use]
     pub fn host_root(&self) -> &std::path::Path {
         &self.host_root
+    }
+
+    #[cfg(unix)]
+    fn trash_dirs(
+        &self,
+        create: bool,
+    ) -> Result<Option<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)>, FsError> {
+        ensure_real_directory(&self.host_root, "trash root")?;
+        let mut base = self.host_root.clone();
+        for segment in [".local", "share", "Trash"] {
+            base.push(segment);
+            if !ensure_directory_component(&base, create, "trash dirs")? {
+                return Ok(None);
+            }
+        }
+        let files = base.join("files");
+        let info = base.join("info");
+        let files_exist = ensure_directory_component(&files, create, "trash dirs")?;
+        let info_exist = ensure_directory_component(&info, create, "trash dirs")?;
+        if !files_exist || !info_exist {
+            return Err(FsError::NotFound);
+        }
+        Ok(Some((base, files, info)))
     }
 }
 
@@ -1150,6 +1279,66 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn symlink_components_are_refused_and_reads_do_not_follow_links() {
+        let root = temp_root("symlink-root");
+        let outside = temp_root("symlink-outside");
+        std::fs::write(outside.join("secret.txt"), "secret").expect("outside fixture");
+        std::os::unix::fs::symlink(&outside, root.join("dir-link")).expect("directory link");
+        std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("file-link"))
+            .expect("file link");
+        let bridge =
+            FsBridge::open(&root, litric_locale::TimeZone::utc("test")).expect("bridge");
+
+        assert!(matches!(
+            bridge.read_text("/dir-link/secret.txt"),
+            Err(FsError::Denied)
+        ));
+        assert!(matches!(
+            bridge.mkdir("/dir-link", "created-through-link"),
+            Err(FsError::Denied)
+        ));
+        assert!(matches!(
+            bridge.read_text("/file-link"),
+            Err(FsError::Denied)
+        ));
+        let entries = bridge.list_dir("/").expect("root listing");
+        assert!(entries
+            .iter()
+            .any(|entry| entry.name == "dir-link" && entry.kind == FileKind::Link));
+        assert_eq!(
+            std::fs::read_to_string(outside.join("secret.txt")).as_deref(),
+            Ok("secret")
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trash_refuses_a_symlinked_trash_directory() {
+        let root = temp_root("trash-link-root");
+        let outside = temp_root("trash-link-outside");
+        let bridge =
+            FsBridge::open(&root, litric_locale::TimeZone::utc("test")).expect("bridge");
+        bridge
+            .write_text("/", "gone.txt", "keep")
+            .expect("source fixture");
+        std::os::unix::fs::symlink(&outside, root.join(".local")).expect("trash parent link");
+
+        assert!(matches!(
+            bridge.trash("/gone.txt", 1_900_000_000),
+            Err(FsError::Denied)
+        ));
+        assert!(bridge.exists("/gone.txt").unwrap());
+        assert!(!outside.join("share").exists());
+
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn copy_keeps_both_and_numbers_the_next_clash() {
         let root = temp_root("cp");
         let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).unwrap();
@@ -1199,6 +1388,10 @@ mod tests {
         b.trash("/gone.txt", 1_900_000_100).unwrap();
         b.trash_purge("gone.txt").expect("purge");
         assert_eq!(b.trash_list().unwrap().len(), 0);
+        assert!(
+            !info_path.exists(),
+            "purge must remove the paired .trashinfo record too"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
