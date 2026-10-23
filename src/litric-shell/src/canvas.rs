@@ -1240,31 +1240,94 @@ impl Canvas {
 
     /// A soft drop shadow under a rounded rectangle.
     ///
-    /// Built from concentric rounded rectangles rather than by blurring a mask.
-    /// Twelve steps is enough that the banding is below one 8-bit level, and it
-    /// avoids allocating a second full-size buffer for something that is only
-    /// ever a dark halo. The outermost ring is grown by 11/12 of `spread` and
-    /// moved down by `dy`.
+    /// The shadow is twelve concentric rounded rectangles, the outermost grown
+    /// by 11/12 of `spread` and the whole stack moved down by `dy`. Twelve steps
+    /// is enough that the banding is below one 8-bit level, and no second
+    /// full-size buffer is needed for something that is only ever a dark halo.
+    ///
+    /// It is composed in one pass, not twelve. Growing a rounded rectangle by
+    /// `g` and its radius by `g` moves its edge out by exactly `g`, so every ring
+    /// shares one signed distance per pixel and differs only in the `g` it is
+    /// compared with. Drawing the rings as twelve fills walked the whole outer
+    /// rectangle twelve times and, for a window, composited the area *under* the
+    /// window twelve times too (BUG-0015: shadow was 8.77M of 11.36M pixel
+    /// visits in a three-window frame). Two things are skipped:
+    ///
+    /// * rings whose edge has not reached the pixel, which contribute nothing;
+    /// * the interior of `r` (one pixel in from its edge), but **only when a
+    ///   glass backdrop is attached**. Then the panel the shadow belongs to
+    ///   replaces those pixels from the backdrop at full coverage, so a shadow
+    ///   under it is never seen. Without a backdrop the glass path blurs what is
+    ///   already on the canvas, shadow included, so the pixels under the panel
+    ///   are part of its look and are kept. The one-pixel margin leaves the
+    ///   anti-aliased edge, which is blended and does show what is under it.
     pub fn soft_shadow(&mut self, r: Rect, radius: f32, spread: f32, dy: f32, alpha: f32) {
-        const STEPS: u32 = 12;
+        const STEPS: usize = 12;
         let prev = self.set_site(Site::Shadow);
-        for i in (0..STEPS).rev() {
-            let t = f32::from(i as u16) / f32::from(STEPS as u16);
-            let grow = spread * t;
+
+        // Per ring: how far its edge is grown, and the colour it is drawn in.
+        // Index 0 is the innermost ring, which is drawn last, on top.
+        let mut grow = [0.0f32; STEPS];
+        let mut tint = [0u32; STEPS];
+        for (i, (g, c)) in grow.iter_mut().zip(tint.iter_mut()).enumerate() {
+            let t = i as f32 / STEPS as f32;
+            *g = spread * t;
             // Squared falloff: a linear one leaves a visible outer edge where
             // the last ring stops, which reads as a rectangle rather than a
             // shadow.
-            let a = alpha * (1.0 - t) * (1.0 - t) / f32::from(STEPS as u16) * 3.0;
-            self.fill_round_rect(
-                Rect::new(
-                    r.x - grow,
-                    r.y + dy - grow,
-                    r.w + grow * 2.0,
-                    r.h + grow * 2.0,
-                ),
-                radius + grow,
-                with_alpha(rgba(0, 0, 0, 255), a),
-            );
+            let a = alpha * (1.0 - t) * (1.0 - t) / STEPS as f32 * 3.0;
+            *c = with_alpha(rgba(0, 0, 0, 255), a);
+        }
+        let reach = grow.last().copied().unwrap_or(0.0);
+
+        let base = Rect::new(r.x, r.y + dy, r.w, r.h);
+        let (x0, y0, x1, y1) = self.span(&base.inflate(reach + 1.5));
+
+        // A rectangle that lies wholly inside `r`'s rounded outline, so the
+        // common case -- the middle of a window -- is skipped a row at a time
+        // without a distance calculation per pixel.
+        let covered = self.backdrop.is_some();
+        let inset = radius.max(2.0);
+        let hide = Rect::new(r.x + inset, r.y + inset, r.w - inset * 2.0, r.h - inset * 2.0);
+        let (hx0, hy0, hx1, hy1) = if covered && hide.w > 0.0 && hide.h > 0.0 {
+            (
+                hide.x.ceil() as i64,
+                hide.y.ceil() as i64,
+                hide.right().floor() as i64,
+                hide.bottom().floor() as i64,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
+
+        for y in y0..y1 {
+            let py = y as f32 + 0.5;
+            let mut x = x0;
+            while x < x1 {
+                if y >= hy0 && y < hy1 && x >= hx0 && x < hx1 {
+                    x = hx1;
+                    continue;
+                }
+                let px = x as f32 + 0.5;
+                // Under the panel, past its first pixel: never visible.
+                if covered && sd_round_rect(px, py, &r, radius) < -1.0 {
+                    x += 1;
+                    continue;
+                }
+                let d = sd_round_rect(px, py, &base, radius);
+                // Outermost ring first, as it was drawn; a ring whose grown
+                // edge is still short of this pixel has zero coverage.
+                for i in (0..STEPS).rev() {
+                    let (Some(g), Some(c)) = (grow.get(i), tint.get(i)) else {
+                        continue;
+                    };
+                    let cov = coverage(d - *g);
+                    if cov > 0.0 {
+                        self.blend_in(x, y, *c, cov);
+                    }
+                }
+                x += 1;
+            }
         }
         self.set_site(prev);
     }
@@ -2116,6 +2179,85 @@ mod tests {
         assert_eq!(by.first().map(|(s, _)| *s), Some(Site::Draw));
         assert_eq!(by.get(1).map(|(s, _)| *s), Some(Site::Shadow));
         assert_eq!(c.pixels_visited(), by.iter().map(|(_, n)| n).sum::<u64>());
+    }
+
+    /// The shadow as it was drawn before it was composed in one pass: twelve
+    /// grown rounded rectangles, outermost first. Kept here as the reference the
+    /// single-pass version must equal, pixel for pixel.
+    fn twelve_ring_shadow(c: &mut Canvas, r: Rect, radius: f32, spread: f32, dy: f32, alpha: f32) {
+        const STEPS: u32 = 12;
+        for i in (0..STEPS).rev() {
+            let t = f32::from(i as u16) / f32::from(STEPS as u16);
+            let grow = spread * t;
+            let a = alpha * (1.0 - t) * (1.0 - t) / f32::from(STEPS as u16) * 3.0;
+            c.fill_round_rect(
+                Rect::new(r.x - grow, r.y + dy - grow, r.w + grow * 2.0, r.h + grow * 2.0),
+                radius + grow,
+                with_alpha(rgba(0, 0, 0, 255), a),
+            );
+        }
+    }
+
+    #[test]
+    fn the_one_pass_shadow_equals_the_twelve_ring_shadow() {
+        // Panels the shell really draws: a window, a pill dock, a dialog.
+        for (r, radius, spread, dy, alpha) in [
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 30.0, 12.0, 0.60),
+            (Rect::new(40.0, 120.0, 150.0, 30.0), 15.0, 40.0, 14.0, 0.45),
+            (Rect::new(70.0, 40.0, 60.0, 60.0), 40.0, 24.0, 10.0, 0.35),
+            (Rect::new(10.5, 20.25, 120.0, 70.0), 0.0, 18.0, 7.0, 0.40),
+        ] {
+            let mut want = textured(260, 200);
+            let mut got = textured(260, 200);
+            twelve_ring_shadow(&mut want, r, radius, spread, dy, alpha);
+            got.soft_shadow(r, radius, spread, dy, alpha);
+            assert_eq!(
+                want.pixels(),
+                got.pixels(),
+                "shadow differs for {r:?} radius {radius} spread {spread}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shadow_under_an_opaque_panel_with_a_backdrop_leaves_the_same_frame() {
+        // With a backdrop attached the shadow skips the pixels under its own
+        // panel. That is only allowed if the panel then covers them completely,
+        // so the finished frame -- shadow, then the panel -- must match.
+        let r = Rect::new(60.0, 50.0, 140.0, 90.0);
+        let radius = 14.0;
+        let backdrop = std::rc::Rc::new(textured(260, 200));
+        let paint_panel = |c: &mut Canvas| {
+            c.glass_backdrop(r, radius, 3, 1.0);
+            c.fill_round_rect(r, radius, with_alpha(rgb(0x101820), 0.6));
+        };
+        let mut want = textured(260, 200);
+        assert!(want.set_backdrop(Some(backdrop.clone())));
+        twelve_ring_shadow(&mut want, r, radius, 30.0, 12.0, 0.6);
+        paint_panel(&mut want);
+
+        let mut got = textured(260, 200);
+        assert!(got.set_backdrop(Some(backdrop)));
+        got.soft_shadow(r, radius, 30.0, 12.0, 0.6);
+        paint_panel(&mut got);
+        assert_eq!(want.pixels(), got.pixels());
+    }
+
+    #[test]
+    fn the_one_pass_shadow_visits_far_fewer_pixels_under_a_window() {
+        let r = Rect::new(60.0, 50.0, 140.0, 90.0);
+        let backdrop = std::rc::Rc::new(textured(260, 200));
+        let mut c = textured(260, 200);
+        assert!(c.set_backdrop(Some(backdrop)));
+        c.reset_pixels_visited();
+        c.soft_shadow(r, 14.0, 30.0, 12.0, 0.6);
+        let one_pass = c.pixels_visited();
+        let mut d = textured(260, 200);
+        d.reset_pixels_visited();
+        let prev = d.set_site(Site::Shadow);
+        twelve_ring_shadow(&mut d, r, 14.0, 30.0, 12.0, 0.6);
+        d.set_site(prev);
+        assert!(one_pass * 3 < d.pixels_visited(), "{one_pass} vs {}", d.pixels_visited());
     }
 
     #[test]
