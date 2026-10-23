@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>LitricOS live frame</title>
+<style>
+  html,body{margin:0;background:#000;color:#888;font:12px ui-monospace,monospace}
+  img{display:block;width:100%;image-rendering:auto}
+  p{margin:4px 8px}
+</style>
+<p id="cap">frame</p>
+<img id="shot" src="live-01.png" alt="frame">
+<script>
+  const q = new URLSearchParams(location.search);
+  if (q.get('src')) document.getElementById('shot').src = q.get('src');
+  document.getElementById('cap').textContent = document.getElementById('shot').src;
+</script>

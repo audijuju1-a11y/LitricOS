@@ -571,6 +571,86 @@ impl Radius {
     }
 }
 
+/// Elevation: how far a surface sits above the wallpaper.
+///
+/// Each level is a shadow spec rather than a colour, so one level reads the
+/// same way on every theme. Higher levels get larger blur and offset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum Elevation {
+    /// 0 — flush with the wallpaper.
+    Z0,
+    /// 1 — cards resting on the desktop.
+    Z1,
+    /// 2 — windows, menus.
+    Z2,
+    /// 3 — the focused window and popovers.
+    Z3,
+    /// 4 — spotlight, sheets and banners.
+    Z4,
+}
+
+impl Elevation {
+    /// Every level, lowest first.
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &[Self::Z0, Self::Z1, Self::Z2, Self::Z3, Self::Z4]
+    }
+
+    /// Shadow blur radius in logical pixels.
+    #[must_use]
+    pub const fn blur_px(self) -> u16 {
+        match self {
+            Self::Z0 => 0,
+            Self::Z1 => 8,
+            Self::Z2 => 18,
+            Self::Z3 => 30,
+            Self::Z4 => 44,
+        }
+    }
+
+    /// Shadow vertical offset in logical pixels.
+    #[must_use]
+    pub const fn offset_y_px(self) -> u16 {
+        match self {
+            Self::Z0 => 0,
+            Self::Z1 => 2,
+            Self::Z2 => 6,
+            Self::Z3 => 12,
+            Self::Z4 => 20,
+        }
+    }
+
+    /// Shadow opacity, percent.
+    #[must_use]
+    pub const fn shadow_alpha_pct(self) -> u8 {
+        match self {
+            Self::Z0 => 0,
+            Self::Z1 => 18,
+            Self::Z2 => 28,
+            Self::Z3 => 40,
+            Self::Z4 => 55,
+        }
+    }
+}
+
+#[cfg(test)]
+mod elevation_tests {
+    use super::Elevation;
+
+    #[test]
+    fn higher_elevation_never_casts_less_shadow() {
+        let levels = Elevation::all();
+        for pair in levels.windows(2) {
+            let (lo, hi) = (pair[0], pair[1]);
+            assert!(hi.blur_px() >= lo.blur_px(), "{lo:?} -> {hi:?} blur shrinks");
+            assert!(hi.offset_y_px() >= lo.offset_y_px(), "{lo:?} -> {hi:?} offset shrinks");
+            assert!(hi.shadow_alpha_pct() >= lo.shadow_alpha_pct(), "{lo:?} -> {hi:?} alpha shrinks");
+        }
+        assert_eq!(Elevation::Z0.shadow_alpha_pct(), 0);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Motion
 // ---------------------------------------------------------------------------

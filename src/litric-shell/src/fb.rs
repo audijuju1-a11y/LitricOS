@@ -1,16 +1,17 @@
-//! The Linux framebuffer, reached without a single `ioctl`.
+//! The Linux framebuffer, with a safe Rust control plane and a tiny native
+//! scanout helper where the fbdev driver requires memory mapping.
 //!
 //! # Why this way
 //!
-//! The usual way to drive `/dev/fb0` is `FBIOGET_VSCREENINFO` for the geometry
-//! and `mmap` for the pixels. Both are `ioctl`/`mmap`, both need `unsafe`, and
-//! the workspace forbids `unsafe` outright.
-//!
-//! It turns out neither is necessary. The kernel already publishes the geometry
-//! as text under `/sys/class/graphics/fb0/`, and the fbdev character device
-//! implements `write()`, so a frame can be delivered with `seek` and
-//! `write_all`. The whole display path is therefore ordinary safe Rust over
-//! ordinary files:
+//! The kernel publishes geometry as text under `/sys/class/graphics/fb0/`.
+//! Some fbdev implementations also accept `write()` on `/dev/fb0`; regular
+//! files and such devices use that safe path directly. QEMU's DRM fbdev bridge
+//! accepts the writes yet may leave the QEMU scanout unchanged. For an actual
+//! `/dev/fbN` and an installed `litric-fbpresent`, the shell therefore sends
+//! complete packed frames to a small, audited C process. That process has just
+//! enough authority to `mmap` that one framebuffer and present it; the Rust
+//! shell remains entirely safe Rust and retains ownership of pixels, layout,
+//! input, and policy.
 //!
 //! ```text
 //!   /sys/class/graphics/fb0/virtual_size     "1280,800"
@@ -19,11 +20,9 @@
 //!   /dev/fb0                                 the pixels
 //! ```
 //!
-//! `write()` costs one copy compared with `mmap`. At 1280x800 that is 4 MB per
-//! frame, which is nothing for a desktop that repaints when something changes
-//! rather than sixty times a second, and it buys a display driver with no
-//! `unsafe` in it at all. If a compositing path ever needs the frame rate,
-//! `mmap` can be added then, measured, and confined to one module.
+//! The helper protocol is deliberately raw fixed-size frames. It has no parser,
+//! no filesystem access, no network access, and no control commands; EOF stops
+//! it. A partial frame is rejected rather than copied to the visible display.
 //!
 //! # What is NOT known here
 //!
@@ -36,6 +35,7 @@
 use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
 
 use crate::canvas::{Canvas, Rect};
 
@@ -216,11 +216,22 @@ pub fn discover(root: &Path) -> Option<(PathBuf, PathBuf, FbInfo)> {
     None
 }
 
+const MMAP_PRESENTER: &str = "/usr/bin/litric-fbpresent";
+
+#[derive(Debug)]
+enum FramebufferSink {
+    /// Portable fbdev writes, also used by host-side unit fixtures.
+    Direct(fs::File),
+    /// A constrained process that maps the one framebuffer it was given and
+    /// receives fixed-size frames through an anonymous pipe.
+    Mapped { child: Child, stdin: ChildStdin },
+}
+
 /// An open framebuffer, ready to be written to.
 #[derive(Debug)]
 pub struct Framebuffer {
     info: FbInfo,
-    file: fs::File,
+    sink: FramebufferSink,
     row: Vec<u8>,
 }
 
@@ -228,11 +239,25 @@ impl Framebuffer {
     /// Open a framebuffer device for writing.
     ///
     /// # Errors
-    /// Any I/O error from opening the device.
+    /// Any I/O error from opening the device or starting its presenter.
     pub fn open(dev: &Path, info: FbInfo) -> std::io::Result<Self> {
-        let file = fs::OpenOptions::new().write(true).open(dev)?;
+        let sink = if is_live_framebuffer(dev) && Path::new(MMAP_PRESENTER).is_file() {
+            let mut child = Command::new(MMAP_PRESENTER)
+                .arg(dev)
+                .arg(info.frame_bytes().to_string())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .spawn()?;
+            let stdin = child.stdin.take().ok_or_else(|| {
+                std::io::Error::other("framebuffer presenter did not provide stdin")
+            })?;
+            FramebufferSink::Mapped { child, stdin }
+        } else {
+            FramebufferSink::Direct(fs::OpenOptions::new().write(true).open(dev)?)
+        };
         let row = vec![0u8; info.stride as usize];
-        Ok(Self { info, file, row })
+        Ok(Self { info, sink, row })
     }
 
     /// The geometry in use.
@@ -244,60 +269,81 @@ impl Framebuffer {
     /// Send a canvas to the screen.
     ///
     /// The canvas may be a different size from the display; the overlap is
-    /// drawn and the rest of each row is left as it was. Scaling silently would
-    /// hide a geometry bug behind a slightly soft picture.
+    /// drawn and the rest of each row is left as it was on the direct path.
+    /// The mapped path zero-fills it, because each fixed-size pipe frame must
+    /// fully determine the screen.
     ///
     /// # Errors
-    /// Any I/O error from seeking or writing.
+    /// Any I/O error from seeking, writing, or the presenter pipe.
     pub fn present(&mut self, canvas: &Canvas) -> std::io::Result<()> {
+        if matches!(self.sink, FramebufferSink::Mapped { .. }) {
+            return self.present_mapped(canvas);
+        }
         let bytes = self.info.format.bytes();
         let rows = self.info.height.min(canvas.height());
         let cols = self.info.width.min(canvas.width());
-
-        self.file.seek(SeekFrom::Start(0))?;
         for y in 0..rows {
-            for b in self.row.iter_mut() {
-                *b = 0;
-            }
-            for x in 0..cols {
-                let px = canvas
-                    .get(i64::from(x), i64::from(y))
-                    .unwrap_or(0xFF00_0000);
-                let off = (x as usize).saturating_mul(bytes);
-                if let Some(slot) = self.row.get_mut(off..off.saturating_add(bytes)) {
-                    self.info.format.encode(px, slot);
-                }
-            }
+            self.encode_row(canvas, y, cols, bytes);
             let offset = u64::from(self.info.stride).saturating_mul(u64::from(y));
-            self.file.seek(SeekFrom::Start(offset))?;
-            self.file.write_all(&self.row)?;
+            let FramebufferSink::Direct(file) = &mut self.sink else {
+                unreachable!("mapped framebuffers return above");
+            };
+            file.seek(SeekFrom::Start(offset))?;
+            file.write_all(&self.row)?;
         }
-        self.file.flush()?;
-        Ok(())
+        let FramebufferSink::Direct(file) = &mut self.sink else {
+            unreachable!("mapped framebuffers return above");
+        };
+        file.flush()
     }
-}
 
-impl Framebuffer {
+    fn encode_row(&mut self, canvas: &Canvas, y: u32, cols: u32, bytes: usize) {
+        self.row.fill(0);
+        if y >= canvas.height() {
+            return;
+        }
+        for x in 0..cols {
+            let px = canvas.get(i64::from(x), i64::from(y)).unwrap_or(0xFF00_0000);
+            let off = (x as usize).saturating_mul(bytes);
+            if let Some(slot) = self.row.get_mut(off..off.saturating_add(bytes)) {
+                self.info.format.encode(px, slot);
+            }
+        }
+    }
+
+    fn present_mapped(&mut self, canvas: &Canvas) -> std::io::Result<()> {
+        let bytes = self.info.format.bytes();
+        let cols = self.info.width.min(canvas.width());
+        for y in 0..self.info.height {
+            self.encode_row(canvas, y, cols, bytes);
+            let FramebufferSink::Mapped { stdin, .. } = &mut self.sink else {
+                unreachable!("only called for mapped framebuffers");
+            };
+            stdin.write_all(&self.row)?;
+        }
+        let FramebufferSink::Mapped { stdin, .. } = &mut self.sink else {
+            unreachable!("only called for mapped framebuffers");
+        };
+        stdin.flush()
+    }
+
     /// Send only the rows covered by `damage`.
     ///
-    /// A full frame at 1280x800 is 4 MB through `write()`. Most changes touch a
-    /// fraction of that: a clock that ticks needs about sixty rows, a hovered
-    /// menu item about thirty. Presenting only what changed is where the
-    /// difference between an idle desktop that costs nothing and one that costs
-    /// a core actually comes from.
+    /// The direct path preserves idle efficiency. The mapped path sends one
+    /// complete frame so its unframed pipe cannot expose a torn partial update.
     ///
-    /// Returns how many rows were written, so the diagnostics can show the
-    /// saving rather than assert it.
+    /// Returns how many rows were written, so diagnostics state the true cost.
     ///
     /// # Errors
-    /// Any I/O error from seeking or writing.
+    /// Any I/O error from seeking, writing, or the presenter pipe.
     pub fn present_damage(&mut self, canvas: &Canvas, damage: &[Rect]) -> std::io::Result<u32> {
         if damage.is_empty() {
             return Ok(0);
         }
-        // Rows rather than rectangles: the device is written a row at a time
-        // anyway, so merging to a row set is both simpler and no slower than
-        // tracking overlapping rectangles.
+        if matches!(self.sink, FramebufferSink::Mapped { .. }) {
+            self.present_mapped(canvas)?;
+            return Ok(self.info.height);
+        }
         let height = self.info.height.min(canvas.height());
         let mut rows = vec![false; height as usize];
         for r in damage {
@@ -317,26 +363,40 @@ impl Framebuffer {
             if rows.get(y as usize) != Some(&true) {
                 continue;
             }
-            for b in self.row.iter_mut() {
-                *b = 0;
-            }
-            for x in 0..cols {
-                let px = canvas
-                    .get(i64::from(x), i64::from(y))
-                    .unwrap_or(0xFF00_0000);
-                let off = (x as usize).saturating_mul(bytes);
-                if let Some(slot) = self.row.get_mut(off..off.saturating_add(bytes)) {
-                    self.info.format.encode(px, slot);
-                }
-            }
+            self.encode_row(canvas, y, cols, bytes);
             let offset = u64::from(self.info.stride).saturating_mul(u64::from(y));
-            self.file.seek(SeekFrom::Start(offset))?;
-            self.file.write_all(&self.row)?;
+            let FramebufferSink::Direct(file) = &mut self.sink else {
+                unreachable!("mapped framebuffers return above");
+            };
+            file.seek(SeekFrom::Start(offset))?;
+            file.write_all(&self.row)?;
             written = written.saturating_add(1);
         }
-        self.file.flush()?;
+        let FramebufferSink::Direct(file) = &mut self.sink else {
+            unreachable!("mapped framebuffers return above");
+        };
+        file.flush()?;
         Ok(written)
     }
+}
+
+impl Drop for Framebuffer {
+    fn drop(&mut self) {
+        if let FramebufferSink::Mapped { child, .. } = &mut self.sink {
+            // The pipe also closes during field drop. Killing first ensures a
+            // shell restart remains prompt if a faulty graphics driver stalls.
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn is_live_framebuffer(dev: &Path) -> bool {
+    dev.parent() == Some(Path::new("/dev"))
+        && dev
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("fb"))
 }
 
 #[cfg(test)]

@@ -1,0 +1,75 @@
+scene=01-desktop-idle ppm=../docs/evidence/2026-10-15/frames-after\01-desktop-idle.ppm bytes=3072016 px=1024000 visited_px=216750 coverage=0.212 draw_ms=6.77 fingerprint=0x295e8987b02652da
+sites=01-desktop-idle draw=106319 glass=64000 text=44191 brightest=2240
+partial=01-desktop-idle damage_area_px=7680 partial_visited_px=10768 partial_ms=0.19 overdraw=1.4x
+partial_sites=01-desktop-idle draw=8528 brightest=2240
+text=01-desktop-idle overlaps=none (15 runs checked)
+scene=02-desktop-start ppm=../docs/evidence/2026-10-15/frames-after\02-desktop-start.ppm bytes=3072016 px=1024000 visited_px=4944938 coverage=4.829 draw_ms=158.41 fingerprint=0x50230134ba29d21f
+sites=02-desktop-start shadow=3599202 draw=716352 glass=451604 text=158645 brightest=19135
+partial=02-desktop-start damage_area_px=7680 partial_visited_px=27663 partial_ms=1.36 overdraw=3.6x
+partial_sites=02-desktop-start brightest=19135 draw=8528
+text=02-desktop-start overlaps=0 within a surface, 7 across stacked windows, in 56 runs; worst: cross-surface "Docum..."(x=113,y=272) over "warn 80 %, critical 93 %"(x=80,y=270) [73x15] | cross-surface "Downlo..."(x=112,y=360) over "litric-sysd"(x=76,y=356) [56x13] | cross-surface "Defend..."(x=20,y=360) over "litric-sysd"(x=76,y=356) [20x13]
+scene=11-lock ppm=../docs/evidence/2026-10-15/frames-after\11-lock.ppm bytes=3072016 px=1024000 visited_px=1905469 coverage=1.861 draw_ms=141.98 fingerprint=0x367c7dc0b89dca35
+sites=11-lock draw=1570341 text=335128
+partial=11-lock damage_area_px=7680 partial_visited_px=17056 partial_ms=10.78 overdraw=2.2x
+partial_sites=11-lock draw=17056
+text=11-lock overlaps=none (13 runs checked)
+scene=12-lock-password ppm=../docs/evidence/2026-10-15/frames-after\12-lock-password.ppm bytes=3072016 px=1024000 visited_px=2001669 coverage=1.955 draw_ms=147.91 fingerprint=0x3ba8b424d52ac4f9
+sites=12-lock-password draw=1669466 text=332203
+partial=12-lock-password damage_area_px=7680 partial_visited_px=17056 partial_ms=10.46 overdraw=2.2x
+partial_sites=12-lock-password draw=17056
+text=12-lock-password overlaps=none (10 runs checked)
+scene=13-lock-customize ppm=../docs/evidence/2026-10-15/frames-after\13-lock-customize.ppm bytes=3072016 px=1024000 visited_px=7259122 coverage=7.089 draw_ms=315.33 fingerprint=0xb57ffe3c0e3e5b5d
+sites=13-lock-customize shadow=4059796 draw=2835505 text=363821
+partial=13-lock-customize damage_area_px=7680 partial_visited_px=168754 partial_ms=14.74 overdraw=22.0x
+partial_sites=13-lock-customize shadow=102336 draw=63742 text=2676
+text=13-lock-customize overlaps=none (28 runs checked)
+scene=14-launcher ppm=../docs/evidence/2026-10-15/frames-after\14-launcher.ppm bytes=3072016 px=1024000 visited_px=12305635 coverage=12.017 draw_ms=344.77 fingerprint=0x63074ffd2437b4d8
+sites=14-launcher shadow=9983640 draw=2149696 text=106059 glass=64000 brightest=2240
+partial=14-launcher damage_area_px=7680 partial_visited_px=250846 partial_ms=6.96 overdraw=32.7x
+partial_sites=14-launcher shadow=204672 draw=43934 brightest=2240
+text=14-launcher overlaps=none (33 runs checked)
+scene=15-search ppm=../docs/evidence/2026-10-15/frames-after\15-search.ppm bytes=3072016 px=1024000 visited_px=12121855 coverage=11.838 draw_ms=341.05 fingerprint=0xbb513b7e03154607
+sites=15-search shadow=9983640 draw=2011196 glass=64000 text=60779 brightest=2240
+partial=15-search damage_area_px=7680 partial_visited_px=241024 partial_ms=6.39 overdraw=31.4x
+partial_sites=15-search shadow=204672 draw=34112 brightest=2240
+text=15-search overlaps=none (21 runs checked)
+scene=03-windows-overlap ppm=../docs/evidence/2026-10-15/frames-after\03-windows-overlap.ppm bytes=3072016 px=1024000 visited_px=11043440 coverage=10.785 draw_ms=346.21 fingerprint=0x89afe0cd1dc6f881
+sites=03-windows-overlap shadow=8159544 draw=1632617 glass=902140 text=307614 brightest=41525
+partial=03-windows-overlap damage_area_px=7680 partial_visited_px=137816 partial_ms=6.07 overdraw=17.9x
+partial_sites=03-windows-overlap shadow=69270 brightest=41525 draw=25416 text=1605
+text=03-windows-overlap overlaps=0 within a surface, 22 across stacked windows, in 130 runs; worst: cross-surface "Memory"(x=340,y=294) over "the file service is not available on this platform"(x=320,y=298) [76x14] | cross-surface "Settings"(x=114,y=96) over "Activity"(x=122,y=98) [64x16] | cross-surface "warn 80 %, critical 93 %"(x=64,y=254) over "Documents"(x=192,y=249) [76x12]
+scene=04-files ppm=../docs/evidence/2026-10-15/frames-after\04-files.ppm bytes=3072016 px=1024000 visited_px=6584357 coverage=6.430 draw_ms=203.73 fingerprint=0x6fd4bfd2c5fd8a6a
+sites=04-files shadow=4868472 draw=1042169 glass=539904 text=107822 brightest=25990
+partial=04-files damage_area_px=7680 partial_visited_px=113402 partial_ms=3.67 overdraw=14.8x
+partial_sites=04-files shadow=68880 brightest=25990 draw=18532
+text=04-files overlaps=0 within a surface, 6 across stacked windows, in 36 runs; worst: cross-surface "Projects"(x=205,y=184) over "Name ↑"(x=202,y=179) [59x12] | cross-surface "Settings"(x=114,y=96) over "Files"(x=138,y=98) [42x16] | cross-surface "Docum..."(x=113,y=272) over "Projects"(x=76,y=267) [43x12]
+scene=05-settings ppm=../docs/evidence/2026-10-15/frames-after\05-settings.ppm bytes=3072016 px=1024000 visited_px=6557252 coverage=6.404 draw_ms=203.24 fingerprint=0xb90b73267535a4e4
+sites=05-settings shadow=4796472 draw=1019387 glass=532864 text=182889 brightest=25640
+partial=05-settings damage_area_px=7680 partial_visited_px=159046 partial_ms=4.72 overdraw=20.7x
+partial_sites=05-settings shadow=100368 draw=28372 brightest=25640 text=4666
+text=05-settings overlaps=0 within a surface, 5 across stacked windows, in 69 runs; worst: cross-surface "Downlo..."(x=112,y=360) over "Environments"(x=109,y=356) [75x14] | cross-surface "Settings"(x=114,y=96) over "Settings"(x=138,y=98) [48x16] | cross-surface "Trash"(x=125,y=184) over "Display"(x=109,y=176) [50x10]
+scene=06-browser ppm=../docs/evidence/2026-10-15/frames-after\06-browser.ppm bytes=3072016 px=1024000 visited_px=9025312 coverage=8.814 draw_ms=298.31 fingerprint=0x21974c3465243d51
+sites=06-browser shadow=6846072 draw=1318013 glass=717184 text=108053 brightest=35990
+partial=06-browser damage_area_px=7680 partial_visited_px=172438 partial_ms=6.71 overdraw=22.5x
+partial_sites=06-browser shadow=102336 brightest=35990 draw=34112
+text=06-browser overlaps=0 within a surface, 2 across stacked windows, in 28 runs; worst: cross-surface "Pictures"(x=206,y=96) over "Litric Browser"(x=138,y=98) [64x16] | cross-surface "Settings"(x=114,y=96) over "Litric Browser"(x=138,y=98) [48x16]
+scene=07-terminal ppm=../docs/evidence/2026-10-15/frames-after\07-terminal.ppm bytes=3072016 px=1024000 visited_px=4677298 coverage=4.568 draw_ms=161.95 fingerprint=0xa431fd7544432473
+sites=07-terminal shadow=3327672 draw=869501 glass=400064 text=61821 brightest=18240
+partial=07-terminal damage_area_px=7680 partial_visited_px=26768 partial_ms=1.38 overdraw=3.5x
+partial_sites=07-terminal brightest=18240 draw=8528
+text=07-terminal overlaps=0 within a surface, 2 across stacked windows, in 20 runs; worst: cross-surface "Settings"(x=114,y=96) over "Terminal"(x=138,y=98) [48x16] | cross-surface "Pictures"(x=206,y=96) over "Terminal"(x=138,y=98) [13x16]
+scene=08-trash ppm=../docs/evidence/2026-10-15/frames-after\08-trash.ppm bytes=3072016 px=1024000 visited_px=3775492 coverage=3.687 draw_ms=130.65 fingerprint=0xb8d2cd1dfea6b4d9
+sites=08-trash shadow=2785272 draw=557933 glass=349664 text=67083 brightest=15540
+partial=08-trash damage_area_px=7680 partial_visited_px=24068 partial_ms=1.08 overdraw=3.1x
+partial_sites=08-trash brightest=15540 draw=8528
+text=08-trash overlaps=0 within a surface, 4 across stacked windows, in 21 runs; worst: cross-surface "Settings"(x=114,y=96) over "Trash"(x=138,y=98) [48x16] | cross-surface "Projects"(x=205,y=184) over "the file service is not available"(x=76,y=170) [74x3] | cross-surface "Trash"(x=125,y=184) over "the file service is not available"(x=76,y=170) [50x3]
+scene=09-defender ppm=../docs/evidence/2026-10-15/frames-after\09-defender.ppm bytes=3072016 px=1024000 visited_px=4134729 coverage=4.038 draw_ms=159.14 fingerprint=0x59e634eeb6e3a426
+sites=09-defender shadow=3063672 draw=601719 glass=374944 text=77454 brightest=16940
+partial=09-defender damage_area_px=7680 partial_visited_px=25468 partial_ms=1.12 overdraw=3.3x
+partial_sites=09-defender brightest=16940 draw=8528
+text=09-defender overlaps=0 within a surface, 6 across stacked windows, in 20 runs; worst: cross-surface "Settings"(x=114,y=96) over "Defender"(x=138,y=98) [48x16] | cross-surface "Trash"(x=125,y=184) over "Scan now"(x=90,y=194) [50x8] | cross-surface "Pictures"(x=206,y=96) over "Defender"(x=138,y=98) [20x16]
+scene=10-activity ppm=../docs/evidence/2026-10-15/frames-after\10-activity.ppm bytes=3072016 px=1024000 visited_px=3081690 coverage=3.009 draw_ms=121.28 fingerprint=0xaedd3f5d1e463524
+sites=10-activity shadow=2161272 draw=474453 glass=291424 text=142101 brightest=12440
+partial=10-activity damage_area_px=7680 partial_visited_px=20968 partial_ms=1.43 overdraw=2.7x
+partial_sites=10-activity brightest=12440 draw=8528
+text=10-activity overlaps=0 within a surface, 9 across stacked windows, in 53 runs; worst: cross-surface "Settings"(x=114,y=96) over "Activity"(x=138,y=98) [48x16] | cross-surface "Downlo..."(x=112,y=360) over "litric-defender"(x=76,y=352) [75x9] | cross-surface "Terminal"(x=20,y=272) over "Name"(x=76,y=271) [20x16]

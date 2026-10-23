@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>LitricOS — Precision Atelier prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #0b1012;
+      --ink-2: #11191b;
+      --ink-3: #182326;
+      --paper: #f2f0e8;
+      --paper-2: #e8e7df;
+      --paper-3: #d9ddd7;
+      --text: #f4f5ef;
+      --muted: #a4b2b0;
+      --dim: #788a88;
+      --accent: #8ce4ca;
+      --accent-dark: #153f38;
+      --line: #2b3938;
+      --line-light: #d3d9d2;
+      --warn: #f0c878;
+      --bad: #ed8c80;
+      --good: #67d4a4;
+      --radius-sm: 10px;
+      --radius-md: 16px;
+      --radius-lg: 24px;
+      --shadow: 0 24px 70px #0008;
+      --ui: "Noto Sans Thai", Inter, "Segoe UI", system-ui, sans-serif;
+      --mono: "Noto Sans Mono", "Cascadia Code", ui-monospace, monospace;
+      font-family: var(--ui);
+      font-synthesis: none;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #080c0d; color: var(--text); }
+    button, input { color: inherit; font: inherit; }
+    button { cursor: pointer; }
+    .app { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
+    .rail { padding: 26px 18px; background: #0d1314; border-right: 1px solid #202a29; display: flex; flex-direction: column; gap: 28px; }
+    .brand { display: flex; gap: 12px; align-items: center; padding: 0 7px; }
+    .brand-mark { width: 34px; height: 34px; border-radius: 11px; background: var(--accent); color: #0b1815; display: grid; place-items: center; font-weight: 850; letter-spacing: -2px; }
+    .brand strong { display: block; font-size: 14px; letter-spacing: .04em; }
+    .brand small { display: block; color: var(--dim); font-size: 11px; margin-top: 2px; }
+    .rail-label { color: #70817f; text-transform: uppercase; font-size: 10px; letter-spacing: .14em; padding: 0 10px; margin: 0 0 8px; }
+    .nav { display: grid; gap: 5px; }
+    .nav button, .rail-action { width: 100%; display: flex; align-items: center; gap: 12px; border: 0; text-align: left; background: transparent; color: #b7c3bf; border-radius: 11px; padding: 11px 12px; font-size: 13px; transition: .18s ease; }
+    .nav button:hover, .rail-action:hover { background: #182120; color: white; }
+    .nav button.active { color: var(--accent); background: #162522; box-shadow: inset 2px 0 var(--accent); }
+    .nav .ico, .rail-action .ico { width: 20px; text-align: center; color: #8fa29e; font-size: 15px; }
+    .nav button.active .ico { color: var(--accent); }
+    .rail-spacer { flex: 1; }
+    .prototype-note { font-size: 10px; line-height: 1.5; color: #80908e; background: #131b1b; border: 1px solid #273130; padding: 12px; border-radius: 12px; }
+    .main { min-width: 0; padding: 26px clamp(18px, 3vw, 44px) 42px; }
+    .top { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 22px; }
+    .eyebrow { text-transform: uppercase; letter-spacing: .16em; font-size: 10px; color: var(--accent); font-weight: 750; }
+    h1 { font-size: clamp(25px, 2.2vw, 34px); letter-spacing: -.045em; margin: 8px 0 5px; font-weight: 680; }
+    .sub { font-size: 13px; color: #94a39f; margin: 0; }
+    .tools { display: flex; align-items: center; gap: 8px; }
+    .chip { border: 1px solid #2b3938; background: #11191a; border-radius: 999px; padding: 8px 11px; color: #c6d0ca; font-size: 11px; }
+    .stage-wrap { border: 1px solid #293535; border-radius: 18px; background: #101617; padding: 12px; box-shadow: 0 30px 90px #0006; }
+    .stage-head { display: flex; justify-content: space-between; align-items: center; padding: 2px 3px 10px; color: #82918e; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    .lights { display: flex; gap: 5px; }
+    .lights i { width: 7px; height: 7px; border-radius: 50%; background: #53615f; }
+    .lights i:first-child { background: #ef907d; }
+    .lights i:nth-child(2) { background: #edc777; }
+    .lights i:nth-child(3) { background: #72cda0; }
+    .stage { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 12px; min-height: 430px; background: var(--ink); isolation: isolate; }
+    .wall { position: absolute; inset: 0; z-index: -2; background: radial-gradient(ellipse at 78% 18%, #17433d 0, transparent 31%), radial-gradient(ellipse at 64% 82%, #1d4053 0, transparent 36%), linear-gradient(125deg, #0b1012 5%, #101d20 58%, #0b1114); }
+    .wall:before { content: ""; position: absolute; width: 52vw; height: 52vw; max-width: 780px; max-height: 780px; border: 1px solid #a0e9d313; border-radius: 50%; right: -16%; top: -52%; box-shadow: 0 0 0 64px #a0e9d309, 0 0 0 128px #a0e9d306, 0 0 120px #53b89c18; }
+    .wall:after { content: ""; position: absolute; width: 40vw; height: 24vw; max-width: 640px; max-height: 380px; border-radius: 50%; right: 9%; bottom: 7%; transform: rotate(-28deg); background: linear-gradient(130deg, #75dec327, #447d9a18 58%, transparent 76%); filter: blur(1px); }
+    .screen { position: absolute; inset: 0; display: none; }
+    .screen.active { display: block; animation: arrive .24s ease-out; }
+    @keyframes arrive { from { opacity: .45; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .lock-content { height: 100%; padding: clamp(28px, 6vw, 86px); display: grid; grid-template-columns: 1.05fr .95fr; align-items: center; gap: 5%; }
+    .lock-time { align-self: center; padding-bottom: 6%; }
+    .date { color: #bdccc7; font-size: clamp(12px, 1.1vw, 16px); letter-spacing: .04em; margin-bottom: 12px; }
+    .clock { font-size: clamp(76px, 11vw, 172px); line-height: .94; letter-spacing: -.09em; font-weight: 300; color: #f4f6ee; text-shadow: 0 8px 40px #a3e7d132; white-space: nowrap; }
+    .lock-message { color: #aebdb8; font-size: clamp(13px, 1.2vw, 16px); margin-top: 18px; }
+    .lock-card { width: min(100%, 390px); justify-self: end; padding: clamp(22px, 3vw, 34px); border: 1px solid #d9eee32c; border-radius: 22px; background: linear-gradient(145deg, #172120eF, #101819eF); box-shadow: var(--shadow); backdrop-filter: blur(14px); }
+    .avatar { width: 54px; height: 54px; border-radius: 18px; background: linear-gradient(145deg, #c9e7d9, #548579); color: #10201b; display: grid; place-items: center; font-size: 22px; font-weight: 750; margin-bottom: 14px; }
+    .lock-card h2 { margin: 0; font-size: 20px; letter-spacing: -.03em; }
+    .lock-card p { margin: 5px 0 18px; color: #9aa9a4; font-size: 12px; }
+    .field-label { font-size: 10px; letter-spacing: .1em; color: #94aaa2; text-transform: uppercase; display: block; margin: 0 0 7px; }
+    .password { width: 100%; border: 1px solid #3a4c48; outline: 0; background: #0d1515; border-radius: 10px; height: 42px; padding: 0 12px; font-size: 13px; }
+    .password:focus { border-color: var(--accent); box-shadow: 0 0 0 3px #8ce4ca22; }
+    .primary { border: 0; background: var(--accent); color: #10201b; font-weight: 750; border-radius: 10px; height: 42px; padding: 0 16px; }
+    .lock-card .primary { width: 100%; margin-top: 10px; }
+    .lock-links { display: flex; justify-content: space-between; align-items: center; color: #93a39e; font-size: 10px; margin-top: 14px; }
+    .lock-links button { border: 0; background: none; color: #b4c8bf; font-size: inherit; padding: 3px; }
+    .status-rail { position: absolute; left: clamp(28px, 6vw, 86px); right: clamp(28px, 6vw, 86px); bottom: 6.4%; display: flex; align-items: center; gap: 22px; color: #bdcbc5; font-size: 11px; }
+    .status-rail span { display: flex; align-items: center; gap: 8px; }
+    .status-rail b { color: white; font-weight: 650; }
+    .status-rail .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); display: inline-block; }
+    .status-rail .lang { margin-left: auto; }
+    .desktop { background: linear-gradient(120deg, #0e1517bb, #0c1315ab); }
+    .menubar { height: 38px; display: flex; align-items: center; padding: 0 22px; gap: 18px; border-bottom: 1px solid #d6f5e41a; color: #e6f1e9; background: #0e1717b5; backdrop-filter: blur(14px); font-size: 11px; }
+    .menubar .logo { color: var(--accent); font-weight: 850; font-size: 14px; letter-spacing: -.1em; }
+    .menubar .right { margin-left: auto; display: flex; gap: 14px; align-items: center; color: #bdd0c6; }
+    .desk-label { position: absolute; left: 30px; top: 68px; }
+    .desk-label small { color: #99aaa3; font-size: 11px; }
+    .desk-label h2 { margin: 7px 0 0; font-size: clamp(22px, 3vw, 38px); letter-spacing: -.05em; font-weight: 600; }
+    .window { position: absolute; left: 25%; top: 18%; width: 53%; height: 65%; min-width: 380px; border: 1px solid #edf2eb36; border-radius: 14px; overflow: hidden; background: #11191a; box-shadow: 0 30px 90px #0009; }
+    .window-bar { display: flex; align-items: center; height: 38px; padding: 0 12px; gap: 10px; border-bottom: 1px solid #2b3735; background: #151e1e; font-size: 11px; }
+    .window-title { flex: 1; color: #edf3ec; font-weight: 650; }
+    .window-actions { display: flex; gap: 12px; color: #94a39d; }
+    .desk-body { height: calc(100% - 38px); display: grid; grid-template-columns: 160px 1fr; }
+    .settings-side { padding: 16px 10px; background: #151d1d; border-right: 1px solid #2a3533; }
+    .settings-side small { display: block; color: #778985; text-transform: uppercase; letter-spacing: .1em; font-size: 9px; margin: 0 8px 8px; }
+    .settings-side span { display: block; color: #b1bfb8; font-size: 10px; padding: 8px; border-radius: 7px; margin-bottom: 2px; }
+    .settings-side span.selected { color: var(--accent); background: #1f302b; }
+    .settings-main { padding: clamp(16px, 2.2vw, 28px); overflow: hidden; }
+    .settings-main h3 { font-size: clamp(16px, 1.55vw, 22px); margin: 0 0 3px; letter-spacing: -.035em; }
+    .settings-main .hint { color: #93a39c; font-size: 10px; margin: 0 0 18px; }
+    .setting-row { border-top: 1px solid #2a3634; padding: 12px 0; display: flex; align-items: center; gap: 18px; }
+    .setting-row .copy { flex: 1; min-width: 0; }
+    .setting-row strong { display: block; font-size: 11px; font-weight: 650; }
+    .setting-row small { display: block; font-size: 9px; color: #92a19a; margin-top: 4px; }
+    .toggle { width: 31px; height: 18px; border-radius: 10px; background: #3b4a47; position: relative; flex: 0 0 auto; }
+    .toggle:after { content: ""; width: 12px; height: 12px; border-radius: 50%; background: #e2e7df; position: absolute; top: 3px; left: 3px; transition: .16s; }
+    .toggle.on { background: #4c9a82; }
+    .toggle.on:after { left: 16px; background: #f2fff8; }
+    .select { color: #dce9e0; border: 1px solid #3b4b46; border-radius: 7px; padding: 7px 9px; font-size: 9px; background: #101717; }
+    .dock { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 7px; padding: 7px 10px; border: 1px solid #e7fff32a; border-radius: 15px; background: #101918d9; backdrop-filter: blur(18px); box-shadow: 0 10px 35px #0007; }
+    .dock button { width: 34px; height: 34px; border: 1px solid #dff6e314; background: #1c2826; color: #b8e5d1; border-radius: 10px; font-size: 14px; }
+    .dock button:hover { transform: translateY(-3px); background: #2e413a; }
+    .file-window { background: var(--paper); color: #18211e; position: absolute; inset: 7% 6%; border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+    .file-title { height: 42px; display: flex; align-items: center; gap: 12px; padding: 0 15px; border-bottom: 1px solid #d6dbd4; font-size: 11px; }
+    .file-title strong { font-size: 12px; }
+    .file-title .path { color: #74827c; margin-left: 7px; }
+    .file-title .spacer { flex: 1; }
+    .file-search { border: 1px solid #d1d8d0; background: #fff; border-radius: 8px; padding: 7px 10px; color: #7a8982; width: 170px; font-size: 10px; }
+    .files-layout { height: calc(100% - 42px); display: grid; grid-template-columns: 190px 1fr; }
+    .file-side { padding: 15px 10px; border-right: 1px solid #d9ded7; background: #e9ebe4; }
+    .file-side h4 { margin: 0 8px 8px; color: #75827a; font-size: 9px; text-transform: uppercase; letter-spacing: .1em; }
+    .file-side div { padding: 8px; border-radius: 7px; font-size: 10px; color: #4a5951; }
+    .file-side .chosen { color: #17483b; background: #d4e8dc; font-weight: 700; }
+    .file-content { padding: 18px 20px; overflow: auto; }
+    .file-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 15px; }
+    .file-heading h3 { margin: 0; font-size: 19px; letter-spacing: -.04em; }
+    .file-heading small { color: #839087; font-size: 9px; }
+    .crumb { color: #78867e; font-size: 9px; margin-bottom: 13px; }
+    .file-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+    .file-table th { color: #818d85; text-align: left; font-size: 9px; font-weight: 600; padding: 8px 9px; border-bottom: 1px solid #d8ddd6; }
+    .file-table td { padding: 10px 9px; border-bottom: 1px solid #e0e4dd; color: #35443c; }
+    .file-table tr.selected td { background: #d6e9dd; color: #173e31; }
+    .file-table td:first-child { font-weight: 650; }
+    .file-icon { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 7px; background: #dbe2db; border-radius: 5px; color: #487261; }
+    .apps { padding: clamp(20px, 4vw, 56px); display: flex; flex-direction: column; }
+    .apps h2 { margin: 0; font-size: clamp(23px, 3vw, 38px); letter-spacing: -.05em; }
+    .apps > p { color: #9caca6; font-size: 11px; margin: 7px 0 22px; }
+    .app-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; }
+    .app-card { min-height: 105px; padding: 13px; border-radius: 12px; border: 1px solid #d4ede21a; background: #13201fd9; text-align: left; }
+    .app-card:hover { border-color: #8ce4ca70; background: #1c302b; }
+    .app-card .app-ico { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; background: #28413a; color: #a1ebcc; font-size: 14px; margin-bottom: 9px; }
+    .app-card strong { display: block; font-size: 10px; }
+    .app-card small { display: block; margin-top: 4px; color: #8fa099; font-size: 8px; line-height: 1.4; }
+    .toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 18px); opacity: 0; pointer-events: none; background: #eaf3ec; color: #15211d; border: 1px solid #8ce4ca; border-radius: 999px; padding: 10px 16px; font-size: 11px; transition: .2s; box-shadow: var(--shadow); z-index: 10; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .light { color-scheme: light; --ink: #f1f0e9; --ink-2: #e7e8e1; --ink-3: #dadfd7; --text: #17211e; --muted: #54635c; --dim: #728078; --accent: #245e50; --line: #d2d9d1; }
+    .light body { background: #e6e9e3; color: #19231f; }
+    .light .rail { background: #f2f1eb; border-color: #d1d8d0; }
+    .light .brand-mark { background: #245e50; color: #eff7f1; }
+    .light .nav button { color: #4d5a54; }
+    .light .nav button.active { background: #deebe3; color: #245e50; box-shadow: inset 2px 0 #245e50; }
+    .light .nav button.active .ico { color: #245e50; }
+    .light .prototype-note { background: #e5e8e1; border-color: #cbd4cb; color: #68766e; }
+    .light .stage-wrap { background: #f0f1ec; border-color: #cbd4ca; }
+    .light .chip { background: #f4f5f1; border-color: #cbd4ca; color: #40534a; }
+    .light .sub { color: #65736b; }
+    @media (max-width: 1000px) {
+      .app { grid-template-columns: 204px minmax(0,1fr); }
+      .stage { min-height: 470px; aspect-ratio: auto; }
+      .lock-content { padding: 28px; }
+      .clock { font-size: clamp(70px, 9vw, 112px); }
+      .window { left: 13%; width: 76%; min-width: 0; }
+      .app-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+    }
+    @media (max-width: 700px) {
+      .app { grid-template-columns: 1fr; }
+      .rail { position: sticky; top: 0; z-index: 5; padding: 10px 12px; flex-direction: row; align-items: center; gap: 10px; border-right: 0; border-bottom: 1px solid #202a29; }
+      .brand { padding: 0; }
+      .brand-mark { width: 30px; height: 30px; }
+      .brand small, .rail-label, .rail-spacer, .prototype-note { display: none; }
+      .rail > div:nth-of-type(2) { flex: 1; overflow: auto; }
+      .nav { display: flex; gap: 3px; }
+      .nav button { width: auto; padding: 8px; font-size: 0; }
+      .nav .ico { font-size: 14px; }
+      .main { padding: 18px 12px 30px; }
+      .top { display: block; }
+      .tools { margin-top: 12px; }
+      .stage { min-height: 680px; }
+      .lock-content { display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 22px; padding: 25px; }
+      .lock-time { padding: 0; }
+      .clock { font-size: clamp(65px, 17vw, 110px); }
+      .lock-card { width: 100%; justify-self: auto; }
+      .status-rail { left: 25px; right: 25px; bottom: 16px; gap: 11px; flex-wrap: wrap; font-size: 9px; }
+      .status-rail .lang { margin-left: 0; }
+      .window { left: 4%; top: 13%; width: 92%; height: 73%; }
+      .desk-body { grid-template-columns: 115px 1fr; }
+      .settings-side span { font-size: 8px; padding: 7px 5px; }
+      .settings-main { padding: 14px 11px; }
+      .settings-main .hint { margin-bottom: 7px; }
+      .setting-row { padding: 9px 0; gap: 6px; }
+      .setting-row strong { font-size: 9px; }
+      .setting-row small { font-size: 7px; }
+      .file-window { inset: 3%; }
+      .files-layout { grid-template-columns: 105px 1fr; }
+      .file-side div { font-size: 8px; padding: 7px 5px; }
+      .file-content { padding: 12px 9px; }
+      .file-search { display: none; }
+      .file-table th, .file-table td { padding: 8px 3px; font-size: 8px; }
+      .file-table th:nth-child(3), .file-table td:nth-child(3) { display: none; }
+      .app-grid { gap: 7px; }
+      .app-card { min-height: 100px; padding: 10px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *:before, *:after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+  </style>
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="rail">
+      <div class="brand"><div class="brand-mark">L.</div><div><strong>LITRICOS</strong><small>Precision Atelier · prototype</small></div></div>
+      <div>
+        <p class="rail-label">Screen board</p>
+        <nav class="nav" aria-label="Prototype screens">
+          <button class="active" data-screen="lock"><span class="ico">◉</span>Lock screen</button>
+          <button data-screen="desktop"><span class="ico">▦</span>Desktop</button>
+          <button data-screen="files"><span class="ico">▤</span>Files</button>
+          <button data-screen="settings"><span class="ico">⚙</span>Settings</button>
+          <button data-screen="apps"><span class="ico">⌘</span>All apps</button>
+        </nav>
+      </div>
+      <div class="rail-spacer"></div>
+      <div>
+        <p class="rail-label">Preview controls</p>
+        <button class="rail-action" id="theme"><span class="ico">◐</span><span>Toggle light / dark</span></button>
+        <button class="rail-action" id="language"><span class="ico">文</span><span>ภาษาไทย</span></button>
+      </div>
+      <div class="prototype-note">VISUAL PROTOTYPE<br>Demo interactions are local to this page. No password is checked and no VM settings are changed.</div>
+    </aside>
+    <main class="main">
+      <header class="top">
+        <div><div class="eyebrow">Product design · 01 / shell refresh</div><h1>Precision Atelier</h1><p class="sub">An authored LitricOS identity, designed around clarity, useful density, and real system state.</p></div>
+        <div class="tools"><span class="chip">1920 × 1080 · native draw</span><span class="chip">Thai + English</span></div>
+      </header>
+      <section class="stage-wrap">
+        <div class="stage-head"><span class="lights"><i></i><i></i><i></i></span><span id="scene-name">Lock screen · account and time</span><span>VISUAL MOCKUP</span></div>
+        <div class="stage" id="stage">
+          <div class="wall"></div>
+          <section class="screen active" data-scene="lock" aria-label="Lock screen concept">
+            <div class="lock-content">
+              <div class="lock-time"><div class="date">WEDNESDAY · OCTOBER 15</div><div class="clock">11:37</div><div class="lock-message">A quiet place to pick up where you left off.</div></div>
+              <form class="lock-card" id="login-demo">
+                <div class="avatar">L</div><h2>Welcome back</h2><p>Sign in to your LitricOS session</p>
+                <label class="field-label" for="password">Password</label><input class="password" id="password" type="password" placeholder="Enter your password" autocomplete="off">
+                <button class="primary" type="submit">Unlock session <span aria-hidden="true">→</span></button>
+                <div class="lock-links"><span>Caps Lock is off</span><button type="button" data-action="demo">Accessibility options</button></div>
+              </form>
+            </div>
+            <div class="status-rail"><span><i class="dot"></i><b>System ready</b></span><span>⌁ ethernet</span><span>◷ 01h 12m</span><span>◧ power connected</span><span class="lang">EN · TH</span></div>
+          </section>
+          <section class="screen desktop" data-scene="desktop" aria-label="Desktop concept">
+            <div class="menubar"><span class="logo">L.</span><strong>Litric</strong><span>Workspace</span><span>Window</span><span>Help</span><div class="right"><span>●</span><span>⌁</span><span>◧</span><span>11:37</span><span>Audim</span></div></div>
+            <div class="desk-label"><small>WEDNESDAY, OCTOBER 15 · SPACE 01</small><h2>Good morning, Audim.</h2></div>
+            <div class="window">
+              <div class="window-bar"><span>● ● ●</span><span class="window-title">Settings · Appearance</span><span class="window-actions">−　□　×</span></div>
+              <div class="desk-body">
+                <aside class="settings-side"><small>Personalize</small><span class="selected">Appearance</span><span>Displays</span><span>Language & input</span><span>Accessibility</span><small style="margin-top:15px">System</small><span>Network</span><span>Power</span><span>Privacy</span></aside>
+                <div class="settings-main"><h3>Make it yours.</h3><p class="hint">Changes preview immediately. Your system preference is saved only after confirmation.</p>
+                  <div class="setting-row"><div class="copy"><strong>Interface theme</strong><small>Choose a comfortable surface for your day.</small></div><button class="select" data-action="theme">Dark　⌄</button></div>
+                  <div class="setting-row"><div class="copy"><strong>Accent color</strong><small>Used for focus, selection, and primary actions.</small></div><span style="color:#8ce4ca;font-size:20px">●</span></div>
+                  <div class="setting-row"><div class="copy"><strong>Reduce motion</strong><small>Keep transitions calm and direct.</small></div><span class="toggle"></span></div>
+                  <div class="setting-row"><div class="copy"><strong>Text size</strong><small>Scales labels and controls together.</small></div><button class="select">Default　⌄</button></div>
+                </div>
+              </div>
+            </div>
+            <div class="dock"><button title="Launcher" data-screen="apps">⌘</button><button title="Files" data-screen="files">▤</button><button title="Browser">◎</button><button title="Terminal">&gt;_</button><button title="Settings">⚙</button><button title="Activity">◫</button><button title="Trash">♲</button></div>
+          </section>
+          <section class="screen" data-scene="files" aria-label="Files concept">
+            <div class="file-window">
+              <div class="file-title"><strong>Files</strong><span class="path">Home　›　Documents</span><span class="spacer"></span><button class="select">New　+</button><input class="file-search" placeholder="Search in Documents" aria-label="Search files"></div>
+              <div class="files-layout">
+                <aside class="file-side"><h4>Favorites</h4><div>⌂　Home</div><div class="chosen">▤　Documents</div><div>⇩　Downloads</div><div>◇　Pictures</div><div>◷　Recent</div><h4 style="margin-top:19px">Locations</h4><div>▣　LitricOS</div><div>♲　Trash</div></aside>
+                <div class="file-content"><div class="crumb">Home　›　Documents　 <span style="float:right">8 items · Sorted by name</span></div><div class="file-heading"><h3>Documents</h3><small>List view　▤　▦</small></div>
+                  <table class="file-table"><thead><tr><th>Name ↑</th><th>Modified</th><th>Kind</th><th>Size</th></tr></thead><tbody>
+                    <tr><td><span class="file-icon">▤</span>Project brief.md</td><td>Today, 10:42</td><td>Markdown</td><td>12 KB</td></tr>
+                    <tr class="selected"><td><span class="file-icon">▣</span>Design references</td><td>Yesterday</td><td>Folder</td><td>—</td></tr>
+                    <tr><td><span class="file-icon">▤</span>Meeting notes.txt</td><td>Oct 12</td><td>Text</td><td>4 KB</td></tr>
+                    <tr><td><span class="file-icon">▧</span>Wireframes.zip</td><td>Oct 10</td><td>Archive</td><td>2.4 MB</td></tr>
+                    <tr><td><span class="file-icon">▤</span>Welcome to Litric.md</td><td>Oct 08</td><td>Markdown</td><td>8 KB</td></tr>
+                  </tbody></table>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="screen" data-scene="settings" aria-label="Settings concept">
+            <div class="file-window">
+              <div class="file-title"><strong>Settings</strong><span class="path">System preferences</span><span class="spacer"></span><input class="file-search" placeholder="Search settings" aria-label="Search settings"></div>
+              <div class="files-layout">
+                <aside class="file-side"><h4>Personal</h4><div class="chosen">◈　Appearance</div><div>▧　Display</div><div>⌨　Input</div><div>文　Language</div><h4 style="margin-top:17px">System</h4><div>⌁　Network</div><div>◖　Power</div><div>◉　Privacy</div><div>♧　Accessibility</div><div>▤　Storage</div><div>ⓘ　About</div></aside>
+                <div class="file-content"><div class="file-heading"><div><h3>Appearance</h3><small>Personalize the look and feel of LitricOS.</small></div></div>
+                  <div class="setting-row" style="border-color:#d9dfd7"><div class="copy"><strong>Theme</strong><small>Updates all surfaces and controls together.</small></div><button class="select" data-action="theme">Dark　⌄</button></div>
+                  <div class="setting-row" style="border-color:#d9dfd7"><div class="copy"><strong>Accent</strong><small>Mint · used for focus and primary actions.</small></div><span style="color:#3e806b;font-size:19px">●</span></div>
+                  <div class="setting-row" style="border-color:#d9dfd7"><div class="copy"><strong>High contrast</strong><small>Raises text and border contrast across the system.</small></div><span class="toggle"></span></div>
+                  <div class="setting-row" style="border-color:#d9dfd7"><div class="copy"><strong>Interface language</strong><small>Includes menus, apps, and system messages.</small></div><button class="select" data-action="language">English　⌄</button></div>
+                  <div class="setting-row" style="border-color:#d9dfd7"><div class="copy"><strong>Text scale</strong><small>Changes text without shrinking hit targets.</small></div><button class="select">100%　⌄</button></div>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section class="screen apps" data-scene="apps" aria-label="All applications concept">
+            <h2>Everything you need, in one place.</h2><p>Search apps, settings, and files. Each app keeps its own workflow and shares one consistent system language.</p>
+            <div class="app-grid">
+              <button class="app-card"><span class="app-ico">◫</span><strong>Activity</strong><small>System health, resources, and processes</small></button>
+              <button class="app-card"><span class="app-ico">◇</span><strong>Environments</strong><small>Installed systems and live status</small></button>
+              <button class="app-card" data-screen="settings"><span class="app-ico">⚙</span><strong>Settings</strong><small>Searchable, applied system controls</small></button>
+              <button class="app-card" data-screen="files"><span class="app-ico">▤</span><strong>Files</strong><small>Find, preview, organize, and restore</small></button>
+              <button class="app-card"><span class="app-ico">◎</span><strong>Litric Browser</strong><small>Tabs, privacy, permissions, downloads</small></button>
+              <button class="app-card"><span class="app-ico">&gt;_</span><strong>Terminal</strong><small>Sessions, history, and real output</small></button>
+              <button class="app-card"><span class="app-ico">♲</span><strong>Trash</strong><small>Review, restore, or permanently remove</small></button>
+              <button class="app-card"><span class="app-ico">⬡</span><strong>Defender</strong><small>On-demand scans with honest status</small></button>
+            </div>
+          </section>
+        </div>
+      </section>
+      <p class="sub" style="font-size:10px;margin:12px 2px 0">Prototype interactions are illustrative. Authentication, settings, and app actions are not connected to LitricOS.</p>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script>
+    const labels = { lock: 'Lock screen · account and time', desktop: 'Desktop · workspace and window chrome', files: 'Files · navigation and list', settings: 'Settings · searchable system controls', apps: 'Launcher · eight built-in applications' };
+    const show = name => {
+      document.querySelectorAll('.screen').forEach(el => el.classList.toggle('active', el.dataset.scene === name));
+      document.querySelectorAll('.nav [data-screen]').forEach(el => el.classList.toggle('active', el.dataset.screen === name));
+      document.querySelector('#scene-name').textContent = labels[name] || name;
+    };
+    document.querySelectorAll('[data-screen]').forEach(el => el.addEventListener('click', () => show(el.dataset.screen)));
+    const toast = message => { const el = document.querySelector('#toast'); el.textContent = message; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2300); };
+    document.querySelector('#theme').addEventListener('click', () => { document.documentElement.classList.toggle('light'); toast('Theme preview changed · prototype only'); });
+    document.querySelector('#language').addEventListener('click', e => { e.currentTarget.querySelector('span:last-child').textContent = e.currentTarget.querySelector('span:last-child').textContent === 'ภาษาไทย' ? 'English' : 'ภาษาไทย'; toast('Language preview selected · prototype only'); });
+    document.querySelectorAll('[data-action="theme"]').forEach(el => el.addEventListener('click', () => { document.documentElement.classList.toggle('light'); toast('Theme preview changed · prototype only'); }));
+    document.querySelectorAll('[data-action="language"]').forEach(el => el.addEventListener('click', () => toast('Language selector · prototype only')));
+    document.querySelectorAll('[data-action="demo"]').forEach(el => el.addEventListener('click', () => toast('Accessibility options · prototype only')));
+    document.querySelector('#login-demo').addEventListener('submit', e => { e.preventDefault(); toast('Demo only · no password was checked'); });
+  </script>
+</body>
+</html>

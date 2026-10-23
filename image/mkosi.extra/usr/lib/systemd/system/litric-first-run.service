@@ -1,0 +1,27 @@
+[Unit]
+Description=Set the LitricOS desktop password on first boot
+Requires=litric-etc-overlay.service
+After=local-fs.target litric-etc-overlay.service
+Before=litric-shell.service
+Conflicts=getty@tty1.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+# The script runs on the framebuffer console, whose terminfo entry is `linux`.
+# Without TERM, anything that asks the terminal what it is gets nothing back --
+# and the image ships no terminfo database for it to answer with either, which
+# is why the script no longer calls `clear` at all.
+Environment=TERM=linux
+ExecStart=/usr/bin/bash /usr/lib/litric/first-run.sh
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

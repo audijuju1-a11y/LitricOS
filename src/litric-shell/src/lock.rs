@@ -39,6 +39,8 @@
 //!   is an accent wash behind them. Both are scaled by the preset, so the
 //!   control does what it says.
 
+use std::rc::Rc;
+
 use crate::canvas::{rgb, with_alpha, Canvas, Rect};
 use crate::font::{self, Style};
 use crate::shell::Hot;
@@ -131,7 +133,7 @@ impl Wall {
     #[must_use]
     pub const fn palette(self) -> (u32, u32, u32, u32) {
         match self {
-            Self::Aurora => (0x0007_121A, 0x001F_B6A6, 0x003B_6FE0, 0x00A6_4BD6),
+            Self::Aurora => (0x000A_1117, 0x0037_6A67, 0x0047_5D78, 0x0076_6277),
             Self::Sunset => (0x0017_0B12, 0x00FF_7A59, 0x00FF_3D77, 0x007A_3CFF),
             Self::Ocean => (0x0006_121F, 0x002B_B0FF, 0x002D_5BFF, 0x0019_E0C0),
             Self::Mono => (0x000B_0C0E, 0x008A_8F98, 0x004A_4F58, 0x00C9_CED6),
@@ -426,22 +428,21 @@ pub struct Tweaks {
 }
 
 impl Default for Tweaks {
-    /// The shipped look: Aurora, glass digits, the standard preset of
-    /// everything, breathing on, all three widgets on. Every value is the
-    /// prototype's own default, so the port opens on the screen that was
-    /// designed rather than on a screen someone tuned by accident.
+    /// The shipped look: a quiet Aurora field, crisp digits, subtle materials,
+    /// no decorative animation, and the three useful system facts.
     fn default() -> Self {
         Self {
             wall: Wall::default(),
-            digits: Digits::default(),
+            // Quiet and readable at first boot; expressive presets remain in Customize.
+            digits: Digits::Solid,
             accent: 0,
             size: 1,
             weight: 1,
-            light: 2,
-            motion: 2,
-            glass: 1,
+            light: 0,
+            motion: 0,
+            glass: 0,
             curve: 1,
-            breathe: true,
+            breathe: false,
             widgets: [true; WIDGETS],
         }
     }
@@ -716,19 +717,27 @@ impl LockState {
         u64::try_from(base.round() as i64).unwrap_or(28_000)
     }
 
-    /// Move the drift on by however long passed.
+    /// Move the drift on by however long passed. Returns whether an animation
+    /// frame is due so a still lock sleeps between clock changes.
     ///
     /// Called from the shell's `tick`, with the same monotonic clock the rest
     /// of the shell uses. A first call (or one after a pause) closes the gap
     /// rather than replaying it: a lock screen that had been asleep for an hour
     /// must not sweep its fields through an hour of keyframes in one frame.
-    pub fn advance(&mut self, now_ms: u64) {
+    pub fn advance(&mut self, now_ms: u64) -> bool {
         let elapsed = now_ms.saturating_sub(self.last_ms);
         self.last_ms = now_ms;
         if !self.locked || !self.tweaks.animating() || elapsed > 1_000 {
-            return;
+            return false;
         }
+        let before = self.flow_ms;
         self.flow_ms = self.flow_ms.saturating_add(elapsed);
+        // The drift moves at ~30 Hz, so only a new 33 ms bucket is worth a
+        // frame. The division is the quantization and is deliberate;
+        // `checked_rem`-free `checked_div` states that without tripping the
+        // restriction lint, which exists to catch divisions nobody meant.
+        const FLOW_FRAME_MS: u64 = 33;
+        self.flow_ms.checked_div(FLOW_FRAME_MS) != before.checked_div(FLOW_FRAME_MS)
     }
 
     /// The drift's phase, 0.0 to 1.0, for the field that laps in `period_ms`.
@@ -900,67 +909,352 @@ pub struct View<'a> {
     pub verifier: Option<String>,
 }
 
+/// The saturation every lock panel's glass pushes its backdrop by.
+///
+/// One number, used by every panel, so the material cannot drift between the
+/// widget row and the password pill.
+const GLASS_SATURATION: f32 = 1.05;
+
+/// What the frame's background is drawn from.
+///
+/// The surface behind everything — the opaque base, the three drifting fields
+/// and the bloom wash — moves less than a fifth of a pixel in one thirty-third
+/// of a second. So the picture is the *same picture* for several frames in a
+/// row, and re-deriving it every frame from keyframes that have moved by a
+/// fifth of a pixel was most of what BUG-0018 measured: 3.1M of a locked
+/// frame's 10.4M pixels.
+///
+/// This is the test for "has it changed". The fields are quantised to whole
+/// device pixels and the scale to a 1/512 step — both finer than anything the
+/// drift's own rate can show in one frame, and at most a pixel of movement
+/// between the frames that share a key.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Key {
+    /// Each field's offset in device pixels and its scale, ×512.
+    flow: [(i32, i32, i32); 3],
+    /// The four wall colours: base, then the three fields.
+    palette: (u32, u32, u32, u32),
+    /// Logical-to-device scale, ×4096, which every field's size is built from.
+    scale: i32,
+    /// The frame's size in pixels.
+    size: (u32, u32),
+    /// The clock size the wash above it is placed from, ×16.
+    clock: i32,
+    /// The bloom preset, whose value moves the wash's strength.
+    light: u8,
+}
+
+impl Key {
+    /// The key of the frame `v` is in.
+    fn of(t: &Tokens, v: &View<'_>, tw: Tweaks, clock: f32, size: (u32, u32)) -> Self {
+        let px = t.px(1.0);
+        let flow = v.state.flow();
+        Self {
+            flow: [
+                steady(flow.first().copied().unwrap_or((0.0, 0.0, 1.0)), px),
+                steady(flow.get(1).copied().unwrap_or((0.0, 0.0, 1.0)), px),
+                steady(flow.get(2).copied().unwrap_or((0.0, 0.0, 1.0)), px),
+            ],
+            palette: tw.wall.palette(),
+            scale: (px * 4096.0).round() as i32,
+            size,
+            clock: (clock * 16.0).round() as i32,
+            light: tw.light,
+        }
+    }
+
+    /// The drift in the units [`field`] draws with: device pixels and a plain
+    /// scale.
+    fn flow(self) -> [(f32, f32, f32); 3] {
+        self.flow.map(|(dx, dy, scale)| {
+            (
+                dx as f32 * FLOW_STEP,
+                dy as f32 * FLOW_STEP,
+                scale as f32 / SCALE_STEP,
+            )
+        })
+    }
+}
+
+/// How far a field may move before its frame is a different frame, in device
+/// pixels, and how finely its scale is kept.
+///
+/// Four pixels, and 1/128 of the scale -- which is about four pixels on the
+/// edge of a field, since the scale multiplies a radius of roughly 550.
+///
+/// Not one pixel, which is what the drift moves in about a frame: a key that
+/// changes every frame is a cache that never hits, and the fields would then be
+/// derived again every tick -- the thing being fixed. Four is safe because of
+/// what a field *is*: a radial wash whose falloff spans 550 px, so moving it
+/// four pixels changes a covered pixel by well under one of the 255 levels it
+/// is stored in. The drift's own rate is 170 px in 9.3 s, so a key lasts about
+/// four ticks while a field is moving fastest and indefinitely when the easing
+/// has it nearly still.
+const FLOW_STEP: f32 = 4.0;
+/// Steps of the scale per unit, as [`FLOW_STEP`] describes.
+const SCALE_STEP: f32 = 128.0;
+
+/// One field's keyframe offset, in whole [`FLOW_STEP`]s of device pixels.
+fn steady((dx, dy, scale): (f32, f32, f32), px: f32) -> (i32, i32, i32) {
+    (
+        (dx * px / FLOW_STEP).round() as i32,
+        (dy * px / FLOW_STEP).round() as i32,
+        (scale * SCALE_STEP).round() as i32,
+    )
+}
+
+/// The lock surface's memory between one frame and the next.
+///
+/// Two pictures, both of them the same picture for several ticks in a row:
+///
+/// * The **background**: the opaque base, the drifting fields and the bloom
+///   wash, drawn over by everything else. Derived again only when [`Key`]
+///   changes, and copied into the frame when it does not.
+/// * The **glass backdrop**: that same picture blurred and saturated where the
+///   panels need it, which is what the material samples when one is attached.
+///   It is made from the lock's *own* pixels — the fields, not the desktop's
+///   wallpaper, which is what a panel on this surface is actually refracting —
+///   and derived once for all the panels together rather than once per panel
+///   per frame. That is the "blur the union of the glass regions once" from
+///   BUG-0018, and it is exact: the region contains every pixel each panel's own
+///   blur would have read, so the truncated means come out the same.
+///
+/// Nothing here changes a pixel the uncached path drew, so a frame that misses
+/// the cache is the frame the surface has always drawn.
+#[derive(Debug, Clone, Default)]
+pub struct Cache {
+    /// The background and the key it was drawn at.
+    key: Option<Key>,
+    background: Option<Rc<Canvas>>,
+    /// The blurred copy and the key it was made from.
+    glass_key: Option<Key>,
+    glass: Option<Rc<Canvas>>,
+    /// The rectangles of `glass` that are blurred, one per panel.
+    ///
+    /// One region per panel rather than the union of them all: the panels of
+    /// this surface do not overlap, and a union would make every panel that
+    /// asks for a region blur the whole union again -- blurring what an earlier
+    /// panel had already blurred, and paying for the same pixels twice.
+    covered: Vec<Rect>,
+}
+
+impl Cache {
+    /// Draw the background into `canvas`, from this cache when it is current.
+    ///
+    /// `clock` is the fitted clock size, which the wash above the digits is
+    /// placed from; the key carries it quantised, because a wash that moved by
+    /// a sixteenth of a pixel is not worth a second composition.
+    fn paint(&mut self, canvas: &mut Canvas, v: &View<'_>, key: Key, clock: f32) {
+        if self.key != Some(key) {
+            let t = v.t;
+            let (base, c1, c2, c3) = key.palette;
+            let mut bg = Canvas::new(canvas.width(), canvas.height(), rgb(base));
+            let flow = key.flow();
+            field(
+                &mut bg,
+                v,
+                flow.first().copied().unwrap_or((0.0, 0.0, 1.0)),
+                -160.0,
+                -120.0,
+                760.0,
+                c1,
+                0.48,
+            );
+            field(
+                &mut bg,
+                v,
+                flow.get(1).copied().unwrap_or((0.0, 0.0, 1.0)),
+                700.0,
+                -80.0,
+                680.0,
+                c2,
+                0.38,
+            );
+            field(
+                &mut bg,
+                v,
+                flow.get(2).copied().unwrap_or((0.0, 0.0, 1.0)),
+                260.0,
+                380.0,
+                800.0,
+                c3,
+                0.28,
+            );
+            let tw = v.state.tweaks;
+            let wash_y = t.px(84.0) + clock * 0.5;
+            bg.radial_wash(
+                v.w / 2.0,
+                wash_y,
+                t.px(760.0),
+                rgb(0xFFFFFF),
+                tw.bloom() / 100.0 * 0.22,
+            );
+            self.background = Some(Rc::new(bg));
+            self.key = Some(key);
+            // The glass was made from the picture this has just replaced.
+            self.glass = None;
+            self.glass_key = None;
+            self.covered.clear();
+        }
+        if let Some(bg) = self.background.clone() {
+            canvas.blit_from(&bg, Rect::new(0.0, 0.0, v.w, v.h));
+        }
+    }
+
+    /// The blurred backdrop that covers `r`, or `None` when this canvas cannot
+    /// use one and the caller should blur the panel itself.
+    ///
+    /// A partially repainted frame is refused: [`Canvas::blur_region`] writes
+    /// only inside the clip, so the pixels it skipped would be left unblurred
+    /// for whichever frame sampled them next. A lock frame is composited whole
+    /// (it is always damage, and the whole surface changes), so this costs the
+    /// surface nothing a person can see.
+    fn blurred_for(
+        &mut self,
+        canvas: &Canvas,
+        key: Key,
+        r: Rect,
+        blur: u32,
+        saturation: f32,
+    ) -> Option<Rc<Canvas>> {
+        if blur == 0 || canvas.clip().is_some() {
+            return None;
+        }
+        // Every painted pixel's value depends on source pixels no further away
+        // than the blur's reach -- two box passes of `blur` reach `2 * blur` in
+        // each direction, plus the rounding at the edge of each pass.
+        let want = r.inflate(blur as f32 * 2.0 + 2.0);
+        if self.glass_key != Some(key) {
+            let source = self.background.as_ref()?;
+            // Empty rather than a copy: only the pixels the panels ask for are
+            // ever read out of it, and they are filled in below, from the
+            // background, over the region the blur needs to read.
+            self.glass = Some(Rc::new(Canvas::new(source.width(), source.height(), 0)));
+            self.glass_key = Some(key);
+            self.covered.clear();
+        }
+        if !self.covered.iter().any(|c| contains(c, &want)) {
+            let source = self.background.clone()?;
+            let region = absorb(&mut self.covered, want);
+            let glass = Rc::get_mut(self.glass.as_mut()?)?;
+            glass.blit_from(&source, region);
+            glass.blur_region(region, blur, 2);
+            glass.saturate_region(region, saturation);
+            self.covered.push(region);
+        }
+        self.glass.clone()
+    }
+}
+
+/// Whether `outer` contains `inner`.
+fn contains(outer: &Rect, inner: &Rect) -> bool {
+    outer.x <= inner.x
+        && outer.y <= inner.y
+        && outer.right() >= inner.right()
+        && outer.bottom() >= inner.bottom()
+}
+
+/// Whether two rectangles share a pixel.
+fn overlaps(a: &Rect, b: &Rect) -> bool {
+    a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom()
+}
+
+/// Take `want` out of the covered list and hand back the region to blur for
+/// it: `want` grown until it has swallowed every rectangle it touches.
+///
+/// A blur computed over one region is truncated at that region's edge, so two
+/// overlapping regions blurred one after the other do not come out the same as
+/// one region covering both -- measured on the widget row, where the cards sit
+/// 16 px apart with a 56 px kernel between them, that was five levels of green
+/// along the edge they share. Growing to the union keeps every painted pixel's
+/// *whole* kernel inside the region it is blurred over, which is what makes a
+/// panel's pixels the same whichever order the panels were drawn in, and
+/// therefore the same whether this frame built the backdrop or reused it.
+///
+/// Growing can reach a rectangle the first pass did not touch, so it repeats
+/// until a pass finds nothing new.
+fn absorb(covered: &mut Vec<Rect>, want: Rect) -> Rect {
+    let mut region = want;
+    let mut pending = std::mem::take(covered);
+    loop {
+        let mut rest = Vec::with_capacity(pending.len());
+        let mut grew = false;
+        for c in pending {
+            if overlaps(&c, &region) {
+                region = union(region, c);
+                grew = true;
+            } else {
+                rest.push(c);
+            }
+        }
+        pending = rest;
+        if !grew {
+            break;
+        }
+    }
+    *covered = pending;
+    region
+}
+
+/// The smallest rectangle containing both.
+fn union(a: Rect, b: Rect) -> Rect {
+    let x = a.x.min(b.x);
+    let y = a.y.min(b.y);
+    let right = a.right().max(b.right());
+    let bottom = a.bottom().max(b.bottom());
+    Rect::new(x, y, (right - x).max(0.0), (bottom - y).max(0.0))
+}
+
+/// Paint the backdrop behind one glass panel, and nothing else.
+///
+/// The cached blurred picture when there is one, and the live per-panel blur
+/// when there is not. Both put the same pixels under the panel; they differ in
+/// who pays for them: one blur for the whole surface, kept between frames,
+/// against one blur per panel per frame.
+fn glass_panel(
+    canvas: &mut Canvas,
+    r: Rect,
+    radius: f32,
+    blur: u32,
+    saturation: f32,
+    cache: &mut Cache,
+    key: Key,
+) {
+    if let Some(blurred) = cache.blurred_for(canvas, key, r, blur, saturation) {
+        let previous = canvas.backdrop_owned();
+        if canvas.set_backdrop(Some(blurred)) {
+            canvas.glass_backdrop(r, radius, blur, saturation);
+            let _ = canvas.set_backdrop(previous);
+            return;
+        }
+        let _ = canvas.set_backdrop(previous);
+    }
+    canvas.glass_backdrop(r, radius, blur, saturation);
+}
+
 /// Draw the lock surface over everything, and report what was drawn.
 ///
-/// The first call is [`Canvas::clear`]: the surface is opaque, so nothing that
-/// was on the screen before the lock is still in the buffer — the "clear, then
-/// draw" order `docs/design/wave1/04-authentication.md` §5 U7 requires, and the
-/// reason a locked frame cannot show a window through a translucent panel.
-pub fn draw(canvas: &mut Canvas, v: &View<'_>, hits: &mut Vec<(Rect, Hot)>) {
+/// The first thing a frame does is lay down the background — the opaque base the
+/// surface is cleared to, then the fields and the bloom wash. The surface is
+/// opaque, so nothing that was on the screen before the lock is still in the
+/// buffer: the "clear, then draw" order
+/// `docs/design/wave1/04-authentication.md` §5 U7 requires, and the reason a
+/// locked frame cannot show a window through a translucent panel.
+pub fn draw(canvas: &mut Canvas, v: &View<'_>, cache: &mut Cache, hits: &mut Vec<(Rect, Hot)>) {
     let t = v.t;
     let (tw, radius) = (v.state.tweaks, t.px(v.state.tweaks.radius()));
-    let (base, c1, c2, c3) = tw.wall.palette();
     let accent = tw.accent_color();
 
-    // 1. The opaque base. Nothing above this can be the desktop.
-    canvas.clear(rgb(base));
-
-    // 2. The three colour fields, drifting.
-    let flow = v.state.flow();
-    field(
-        canvas,
-        v,
-        flow.first().copied().unwrap_or((0.0, 0.0, 1.0)),
-        -160.0,
-        -120.0,
-        760.0,
-        c1,
-        0.8,
-    );
-    field(
-        canvas,
-        v,
-        flow.get(1).copied().unwrap_or((0.0, 0.0, 1.0)),
-        700.0,
-        -80.0,
-        680.0,
-        c2,
-        0.75,
-    );
-    field(
-        canvas,
-        v,
-        flow.get(2).copied().unwrap_or((0.0, 0.0, 1.0)),
-        260.0,
-        380.0,
-        800.0,
-        c3,
-        0.7,
-    );
-
-    // 3. The wash the bloom preset adds above the clock.
-    let size = tw.clock_size(t, v.h);
-    let wash_y = t.px(84.0) + size * 0.5;
-    canvas.radial_wash(
-        v.w / 2.0,
-        wash_y,
-        t.px(760.0),
-        rgb(0xFFFFFF),
-        tw.bloom() / 100.0 * 0.22,
-    );
+    // 1-3. The opaque base, the three drifting fields and the bloom wash: the
+    // picture everything else is drawn over. Kept between frames, because the
+    // fields move a fifth of a pixel in one tick and re-deriving a picture that
+    // did not change was most of what a locked frame cost (BUG-0018).
+    let size = fit_clock(t, v, tw.clock_size(t, v.h), tw);
+    let key = Key::of(t, v, tw, size, (canvas.width(), canvas.height()));
+    cache.paint(canvas, v, key, size);
 
     // 4. The date, then the clock.
-    let date_style = Style::new(t.px(26.0), with_alpha(rgb(0xFFFFFF), 0.88));
+    let date_style = Style::new(t.px(20.0), with_alpha(rgb(0xFFFFFF), 0.78));
     centred(
         canvas,
         &v.date,
@@ -972,11 +1266,11 @@ pub fn draw(canvas: &mut Canvas, v: &View<'_>, hits: &mut Vec<(Rect, Hot)>) {
 
     // 5. The widgets, at the height the clock size leaves.
     let widgets_y = (t.px(84.0) + size + t.px(8.0)).min(widget_top_limit(t, v.h));
-    widgets(canvas, v, tw, widgets_y, radius);
+    widgets(canvas, v, tw, widgets_y, radius, cache, key);
 
     // 6. The customize sheet, or the hint and the submit pill.
     if v.state.edit {
-        sheet(canvas, v, tw, radius, hits);
+        sheet(canvas, v, tw, radius, cache, key, hits);
     } else {
         // The whole screen wakes the lock screen. It is registered **first**,
         // because a later hotspot wins a hit and the customize button is drawn
@@ -985,18 +1279,49 @@ pub fn draw(canvas: &mut Canvas, v: &View<'_>, hits: &mut Vec<(Rect, Hot)>) {
         if v.state.stage != Stage::Entry {
             hits.push((Rect::new(0.0, 0.0, v.w, v.h), Hot::LockWake));
         }
-        hint(canvas, v, tw, radius, hits);
-        if v.state.stage == Stage::Entry {
-            if v.verifier.is_some() {
-                entry(canvas, v, tw, radius, hits);
-            } else {
-                // The daemon went away, or was never there. Collecting a
-                // password that nothing can check is the failure this whole
-                // surface exists to avoid, so it is not collected: the pill
-                // says why instead.
-                unavailable(canvas, v, tw, radius);
-            }
+        hint(canvas, v, tw, radius, cache, key, hits);
+        if v.verifier.is_some() {
+            // Keep the account and next action visible at rest. The card
+            // becomes a live password field after the first click or keypress.
+            entry(canvas, v, tw, radius, cache, key, hits);
+        } else if v.state.stage == Stage::Entry {
+            // The daemon went away, or was never there. Collecting a password
+            // that nothing can check is the failure this surface avoids.
+            unavailable(canvas, v, tw, radius, cache, key);
         }
+    }
+}
+
+/// How much of the preset size the typeface's digits are drawn at.
+///
+/// The presets are the design's CSS font sizes, and LitricOS Sans draws its
+/// digits about 1.14x taller than the size says, so the same number would put
+/// the numerals 250 px tall where the design's are 175. Scaling the *drawn*
+/// size, and leaving the preset (and the layout that hangs off it) alone, puts
+/// the digits where the design has them.
+const CLOCK_GLYPH: f32 = 0.70;
+
+/// The clock size that keeps the digits inside the screen.
+///
+/// The preset sizes are chosen for `HH:MM`. A locale that prints more than that
+/// (a seconds field, a 12-hour suffix) would run past both edges of the screen
+/// at the design's 220 px, so the size is reduced until the measured width fits
+/// within 90% of the display. It only ever shrinks.
+fn fit_clock(t: &Tokens, v: &View<'_>, size: f32, tw: Tweaks) -> f32 {
+    let probe = Style {
+        size: size * CLOCK_GLYPH,
+        weight: tw.clock_weight(),
+        tracking: -size * CLOCK_GLYPH * 0.03,
+        color: rgb(0xFFFFFF),
+        face: font::FontFace::Sans,
+    };
+    let width = font::measure(&v.clock, &probe);
+    let room = v.w * 0.9;
+    let _ = t;
+    if width > room && width > 0.0 {
+        size * room / width
+    } else {
+        size
     }
 }
 
@@ -1011,6 +1336,11 @@ fn widget_top_limit(t: &Tokens, height: f32) -> f32 {
 /// with the scale applied about the field's own centre. The radius is larger
 /// than the element because the prototype's 90 px blur spreads it; the wash's
 /// smoothstep falloff is what stands in for that blur.
+///
+/// `flow` is the field's keyframe offset in *device* pixels and its scale, the
+/// form [`Key`] keeps it in: quantising an offset that is then multiplied by
+/// the token scale again would round twice, and the pixel a frame drew would
+/// not be the pixel its key said.
 #[allow(clippy::too_many_arguments)]
 fn field(
     canvas: &mut Canvas,
@@ -1030,8 +1360,8 @@ fn field(
     // of the element rather than 50%, standing in for the 90 px blur the design
     // spreads it with.
     canvas.radial_wash(
-        cx + t.px(dx),
-        cy + t.px(dy),
+        cx + dx,
+        cy + dy,
         size * 0.72 * scale,
         rgb(colour & 0x00FF_FFFF),
         peak,
@@ -1059,11 +1389,14 @@ fn clock(canvas: &mut Canvas, v: &View<'_>, size: f32, accent: u32, tw: Tweaks) 
         0.0
     };
     let size = size * (1.0 + breathe);
-    let baseline = t.px(84.0) + size;
+    // Layout is in preset size; the digits are drawn smaller (see CLOCK_GLYPH)
+    // and sit on the design's baseline, 24 px up from the preset's.
+    let baseline = t.px(84.0) + size * 0.89;
+    let size = size * CLOCK_GLYPH;
     let cx = v.w / 2.0;
 
     let fill = match tw.digits {
-        Digits::Glass => with_alpha(rgb(0xFFFFFF), 0.30),
+        Digits::Glass => with_alpha(rgb(0xFFFFFF), 0.62),
         Digits::Solid => rgb(0xFFFFFF),
         Digits::Tint => rgb(accent & 0x00FF_FFFF),
     };
@@ -1082,40 +1415,19 @@ fn clock(canvas: &mut Canvas, v: &View<'_>, size: f32, accent: u32, tw: Tweaks) 
         tw.bloom() / 100.0 * 0.30,
     );
 
-    // Glow: eight passes, heavier than the digits and faint. The radius grows
-    // with the preset so "Off" really is a single crisp pass.
+    // Glow: one rasterisation of the same ink, blurred, instead of sixteen
+    // offset copies of it. The preset still decides how much light there is, so
+    // "Off" is still a single crisp pass.
     let glow = tw.glow() / 100.0;
     if glow > 0.01 {
-        let base_weight = tw.clock_weight();
-        for (sx, sy) in [
-            (0.0, 1.0),
-            (0.0, -1.0),
-            (1.0, 0.0),
-            (-1.0, 0.0),
-            (1.0, 1.0),
-            (-1.0, -1.0),
-            (1.0, -1.0),
-            (-1.0, 1.0),
-        ] {
-            for step in 1..=2 {
-                let d = t.px(step as f32 * 1.3);
-                let alpha = glow * 0.30 / step as f32;
-                let style = Style {
-                    size,
-                    weight: base_weight * (1.0 + 0.06 * step as f32),
-                    tracking: -size * 0.03,
-                    color: with_alpha(glow_col, alpha),
-                };
-                let w = font::measure(&v.clock, &style);
-                font::draw(
-                    canvas,
-                    &v.clock,
-                    cx - w / 2.0 + sx * d,
-                    baseline + sy * d,
-                    &style,
-                );
-            }
-        }
+        let style = Style {
+            size,
+            weight: tw.clock_weight(),
+            tracking: -size * 0.03,
+            color: with_alpha(glow_col, 1.0),
+            face: font::FontFace::Sans,
+        };
+        glow_halo(canvas, &v.clock, cx, baseline, &style, glow_col, glow);
     }
 
     // The digits, last and once: everything before this pass is light, and a
@@ -1125,13 +1437,115 @@ fn clock(canvas: &mut Canvas, v: &View<'_>, size: f32, accent: u32, tw: Tweaks) 
         weight: tw.clock_weight(),
         tracking: -size * 0.03,
         color: fill,
+        face: font::FontFace::Sans,
     };
     let w = font::measure(&v.clock, &style);
     font::draw(canvas, &v.clock, cx - w / 2.0, baseline, &style);
 }
 
+/// The light the glow pattern carried, as a multiple of its preset.
+///
+/// The pattern this replaces drew eight copies of the digits at 0.10 of the
+/// preset and eight more at half that, so the halo it produced held
+/// `0.10 * 8 + 0.05 * 8 = 1.2` of the preset's light. A box blur of the ink
+/// spreads the same light rather than adding to it, so this is what a blurred
+/// mask has to be composited at to put that much light back.
+const GLOW_ENERGY: f32 = 0.10 * 8.0 + 0.05 * 8.0;
+
+/// The clock's glow: the digits' own ink, rasterised once into a small canvas,
+/// blurred, and composited at the strength the preset asks for.
+///
+/// What this replaces: eight offset copies of the whole digit string at two
+/// distances each, i.e. sixteen re-rasterisations of five glyphs on every
+/// frame. Measured on a locked frame (BUG-0018), that was 5.3M of the frame's
+/// 10.4M pixels and most of its time. A blur of one rasterisation is the halo
+/// those offset copies approximate -- it is what a stencil blurred with a
+/// Gaussian is, and the copies are a stencil sampled at sixteen points -- for
+/// one pass of ink instead of sixteen.
+///
+/// The mask is drawn white on opaque black and blurred with the canvas's own
+/// box blur, so the pixel's red channel *is* the halo's coverage there. The
+/// blur keeps the light rather than adding to it, which is what makes
+/// [`GLOW_ENERGY`] the right scale.
+///
+/// The mask is a canvas of its own, sized to the digits plus the blur's reach,
+/// so nothing here depends on the screen and the cost follows the type rather
+/// than the display.
+fn glow_halo(
+    canvas: &mut Canvas,
+    text: &str,
+    cx: f32,
+    baseline: f32,
+    style: &Style,
+    colour: u32,
+    glow: f32,
+) {
+    // Two box passes of two pixels: a spread of about four, which covers the
+    // 2.6 px the outer copies reached and then some, and is the same soft edge
+    // the pattern was reaching for.
+    const BLUR: u32 = 2;
+    const PASSES: u32 = 2;
+    let width = font::measure(text, style);
+    // The blur reads `BLUR` pixels each way per pass; the extra few keep the
+    // ink away from the mask's edge, where the blur has no neighbours to
+    // average and would darken the rim of the halo.
+    let reach = (BLUR * PASSES * 2) as f32 + 4.0;
+    let x0 = (cx - width / 2.0 - reach).floor();
+    let y0 = (baseline - style.size - reach).floor();
+    let x1 = (cx + width / 2.0 + reach).ceil();
+    let y1 = (baseline + reach).ceil();
+    let Some(w) = u32::try_from((x1 - x0) as i64).ok().filter(|n| *n > 0) else {
+        return;
+    };
+    let Some(h) = u32::try_from((y1 - y0) as i64).ok().filter(|n| *n > 0) else {
+        return;
+    };
+    // A stroke wider than the screen is a mis-set preset, not a glyph; the cap
+    // keeps one frame from trying to allocate a canvas the machine does not
+    // have. The halo is inside the screen anyway, so nothing is lost.
+    let cap = canvas.width().saturating_mul(canvas.height());
+    if w.saturating_mul(h) > cap {
+        return;
+    }
+
+    let mut mask = Canvas::new(w, h, rgb(0x000000));
+    font::draw(&mut mask, text, cx - width / 2.0 - x0, baseline - y0, style);
+    mask.blur_region(Rect::new(0.0, 0.0, w as f32, h as f32), BLUR, PASSES);
+
+    let scale = glow * GLOW_ENERGY;
+    let (ox, oy) = (x0 as i64, y0 as i64);
+    for y in 0..h {
+        for x in 0..w {
+            let Some(p) = mask.get(i64::from(x), i64::from(y)) else {
+                continue;
+            };
+            // A blurred grey is its own coverage; the channels are equal by
+            // construction, so the red one is the whole answer.
+            let grey = f32::from(((p >> 16) & 0xFF) as u8) / 255.0;
+            let cov = grey * scale;
+            if cov > 0.0 {
+                canvas.blend_px(
+                    ox.saturating_add(i64::from(x)),
+                    oy.saturating_add(i64::from(y)),
+                    with_alpha(colour, cov),
+                    1.0,
+                );
+            }
+        }
+    }
+}
+
 /// The widget row: the measured state of this machine, in glass cards.
-fn widgets(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, y: f32, radius: f32) {
+#[allow(clippy::too_many_arguments)]
+fn widgets(
+    canvas: &mut Canvas,
+    v: &View<'_>,
+    tw: Tweaks,
+    y: f32,
+    radius: f32,
+    cache: &mut Cache,
+    key: Key,
+) {
     let t = v.t;
     let card_w = t.px(300.0);
     let card_h = t.px(88.0);
@@ -1148,15 +1562,52 @@ fn widgets(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, y: f32, radius: f32) {
     let mut x = v.w / 2.0 - total / 2.0;
     for index in shown {
         let r = Rect::new(x, y, card_w, card_h);
-        liquid(canvas, t, r, radius, tw);
+        liquid(canvas, t, r, radius, tw, cache, key);
         let (icon, label, value) = widget_content(v, index);
-        let chip = Rect::new(r.x + t.px(20.0), r.y + t.px(20.0), t.px(48.0), t.px(48.0));
-        crate::icons::draw(canvas, icon, chip, with_alpha(rgb(0xFFFFFF), 0.92), 1.0);
+        let chip = Rect::new(r.x + t.px(18.0), r.y + t.px(20.0), t.px(48.0), t.px(48.0));
+        let accent = rgb(tw.accent_color() & 0x00FF_FFFF);
+        match index {
+            // First card: the accent disc with a dark glyph, as the music
+            // card in the design.
+            0 => {
+                canvas.fill_circle(chip.center().0, chip.center().1, chip.w / 2.0, accent);
+                crate::icons::draw(
+                    canvas,
+                    icon,
+                    chip.inflate(-t.px(13.0)),
+                    with_alpha(rgb(0x000000), 0.85),
+                    1.0,
+                );
+            }
+            // Second card: a quiet glass tile, as the calendar card.
+            1 => {
+                canvas.fill_round_rect(chip, t.px(12.0), with_alpha(rgb(0xFFFFFF), 0.18));
+                crate::icons::draw(
+                    canvas,
+                    icon,
+                    chip.inflate(-t.px(12.0)),
+                    with_alpha(rgb(0xFFFFFF), 0.95),
+                    1.0,
+                );
+            }
+            // Third card: a progress ring when the machine has a battery to
+            // measure; with none, the plain glyph rather than an empty ring.
+            _ => match v.battery {
+                Some(pct) => ring(canvas, t, chip, f32::from(pct.min(100)) / 100.0, accent),
+                None => crate::icons::draw(
+                    canvas,
+                    icon,
+                    chip.inflate(-t.px(8.0)),
+                    with_alpha(rgb(0xFFFFFF), 0.92),
+                    1.0,
+                ),
+            },
+        }
         let label_style = Style::new(t.px(13.0), with_alpha(rgb(0xFFFFFF), 0.7));
         font::draw(
             canvas,
             label,
-            r.x + t.px(84.0),
+            r.x + t.px(82.0),
             r.y + t.px(36.0),
             &label_style,
         );
@@ -1164,11 +1615,35 @@ fn widgets(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, y: f32, radius: f32) {
         font::draw(
             canvas,
             &value,
-            r.x + t.px(84.0),
+            r.x + t.px(82.0),
             r.y + t.px(64.0),
             &value_style,
         );
         x += card_w + gap;
+    }
+}
+
+/// A progress ring: a faint full track, and over it an arc from twelve o'clock
+/// clockwise for `fraction` of the way round.
+fn ring(canvas: &mut Canvas, t: &Tokens, r: Rect, fraction: f32, colour: u32) {
+    let (cx, cy) = r.center();
+    let width = t.px(5.0);
+    let radius = r.w / 2.0 - width / 2.0;
+    let track = crate::canvas::arc_points(cx, cy, radius, radius, 0.0, 360.0, 48);
+    for pair in track.windows(2) {
+        if let [a, b] = pair {
+            canvas.stroke_line(a.0, a.1, b.0, b.1, width, with_alpha(rgb(0xFFFFFF), 0.22));
+        }
+    }
+    let sweep = 360.0 * fraction.clamp(0.0, 1.0);
+    if sweep > 1.0 {
+        let steps = (sweep / 7.5).ceil().max(2.0) as u32;
+        let arc = crate::canvas::arc_points(cx, cy, radius, radius, -90.0, -90.0 + sweep, steps);
+        for pair in arc.windows(2) {
+            if let [a, b] = pair {
+                canvas.stroke_line(a.0, a.1, b.0, b.1, width, colour);
+            }
+        }
     }
 }
 
@@ -1208,8 +1683,16 @@ fn widget_content(v: &View<'_>, index: usize) -> (crate::icons::Icon, &'static s
 
 /// A liquid-glass panel: the backdrop blurred and saturated in place, then a
 /// tint, a specular top edge and a hairline, all from the glass presets.
-fn liquid(canvas: &mut Canvas, t: &Tokens, r: Rect, radius: f32, tw: Tweaks) {
-    canvas.glass_backdrop(r, radius, tw.blur(), 1.8);
+fn liquid(
+    canvas: &mut Canvas,
+    t: &Tokens,
+    r: Rect,
+    radius: f32,
+    tw: Tweaks,
+    cache: &mut Cache,
+    key: Key,
+) {
+    glass_panel(canvas, r, radius, tw.blur(), GLASS_SATURATION, cache, key);
     canvas.fill_round_rect(r, radius, with_alpha(rgb(0xFFFFFF), tw.tint()));
     // The specular edge: three hairlines of falling alpha rather than a
     // gradient, because a gradient fill is a rectangle and this shape has
@@ -1234,11 +1717,30 @@ fn centred(canvas: &mut Canvas, text: &str, cx: f32, baseline: f32, style: &Styl
 }
 
 /// The idle hint and the customize button.
-fn hint(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32, hits: &mut Vec<(Rect, Hot)>) {
+/// Whether a word of the hint is a key, which gets its own pill. Decided by
+/// name: "Space" and "Enter" are both five letters, so a length test cannot.
+fn is_key(word: &str) -> bool {
+    matches!(word, "Space" | "Enter")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn hint(
+    canvas: &mut Canvas,
+    v: &View<'_>,
+    tw: Tweaks,
+    radius: f32,
+    cache: &mut Cache,
+    key: Key,
+    hits: &mut Vec<(Rect, Hot)>,
+) {
     let t = v.t;
     let hint_style = Style::new(t.px(16.0), with_alpha(rgb(0xFFFFFF), 0.8));
     let keys_style = Style::new(t.px(14.0), with_alpha(rgb(0xFFFFFF), 0.92));
-    let y = v.h - t.px(44.0);
+    // The design's rows: the keys line centred 120 px above the bottom edge,
+    // the Customize pill 92 px above it. When the password field is out it takes
+    // the keys line's place, so the line is not drawn at all then.
+    let y = v.h - t.px(114.0);
+    let show_keys = v.state.stage != Stage::Entry && v.verifier.is_none();
 
     // "Press  Space  or  Enter" — the keys in their own pills, so the hint
     // reads as keys rather than as prose.
@@ -1246,20 +1748,19 @@ fn hint(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32, hits: &mut V
     let widths: Vec<f32> = words
         .iter()
         .map(|w| {
-            let style = if w.len() > 5 {
-                &keys_style
-            } else {
-                &hint_style
-            };
-            font::measure(w, style) + t.px(if w.len() > 5 { 20.0 } else { 0.0 })
+            let style = if is_key(w) { &keys_style } else { &hint_style };
+            font::measure(w, style) + t.px(if is_key(w) { 20.0 } else { 0.0 })
         })
         .collect();
     let gap = t.px(10.0);
     let total: f32 = widths.iter().sum::<f32>() + gap * 3.0;
     let mut x = v.w / 2.0 - total / 2.0;
     for (i, word) in words.iter().enumerate() {
+        if !show_keys {
+            break;
+        }
         let w = widths.get(i).copied().unwrap_or(0.0);
-        if word.len() > 5 {
+        if is_key(word) {
             let pill = Rect::new(x, y - t.px(18.0), w, t.px(28.0));
             canvas.fill_round_rect(pill, t.px(8.0), with_alpha(rgb(0xFFFFFF), 0.10));
             canvas.stroke_round_rect(pill, t.px(8.0), 1.0, with_alpha(rgb(0xFFFFFF), 0.35));
@@ -1280,8 +1781,8 @@ fn hint(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32, hits: &mut V
     let label = "Customize";
     let style = Style::new(t.px(16.0), rgb(0xFFFFFF));
     let w = font::measure(label, &style) + t.px(76.0);
-    let r = Rect::new(v.w / 2.0 - w / 2.0, y + t.px(14.0), w, t.px(48.0));
-    liquid(canvas, t, r, t.px(radius).min(r.h / 2.0), tw);
+    let r = Rect::new(v.w / 2.0 - w / 2.0, v.h - t.px(92.0), w, t.px(48.0));
+    liquid(canvas, t, r, t.px(radius).min(r.h / 2.0), tw, cache, key);
     crate::icons::draw(
         canvas,
         crate::icons::Icon::Settings,
@@ -1294,12 +1795,19 @@ fn hint(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32, hits: &mut V
 }
 
 /// The pill shown when this machine cannot check a password at all.
-fn unavailable(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32) {
+fn unavailable(
+    canvas: &mut Canvas,
+    v: &View<'_>,
+    tw: Tweaks,
+    radius: f32,
+    cache: &mut Cache,
+    key: Key,
+) {
     let t = v.t;
     let w = t.px(560.0).min(v.w - t.px(40.0));
     let h = t.px(68.0);
-    let r = Rect::new(v.w / 2.0 - w / 2.0, v.h - t.px(112.0), w, h);
-    liquid(canvas, t, r, t.px(radius).min(h / 2.0), tw);
+    let r = Rect::new(v.w / 2.0 - w / 2.0, v.h - t.px(180.0), w, h);
+    liquid(canvas, t, r, t.px(radius).min(h / 2.0), tw, cache, key);
     crate::icons::draw(
         canvas,
         crate::icons::Icon::Warning,
@@ -1319,15 +1827,24 @@ fn unavailable(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32) {
 }
 
 /// The password pill: an avatar, the dot row, and the submit button.
-fn entry(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32, hits: &mut Vec<(Rect, Hot)>) {
+#[allow(clippy::too_many_arguments)]
+fn entry(
+    canvas: &mut Canvas,
+    v: &View<'_>,
+    tw: Tweaks,
+    radius: f32,
+    cache: &mut Cache,
+    key: Key,
+    hits: &mut Vec<(Rect, Hot)>,
+) {
     let t = v.t;
     let accent = tw.accent_color();
-    let w = t.px(440.0);
-    let h = t.px(68.0);
-    let r = Rect::new(v.w / 2.0 - w / 2.0, v.h - t.px(112.0), w, h);
-    liquid(canvas, t, r, t.px(radius).min(h / 2.0), tw);
+    let w = t.px(460.0).min(v.w - t.px(32.0));
+    let h = t.px(80.0);
+    let r = Rect::new(v.w / 2.0 - w / 2.0, v.h * 0.70 - h / 2.0, w, h);
+    liquid(canvas, t, r, t.px(radius).min(h / 2.0), tw, cache, key);
 
-    let avatar = Rect::new(r.x + t.px(11.0), r.y + t.px(11.0), t.px(46.0), t.px(46.0));
+    let avatar = Rect::new(r.x + t.px(12.0), r.y + t.px(16.0), t.px(48.0), t.px(48.0));
     canvas.fill_circle(
         avatar.center().0,
         avatar.center().1,
@@ -1342,27 +1859,56 @@ fn entry(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32, hits: &mut 
         1.0,
     );
 
-    // One dot per character typed, and a placeholder when none has been.
+    // The account is named above the password line so the unlock action is
+    // discoverable without another keypress and the password stays masked.
     let field_x = avatar.right() + t.px(16.0);
+    let account_style = Style::new(t.px(13.0), with_alpha(rgb(0xFFFFFF), 0.78));
+    let account = format!("{} {}", crate::i18n::text("Unlock"), v.state.user);
+    font::draw(canvas, &account, field_x, r.y + t.px(31.0), &account_style);
+
+    // One dot per character typed, and an explicit placeholder when empty.
     if v.state.typed() == 0 {
-        let style = Style::new(t.px(18.0), with_alpha(rgb(0xFFFFFF), 0.5));
-        font::draw(canvas, "Password", field_x, r.y + t.px(42.0), &style);
+        let style = Style::new(t.px(16.0), with_alpha(rgb(0xFFFFFF), 0.64));
+        let prompt = if v.state.stage == Stage::Idle {
+            "Click or press Enter to unlock"
+        } else {
+            "Enter password"
+        };
+        font::draw(canvas, prompt, field_x, r.y + t.px(59.0), &style);
     } else {
         let dot = t.px(5.0);
         let step = t.px(14.0);
         for i in 0..v.state.typed().min(28) {
             canvas.fill_circle(
                 field_x + t.px(6.0) + step * i as f32,
-                r.center().1,
+                r.y + t.px(55.0),
                 dot,
                 rgb(0xFFFFFF),
             );
         }
     }
 
+    // The lock opens directly into this focused field. A steady insertion
+    // marker makes that state visible with both the keyboard and pointer.
+    let caret_x = if v.state.typed() == 0 {
+        field_x - t.px(2.0)
+    } else {
+        field_x + t.px(6.0) + t.px(14.0) * v.state.typed().min(28) as f32
+    };
+    if v.state.stage == Stage::Entry {
+        canvas.stroke_line(
+            caret_x,
+            r.y + t.px(44.0),
+            caret_x,
+            r.y + t.px(63.0),
+            t.px(1.0),
+            rgb(accent & 0x00FF_FFFF),
+        );
+    }
+
     let submit = Rect::new(
         r.right() - t.px(57.0),
-        r.y + t.px(11.0),
+        r.center().1 - t.px(24.0),
         t.px(46.0),
         t.px(46.0),
     );
@@ -1395,8 +1941,10 @@ fn entry(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32, hits: &mut 
         with_alpha(rgb(0x000000), 0.85),
         1.0,
     );
-    hits.push((r, Hot::LockEntry));
-    hits.push((submit, Hot::LockSubmit));
+    if v.state.stage == Stage::Entry {
+        hits.push((r, Hot::LockEntry));
+        hits.push((submit, Hot::LockSubmit));
+    }
 
     // What the last attempt did, above the pill. A refusal is named in the
     // daemon's own words, and this machine having no verifier is named as
@@ -1405,14 +1953,6 @@ fn entry(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32, hits: &mut 
         let style = Style::new(t.px(14.0), with_alpha(rgb(0xFFFFFF), 0.85));
         centred(canvas, message, v.w / 2.0, r.y - t.px(16.0), &style);
     }
-    let hint_style = Style::new(t.px(13.0), with_alpha(rgb(0xFFFFFF), 0.6));
-    centred(
-        canvas,
-        "Esc  to go back",
-        v.w / 2.0,
-        r.bottom() + t.px(24.0),
-        &hint_style,
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1539,7 +2079,16 @@ fn cards(tab: Tab) -> Vec<Card> {
 }
 
 /// The sheet: a glass panel of tabs and preset cards.
-fn sheet(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32, hits: &mut Vec<(Rect, Hot)>) {
+#[allow(clippy::too_many_arguments)]
+fn sheet(
+    canvas: &mut Canvas,
+    v: &View<'_>,
+    tw: Tweaks,
+    radius: f32,
+    cache: &mut Cache,
+    key: Key,
+    hits: &mut Vec<(Rect, Hot)>,
+) {
     let t = v.t;
     let tab = v.state.tab;
     let list = cards(tab);
@@ -1562,7 +2111,15 @@ fn sheet(canvas: &mut Canvas, v: &View<'_>, tw: Tweaks, radius: f32, hits: &mut 
         height,
     );
     canvas.soft_shadow(r, t.px(36.0), t.px(40.0), t.px(14.0), 0.5);
-    liquid(canvas, t, r, t.px(36.0).min(radius + t.px(8.0)), tw);
+    liquid(
+        canvas,
+        t,
+        r,
+        t.px(36.0).min(radius + t.px(8.0)),
+        tw,
+        cache,
+        key,
+    );
 
     // Tabs, then Reset and Done.
     let mut x = r.x + t.px(22.0);
@@ -1732,6 +2289,7 @@ fn switch_on(tw: Tweaks, index: u8) -> bool {
 #[allow(clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
+    use litric_design::{Theme, ThemeKind};
 
     #[test]
     fn a_secret_never_prints_itself() {
@@ -1779,14 +2337,26 @@ mod tests {
     fn the_default_look_is_the_designed_one() {
         let tw = Tweaks::default();
         assert_eq!(tw.wall, Wall::Aurora);
-        assert_eq!(tw.digits, Digits::Glass);
-        assert_eq!(tw.glow(), 40.0, "the standard preset");
-        assert_eq!(tw.bloom(), 45.0);
-        assert_eq!(tw.blur(), 28);
+        assert_eq!(tw.digits, Digits::Solid);
+        assert_eq!(tw.glow(), 0.0, "crisp digits are the default");
+        assert_eq!(tw.bloom(), 0.0);
+        assert_eq!(tw.blur(), 8);
         assert_eq!(tw.radius(), 28.0);
-        assert!(tw.animating());
+        assert!(!tw.animating());
         assert!((tw.speed() - 1.0).abs() < f32::EPSILON);
-        assert!(tw.breathe && tw.widgets.iter().all(|w| *w));
+        assert!(!tw.breathe && tw.widgets.iter().all(|w| *w));
+    }
+
+    #[test]
+    fn still_lock_has_no_animation_frames_but_motion_is_bounded() {
+        let mut state = LockState {
+            locked: true,
+            ..LockState::default()
+        };
+        assert!(!state.advance(10), "still mode does not animate");
+        state.tweaks.motion = 2;
+        assert!(!state.advance(20), "sub-frame motion waits");
+        assert!(state.advance(50), "motion schedules a frame at 30 Hz");
     }
 
     #[test]
@@ -1821,7 +2391,7 @@ mod tests {
     fn the_widget_switches_are_two_way() {
         let mut tw = Tweaks::default();
         tw.toggle(SWITCH_BREATHE);
-        assert!(!tw.breathe);
+        assert!(tw.breathe);
         tw.toggle(SWITCH_BATTERY);
         assert!(!tw.widgets[2], "the battery widget is the third slot");
         tw.toggle(99);
@@ -1834,6 +2404,7 @@ mod tests {
             locked: true,
             ..LockState::default()
         };
+        st.tweaks.motion = 2;
         st.advance(1_000);
         st.advance(1_016);
         assert!(st.flow_ms > 0, "the fields drift while motion is on");
@@ -1865,6 +2436,156 @@ mod tests {
         assert!(
             (mid - 1.12).abs() < 0.001,
             "the 33% keyframe is a scale of 1.12"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The frame cache (BUG-0018)
+    // -----------------------------------------------------------------------
+
+    /// A view of a locked surface at 1280x800 with the shipped look.
+    fn frame_view<'a>(t: &'a Tokens, state: &'a LockState) -> View<'a> {
+        View {
+            t,
+            state,
+            clock: "10:24".to_owned(),
+            date: "Mon 15 October".to_owned(),
+            w: 1280.0,
+            h: 800.0,
+            battery: Some(72),
+            network: Some("wifi".to_owned()),
+            uptime: Some(4_000.0),
+            verifier: Some("unix-chkpwd".to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_frame_from_a_warm_cache_is_the_frame_from_a_cold_one() {
+        let t = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
+        for stage in [Stage::Idle, Stage::Entry] {
+            let state = LockState {
+                locked: true,
+                stage,
+                ..LockState::default()
+            };
+            let v = frame_view(&t, &state);
+            let mut cache = Cache::default();
+            let mut hits = Vec::new();
+
+            let mut cold = Canvas::new(1280, 800, 0);
+            draw(&mut cold, &v, &mut cache, &mut hits);
+            let derived = cache.covered.len();
+            assert!(derived > 0, "the first frame derived a backdrop to reuse");
+
+            let mut warm = Canvas::new(1280, 800, 0);
+            draw(&mut warm, &v, &mut cache, &mut hits);
+            assert_eq!(
+                cache.covered.len(),
+                derived,
+                "a frame that changed nothing derived the backdrop again"
+            );
+            let mut differing = 0_usize;
+            let mut first = usize::MAX;
+            for (i, (a, b)) in cold.pixels().iter().zip(warm.pixels()).enumerate() {
+                if a != b {
+                    if differing < 6 {
+                        println!(
+                            "DIFF x={} y={} cold={:#010x} warm={:#010x} d={}",
+                            i % 1280,
+                            i.div_euclid(1280),
+                            a,
+                            b,
+                            (*a as i64 - *b as i64).abs()
+                        );
+                    }
+                    differing = differing.saturating_add(1);
+                    if first == usize::MAX {
+                        first = i;
+                    }
+                }
+            }
+            assert_eq!(
+                differing,
+                0,
+                "the cached frame is the frame the surface draws ({stage:?}); \
+                 {differing} pixel(s) differ, first at index {first} \
+                 (x={}, y={})",
+                first % 1280,
+                first.div_euclid(1280)
+            );
+        }
+    }
+
+    #[test]
+    fn a_panel_is_the_same_whether_its_blur_is_reused_or_redone() {
+        // The cache's own bookkeeping is the only difference between the two
+        // frames: the pixels must not know which of the two drew them. This is
+        // what catches a region blurred on top of an already-blurred one.
+        let t = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
+        let state = LockState {
+            locked: true,
+            edit: true,
+            ..LockState::default()
+        };
+        let v = frame_view(&t, &state);
+        let mut cache = Cache::default();
+        let mut hits = Vec::new();
+
+        let mut reused = Canvas::new(1280, 800, 0);
+        draw(&mut reused, &v, &mut cache, &mut hits);
+
+        let mut redone = Canvas::new(1280, 800, 0);
+        cache.covered.clear();
+        draw(&mut redone, &v, &mut cache, &mut hits);
+        assert_eq!(
+            reused.pixels(),
+            redone.pixels(),
+            "a re-derived blur changed the panel"
+        );
+    }
+
+    #[test]
+    fn a_drift_under_half_a_step_keeps_the_frame_it_had() {
+        // The cache is only worth having if a frame usually has the one before
+        // it: the fields move about 18 px a second, and the key must not turn
+        // over on every one of them.
+        let a = steady((100.0, 50.0, 1.04), 1.0);
+        let b = steady((101.9, 51.9, 1.041), 1.0);
+        let c = steady((102.5, 50.0, 1.04), 1.0);
+        assert_eq!(a, b, "under half a step is still the same frame");
+        assert_ne!(a, c, "past half a step is a new one");
+    }
+
+    #[test]
+    fn the_drift_reaches_the_field_in_whole_pixels() {
+        // The key keeps the offsets in steps; the field must be drawn at the
+        // pixel those steps mean, or the frame is not the frame the key names.
+        let key = Key {
+            flow: [steady((140.0, -90.0, 1.12), 1.0); 3],
+            palette: (0, 0, 0, 0),
+            scale: 4096,
+            size: (1280, 800),
+            clock: 3_520,
+            light: 2,
+        };
+        let flow = key.flow();
+        assert!(!flow.is_empty(), "a key always has its three fields");
+        let (dx, dy, scale) = match flow.first().copied() {
+            Some(field) => field,
+            // Unreachable given the assertion above, which is where an empty
+            // key is reported.
+            None => return,
+        };
+        assert!((dx - 140.0).abs() < f32::EPSILON, "x landed on {dx}");
+        // -90 is exactly on a half step of four, and halves round away from
+        // zero: the field lands on -92, which is a step, not on -90.
+        assert!((dy + 92.0).abs() < f32::EPSILON, "y landed on {dy}");
+        // The scale is kept in steps of 1/128, which is a quarter of a pixel on
+        // the edge of a field that size: the value comes back on the step, not
+        // on the keyframe's own number.
+        assert!(
+            (scale - 1.12).abs() <= 1.0 / SCALE_STEP,
+            "scale landed on {scale}"
         );
     }
 }

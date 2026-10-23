@@ -53,7 +53,7 @@ die()  { printf '\033[1;31m[iso]\033[0m %s\n' "$*" >&2; exit 1; }
 preflight() {
     log "preflight"
     local missing=()
-    for tool in xorriso mcopy mmd mformat sha256sum; do
+    for tool in xorriso mcopy mmd mkfs.fat sha256sum; do
         command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
     done
     if (( ${#missing[@]} )); then
@@ -139,11 +139,18 @@ restamp_uki() {
         warn "It will not boot with Secure Boot enabled. Run tools/gen-dev-keys.sh."
     fi
 
+    local os_release_args=()
+    if [[ -f "${PROJECT_ROOT}/image/mkosi.extra/usr/lib/os-release" ]]; then
+        os_release_args+=(--os-release="@${PROJECT_ROOT}/image/mkosi.extra/usr/lib/os-release")
+    else
+        warn "no image os-release file; building the UKI without the optional .osrel section"
+    fi
+
     ukify build \
         --linux="$work/vmlinuz" \
         ${work:+--initrd="$work/initrd"} \
         --cmdline="@$work/cmdline" \
-        --os-release="@${PROJECT_ROOT}/image/mkosi.extra/usr/lib/os-release" \
+        "${os_release_args[@]}" \
         --uname="$(basename "$UKI" .efi)" \
         "${sign_args[@]}" \
         --output="$work/litricos.efi"
@@ -226,7 +233,10 @@ build_efiboot() {
     (( size_kb < 32768 )) && size_kb=32768
     size_kb=$(( (size_kb + 1023) / 1024 * 1024 ))
 
-    mformat -i "$img" -C -f "$size_kb" -F -v LITRIC_EFI ::
+    # mformat's -f only accepts a fixed list of floppy sizes; for an ESP this
+    # large (the signed UKI alone is over 300 MiB), create the FAT image with
+    # dosfstools and then use mtools to populate it.
+    mkfs.fat -F 32 -n LITRIC_EFI -C "$img" "$size_kb" >/dev/null
     mmd -i "$img" ::/EFI ::/EFI/BOOT ::/EFI/Linux ::/loader ::/loader/entries
     mcopy -i "$img" -s "$STAGE_DIR/root/EFI/BOOT/"*   ::/EFI/BOOT/
     mcopy -i "$img" -s "$STAGE_DIR/root/EFI/Linux/"*  ::/EFI/Linux/
@@ -258,8 +268,8 @@ master_iso() {
         -appid "LitricOS ${PROFILE} ${VERSION}" \
         -publisher "LitricOS" \
         -preparer "iso/assemble-iso.sh" \
-        -volume_date all_file_dates "=${SOURCE_DATE_EPOCH}" \
-        -volume_date uuid "$ISO_MTIME" \
+        --modification-date="$ISO_MTIME" \
+        --set_all_file_dates "$ISO_MTIME" \
         -append_partition 2 C12A7328-F81F-11D2-BA4B-00A0C93EC93B "$STAGE_DIR/efiboot.img" \
         -appended_part_as_gpt \
         -eltorito-alt-boot \

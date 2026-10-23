@@ -1,0 +1,73 @@
+canvas=1280x800
+full_frame.visited_px=5914284
+full_frame.min_ms=150.825
+full_frame.median_ms=155.333
+full_frame.mean_ms=157.817
+full_frame.stddev_ms=6.787
+full_frame.runs=15
+pointer_move.run0.full=true damage_rects=2 restored_px=1024000 changed_px=98580 visited_px=5926850
+pointer_move.run14.full=false damage_rects=2 restored_px=1440 changed_px=278971 visited_px=5005156
+pointer_move_frame.min_ms=156.218
+pointer_move_frame.median_ms=158.763
+pointer_move_frame.mean_ms=161.695
+pointer_move_frame.stddev_ms=5.825
+pointer_move_frame.runs=15
+open_window.run0.full=true damage_rects=5 restored_px=1024000 changed_px=584140 visited_px=12410961
+open_window.run14.full=true damage_rects=5 restored_px=1024000 changed_px=422897 visited_px=12361859
+open_window_frame.min_ms=360.550
+open_window_frame.median_ms=390.934
+open_window_frame.mean_ms=395.393
+open_window_frame.stddev_ms=46.164
+open_window_frame.runs=15
+blur_full_screen_r3_2passes.min_ms=79.425
+blur_full_screen_r3_2passes.median_ms=81.068
+blur_full_screen_r3_2passes.mean_ms=81.992
+blur_full_screen_r3_2passes.stddev_ms=2.120
+blur_full_screen_r3_2passes.runs=15
+blur_full_screen_r10_2passes.min_ms=75.407
+blur_full_screen_r10_2passes.median_ms=80.467
+blur_full_screen_r10_2passes.mean_ms=81.663
+blur_full_screen_r10_2passes.stddev_ms=4.722
+blur_full_screen_r10_2passes.runs=15
+blur_full_screen_r30_2passes.min_ms=73.063
+blur_full_screen_r30_2passes.median_ms=84.152
+blur_full_screen_r30_2passes.mean_ms=90.501
+blur_full_screen_r30_2passes.stddev_ms=19.547
+blur_full_screen_r30_2passes.runs=15
+present_full.bytes=4096000
+present_full.min_ms=6.161
+present_full.median_ms=7.141
+present_full.mean_ms=7.138
+present_full.stddev_ms=0.535
+present_full.runs=15
+present_pointer_damage.rows=32 bytes=163840
+present_pointer_damage.min_ms=0.189
+present_pointer_damage.median_ms=0.197
+present_pointer_damage.mean_ms=0.214
+present_pointer_damage.stddev_ms=0.032
+present_pointer_damage.runs=15
+lock.interval_ms=33
+lock_frame.full=true damage_rects=0 restored_px=1024000 visited_px=10426249
+lock_frame.min_ms=287.931
+lock_frame.median_ms=297.341
+lock_frame.mean_ms=299.497
+lock_frame.stddev_ms=7.313
+lock_frame.runs=15
+lock_frame_entry.full=true damage_rects=0 restored_px=1024000 visited_px=10692758
+lock_frame_entry.min_ms=308.313
+lock_frame_entry.median_ms=320.369
+lock_frame_entry.mean_ms=327.709
+lock_frame_entry.stddev_ms=21.689
+lock_frame_entry.runs=15
+lock_frame_customize.full=true damage_rects=0 restored_px=1024000 visited_px=16011499
+lock_frame_customize.min_ms=462.593
+lock_frame_customize.median_ms=472.377
+lock_frame_customize.mean_ms=475.053
+lock_frame_customize.stddev_ms=10.379
+lock_frame_customize.runs=15
+lock_frame_still.full=true damage_rects=0 restored_px=1024000 visited_px=10607884
+lock_frame_still.min_ms=293.152
+lock_frame_still.median_ms=317.535
+lock_frame_still.mean_ms=320.788
+lock_frame_still.stddev_ms=22.162
+lock_frame_still.runs=15

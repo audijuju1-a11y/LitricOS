@@ -1,6 +1,7 @@
 [Unit]
 Description=LitricOS desktop shell
 Documentation=file:///usr/share/doc/litric/adr/0017-framebuffer-shell.md
+Slice=litric-shell.slice
 
 # HONEST SCOPE, 2026-08-29.
 #
@@ -17,7 +18,8 @@ Documentation=file:///usr/share/doc/litric/adr/0017-framebuffer-shell.md
 # toward the one above one capability at a time, each because something needs
 # it -- input devices were added when there was something to read them.
 
-After=basic.target litric-sysd.service
+After=basic.target litric-sysd.service litric-first-run.service
+Requires=litric-first-run.service
 Wants=litric-sysd.service
 
 # The kernel's framebuffer console and a login prompt both draw on the same
@@ -35,6 +37,13 @@ Type=simple
 # only what changed. An idle desktop presents nothing at all, which is where
 # Adaptive Idle's saving actually comes from.
 ExecStart=/usr/bin/litric-shell
+
+# A single root-owned preference file stores the shell's language, theme and
+# reduced-motion choice on the persistent /var filesystem. Systemd creates this
+# directory with mode 0700 and opens only this state directory through the
+# ProtectSystem=strict boundary below.
+StateDirectory=litric-shell
+StateDirectoryMode=0700
 
 RuntimeDirectory=litric
 RuntimeDirectoryMode=0755
@@ -93,11 +102,9 @@ IPAddressDeny=any
 # write and nothing else; the sandbox above still denies every other route.
 ProtectKernelTunables=no
 
-# Two 4 MB canvases at 1280x800 -- the wallpaper and the composed scene -- plus
-# blur scratch and a row buffer. If it ever needs eight times that, something is
-# wrong and it should fail here rather than become the reason the machine is
-# short of memory.
-MemoryMax=96M
+# The 140 MB slice limit is measured against the actual 1920x1080 framebuffer:
+# wallpaper, scene, lock cache, and shaped glyph runs all live in this process.
+# The slice applies MemoryHigh=110M before the hard 140 MB ceiling.
 # One thread per input device plus the main loop. A machine with a dozen input
 # devices is unusual; a shell with a hundred threads is a bug.
 TasksMax=32

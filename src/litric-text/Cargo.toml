@@ -1,0 +1,15 @@
+[package]
+name = "litric-text"
+description = "Offline OpenType shaping and software glyph rasterization for LitricOS"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fontdue = "0.9.4"
+harfrust = "0.14.0"
+

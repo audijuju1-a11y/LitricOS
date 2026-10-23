@@ -433,13 +433,30 @@ impl Connection {
                     format!("no such trash entry: {name}"),
                 ));
             };
-            let Some(raw) = item.original_path.strip_prefix("file://") else {
+            // `original_path` is already a logical path: `DiskTrash`'s reader
+            // maps the entry's `Path=` back through
+            // `trashinfo::logical_location`, which understands the current
+            // absolute-location form and the legacy `file://` one. There is no
+            // scheme to strip here any more (BUG-0009).
+            //
+            // The flag has to be checked BEFORE the parse, not instead of it.
+            // An entry recorded against another root (`Path=/somewhere/else/x`,
+            // a trash directory shared with a different system) arrives verbatim,
+            // and a rooted path parses as a perfectly good logical path — so a
+            // restore would resolve it under this root and write the item to a
+            // location the entry never named. Syntax cannot tell the two apart;
+            // the mapping can. A refused restore is the honest answer.
+            if item.outside_root {
                 return Outcome::Fail(Error::new(
-                    ErrorKind::CorruptArchive,
-                    "trashinfo Path= is not a file URI",
+                    ErrorKind::InvalidName,
+                    format!(
+                        "{} records a location outside this root ({}); there is \
+                         no honest place to restore it to",
+                        name, item.original_path
+                    ),
                 ));
-            };
-            let logical = match LogicalPath::parse(raw) {
+            }
+            let logical = match LogicalPath::parse(&item.original_path) {
                 Ok(p) => p,
                 Err(e) => return Outcome::Fail(invalid(e)),
             };
@@ -1073,7 +1090,21 @@ mod tests {
             Outcome::Reply(lines) => {
                 assert_eq!(lines.len(), 1);
                 assert!(lines[0].starts_with("t name=memo.txt "));
-                assert!(lines[0].contains("original=file%3A%2F%2F%2FDocuments%2Fmemo.txt"));
+                // The original location is a logical path, and the wire
+                // percent-encodes its separators. It is no longer the
+                // `file://` URI that made other tools restore into the wrong
+                // place (BUG-0009).
+                assert!(lines[0].contains("original=%2FDocuments%2Fmemo.txt"));
+                // The URI scheme, not the word: this assertion used to reject
+                // any line containing "file", which the same line's own
+                // `kind=file` field then tripped. A guard that fires on a field
+                // it did not mean to describe is a guard nobody can keep green.
+                assert!(!lines[0].contains("file://"), "not a URI: {}", lines[0]);
+                assert!(
+                    !lines[0].contains("file%3A%2F%2F"),
+                    "not an encoded URI: {}",
+                    lines[0]
+                );
             }
             other => panic!("not a reply: {other:?}"),
         }
@@ -1092,6 +1123,79 @@ mod tests {
             conn.dispatch("RESTORE memo.txt", &mut |_, _| {}),
             Outcome::Fail(_)
         ));
+    }
+
+    #[test]
+    fn restoring_an_entry_that_came_from_another_root_is_refused_not_guessed() {
+        // The item and its record are both real; the location it names is not
+        // ours. `/somewhere/else/stray.txt` is a valid *logical* path, so the
+        // only thing standing between it and a restore into this root is the
+        // flag `DiskTrash`'s reader sets. This drives the refusal through the
+        // wire protocol, which is where a front end would meet it.
+        let (dir, root) = open_root("restore-outside");
+        let base = dir.join(crate::trash::TRASH_DIR_NAME);
+        fs::create_dir_all(base.join("files")).expect("files");
+        fs::create_dir_all(base.join("info")).expect("info");
+        fs::write(base.join("files/stray.txt"), "x").expect("item");
+        fs::write(
+            base.join("info/stray.txt.trashinfo"),
+            "[Trash Info]\nPath=/somewhere/else/stray.txt\n\
+             DeletionDate=2026-01-01T00:00:00\n",
+        )
+        .expect("record");
+
+        let mut conn = Connection::new(root);
+        // It still lists, with the location it actually records.
+        let listing = one_line(&mut conn, "TRASHLIST");
+        assert!(
+            listing.contains("original=%2Fsomewhere%2Felse%2Fstray.txt"),
+            "listing must keep the recorded location: {listing}"
+        );
+        match conn.dispatch("RESTORE stray.txt", &mut |_, _| {}) {
+            Outcome::Fail(e) => assert_eq!(e.kind().token(), "invalid-name", "got {e:?}"),
+            other => panic!("a restore outside this root was not refused: {other:?}"),
+        }
+        // Refused, and nothing was created anywhere under the root.
+        assert!(!dir.join("somewhere").exists(), "no guessed destination");
+        assert!(
+            base.join("files/stray.txt").exists(),
+            "a refused restore must leave the item in the trash"
+        );
+    }
+
+    #[test]
+    fn trashlist_reports_the_original_logical_location_for_a_legacy_entry() {
+        // An entry an older build wrote in the `file://` URI form must still
+        // list with its real location, and must still restore (BUG-0009).
+        let (dir, root) = open_root("trash-legacy");
+        let mut conn = Connection::new(root);
+        let base = dir.join(".local/share/Trash");
+        fs::create_dir_all(base.join("files")).expect("files");
+        fs::create_dir_all(base.join("info")).expect("info");
+        fs::write(base.join("files/old.txt"), "old").expect("item");
+        // Exactly what the pre-fix daemon wrote: the whole URI, with `/` kept
+        // literal and `:` escaped.
+        let legacy = crate::trashinfo::pct_encode("file:///Documents/old.txt");
+        fs::write(
+            base.join("info/old.txt.trashinfo"),
+            format!("[Trash Info]\nPath={legacy}\nDeletionDate=2026-01-01T00:00:00\n"),
+        )
+        .expect("record");
+
+        match conn.dispatch("TRASHLIST", &mut |_, _| {}) {
+            Outcome::Reply(lines) => {
+                assert_eq!(lines.len(), 1, "{lines:?}");
+                assert!(
+                    lines[0].contains("original=%2FDocuments%2Fold.txt"),
+                    "got: {}",
+                    lines[0]
+                );
+            }
+            other => panic!("not a reply: {other:?}"),
+        }
+        let restored = one_line(&mut conn, "RESTORE old.txt");
+        assert!(restored.contains("path="), "got: {restored}");
+        assert!(dir.join("Documents/old.txt").exists());
     }
 
     #[test]

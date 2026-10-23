@@ -26,6 +26,23 @@ Lint ทำงานบน **โค้ดจริง** (ไม่ใช่ภ�
 - ตรวจด้วย e2e golden-frame เดิม + **pixel-diff threshold**: แก้ UI แล้ว diff เกิน 2% ต้องอัปเดต golden พร้อมเหตุผลใน commit
 - ทุก golden เก็บภาพจริงจาก VM (ไม่ใช่ render เดโม่) — pipeline photo-tour ที่มีอยู่ใช้ได้เลย
 
+### 2.1 Gate ที่รันได้แล้ว (2026-10-16)
+
+`ci/check-golden-frames.py` เทียบเฟรมที่ `frame_dump` เพิ่งดัมป์กับ golden ที่บันทึกไว้ และ **fail build** เมื่อภาพเปลี่ยนเกิน threshold:
+
+| อย่าง | ค่า |
+|---|---|
+| สคริปต์ | `ci/check-golden-frames.py` |
+| เฟรมที่ต้องมี (10 ใบ) | `01-desktop-idle`, `03-windows-overlap`, `04-files`, `16-files-empty`, `05-settings`, `17-control-centre`, `15-search`, `18-notifications`, `19-dialog-danger`, `11-lock` |
+| golden | `docs/evidence/golden/fingerprints.json` (fingerprint + sha256 + grid, ไม่เก็บ PPM ใน git) |
+| threshold | เปลี่ยนเกิน **2% ของ 64×40 cell** หรือ mean delta > 0.5 level = FAIL |
+| อัปเดต golden | `python ci/check-golden-frames.py --frames build/frames --update` หลังรีวิวภาพ แล้วระบุเหตุผลใน commit |
+| วิธีได้เฟรม | `cargo run -p litric-shell --example frame_dump -- --fonts build/fonts build/frames` |
+| ต่อ CI | รันใน `ci/verify.sh` section `[5b]` พร้อม self-test (`--self-test`) ที่ปลูกการเปลี่ยนแปลงปลอมเพื่อพิสูจน์ว่า gate fail จริง |
+
+- เทียบเป็น **grid luminance 64×40** ไม่ใช่ hash ตรง: 1 พิกเซล antialias ที่เปลี่ยนไม่ควรทำให้ build แดง แต่ก้อนที่คนมองเห็นต้องแดง (hash ยังพิมพ์ไว้ให้ดูว่าเฟรมขยับหรือไม่)
+- ข้อจำกัดที่เขียนไว้ในสคริปต์: gate นี้พิสูจน์ **composition** ภายใต้ fact คงที่ ไม่ได้พิสูจน์ว่าเครื่องบูตหรือฟอนต์ rasterize บนเป้า — ส่วนนั้นคือ `tools/screen-test.sh` / `tools/photo-tour.sh` ที่ต้องมีภาพจาก VM
+
 ## 3. Visual QA 4 ระดับ (MASTER §53) — ใครตรวจอะไร
 
 | ระดับ | ตรวจด้วย | อัตโนมัติ? |
@@ -59,7 +76,7 @@ Lint ทำงานบน **โค้ดจริง** (ไม่ใช่ภ�
 - ถ้า fps ต่ำกว่า 55 ในภาพทัวร์ = ถอน effect นั้น (ไม่ต่อรอง)
 
 ## เกณฑ์ตรวจเฟส QA
-- [ ] design_lint รันได้และตอนนี้เขียว (แก้ของพังที่มันจับก่อน)
-- [ ] golden 10 ใบอยู่ใน evidence/golden/ + สคริปต์ diff
+- [x] design_lint รันได้และตอนนี้เขียว (แก้ของพังที่มันจับก่อน) — รวม 362 เทสใน `litric-shell` และ `clippy --workspace --all-targets` = 0 diagnostic (2026-10-16)
+- [x] golden 10 ใบอยู่ใน evidence/golden/ + สคริปต์ diff — `ci/check-golden-frames.py` ต่อเข้า `ci/verify.sh` แล้ว
 - [ ] reviews/ มีอย่างน้อย 1 ไฟล์ต้นแบบ (ทำจริงกับฟีเจอร์แรก)
 - [ ] frame budget มีตัวเลขจริงแนบใน release note

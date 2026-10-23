@@ -31,6 +31,8 @@
 //! failing. That is the property the previous treatment of this window was
 //! missing: it had a list of "features" that no code consulted.
 
+use std::collections::VecDeque;
+
 use crate::shell::{ProcRow, SystemFacts};
 use crate::ui::Tone;
 
@@ -1877,6 +1879,145 @@ pub struct Meter {
     pub measured: bool,
 }
 
+/// How many samples the Activity window's graphs keep.
+///
+/// One sample per daemon poll, so this is a couple of minutes of history at the
+/// poll interval the shell asks for. It is a bound rather than a window: a
+/// monitor that keeps every sample for the life of the session is a monitor
+/// that grows without limit, and the graph can only show as many samples as it
+/// has pixels anyway.
+pub const HISTORY_SAMPLES: usize = 120;
+
+/// What the machine was doing, sample by sample, oldest first.
+///
+/// A rate is a difference between two samples, so a monitor with no memory of
+/// the last one cannot draw a trend at all: it can only draw the instant it
+/// happens to be looking at, which is the state this window was in. Every
+/// series here is fed from facts the machine reported -- a field that was
+/// `None` stays absent rather than being plotted as zero, because a graph of
+/// zeroes claims an idle machine just as a headline number does.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct History {
+    /// Whole-machine CPU, 0.0 to 1.0.
+    pub cpu: VecDeque<f32>,
+    /// Per logical CPU, in kernel order, one series each.
+    pub cores: Vec<VecDeque<f32>>,
+    /// RAM in use, MiB.
+    pub mem_used_mb: VecDeque<f32>,
+    /// Page cache, MiB.
+    pub mem_cached_mb: VecDeque<f32>,
+    /// Network receive rate, bytes per second.
+    pub net_rx_per_s: VecDeque<f32>,
+    /// Network transmit rate, bytes per second.
+    pub net_tx_per_s: VecDeque<f32>,
+}
+
+impl History {
+    /// Add one sample, dropping the oldest when the buffer is full.
+    pub fn push(&mut self, f: &SystemFacts) {
+        push_bounded(&mut self.cpu, f.cpu_now);
+        // The per-core grid is rebuilt from the machine's own core count: a
+        // machine that came online with eight CPUs and reports six has six.
+        if !f.cpu_cores.is_empty() {
+            self.cores.truncate(f.cpu_cores.len());
+            while self.cores.len() < f.cpu_cores.len() {
+                self.cores.push(VecDeque::new());
+            }
+            for (series, value) in self.cores.iter_mut().zip(f.cpu_cores.iter()) {
+                push_bounded(series, Some(*value));
+            }
+        }
+        push_bounded(&mut self.mem_used_mb, f.mem_used_mb.map(|v| v as f32));
+        push_bounded(&mut self.mem_cached_mb, f.mem_cached_mb.map(|v| v as f32));
+        #[allow(clippy::cast_possible_truncation)]
+        let rx = f.net_rx_per_s.map(|v| v as f32);
+        #[allow(clippy::cast_possible_truncation)]
+        let tx = f.net_tx_per_s.map(|v| v as f32);
+        push_bounded(&mut self.net_rx_per_s, rx);
+        push_bounded(&mut self.net_tx_per_s, tx);
+    }
+
+    /// How many samples every series holds, which is what a graph's horizontal
+    /// scale is drawn against.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.cpu.len()
+    }
+
+    /// Whether anything has been sampled at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.cpu.is_empty()
+    }
+}
+
+/// The history the graphs are drawn from, tested where it is decided: the
+/// lengths, the bounded buffer, and the rule that a missing measurement is not
+/// a zero.
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    fn facts(step: usize) -> SystemFacts {
+        SystemFacts {
+            cpu_now: Some(step as f32 / 100.0),
+            cpu_cores: vec![0.1, 0.2],
+            mem_used_mb: Some(500_u64.saturating_add(step as u64)),
+            mem_cached_mb: Some(1_000),
+            net_rx_per_s: Some(1_000.0 * step as f64),
+            net_tx_per_s: Some(10.0),
+            ..SystemFacts::default()
+        }
+    }
+
+    #[test]
+    fn a_sample_extends_every_series_it_measured() {
+        let mut h = History::default();
+        h.push(&facts(1));
+        h.push(&facts(2));
+        assert_eq!(h.len(), 2);
+        assert_eq!(h.cores.len(), 2, "one series per logical CPU");
+        assert_eq!(h.cores.first().map(VecDeque::len), Some(2));
+        assert_eq!(h.mem_used_mb.back(), Some(&502.0));
+        assert_eq!(h.net_rx_per_s.back(), Some(&2_000.0));
+    }
+
+    #[test]
+    fn the_history_is_bounded_and_drops_the_oldest_sample() {
+        let mut h = History::default();
+        for i in 0..HISTORY_SAMPLES + 10 {
+            h.push(&facts(i));
+        }
+        assert_eq!(h.len(), HISTORY_SAMPLES);
+        assert_eq!(h.mem_used_mb.len(), HISTORY_SAMPLES);
+        let oldest = h.mem_used_mb.front().copied().unwrap_or(0.0);
+        assert_eq!(oldest, 510.0, "the oldest samples are the ones dropped");
+    }
+
+    #[test]
+    fn a_measurement_that_was_never_taken_is_absent_rather_than_zero() {
+        let mut h = History::default();
+        h.push(&SystemFacts::default());
+        assert!(h.is_empty(), "nothing was measured, so there is no history");
+        assert!(h.net_rx_per_s.is_empty());
+        assert!(h.mem_used_mb.is_empty());
+    }
+}
+
+/// Push a measurement, keeping the series at [`HISTORY_SAMPLES`].
+///
+/// A `None` is not pushed: the series is a list of measurements, and its length
+/// is how many samples exist, not how many polls happened.
+fn push_bounded(series: &mut VecDeque<f32>, value: Option<f32>) {
+    let Some(value) = value else {
+        return;
+    };
+    if series.len() >= HISTORY_SAMPLES {
+        series.pop_front();
+    }
+    series.push_back(value);
+}
+
 /// The Task Manager's model: preferences, rows, and what is selected.
 #[derive(Debug, Clone, Default)]
 pub struct TaskManager {
@@ -1888,6 +2029,8 @@ pub struct TaskManager {
     pub total_mb: Option<u64>,
     /// The machine-wide readings the meters are drawn from.
     pub machine: Machine,
+    /// What the machine was doing, sample by sample: the graphs.
+    pub history: History,
     /// The selected row index into [`TaskManager::filtered`].
     pub selected: Option<usize>,
     /// The first row drawn.
@@ -1913,6 +2056,7 @@ impl TaskManager {
         let selected_pid = self.selected_pid();
         self.rows.clone_from(&facts.processes);
         self.total_mb = facts.mem_total_mb;
+        self.history.push(facts);
         // The machine meters come from the same facts, so a meter and the table
         // under it can never disagree about the machine they describe. The frame
         // time is the shell's own and is carried across a sample: it is measured

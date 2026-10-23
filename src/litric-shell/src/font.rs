@@ -1,4 +1,4 @@
-//! LitricOS Sans — a stroke-outline typeface, drawn rather than bitmapped.
+//! LitricOS text drawing: offline OpenType faces with a safe vector fallback.
 //!
 //! # Why a typeface is in here at all
 //!
@@ -32,7 +32,93 @@
 //! raster APIs, so the renderer flips it once, at the point where font space
 //! becomes pixels.
 
+use std::sync::OnceLock;
+
 use crate::canvas::{arc_points, Canvas};
+
+/// Typeface family selected for a run.
+pub use litric_text::Face as FontFace;
+
+static OPEN_TYPE: OnceLock<Option<litric_text::TextSystem>> = OnceLock::new();
+
+/// Initialize the offline font stack before the first UI frame.
+///
+/// The image installs Noto Sans Thai and JetBrains Mono. If an image is missing
+/// one of them, drawing keeps the local vector fallback alive and reports the
+/// missing stack through the return value instead of failing desktop startup.
+#[must_use]
+pub fn initialize() -> bool {
+    OPEN_TYPE
+        .get_or_init(|| litric_text::TextSystem::load_system().ok())
+        .is_some()
+}
+
+/// Initialize the text stack from a directory of installed faces.
+///
+/// For the review tools on a host that is not the image. `frame_dump` used to
+/// refuse to run at all without the installed faces — correctly, because a frame
+/// set in a different typeface has different word widths and is not evidence
+/// about the machine — and the cost was that on a development host with no
+/// package manager in the loop, *no* frame could be produced, so UI work could
+/// only be reviewed by reading it. This is the third option: point the tool at a
+/// local copy of the same six files and get frames that mean something.
+///
+/// The shipping shell never calls this, and an application still cannot supply a
+/// font: the directory is named on the command line by the person running a
+/// development tool.
+#[must_use]
+pub fn initialize_from_dir<P: AsRef<std::path::Path>>(dir: P) -> bool {
+    OPEN_TYPE
+        .get_or_init(|| litric_text::TextSystem::load_dir(dir).ok())
+        .is_some()
+}
+
+fn open_type() -> Option<&'static litric_text::TextSystem> {
+    OPEN_TYPE
+        .get_or_init(|| litric_text::TextSystem::load_system().ok())
+        .as_ref()
+}
+
+/// Cap height in pixels for a font size, from whichever face is live.
+///
+/// The two text paths must agree on what [`Style::size`] means or one `Style`
+/// draws two different sizes depending on which path runs, and every layout
+/// audit performed on one machine describes a UI the other machine never shows.
+/// The tokens are ems (`TypeStep::px()` is *"size in logical pixels"*, and the
+/// WCAG large-text test they carry is defined on ems), the installed OpenType
+/// faces take ems, and the vector fallback reads this to draw a cap that matches
+/// them. The centring arithmetic elsewhere in the shell — `cy + size * 0.36`,
+/// which is half of a 0.72-em cap — has assumed ems all along.
+#[must_use]
+pub fn cap_px(em: f32) -> f32 {
+    em * cap_em_ratio()
+}
+
+/// Cap height as a fraction of the em, for whichever face is live.
+///
+/// Measured from the loaded face when one is installed, so a change of typeface
+/// moves the fallback with it.
+#[must_use]
+pub fn cap_em_ratio() -> f32 {
+    open_type().map_or(litric_text::DOCUMENTED_CAP_EM_RATIO, |system| {
+        system.cap_em_ratio()
+    })
+}
+
+/// Whether the live text stack has a face that can draw Thai script.
+///
+/// When it does not, every Thai character is a missing glyph, and the interface
+/// is safer in a language it can actually print — see [`crate::i18n`].
+#[must_use]
+pub fn draws_thai() -> bool {
+    open_type().is_some_and(litric_text::TextSystem::draws_thai)
+}
+
+/// Which faces loaded and which were substituted, for the diagnostics page.
+#[must_use]
+pub fn face_report() -> litric_text::Faces {
+    open_type().map_or_else(litric_text::Faces::default, |system| system.faces())
+}
 
 /// One pen movement.
 #[derive(Debug, Clone, Copy)]
@@ -103,7 +189,8 @@ pub const WEIGHT_BOLD: f32 = 0.195;
 /// text, and the compiler cannot tell the difference between two `f32`s.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Style {
-    /// Cap height in pixels.
+    /// Font size in pixels: the em, the same unit [`litric_design::TypeStep::px`]
+    /// uses. Not the cap height — see [`cap_px`].
     pub size: f32,
     /// Stroke weight as a fraction of the size.
     pub weight: f32,
@@ -111,6 +198,8 @@ pub struct Style {
     pub tracking: f32,
     /// Ink colour.
     pub color: u32,
+    /// Typeface family.
+    pub face: FontFace,
 }
 
 impl Style {
@@ -122,6 +211,7 @@ impl Style {
             weight: WEIGHT_REGULAR,
             tracking: 0.0,
             color,
+            face: FontFace::Sans,
         }
     }
 
@@ -133,6 +223,7 @@ impl Style {
             weight: WEIGHT_BOLD,
             tracking: 0.0,
             color,
+            face: FontFace::Sans,
         }
     }
 
@@ -147,6 +238,13 @@ impl Style {
     #[must_use]
     pub const fn colored(mut self, color: u32) -> Self {
         self.color = color;
+        self
+    }
+
+    /// Use the installed monospace face for code and terminal output.
+    #[must_use]
+    pub const fn monospace(mut self) -> Self {
+        self.face = FontFace::Mono;
         self
     }
 }
@@ -1644,9 +1742,21 @@ fn advance_px(i: usize, scale: f32, stroke_w: f32, tracking: f32) -> f32 {
 /// cannot drift away from where it was measured to.
 #[must_use]
 pub fn measure(text: &str, style: &Style) -> f32 {
-    let (size, tracking) = (style.size, style.tracking);
-    let scale = size / CAP;
-    let stroke_w = (size * style.weight).max(1.0);
+    let localized = crate::i18n::text(text);
+    let text = localized.as_ref();
+    if let Some(system) = open_type() {
+        let face = selected_face(style);
+        if let Some(run) = system.layout(text, face, style.size, style.tracking) {
+            return run.width;
+        }
+    }
+    measure_vector(text, style)
+}
+
+fn measure_vector(text: &str, style: &Style) -> f32 {
+    let (cap, tracking) = (cap_px(style.size), style.tracking);
+    let scale = cap / CAP;
+    let stroke_w = (cap * style.weight).max(1.0);
     let mut w = 0.0f32;
     let mut n = 0u32;
     for ch in text.chars() {
@@ -1672,8 +1782,8 @@ pub fn measure(text: &str, style: &Style) -> f32 {
 #[must_use]
 pub fn ink_span(ch: char, style: &Style) -> Option<(f32, f32)> {
     let i = glyph_index(ch)?;
-    let scale = style.size / CAP;
-    let stroke_w = (style.size * style.weight).max(1.0);
+    let scale = cap_px(style.size) / CAP;
+    let stroke_w = (cap_px(style.size) * style.weight).max(1.0);
     let (min_x, max_x) = ink_box(i);
     let (left, _) = bearings(i, scale, stroke_w);
     let shift = left * scale;
@@ -1690,7 +1800,10 @@ pub fn pair_gap(a: char, b: char, style: &Style) -> f32 {
     let (Some((_, a_right)), Some((b_left, _))) = (ink_span(a, style), ink_span(b, style)) else {
         return 0.0;
     };
-    let advance = measure(&a.to_string(), style);
+    // `ink_span` describes the vector fallback glyphs, so its pen advance has
+    // to come from that same face. Mixing OpenType advances with vector bounds
+    // reports false overlaps and makes the typography audit meaningless.
+    let advance = measure_vector(&a.to_string(), style);
     advance - a_right + b_left
 }
 
@@ -1699,14 +1812,34 @@ pub fn pair_gap(a: char, b: char, style: &Style) -> f32 {
 /// Returns the x the pen finished at, so callers can chain runs of different
 /// colour or weight without measuring twice.
 pub fn draw(canvas: &mut Canvas, text: &str, x: f32, baseline: f32, style: &Style) -> f32 {
+    let localized = crate::i18n::text(text);
+    draw_literal(canvas, localized.as_ref(), x, baseline, style)
+}
+
+/// Draw text exactly as it is passed: no catalogue lookup.
+///
+/// A section label is a structural keyword -- `POWER`, `SYSTEM`,
+/// `ENVIRONMENT` -- and it is drawn in letter-spaced capitals, which is a form
+/// only the Latin alphabet has. Translating one produced a Thai word at a size
+/// where its vowel marks collide into an unreadable smear, so those labels are
+/// drawn literally and the dictionary is left for prose.
+pub fn draw_literal(canvas: &mut Canvas, text: &str, x: f32, baseline: f32, style: &Style) -> f32 {
+    if let Some(system) = open_type() {
+        let face = selected_face(style);
+        if let Some(run) = system.layout(text, face, style.size, style.tracking) {
+            return draw_open_type(canvas, text, x, baseline, style, &run);
+        }
+    }
     let Style {
         size,
         weight,
         tracking,
         color,
+        ..
     } = *style;
-    let scale = size / CAP;
-    let stroke_w = (size * weight).max(1.0);
+    let cap = cap_px(size);
+    let scale = cap / CAP;
+    let stroke_w = (cap * weight).max(1.0);
     let mut pen = x;
     // Glyphs cost real pixels and there are thousands of them in a frame; the
     // frame's pixel bill should say what share went to type rather than folding
@@ -1721,7 +1854,7 @@ pub fn draw(canvas: &mut Canvas, text: &str, x: f32, baseline: f32, style: &Styl
             let pad = stroke_w / 2.0 + BEARING_GAP_PX;
             let w = 6.0 * scale;
             canvas.stroke_round_rect(
-                crate::canvas::Rect::new(pen + pad, baseline - size - pad, w, size + pad * 2.0),
+                crate::canvas::Rect::new(pen + pad, baseline - cap - pad, w, cap + pad * 2.0),
                 1.0,
                 stroke_w,
                 color,
@@ -1765,6 +1898,66 @@ pub fn draw(canvas: &mut Canvas, text: &str, x: f32, baseline: f32, style: &Styl
         });
     }
     pen
+}
+
+fn selected_face(style: &Style) -> FontFace {
+    match (style.face, style.weight >= WEIGHT_BOLD) {
+        (FontFace::Sans, true) => FontFace::SansBold,
+        (FontFace::Mono, true) => FontFace::MonoBold,
+        (face, false) => face,
+        (face, true) => face,
+    }
+}
+
+fn draw_open_type(
+    canvas: &mut Canvas,
+    text: &str,
+    x: f32,
+    baseline: f32,
+    style: &Style,
+    run: &litric_text::Run,
+) -> f32 {
+    let prev_site = canvas.set_site(crate::canvas::Site::Text);
+    for glyph in &run.glyphs {
+        let gx = (x + glyph.x).floor() as i64;
+        let gy = (baseline + glyph.y).floor() as i64;
+        for row in 0..glyph.height {
+            let Some(y) = gy.checked_add(i64::try_from(row).unwrap_or(i64::MAX)) else {
+                continue;
+            };
+            for col in 0..glyph.width {
+                let Some(at) = row
+                    .checked_mul(glyph.width)
+                    .and_then(|base| base.checked_add(col))
+                else {
+                    continue;
+                };
+                let Some(coverage) = glyph.coverage.get(at).copied() else {
+                    continue;
+                };
+                if coverage == 0 {
+                    continue;
+                }
+                let Some(px) = gx.checked_add(i64::try_from(col).unwrap_or(i64::MAX)) else {
+                    continue;
+                };
+                canvas.blend_px(px, y, style.color, f32::from(coverage) / 255.0);
+            }
+        }
+    }
+    canvas.set_site(prev_site);
+    let end_x = x + run.width;
+    if canvas.is_recording_text() {
+        canvas.record_run(crate::canvas::TextRun {
+            text: text.to_owned(),
+            x,
+            end_x,
+            baseline,
+            size: style.size,
+            surface: canvas.surface(),
+        });
+    }
+    end_x
 }
 
 /// Draw one glyph. `scale` converts font units to pixels; font `y` points up,
@@ -1929,6 +2122,50 @@ mod tests {
     }
 
     #[test]
+    fn a_capital_is_as_tall_as_the_tokens_say_it_is() {
+        // `Style::size` is an em. `TypeStep::px()` is documented as "size in
+        // logical pixels", its WCAG large-text test is defined on ems, and every
+        // centring call in the shell offsets a baseline by `size * 0.36` — which
+        // is half of a 0.72-em cap. The vector fallback used to read that same
+        // number as a cap height and draw roughly 40% too large, so a machine
+        // without the installed faces showed a different interface from the one
+        // the layout audits were checking, and short labels were elided that
+        // would have fitted (`Documents` inside an 80px box became `Docum…`).
+        // This pins the invariant on both paths: the ink height of a capital is
+        // the cap height of the requested size.
+        for size in [12.0_f32, 17.0, 38.0] {
+            let style = Style::new(size, rgb(0xFFFFFF));
+            let mut c = Canvas::new(160, 220, rgb(0x000000));
+            draw(&mut c, "H", 20.0, 180.0, &style);
+            let mut top: Option<i64> = None;
+            let mut bottom: Option<i64> = None;
+            for y in 0..220i64 {
+                let inked =
+                    (0..160i64).any(|x| crate::canvas::luminance(c.get(x, y).unwrap_or(0)) > 0.2);
+                if inked {
+                    top.get_or_insert(y);
+                    bottom = Some(y);
+                }
+            }
+            let (Some(top), Some(bottom)) = (top, bottom) else {
+                panic!("a capital at {size}px drew nothing");
+            };
+            let height = (bottom - top + 1) as f32;
+            let cap = cap_px(size);
+            // Above the cap by more than a stroke's overhang means the size was
+            // read as a cap height; below it means the face collapsed.
+            assert!(
+                height <= cap * 1.25,
+                "a capital at {size}px is {height}px tall, but a {cap}px cap was asked for"
+            );
+            assert!(
+                height >= cap * 0.90,
+                "a capital at {size}px is only {height}px tall against a {cap}px cap"
+            );
+        }
+    }
+
+    #[test]
     fn tracking_is_applied_between_characters_and_not_after_the_last() {
         let a = measure("AAA", &Style::new(20.0, 0));
         let b = measure("AAA", &Style::new(20.0, 0).tracked(2.0));
@@ -2018,19 +2255,47 @@ mod tests {
 
     #[test]
     fn a_heavier_weight_puts_down_more_ink() {
-        let count = |weight: f32| -> usize {
+        let initialized = initialize();
+        eprintln!("OpenType stack initialized: {initialized}");
+        let regular_style = Style::new(22.0, rgb(0xFFFFFF));
+        let mut bold_style = regular_style;
+        bold_style.weight = WEIGHT_BOLD;
+        let regular_run = open_type()
+            .and_then(|system| system.layout("Weight", selected_face(&regular_style), 22.0, 0.0));
+        let bold_run = open_type()
+            .and_then(|system| system.layout("Weight", selected_face(&bold_style), 22.0, 0.0));
+        eprintln!(
+            "faces={:?}/{:?}, widths={:?}/{:?}, equal={}",
+            selected_face(&regular_style),
+            selected_face(&bold_style),
+            regular_run.as_ref().map(|r| r.width),
+            bold_run.as_ref().map(|r| r.width),
+            regular_run
+                .as_ref()
+                .zip(bold_run.as_ref())
+                .is_some_and(|(a, b)| a
+                    .glyphs
+                    .first()
+                    .zip(b.glyphs.first())
+                    .is_some_and(|(x, y)| x.coverage == y.coverage))
+        );
+        let ink = |weight: f32| -> f64 {
             let mut c = Canvas::new(120, 60, rgb(0x000000));
             let mut st = Style::new(22.0, rgb(0xFFFFFF));
             st.weight = weight;
             draw(&mut c, "Weight", 6.0, 44.0, &st);
-            (0..60i64)
-                .flat_map(|y| (0..120i64).map(move |x| (x, y)))
-                .filter(|(x, y)| luminance(c.get(*x, *y).unwrap_or(0)) > 0.5)
-                .count()
+            // Sum coverage instead of counting pixels above a hard threshold:
+            // OpenType antialiasing can make bold ink darker without changing
+            // how many samples happen to cross 50% coverage.
+            c.pixels()
+                .iter()
+                .fold(0.0, |sum, px| sum + f64::from(luminance(*px)))
         };
+        let regular = ink(WEIGHT_REGULAR);
+        let bold = ink(WEIGHT_BOLD);
         assert!(
-            count(WEIGHT_BOLD) > count(WEIGHT_REGULAR),
-            "bold is not heavier than regular"
+            bold > regular,
+            "bold is not heavier than regular: bold={bold}, regular={regular}"
         );
     }
 

@@ -124,21 +124,18 @@ impl TrashedItem {
     pub const fn size(&self) -> u64 {
         self.size
     }
-
-    /// The `.trashinfo` body, in the freedesktop format.
-    ///
-    /// Emitted rather than parsed-and-reemitted so that the file we write is
-    /// exactly the file the specification describes, and other tools can read
-    /// it.
-    #[must_use]
-    pub fn trashinfo(&self, iso_date: &str) -> String {
-        format!(
-            "[Trash Info]\nPath={}\nDeletionDate={}\n",
-            self.original.to_uri(),
-            iso_date
-        )
-    }
 }
+
+// `TrashedItem` deliberately has no `trashinfo()` renderer. It used to, and it
+// emitted `Path=<storage uri>` (`user://Documents/x`), which is not the original
+// *location* the Freedesktop specification asks for and is not a pathname any
+// other tool can restore to — the same defect as BUG-0009, in a third place.
+//
+// The `.trashinfo` body now has exactly one owner, `litric_files::trashinfo`,
+// used by both writers (the daemon and the shell). The ledger stays what its
+// header says it is: the layer that decides what a delete *means*, with no I/O
+// and no knowledge of where the record lives on disk. Two formatters is how one
+// defect came to be fixed twice, with a third copy still wrong.
 
 /// How long items survive before automatic emptying.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -672,19 +669,23 @@ mod tests {
     }
 
     #[test]
-    fn trashinfo_is_the_freedesktop_format() {
-        // Interoperability: another tool must be able to read this.
+    fn the_ledger_exposes_the_original_storage_uri_not_a_trashinfo_path() {
+        // The ledger knows a storage URI, which is Litric's own name for the
+        // item (`user://Documents/notes.txt`) and is **not** a filesystem
+        // location. `Path=` must be an absolute pathname, and only the layer
+        // that owns a root can produce one, so the record is written there —
+        // `litric_files::trashinfo`. This test pins the boundary so a future
+        // renderer added here has to think about why it is the wrong place.
         let mut t = trash();
         let name = t
             .trash(&uri("user://Documents/notes.txt"), 1, T0)
             .expect("trash");
-        let info = t
-            .get(&name)
-            .expect("present")
-            .trashinfo("2026-08-28T10:00:00");
-        assert!(info.starts_with("[Trash Info]\n"));
-        assert!(info.contains("Path=user://Documents/notes.txt\n"));
-        assert!(info.contains("DeletionDate=2026-08-28T10:00:00\n"));
+        let item = t.get(&name).expect("present");
+        assert_eq!(item.original().to_uri(), "user://Documents/notes.txt");
+        assert!(
+            item.original().to_uri().starts_with("user://"),
+            "a storage URI, never a host pathname"
+        );
     }
 
     #[test]

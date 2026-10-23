@@ -65,7 +65,26 @@ ProtectHome=yes
 # image/mkosi.extra/usr/lib/tmpfiles.d/litric-iwd.conf guarantees it exists
 # before this unit's mount namespace is set up, so ReadWritePaths never names a
 # path that is absent -- systemd fails the unit outright when it does.
-ReadWritePaths=/var/lib/iwd
+#
+# `/etc` is the second, and it is opened for the first-run wizard's
+# `AUTH SET PASSWORD`, which runs chpasswd(8). Shadow's update protocol needs a
+# writable /etc *directory*, not a writable /etc/shadow: PAM creates
+# /etc/.pwd.lock and the update writes /etc/shadow+ then rename(2)s it over
+# /etc/shadow, and a file-level bind on /etc/shadow is not merely insufficient
+# -- the rename onto a bind mountpoint fails with EBUSY. Both variants were
+# booted and probed inside this unit's own namespace: with file binds the
+# wizard's action answered `Authentication token manipulation error`, with the
+# directory writable chpasswd changed the password and left no /etc/shadow+
+# behind (the rename completed). The earlier symptom was the wizard printing
+# `ERR action-failed /usr/sbin/chpasswd exited 1` with `Authentication token
+# lock busy` -- the PAM lock file could not be created on the read-only view.
+#
+# /etc is an overlay (upperdir /var/lib/litric/etc-overlay/upper on the
+# read-only /var), but an overlay writes through its own upper mount, which
+# this namespace does not touch, so opening /etc here is enough and /var
+# remains read-only: a direct write to the upperdir inside the namespace still
+# fails with EROFS (measured).
+ReadWritePaths=/var/lib/iwd /etc
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

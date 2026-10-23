@@ -8,17 +8,24 @@ aimed rather than searched for.
 Line counts are the real ones at the time of writing and are there for scale, not
 as a budget.
 
+**Updated 2026-10-22:** Mission Control, system-wide search and the window
+placement shortcuts were added after this map was written. See
+[DESKTOP-2.0.md](DESKTOP-2.0.md) for the capabilities, the keybindings and the
+measured gaps.
+
 ---
 
 ## 1. What is on the screen
 
 | Surface | Where it is drawn | Where its state lives |
 |---|---|---|
-| Top bar (Apps, Workspace, Environment, status, clock, user) | [views.rs](../src/litric-shell/src/views.rs) | [shell.rs](../src/litric-shell/src/shell.rs) (`Overlay`, hotspots) |
+| Top bar (Apps, **focused application** in the centre, Environment, status, clock, user) | [views.rs](../src/litric-shell/src/views.rs) | [shell.rs](../src/litric-shell/src/shell.rs) (`Overlay`, hotspots) |
 | Desktop icon grid | [apps.rs](../src/litric-shell/src/apps.rs) (models), [views.rs](../src/litric-shell/src/views.rs) (pixels) | [shell.rs](../src/litric-shell/src/shell.rs) |
 | The dock **and** the launcher it morphs into (one surface, two states) | [views.rs](../src/litric-shell/src/views.rs) `draw_dock` | [shell.rs](../src/litric-shell/src/shell.rs), `SHORTCUT_CHIPS` |
 | Windows, focus, z-order | [litric-wm](../src/litric-wm/src/) | [litric-wm](../src/litric-wm/src/manager.rs), mirrored in `Shell` |
-| Overlays: switcher, quick settings, notifications | [views.rs](../src/litric-shell/src/views.rs) `draw_overlay` | `Overlay` enum, [shell.rs:206](../src/litric-shell/src/shell.rs#L206) |
+| Overlays: switcher, quick settings, notifications, Mission Control | [views.rs](../src/litric-shell/src/views.rs) `draw_overlay` | `Overlay` enum, [shell.rs:206](../src/litric-shell/src/shell.rs#L206) |
+| Mission Control (every window, every workspace) | [views.rs](../src/litric-shell/src/views.rs) `draw_overview` | [overview.rs](../src/litric-shell/src/overview.rs) layout, `Overlay::Overview` |
+| System-wide search (apps, actions, settings pages, windows) | [views.rs](../src/litric-shell/src/views.rs) `launcher_rows` | [seek.rs](../src/litric-shell/src/seek.rs) |
 | Lock screen (Liquid Glass) | [lock.rs](../src/litric-shell/src/lock.rs) | `lock.rs`, verified through `litric-sysd` |
 | Eight applications | [apps.rs](../src/litric-shell/src/apps.rs) + [views.rs](../src/litric-shell/src/views.rs) | [shell.rs](../src/litric-shell/src/shell.rs) |
 | Context menus (one list, drawn = works) | [views.rs](../src/litric-shell/src/views.rs), [apps.rs:1283](../src/litric-shell/src/apps.rs#L1283) | `MenuItem`/`MenuAction` |
@@ -37,6 +44,8 @@ for the window manager.
 
 | File | Lines | What it decides |
 |---|---:|---|
+| [src/overview.rs](../src/litric-shell/src/overview.rs) | 147 | Mission Control's card grid and keyboard navigation, tested without a display. |
+| [src/seek.rs](../src/litric-shell/src/seek.rs) | 312 | The system-wide search index and its ranking. |
 | [src/shell.rs](../src/litric-shell/src/shell.rs) | 4881 | All state and all input consequences. **Deliberately free of drawing**: which window has focus, what a click means, what an action does. |
 | [src/views.rs](../src/litric-shell/src/views.rs) | 3751 | Drawing from that state: every function reads `Shell` and writes pixels; none of them decide anything. |
 | [src/taskmgr.rs](../src/litric-shell/src/taskmgr.rs) | 3403 | The process table as a model (see [monitor.rs](../src/litric-shell/src/monitor.rs) for why it is a model and not a draw call). |
@@ -284,11 +293,13 @@ and the shell's own system is [03-SHELL-SYSTEM.md](DESIGN-SYSTEM-v3/03-SHELL-SYS
 ## 6. Measured gaps (things this inventory is honest about)
 
 1. **Frame cost.** [BUG-0015](bugs/BUG-0015-a-frame-with-a-window-costs-206ms.md):
-   a frame with a window has been measured at 206 ms against a 16.67 ms budget.
-   [BUG-0018](bugs/BUG-0018-a-locked-frame-costs-half-a-second.md): a locked frame
-   at half a second. Both are measured, not fixed. A second host measured a
-   windowed frame at 107 ms and a locked frame at 335 ms on 2026-10-14
-   ([docs/EVIDENCE.md](EVIDENCE.md)); the defect is the surface, not the machine.
+   a frame with a window has been measured at 206 ms against a 16.67 ms budget,
+   still open. [BUG-0018](bugs/BUG-0018-a-locked-frame-costs-half-a-second.md): a
+   locked frame cost half a second, and is **fixed** as of 2026-10-15 — 293.727 ms
+   to 35.819 ms (8.2x), 10.43M pixels to 1.91M, with the customize sheet still at
+   185.718 ms. A second host measured a windowed frame at 107 ms and a locked
+   frame at 335 ms on 2026-10-14 ([docs/EVIDENCE.md](EVIDENCE.md)); the defect was
+   the surface, not the machine.
 2. **[BUG-0019](bugs/BUG-0019-a-snap-that-changed-the-value-reported-no-frame.md):
    a spring that snapped to its target reported "nothing moved", so a frame that
    had to be drawn was not requested and the pixels it drives — a window's focus

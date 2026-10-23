@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import socket
@@ -113,15 +114,21 @@ def boot_qmp(out_dir: str, image: str | None = None):
 
     accel = "kvm" if os.access("/dev/kvm", os.W_OK) else "tcg"
     cpu = "host" if accel == "kvm" else "max"
-    sock = os.path.join(BUILD, "tour-qmp.sock")
+    # QEMU's QMP and serial endpoints are AF_UNIX sockets.  A WSL process
+    # cannot bind those sockets below /mnt/<drive>, although screenshots and
+    # other evidence may legitimately be kept there.  Callers may therefore
+    # put only QEMU's ephemeral runtime files on a native Linux filesystem.
+    runtime = os.path.abspath(os.environ.get("LITRIC_QEMU_RUNTIME_DIR", BUILD))
+    os.makedirs(runtime, exist_ok=True)
+    sock = os.path.join(runtime, "tour-qmp.sock")
     if os.path.exists(sock):
         os.remove(sock)
     serial = os.path.join(out_dir, "serial.log")
-    serial_sock = os.path.join(BUILD, "tour-serial.sock")
+    serial_sock = os.path.join(runtime, "tour-serial.sock")
     if os.path.exists(serial_sock):
         os.remove(serial_sock)
     os.makedirs(out_dir, exist_ok=True)
-    varsfd = os.path.join(BUILD, "OVMF_VARS.tour.fd")
+    varsfd = os.path.join(runtime, "OVMF_VARS.tour.fd")
     with open(vars_, "rb") as s, open(varsfd, "wb") as d:
         d.write(s.read())
 
@@ -173,7 +180,14 @@ def exec_guest(cmd: str, sock_path: str, timeout: float = 45.0,
     except BlockingIOError:
         pass
     conn.setblocking(True)
-    sent = f"echo S{SENTINEL}B; {cmd}; echo S{SENTINEL}E\n"
+    # A serial terminal echoes bytes as they are typed.  Putting the completion
+    # marker directly in `sent` would therefore make the receive loop see the
+    # marker before the shell had executed anything.  Encode the complete
+    # guest-side script so only its decoded output can contain these markers.
+    # `base64` is provided by coreutils in the LitricOS image.
+    script = f"printf 'S{SENTINEL}B\\n'; {cmd}; printf 'S{SENTINEL}E\\n'"
+    payload = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    sent = f"printf %s {payload} | base64 -d | sh\n"
     conn.sendall(sent.encode())
     buf = b""
     deadline = time.time() + timeout

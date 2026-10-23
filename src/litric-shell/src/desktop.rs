@@ -29,6 +29,7 @@ use litric_design::{Glass, Rgb, Theme, ThemeKind};
 use crate::canvas::{blend, luminance, rgb, rgba, with_alpha, Canvas, Rect, Repaint};
 use crate::font::{self, Style};
 use crate::shell::Shell;
+use litric_input::event::Point;
 use crate::views;
 
 /// WCAG AA for body text. The target the glass solver must meet.
@@ -193,6 +194,14 @@ pub struct Compositor {
     /// The frame that is presented. Glass on it samples a blurred, saturated
     /// copy of the wallpaper made by [`Compositor::new`].
     pub scene: Canvas,
+    /// The pointer as the frame holds it: the rectangle it covers and the
+    /// pixels it was drawn over.
+    ///
+    /// A pointer move used to compose the whole desktop because the arrow is
+    /// part of [`views::draw`]. Keeping the pixels underneath it makes the move
+    /// a restore, a snapshot and one arrow: the twelve thousand pixels of a
+    /// cursor instead of the million a frame visits.
+    cursor: Option<(Rect, Vec<u32>)>,
 }
 
 impl Compositor {
@@ -214,7 +223,23 @@ impl Compositor {
         Self {
             wallpaper: paper,
             scene,
+            cursor: None,
         }
+    }
+
+    /// Replace the cached wallpaper and glass backdrop after a theme change.
+    pub fn retheme(&mut self, theme: &Theme) {
+        let width = self.scene.width();
+        let height = self.scene.height();
+        let mut paper = Canvas::new(width, height, rgb(0x000000));
+        wallpaper(&mut paper, theme);
+        let (blur, saturation) = glass_params(theme);
+        let source = std::rc::Rc::new(paper.glass_source(blur, saturation));
+        let mut scene = paper.clone();
+        let _ = scene.set_backdrop(Some(source));
+        self.wallpaper = paper;
+        self.scene = scene;
+        self.cursor = None;
     }
 
     /// Draw a frame: the whole screen when `full`, otherwise only the regions
@@ -232,55 +257,151 @@ impl Compositor {
         } else {
             Repaint::plan(damage, w, h)
         };
+        self.cursor = None;
         for region in plan.rects(w, h) {
             let saved = self.scene.set_clip(Some(region));
-            self.scene.blit_from(&self.wallpaper, region);
+            // A locked shell draws over every pixel it visits: the lock surface
+            // lays down an opaque background before anything else, so the
+            // wallpaper copy underneath it could not be seen. Skipping it is a
+            // whole screen of copying removed from the one frame that is always
+            // damage (BUG-0018: 1.02M of a locked frame's 2.93M pixels), and it
+            // is invisible - `frame_dump`'s fingerprints for 11-lock and
+            // 12-lock-password are unchanged by it.
+            if !shell.lock.locked {
+                self.scene.blit_from(&self.wallpaper, region);
+            }
             views::draw(&mut self.scene, shell);
             self.scene.set_clip(saved);
         }
+        self.paint_cursor(shell);
         shell.counted_frame();
         plan
     }
+
+    /// Draw the pointer at its current position, keeping what it covers.
+    ///
+    /// The arrow is drawn here rather than in [`views::draw`] so that the
+    /// compositor owns the pixels under it: that ownership is what makes
+    /// [`Compositor::move_cursor`] possible.
+    fn paint_cursor(&mut self, shell: &Shell) {
+        self.cursor = None;
+        let p = shell.pointer();
+        let rect = crate::ui::cursor_bounds(p.x, p.y, shell.tokens.scale);
+        let Some((rect, px)) = self.scene.snapshot(rect) else {
+            return;
+        };
+        crate::ui::cursor(&mut self.scene, p.x, p.y, shell.tokens.scale);
+        self.cursor = Some((rect, px));
+    }
+
+    /// Move the pointer across the frame without composing anything else.
+    ///
+    /// `from` and `to` are the pointer's old and new positions. The frame is
+    /// only valid if the arrow is still exactly where the last frame left it --
+    /// if it is not, `None` says so and the caller composes normally rather
+    /// than leaving a trail of arrows behind. On success only the two cursor
+    /// rectangles are repainted, which is the difference between a desktop that
+    /// stays at its frame rate while the mouse moves and one that composes a
+    /// whole scene per millimetre.
+    pub fn move_cursor(&mut self, shell: &Shell, from: Point, to: Point) -> Option<Repaint> {
+        let (saved_rect, saved_px) = self.cursor.as_ref()?;
+        let from_rect = crate::ui::cursor_bounds(from.x, from.y, shell.tokens.scale);
+        if *saved_rect != from_rect {
+            return None;
+        }
+        let saved_rect = *saved_rect;
+        let saved_px = saved_px.clone();
+        self.scene.restore(saved_rect, &saved_px);
+        let to_rect = crate::ui::cursor_bounds(to.x, to.y, shell.tokens.scale);
+        let (rect, px) = self.scene.snapshot(to_rect)?;
+        crate::ui::cursor(&mut self.scene, to.x, to.y, shell.tokens.scale);
+        self.cursor = Some((rect, px));
+        Some(Repaint::plan(
+            &[from_rect, to_rect],
+            self.scene.width(),
+            self.scene.height(),
+        ))
+    }
 }
 
-/// Paint the wallpaper.
+/// The dark wallpaper: an original LitricOS PNG, embedded in the binary so it
+/// cannot be missing at boot. Source: `assets/wallpapers/`.
+const WAVE_PNG: &[u8] =
+    include_bytes!("../../../assets/wallpapers/litric-obsidian-wave-1920x1080.png");
+
+/// Decode an 8-bit RGB or RGBA PNG into opaque canvas pixels, row by row.
 ///
-/// A flat colour would make the glass look like flat transparency, so this is a
-/// real gradient with three coloured washes -- the same wallpaper the design
-/// page uses, drawn by the same arithmetic.
+/// `None` for anything else, so an unreadable file falls back to a solid colour
+/// instead of taking the shell down.
+fn decode_png(bytes: &[u8]) -> Option<(u32, u32, Vec<u32>)> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
+        .read_info()
+        .ok()?;
+    let mut buf = vec![0u8; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    let channels: usize = match info.color_type {
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => 4,
+        _ => return None,
+    };
+    let count = (info.width as usize)
+        .checked_mul(info.height as usize)?
+        .checked_mul(channels)?;
+    let pixels = buf
+        .get(..count)?
+        .chunks_exact(channels)
+        .map(|c| match c {
+            [r, g, b, ..] => rgba(*r, *g, *b, 255),
+            _ => 0,
+        })
+        .collect();
+    Some((info.width, info.height, pixels))
+}
+
+/// Paint an image over the whole canvas, scaled to cover it and centred.
+///
+/// Proportions are kept at every aspect ratio: the overflow is cropped, never
+/// stretched.
+fn paint_cover(canvas: &mut Canvas, iw: u32, ih: u32, pixels: &[u32]) {
+    let (cw, ch) = (canvas.width(), canvas.height());
+    let scale = (cw as f32 / iw as f32).max(ch as f32 / ih as f32);
+    let ox = (iw as f32 * scale - cw as f32) / 2.0;
+    let oy = (ih as f32 * scale - ch as f32) / 2.0;
+    let last_x = iw.saturating_sub(1) as usize;
+    let last_y = ih.saturating_sub(1) as usize;
+    let stride = iw as usize;
+    for y in 0..ch {
+        let sy = (((y as f32 + 0.5 + oy) / scale) as usize).min(last_y);
+        for x in 0..cw {
+            let sx = (((x as f32 + 0.5 + ox) / scale) as usize).min(last_x);
+            if let Some(&c) = pixels.get(sy.saturating_mul(stride).saturating_add(sx)) {
+                canvas.put(i64::from(x), i64::from(y), c);
+            }
+        }
+    }
+}
+
+/// Paint the wallpaper for `theme`.
+///
+/// Dark uses the embedded wave. Light is a solid Pearl field: the wave is a dark
+/// image and would not read as a light desktop. Both are opaque, with no
+/// gradients, so the glass above them samples real content rather than a wash.
 pub fn wallpaper(canvas: &mut Canvas, theme: &Theme) {
-    let w = canvas.width() as f32;
-    let h = canvas.height() as f32;
-    let base = px(theme.palette.bg_base);
+    paint_wallpaper(canvas, theme, WAVE_PNG);
+}
 
-    // A diagonal base gradient. Two stops, both derived from the theme so a
-    // light theme produces a light desktop without another branch here.
-    let deep = if theme.kind == ThemeKind::Light {
-        rgb(0xE9EDF4)
-    } else {
-        rgb(0x0A0D1F)
-    };
-    let far = if theme.kind == ThemeKind::Light {
-        rgb(0xFDFDFE)
-    } else {
-        rgb(0x06090F)
-    };
-    canvas.fill_vertical_gradient(Rect::new(0.0, 0.0, w, h), deep, far);
-    canvas.blend_px(0, 0, base, 0.0); // keeps `base` meaningful to the reader
-
-    // Washes are deliberately desaturated: a wallpaper is a backdrop for
-    // windows, not a demo of the gradient drawer. Saturated primaries here
-    // read through every glass surface as a coloured haze (the reason the
-    // first desktop looked like a gradient demo), so each wash sits in the
-    // muted band a real product ships.
+fn paint_wallpaper(canvas: &mut Canvas, theme: &Theme, png_bytes: &[u8]) {
+    let (w, h) = (canvas.width() as f32, canvas.height() as f32);
     if theme.kind == ThemeKind::Light {
-        canvas.radial_wash(w * 0.16, h * 0.12, w * 0.55, rgb(0xC9D6EC), 0.38);
-        canvas.radial_wash(w * 0.86, h * 0.24, w * 0.48, rgb(0xE8D3E2), 0.30);
-        canvas.radial_wash(w * 0.60, h * 0.96, w * 0.62, rgb(0xD2E6DF), 0.30);
-    } else {
-        canvas.radial_wash(w * 0.14, h * 0.10, w * 0.60, rgb(0x3A5AA8), 0.32);
-        canvas.radial_wash(w * 0.88, h * 0.22, w * 0.50, rgb(0x7A4E68), 0.24);
-        canvas.radial_wash(w * 0.62, h * 0.98, w * 0.66, rgb(0x2E6E64), 0.24);
+        canvas.fill_round_rect(Rect::new(0.0, 0.0, w, h), 0.0, rgb(0xF4_F2_ED));
+        return;
+    }
+    match decode_png(png_bytes) {
+        Some((iw, ih, pixels)) => paint_cover(canvas, iw, ih, &pixels),
+        None => canvas.fill_round_rect(Rect::new(0.0, 0.0, w, h), 0.0, rgb(0x11_13_18)),
     }
 }
 
@@ -1048,15 +1169,18 @@ mod tests {
     #[test]
     fn the_wallpaper_is_not_one_flat_colour() {
         // Glass over a flat colour proves nothing about glass.
+        // A grid, not three hand-picked points: the wave leaves most of the
+        // top of the frame at the solid base colour, so a few points can land
+        // there and say nothing about the ribbon.
         let mut c = Canvas::new(320, 200, rgb(0x000000));
         wallpaper(&mut c, &Theme::of(ThemeKind::Dark));
-        let a = c.get(10, 10).unwrap_or(0);
-        let b = c.get(300, 190).unwrap_or(0);
-        let m = c.get(160, 100).unwrap_or(0);
-        assert!(
-            a != b && b != m,
-            "wallpaper is flat: {a:08x} {b:08x} {m:08x}"
-        );
+        let mut seen = std::collections::BTreeSet::new();
+        for gy in 0..10 {
+            for gx in 0..16 {
+                seen.insert(c.get(gx * 20 + 10, gy * 20 + 10).unwrap_or(0));
+            }
+        }
+        assert!(seen.len() > 8, "wallpaper is nearly flat: {} colours", seen.len());
     }
 
     #[test]
@@ -1109,6 +1233,31 @@ mod tests {
         assert_eq!(utc_clock(34_860), "09:41 UTC");
         assert_eq!(utc_clock(86_399), "23:59 UTC");
         assert_eq!(utc_clock(86_400), "00:00 UTC", "midnight rolls over");
+    }
+
+    #[test]
+    fn the_embedded_wave_decodes_at_full_size() {
+        let (w, h, pixels) = decode_png(WAVE_PNG).expect("the shipped wave must decode");
+        assert_eq!((w, h), (1920, 1080));
+        assert_eq!(pixels.len(), 1920 * 1080);
+    }
+
+    #[test]
+    fn an_unreadable_wave_falls_back_to_solid_obsidian() {
+        let mut c = Canvas::new(320, 200, rgb(0x000000));
+        paint_wallpaper(&mut c, &Theme::of(ThemeKind::Dark), b"not a png");
+        for (x, y) in [(0, 0), (319, 0), (160, 100), (319, 199)] {
+            assert_eq!(c.get(x, y), Some(rgb(0x11_13_18)), "at ({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn the_light_wallpaper_is_solid_pearl() {
+        let mut c = Canvas::new(320, 200, rgb(0x000000));
+        wallpaper(&mut c, &Theme::of(ThemeKind::Light));
+        for (x, y) in [(0, 0), (160, 100), (319, 199)] {
+            assert_eq!(c.get(x, y), Some(rgb(0xF4_F2_ED)), "at ({x}, {y})");
+        }
     }
 
     // --- UI quality regression guards ------------------------------------

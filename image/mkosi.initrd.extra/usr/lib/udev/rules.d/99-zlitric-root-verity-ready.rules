@@ -1,0 +1,8 @@
+# LitricOS root dm-verity readiness
+#
+# cryptsetup first creates an empty device-mapper container, then changes it
+# into the verified root mapping.  systemd's stock rule has already recorded
+# the empty container as not ready, and the change event asks udev not to run
+# unrelated rules.  Tell systemd about exactly the mapping that veritysetup
+# just created.  The guards intentionally exclude all other dm devices.
+ACTION=="change", SUBSYSTEM=="block", KERNEL=="dm-[0-9]*", ENV{DM_NAME}=="root", ENV{DM_UUID}=="CRYPT-VERITY-*", ENV{SYSTEMD_READY}="1"

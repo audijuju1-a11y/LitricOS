@@ -672,7 +672,11 @@ pub fn text_field(
 
 /// A section heading inside a panel.
 pub fn section_label(canvas: &mut Canvas, t: &Tokens, at: (f32, f32), text: &str) {
-    font::draw(canvas, text, at.0, at.1, &t.style_label());
+    // Letter-spaced capitals are a Latin form: Thai has no capitals, and its
+    // vowel marks land on each other at this size. A translated "SYSTEM"
+    // arrived as a smear while "POWER" and "ENVIRONMENT" were fine, so the
+    // structural keyword is drawn literally and the dictionary is left to prose.
+    font::draw_literal(canvas, text, at.0, at.1, &t.style_label());
 }
 
 /// A hairline separator.
@@ -781,6 +785,24 @@ impl<T: Copy> Hotspots<T> {
         self.items.is_empty()
     }
 
+    /// Identifiers in paint order, including repeated identifiers for distinct
+    /// rows only once. Keyboard navigation uses the same registered controls as
+    /// pointer hit-testing, so a control cannot be focusable without being drawn.
+    pub fn ids(&self) -> impl Iterator<Item = T> + '_
+    where
+        T: PartialEq,
+    {
+        let mut seen = Vec::new();
+        self.items.iter().filter_map(move |(_, id)| {
+            if seen.contains(id) {
+                None
+            } else {
+                seen.push(*id);
+                Some(*id)
+            }
+        })
+    }
+
     /// Every registered rectangle, for damage tracking.
     #[must_use]
     pub fn rects(&self) -> Vec<Rect> {
@@ -850,6 +872,101 @@ pub fn cursor(canvas: &mut Canvas, x: f32, y: f32, scale: f32) {
 pub fn cursor_bounds(x: f32, y: f32, scale: f32) -> Rect {
     let s = 1.0_f32.max(scale);
     Rect::new(x - 3.0 * s, y - 3.0 * s, 20.0 * s, 26.0 * s)
+}
+
+/// Break `text` into lines that each fit `max_width`, at most `max_lines` of
+/// them, ending in an ellipsis when even that is not enough.
+///
+/// A desktop icon's label is a file name, and a file name is long:
+/// `Screencast-2026-10-16-14-12-35.webm` does not fit one 120-pixel line, and
+/// eliding it to `Scree...` throws away the only part that tells it apart from
+/// the file beside it. A label is therefore wrapped rather than cut, and only
+/// the text that will not fit `max_lines` is elided -- into the last line, so
+/// the ellipsis still appears where the name continues.
+///
+/// Lines break at the places a file name already has -- a space, a hyphen, an
+/// underscore, a dot, a slash -- and fall back to breaking between characters
+/// for a name with no break in it at all.
+#[must_use]
+pub fn wrap(text: &str, style: &Style, max_width: f32, max_lines: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() || max_lines == 0 || max_width <= 0.0 {
+        return Vec::new();
+    }
+    // Every line, as the index it starts at and the text it holds.
+    let mut lines: Vec<(usize, String)> = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let mut end = start;
+        let mut width = 0.0_f32;
+        let mut last_break: Option<usize> = None;
+        while let Some(&ch) = chars.get(end) {
+            // The first character of a line is taken even when it is wider than
+            // the room: a line that holds nothing never ends. Every *other*
+            // character pays for itself. This used to charge the first one 0px
+            // always, which made every line's width under-count by one glyph:
+            // `report-2026-10-16.txt` measures 120.14px at 12px and was accepted
+            // into a 120px cell, so a long name never wrapped at all -- the exact
+            // five-letter elision the wrap exists to replace, one glyph smaller.
+            let advance = font::measure(&ch.to_string(), style);
+            if width + advance > max_width && end > start {
+                break;
+            }
+            width += advance;
+            if is_break_char(ch) {
+                last_break = Some(end.saturating_add(1));
+            }
+            end = end.saturating_add(1);
+        }
+        // A break opportunity inside the line is where the line ends, so a
+        // wrapped name breaks between its words rather than mid-word.
+        let mut cut = end;
+        if end < chars.len() {
+            if let Some(at) = last_break {
+                if at > start {
+                    cut = at;
+                }
+            }
+        }
+        if cut <= start {
+            cut = start.saturating_add(1);
+        }
+        let Some(slice) = chars.get(start..cut) else {
+            break;
+        };
+        let line: String = slice.iter().collect();
+        lines.push((start, trim_trailing_space(&line)));
+        start = cut;
+        while chars.get(start) == Some(&' ') {
+            start = start.saturating_add(1);
+        }
+    }
+    if lines.len() > max_lines {
+        // More text than the icon can show: keep the first lines and let the
+        // last one say that the name continues.
+        let keep: Vec<(usize, String)> = lines.drain(..max_lines.saturating_sub(1)).collect();
+        let tail_start = lines.first().map_or(0, |(i, _)| *i);
+        let tail: String = chars
+            .get(tail_start..)
+            .map_or_else(String::new, |s| s.iter().collect());
+        let mut out: Vec<String> = keep.into_iter().map(|(_, l)| l).collect();
+        out.push(elide(&tail, style, max_width));
+        return out;
+    }
+    lines.into_iter().map(|(_, l)| l).collect()
+}
+
+/// Whether a character is a place a wrapped file name may break at.
+fn is_break_char(ch: char) -> bool {
+    matches!(ch, ' ' | '-' | '_' | '.' | '/' | ',')
+}
+
+/// `line` without the space it broke at. Nothing else is trimmed: a hyphen or
+/// a dot at the end of a line is part of the name -- `report-2026-10-16.txt`
+/// wraps to `report-2026-10-16.` and `txt`, and dropping that dot would show a
+/// name whose extension reads as part of its stem.
+fn trim_trailing_space(line: &str) -> String {
+    line.trim_end_matches(' ').to_owned()
 }
 
 /// Truncate text to fit a width, ending in an ellipsis.
@@ -1083,6 +1200,52 @@ mod tests {
         assert!(font::measure(&out, &style) <= 80.0, "{out:?} is too wide");
         assert!(out.ends_with("..."));
         assert_eq!(elide("short", &style, 500.0), "short", "no need to elide");
+    }
+
+    #[test]
+    fn a_long_file_name_wraps_instead_of_eliding_to_five_letters() {
+        let style = Style::new(12.0, rgb(0xFFFFFF));
+        let name = "report-2026-10-16.txt";
+        let lines = wrap(name, &style, 120.0, 2);
+        assert_eq!(
+            lines.len(),
+            2,
+            "a long name takes the second line: {lines:?}"
+        );
+        for line in &lines {
+            assert!(
+                font::measure(line, &style) <= 120.0,
+                "{line:?} is wider than the cell it was given"
+            );
+        }
+        // The whole name is on the icon, not the first five letters of it.
+        assert_eq!(lines.concat(), name, "two lines hold every character");
+    }
+
+    #[test]
+    fn a_name_too_long_for_two_lines_is_elided_where_it_stops_fitting() {
+        let style = Style::new(12.0, rgb(0xFFFFFF));
+        let name = "a-very-long-file-name-that-no-two-lines-can-hold-anyway.tar.gz";
+        let lines = wrap(name, &style, 120.0, 2);
+        assert_eq!(lines.len(), 2);
+        for line in &lines {
+            assert!(font::measure(line, &style) <= 120.0, "{line:?} is too wide");
+        }
+        assert!(
+            lines.last().is_some_and(|l| l.ends_with("...")),
+            "the last line has to say the name continues: {lines:?}"
+        );
+        // What *is* shown is still most of the name, which is the point: an
+        // elision at two lines beats an elision at five letters.
+        let shown: String = lines.join("");
+        assert!(shown.len() > 20, "{shown:?} is too little of the name");
+    }
+
+    #[test]
+    fn a_short_name_is_one_line_and_an_empty_one_is_none() {
+        let style = Style::new(12.0, rgb(0xFFFFFF));
+        assert_eq!(wrap("Documents", &style, 120.0, 2), vec!["Documents"]);
+        assert!(wrap("", &style, 120.0, 2).is_empty());
     }
 
     #[test]

@@ -1,0 +1,80 @@
+   Compiling litric-shell v0.2.0 (D:\LitricOS-151569\src\litric-shell)
+    Finished `release` profile [optimized] target(s) in 14.16s
+     Running `target\release\examples\render_bench.exe`
+canvas=1280x800
+full_frame.visited_px=5914284
+full_frame.min_ms=157.255
+full_frame.median_ms=164.631
+full_frame.mean_ms=164.963
+full_frame.stddev_ms=6.442
+full_frame.runs=15
+pointer_move.run0.full=true damage_rects=2 restored_px=1024000 changed_px=98580 visited_px=5926850
+pointer_move.run14.full=false damage_rects=2 restored_px=1440 changed_px=278971 visited_px=5005156
+pointer_move_frame.min_ms=164.016
+pointer_move_frame.median_ms=168.717
+pointer_move_frame.mean_ms=172.870
+pointer_move_frame.stddev_ms=11.224
+pointer_move_frame.runs=15
+open_window.run0.full=true damage_rects=5 restored_px=1024000 changed_px=584140 visited_px=12410961
+open_window.run14.full=true damage_rects=5 restored_px=1024000 changed_px=422897 visited_px=12361859
+open_window_frame.min_ms=367.241
+open_window_frame.median_ms=375.051
+open_window_frame.mean_ms=389.484
+open_window_frame.stddev_ms=29.727
+open_window_frame.runs=15
+blur_full_screen_r3_2passes.min_ms=81.572
+blur_full_screen_r3_2passes.median_ms=97.522
+blur_full_screen_r3_2passes.mean_ms=96.592
+blur_full_screen_r3_2passes.stddev_ms=11.975
+blur_full_screen_r3_2passes.runs=15
+blur_full_screen_r10_2passes.min_ms=77.419
+blur_full_screen_r10_2passes.median_ms=82.545
+blur_full_screen_r10_2passes.mean_ms=86.050
+blur_full_screen_r10_2passes.stddev_ms=7.704
+blur_full_screen_r10_2passes.runs=15
+blur_full_screen_r30_2passes.min_ms=75.162
+blur_full_screen_r30_2passes.median_ms=82.227
+blur_full_screen_r30_2passes.mean_ms=83.358
+blur_full_screen_r30_2passes.stddev_ms=5.889
+blur_full_screen_r30_2passes.runs=15
+present_full.bytes=4096000
+present_full.min_ms=5.574
+present_full.median_ms=5.968
+present_full.mean_ms=6.266
+present_full.stddev_ms=0.664
+present_full.runs=15
+present_pointer_damage.rows=32 bytes=163840
+present_pointer_damage.min_ms=0.164
+present_pointer_damage.median_ms=0.170
+present_pointer_damage.mean_ms=0.176
+present_pointer_damage.stddev_ms=0.019
+present_pointer_damage.runs=15
+lock.interval_ms=33
+lock_frame.full=true damage_rects=0 restored_px=0 visited_px=1909744
+lock_frame.sites_per_frame=draw=1571118 text=336624
+lock_frame.min_ms=34.614
+lock_frame.median_ms=35.819
+lock_frame.mean_ms=44.638
+lock_frame.stddev_ms=32.492
+lock_frame.runs=15
+lock_frame_entry.full=true damage_rects=0 restored_px=0 visited_px=2009989
+lock_frame_entry.sites_per_frame=draw=1672253 text=336222
+lock_frame_entry.min_ms=35.919
+lock_frame_entry.median_ms=37.983
+lock_frame_entry.mean_ms=65.623
+lock_frame_entry.stddev_ms=54.914
+lock_frame_entry.runs=15
+lock_frame_customize.full=true damage_rects=0 restored_px=0 visited_px=7270677
+lock_frame_customize.sites_per_frame=draw=2839923 shadow=4059796 text=369934
+lock_frame_customize.min_ms=177.489
+lock_frame_customize.median_ms=185.718
+lock_frame_customize.mean_ms=231.664
+lock_frame_customize.stddev_ms=74.689
+lock_frame_customize.runs=15
+lock_frame_still.full=true damage_rects=0 restored_px=0 visited_px=2001669
+lock_frame_still.sites_per_frame=draw=1669466 text=332203
+lock_frame_still.min_ms=34.650
+lock_frame_still.median_ms=36.843
+lock_frame_still.mean_ms=37.050
+lock_frame_still.stddev_ms=1.389
+lock_frame_still.runs=15

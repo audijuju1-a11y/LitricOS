@@ -427,17 +427,21 @@ impl FsBridge {
             }
             let name = logical.rsplit('/').next().unwrap_or_default().to_owned();
             let stamp = self.zone.local(i64::try_from(now_secs).unwrap_or(0));
-            let original_uri = format!("file://{logical}");
-            let record = format!(
-                "[Trash Info]\nPath={}\nDeletionDate={:04}-{:02}-{:02}T{:02}:{:02}:{:02}\n",
-                crate::fsbridge::pct_path(&original_uri),
-                stamp.year,
-                stamp.month,
-                stamp.day,
-                stamp.hour,
-                stamp.minute,
-                stamp.second,
+            let deleted_iso = format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+                stamp.year, stamp.month, stamp.day, stamp.hour, stamp.minute, stamp.second,
             );
+            // `Path=` is the original *location*: the absolute host pathname,
+            // which is what the Freedesktop specification requires. It used to
+            // be `file://<logical>`, which a conforming tool reads as a
+            // *relative* pathname and restores to the wrong place (BUG-0009).
+            //
+            // The format is not spelled out here any more. The daemon writes the
+            // same file, so it lives in one place —
+            // `litric_files::trashinfo` — and the two writers cannot drift. Two
+            // copies is how one defect came to be fixed twice (BUG-0011) with a
+            // third waiting quietly in the copy (BUG-0009).
+            let record = litric_files::trashinfo::record(&src, &deleted_iso);
             // The record is created FIRST, exclusively, which is both what the
             // specification requires and how the name is reserved: two
             // trashings of one filename get two entries instead of one entry
@@ -490,7 +494,15 @@ impl FsBridge {
                         let mut deleted = None;
                         for line in t.lines() {
                             if let Some(v) = line.strip_prefix("Path=") {
-                                original = Some(crate::fsbridge::unpct_path(v));
+                                // The stored value is an absolute host path — or,
+                                // for an entry an older build wrote, a `file://`
+                                // URI. `logical_location` maps both back to a
+                                // logical path; anything else it hands back
+                                // verbatim, so it cannot be mistaken for one.
+                                original = Some(litric_files::trashinfo::logical_location(
+                                    &self.host_root,
+                                    &litric_files::trashinfo::pct_decode(v),
+                                ));
                             } else if let Some(v) = line.strip_prefix("DeletionDate=") {
                                 deleted = Some(v.to_owned());
                             }
@@ -509,11 +521,10 @@ impl FsBridge {
                     continue;
                 }
                 let (original, deleted_iso) = raw;
-                // The original URI is `file:///Documents/x`; the restore
-                // destination is the directory part.
+                // The logical original is `/Documents/x`; the restore
+                // destination is its directory part.
                 let restore_dir = original
-                    .strip_prefix("file://")
-                    .and_then(|p| p.rsplit_once('/'))
+                    .rsplit_once('/')
                     // A file that lived in the root has an empty directory part,
                     // and `""` is not a path: the entry would be listed with
                     // nowhere to go back to, and `host_path("")` would resolve it
@@ -1004,45 +1015,11 @@ fn reserve_trash_name(
     Err(FsError::Io("no free trash name for that item".to_owned()))
 }
 
-/// `file:///Documents/a%20b.txt` — percent-encode for a `.trashinfo` Path=.
-#[cfg(unix)]
-#[must_use]
-fn pct_path(uri: &str) -> String {
-    let mut out = String::with_capacity(uri.len());
-    for b in uri.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'.' | b'_' | b'~') {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
-}
-
-/// The inverse of [`pct_path`].
-#[cfg(unix)]
-#[must_use]
-fn unpct_path(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes.get(i) == Some(&b'%') {
-            if let Some(hex) = s.get(i.saturating_add(1)..i.saturating_add(3)) {
-                if let Ok(b) = u8::from_str_radix(hex, 16) {
-                    out.push(b);
-                    i = i.saturating_add(3);
-                    continue;
-                }
-            }
-        }
-        if let Some(b) = bytes.get(i) {
-            out.push(*b);
-        }
-        i = i.saturating_add(1);
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
+// The `Path=` field's encoding and decoding, and the whole record's shape, used
+// to be spelled out here as well as in the daemon. Both writers now call
+// `litric_files::trashinfo`, so "the two agree" is a property of the code rather
+// than a promise in a comment — and, because that module is not `#[cfg(unix)]`,
+// the format is testable on a host that has no Unix at all.
 
 #[cfg(test)]
 #[allow(clippy::arithmetic_side_effects)]
@@ -1132,6 +1109,67 @@ mod tests {
         b.trash("/gone.txt", 1_900_000_100).unwrap();
         b.trash_purge("gone.txt").expect("purge");
         assert_eq!(b.trash_list().unwrap().len(), 0);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_trash_record_holds_the_absolute_location_not_a_uri() {
+        // BUG-0009, shell half. The shell writes the same directory the daemon
+        // does, so what it records has to be the item's real host location and
+        // has to be readable by the daemon's reader — otherwise the two writers
+        // share a directory they disagree about.
+        let root = temp_root("tr-abs");
+        let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).unwrap();
+        b.write_text("/", "gone.txt", "bye").unwrap();
+        b.trash("/gone.txt", 1_900_000_000).expect("trash");
+
+        let raw = std::fs::read_to_string(root.join(".local/share/Trash/info/gone.txt.trashinfo"))
+            .expect("the record was written");
+        let value = raw
+            .lines()
+            .find_map(|l| l.strip_prefix("Path="))
+            .expect("a Path= line");
+        let decoded = litric_files::trashinfo::pct_decode(value);
+        assert_eq!(decoded, root.join("gone.txt").to_string_lossy());
+        assert!(
+            litric_files::trashinfo::is_not_a_uri(&decoded),
+            "Path= must be a location, not a URI: {decoded:?}"
+        );
+        // The shared reader — the one the daemon's `DiskTrash` uses — maps the
+        // same bytes back to the logical path, so the entry restores in place.
+        assert_eq!(
+            litric_files::trashinfo::logical_location(&root, &decoded),
+            "/gone.txt"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_record_written_in_the_legacy_uri_form_still_lists_and_restores() {
+        // Changing the format must not strand a trash an older build wrote.
+        let root = temp_root("tr-legacy");
+        let base = root.join(".local/share/Trash");
+        std::fs::create_dir_all(base.join("files")).unwrap();
+        std::fs::create_dir_all(base.join("info")).unwrap();
+        std::fs::create_dir_all(root.join("Documents")).unwrap();
+        std::fs::write(base.join("files/old.txt"), "old").unwrap();
+        std::fs::write(
+            base.join("info/old.txt.trashinfo"),
+            "[Trash Info]\nPath=file%3A///Documents/old.txt\nDeletionDate=2026-01-01T00:00:00\n",
+        )
+        .unwrap();
+
+        let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).unwrap();
+        let list = b.trash_list().expect("list");
+        assert_eq!(list.len(), 1, "the legacy entry is still listed");
+        assert_eq!(
+            list.first().map(|e| e.restore_dir.as_str()),
+            Some("/Documents")
+        );
+        b.trash_restore("old.txt").expect("restores");
+        assert!(root.join("Documents/old.txt").exists());
         std::fs::remove_dir_all(&root).ok();
     }
 

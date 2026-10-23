@@ -1,0 +1,776 @@
+# Batch B05: Foundation & Core Crates (`src/litric-*`)
+
+This document provides exhaustive file-level and symbol-level analysis for the 32 files across the 10 foundation and core crates in `src/`.
+
+## `src/litric-caps/Cargo.toml`
+- **Crate**: `litric-caps` (Layer 3/4 Capability Vocabulary (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §15))
+- **Size & Digest**: 351 bytes, 13 lines, SHA-256 `e21f34b8df96d3676696a16a48110f87a01d717ab4fb8e3156ecf27887e715d9`
+- **Role & Responsibility**: Defines the 21 capability identifiers (`CapabilityId`), four risk levels (`Risk::Low`, `Medium`, `High`, `SystemOnly`), resource scopes (`Scope::Any`, `Scope::StorageUri`, `Scope::Host`), and authorization subsumption logic (`Capability::authorises`).
+- **Manifest Keys & Dependencies**:
+  - L2: `name        = "litric-caps"`
+  - L3: `description = "LitricOS capability engine: the single authority for every permission decision on the system"`
+  - L4: `version.workspace      = true`
+  - L5: `edition.workspace      = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace      = true`
+  - L10: `workspace = true`
+  - L13: `litric-core = { path = "../litric-core" }`
+- **Security & Correctness Guarantees**: Default-deny capability architecture: `Capability::new` enforces `ScopeKind` compatibility, rejects wildcard/empty host scopes, and ensures `Scope::StorageUri` only grants prefix-aligned directory subtrees (`/`) rather than arbitrary string prefixes.
+
+## `src/litric-caps/src/capability.rs`
+- **Crate**: `litric-caps` (Layer 3/4 Capability Vocabulary (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §15))
+- **Size & Digest**: 49735 bytes, 1305 lines, SHA-256 `b2c447f69701e482b292b93bfc71bd23b057cf99b6be5e97869bd7db7f3a6a5c`
+- **Role & Responsibility**: Defines the 21 capability identifiers (`CapabilityId`), four risk levels (`Risk::Low`, `Medium`, `High`, `SystemOnly`), resource scopes (`Scope::Any`, `Scope::StorageUri`, `Scope::Host`), and authorization subsumption logic (`Capability::authorises`).
+- **Module Documentation Summary**: Capability identifiers and resource scopes. A capability answers *what may be done*. A scope answers *to what*. They are separate on purpose, because the difference between them is the difference between a permission model that limits damage and one that does not: ```text fs.read                        "read any file"          -- blast radius: everything fs.read @ user://Documents/tax "read this one folder"   -- blast radius: one folder ``` ECOSY
+- **Public Symbols & Signatures (27)**:
+  - L26: `pub enum CapabilityId`
+  - L102: `pub const fn token(self) -> &'static str`
+  - L140: `pub fn parse(s: &str) -> Option<Self>`
+  - L179: `pub const fn all() -> &'static [Self]`
+  - L225: `pub const fn requires_live_consent(self) -> bool`
+  - L245: `pub const fn requires_active_indicator(self) -> bool`
+  - L268: `pub const fn scoping(self) -> Scoping`
+  - L293: `pub const fn prompt(self) -> &'static str`
+  - L331: `pub const fn risk(self) -> Risk`
+  - L374: `pub enum Scoping`
+  - L385: `pub enum Risk`
+  - L401: `pub enum Scope`
+  - L424: `pub enum ScopeError`
+  - L493: `pub const MAX_LEN: usize = 4096;`
+  - L507: `pub fn parse_uri(raw: &str) -> Result<Self, ScopeError>`
+  - L548: `pub fn parse_host(raw: &str) -> Result<Self, ScopeError>`
+  - L581: `pub fn parse_resource(raw: &str) -> Result<Self, ScopeError>`
+  - L620: `pub fn is_destructive(&self) -> bool`
+  - L648: `pub fn contains(&self, other: &Self) -> bool`
+  - L683: `pub fn as_str(&self) -> &str`
+  - L722: `pub struct Capability`
+  - L736: `pub fn new(id: CapabilityId, scope: Scope) -> Option<Self>`
+  - L753: `pub fn unscoped(id: CapabilityId) -> Option<Self>`
+  - L759: `pub const fn id(&self) -> CapabilityId`
+  - L765: `pub const fn scope(&self) -> &Scope`
+  - L771: `pub fn authorises(&self, request: &Self) -> bool`
+  - L784: `pub fn requires_live_consent(&self) -> bool`
+- **Unit Tests (28)**: `every_capability_round_trips_through_its_token` (L805), `tokens_are_unique` (L817), `every_capability_has_a_human_prompt` (L828), `unknown_tokens_are_rejected_not_guessed` (L838), `dangerous_capabilities_require_live_consent_and_an_indicator` (L847), `keylogging_and_screen_reading_are_classified_critical` (L873), `accepts_well_formed_storage_uris` (L884), `rejects_traversal_rather_than_resolving_it` (L898), `rejects_control_characters_and_unknown_schemes` (L916), `trailing_slashes_are_normalised_away` (L941), `prefix_containment_is_segment_aware` (L951), `the_root_scope_contains_everything_beneath_it_but_nothing_beside_it` (L979), `narrow_grant_does_not_authorise_its_parent` (L1012), `any_grant_covers_everything_but_a_specific_grant_never_covers_any` (L1021), `scope_kinds_never_cross` (L1029), `host_wildcards_match_subdomains_only` (L1037), `host_matching_is_case_insensitive` (L1054), `never_scoped_capabilities_refuse_a_scope` (L1063), `filesystem_capabilities_always_require_an_explicit_scope` (L1077), `network_capabilities_may_be_scoped_or_not` (L1103), `authorisation_requires_both_id_and_scope_to_match` (L1133), `resource_scopes_parse_into_their_own_kind` (L1156), `resource_scopes_reject_what_they_cannot_authorise` (L1183), `resource_containment_is_segment_aware` (L1210), `suspending_a_machine_is_not_the_same_grant_as_dimming_it` (L1233), `locking_the_screen_always_needs_the_user_in_the_moment` (L1257), `the_new_capabilities_are_not_silently_the_old_ones` (L1277), `display_form_is_stable` (L1294)
+- **Security & Correctness Guarantees**: Default-deny capability architecture: `Capability::new` enforces `ScopeKind` compatibility, rejects wildcard/empty host scopes, and ensures `Scope::StorageUri` only grants prefix-aligned directory subtrees (`/`) rather than arbitrary string prefixes.
+
+## `src/litric-caps/src/lib.rs`
+- **Crate**: `litric-caps` (Layer 3/4 Capability Vocabulary (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §15))
+- **Size & Digest**: 34792 bytes, 1002 lines, SHA-256 `df7aa38ad00927066939cf4a234651294caa7b2388996eb04baa731204fdc456`
+- **Role & Responsibility**: Defines the 21 capability identifiers (`CapabilityId`), four risk levels (`Risk::Low`, `Medium`, `High`, `SystemOnly`), resource scopes (`Scope::Any`, `Scope::StorageUri`, `Scope::Host`), and authorization subsumption logic (`Capability::authorises`).
+- **Module Documentation Summary**: The LitricOS capability engine. **Layer 2 / 3 (Core Services / System API).** This crate is the decision logic behind `litric-capd`, the single authority for every permission decision on the system. It depends downward on `litric-core` and on nothing else, and it performs no I/O — which is what makes it testable on any host and auditable by reading it. 1. **Deny by default.** An application with no grants can do nothing. There is no ambient autho
+- **Public Symbols & Signatures (37)**:
+  - L35: `pub mod capability;`
+  - L37: `pub use capability::{Capability, CapabilityId, Risk, Scope, ScopeError};`
+  - L43: `pub type Timestamp = u64;`
+  - L49: `pub enum Issuer`
+  - L65: `pub const fn token(self) -> &'static str`
+  - L77: `pub struct Grant`
+  - L88: `pub const fn new(capability: Capability, issuer: Issuer, issued_at: Timestamp) -> Self`
+  - L104: `pub const fn expiring(`
+  - L121: `pub const fn capability(&self) -> &Capability`
+  - L126: `pub const fn issuer(&self) -> Issuer`
+  - L131: `pub const fn issued_at(&self) -> Timestamp`
+  - L136: `pub const fn expires_at(&self) -> Option<Timestamp>`
+  - L141: `pub const fn revoked_at(&self) -> Option<Timestamp>`
+  - L150: `pub fn is_active(&self, now: Timestamp) -> bool`
+  - L164: `pub enum Reason`
+  - L199: `pub const fn token(&self) -> &'static str`
+  - L214: `pub struct Decision`
+  - L222: `pub const fn is_allowed(&self) -> bool`
+  - L227: `pub const fn reason(&self) -> &Reason`
+  - L234: `pub struct AuditEntry`
+  - L253: `pub struct Broker`
+  - L264: `pub const DEFAULT_AUDIT_CAP: usize = 4096;`
+  - L268: `pub fn new() -> Self`
+  - L278: `pub fn with_audit_capacity(cap: usize) -> Self`
+  - L289: `pub fn register(&mut self, app: AppId)`
+  - L295: `pub fn is_registered(&self, app: &AppId) -> bool`
+  - L303: `pub fn grant(&mut self, app: &AppId, grant: Grant)`
+  - L314: `pub fn revoke(&mut self, app: &AppId, id: CapabilityId, now: Timestamp) -> usize`
+  - L329: `pub fn revoke_all(&mut self, app: &AppId, now: Timestamp) -> usize`
+  - L360: `pub fn check(&mut self, app: &AppId, request: &Capability, now: Timestamp) -> Decision`
+  - L387: `pub fn check_with_consent(`
+  - L416: `pub fn would_allow(&self, app: &AppId, request: &Capability, now: Timestamp) -> Decision`
+  - L482: `pub fn grants_for(&self, app: &AppId) -> &[Grant]`
+  - L488: `pub fn active_capabilities(&self, app: &AppId, now: Timestamp) -> Vec<Capability>`
+  - L502: `pub fn audit_log(&self) -> &[AuditEntry]`
+  - L508: `pub fn audit_for(&self, app: &AppId) -> Vec<&AuditEntry>`
+  - L514: `pub fn purge_audit(&mut self)`
+- **Unit Tests (25)**: `an_app_with_no_grants_can_do_nothing` (L541), `an_unregistered_app_is_denied_and_distinguishable` (L561), `registration_conveys_no_authority` (L569), `a_grant_authorises_only_within_its_scope` (L581), `read_does_not_imply_write` (L603), `revocation_takes_effect_on_the_very_next_check` (L624), `revoking_one_capability_leaves_the_others_alone` (L643), `revoke_all_removes_everything_and_reports_the_count` (L659), `revocation_preserves_history` (L683), `an_expiring_grant_stops_working_at_its_deadline` (L699), `an_expired_grant_is_exactly_as_powerful_as_no_grant` (L720), `a_later_valid_grant_overrides_an_earlier_expired_one` (L729), `a_revoked_grant_does_not_shadow_a_valid_one` (L744), `a_destructive_scope_without_consent_is_refused_by_the_broker` (L765), `consent_is_not_a_grant` (L784), `a_capability_that_needs_no_consent_is_unaffected_by_the_flag` (L819), `a_refused_consent_is_recorded_with_its_reason` (L830), `both_allows_and_denies_are_recorded` (L843), `preview_checks_do_not_pollute_the_log` (L863), `the_audit_buffer_is_bounded` (L872), `the_user_can_purge_their_own_history` (L887), `audit_can_be_filtered_per_application` (L898), `one_apps_grant_never_authorises_another_app` (L915), `identity_is_case_normalised_so_a_lookalike_is_the_same_app_not_a_new_one` (L945), `full_lifecycle_of_a_photo_app` (L958)
+- **Security & Correctness Guarantees**: Default-deny capability architecture: `Capability::new` enforces `ScopeKind` compatibility, rejects wildcard/empty host scopes, and ensures `Scope::StorageUri` only grants prefix-aligned directory subtrees (`/`) rather than arbitrary string prefixes.
+
+## `src/litric-core/Cargo.toml`
+- **Crate**: `litric-core` (Layer 3/4 Shared Foundation Contract (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §14, §42))
+- **Size & Digest**: 348 bytes, 13 lines, SHA-256 `7e3a33ceb9b464d47d9b6b86b8b4e719244ad718435f346e39b38e4630f22b3d`
+- **Role & Responsibility**: Defines the immutable platform contract: validated `AppId` (reverse-DNS 3+ label identity), opaque `Handle` + `HandleKind`, structured `Error` + `ErrorKind`, semantic `Version` + `AbiVersion` (`litric-native-v1`), and strict RFC 3986 percent-encoding (`pct`) used across all LitricOS line protocols (`litric-sysd`, LBP/1, LFP/1).
+- **Manifest Keys & Dependencies**:
+  - L2: `name        = "litric-core"`
+  - L3: `description = "LitricOS shared types: identity, versioning, error taxonomy, handles"`
+  - L4: `version.workspace      = true`
+  - L5: `edition.workspace      = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace      = true`
+  - L10: `workspace = true`
+- **Security & Correctness Guarantees**: Prevents identity confusion (`AppId` enforces lowercase ASCII `[a-z0-9-]`, min 3 labels, non-digit label start, reserved `os.litric.*` check), path traversal (`as_path_component()`), and parser differentials (`pct::decode` rejects malformed `%` escapes or raw control/space bytes).
+
+## `src/litric-core/src/error.rs`
+- **Crate**: `litric-core` (Layer 3/4 Shared Foundation Contract (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §14, §42))
+- **Size & Digest**: 11778 bytes, 323 lines, SHA-256 `e2a3547ccec079457d098935132eb36d104196873e763b4894f2d8b3ba3c758a`
+- **Role & Responsibility**: Defines the immutable platform contract: validated `AppId` (reverse-DNS 3+ label identity), opaque `Handle` + `HandleKind`, structured `Error` + `ErrorKind`, semantic `Version` + `AbiVersion` (`litric-native-v1`), and strict RFC 3986 percent-encoding (`pct`) used across all LitricOS line protocols (`litric-sysd`, LBP/1, LFP/1).
+- **Module Documentation Summary**: The LitricOS error taxonomy. Implements the categories required by `LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` section 26. The rule that shapes this module: **do not collapse materially different failures into one generic state when callers need to make different decisions.** A caller asking "should I retry?" or "should I prompt the user for permission?" must be able to answer from the type, never from message text.
+- **Public Symbols & Signatures (16)**:
+  - L22: `pub enum ErrorKind`
+  - L63: `pub const fn is_retryable(self) -> bool`
+  - L72: `pub const fn is_permission_recoverable(self) -> bool`
+  - L83: `pub const fn is_security_event(self) -> bool`
+  - L93: `pub const fn token(self) -> &'static str`
+  - L119: `pub const fn from_wire(v: u16) -> Self`
+  - L141: `pub const fn to_wire(self) -> u16`
+  - L159: `pub struct Error`
+  - L168: `pub const fn new(domain: &'static str, kind: ErrorKind) -> Self`
+  - L182: `pub fn with_detail(domain: &'static str, kind: ErrorKind, detail: impl Into<String>) -> Self`
+  - L192: `pub const fn kind(&self) -> ErrorKind`
+  - L198: `pub const fn domain(&self) -> &'static str`
+  - L204: `pub fn detail(&self) -> Option<&str>`
+  - L210: `pub const fn is_retryable(&self) -> bool`
+  - L216: `pub const fn is_security_event(&self) -> bool`
+  - L233: `pub type Result<T> = core::result::Result<T, Error>;`
+- **Unit Tests (7)**: `wire_discriminants_round_trip` (L240), `abi_discriminants_are_frozen` (L270), `unknown_wire_value_degrades_instead_of_panicking` (L283), `integrity_failure_is_never_retryable` (L291), `transient_failures_are_retryable` (L301), `security_events_are_flagged_for_audit` (L308), `display_is_stable_and_machine_readable` (L317)
+- **Security & Correctness Guarantees**: Prevents identity confusion (`AppId` enforces lowercase ASCII `[a-z0-9-]`, min 3 labels, non-digit label start, reserved `os.litric.*` check), path traversal (`as_path_component()`), and parser differentials (`pct::decode` rejects malformed `%` escapes or raw control/space bytes).
+
+## `src/litric-core/src/handle.rs`
+- **Crate**: `litric-core` (Layer 3/4 Shared Foundation Contract (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §14, §42))
+- **Size & Digest**: 10294 bytes, 297 lines, SHA-256 `87974531e279322c29dd347d43335f5c2987eb3a88c0b51c7746471910ea22de`
+- **Role & Responsibility**: Defines the immutable platform contract: validated `AppId` (reverse-DNS 3+ label identity), opaque `Handle` + `HandleKind`, structured `Error` + `ErrorKind`, semantic `Version` + `AbiVersion` (`litric-native-v1`), and strict RFC 3986 percent-encoding (`pct`) used across all LitricOS line protocols (`litric-sysd`, LBP/1, LFP/1).
+- **Module Documentation Summary**: Opaque handles to system-owned objects. Per RUNTIME section 7 and section 5.2: applications reference kernel and service resources through opaque handles, never through exposed structs or guessable integers. Two properties matter and both are enforced by construction: 1. **A handle is meaningless outside its owning process.** The handle table is per-process; the same numeric value in two processes refers to two different things, or to nothing. 2.
+- **Public Symbols & Signatures (13)**:
+  - L28: `pub enum HandleKind`
+  - L60: `pub const fn token(self) -> &'static str`
+  - L100: `pub struct Handle(u64);`
+  - L111: `pub const INVALID: Self = Self(0);`
+  - L114: `pub const MAX_GENERATION: u32 = (1u32 << Self::GEN_BITS) - 1;`
+  - L124: `pub const fn new(kind: HandleKind, index: u32, generation: u32) -> Self`
+  - L133: `pub const fn from_raw(raw: u64) -> Self`
+  - L139: `pub const fn to_raw(self) -> u64`
+  - L145: `pub const fn index(self) -> u32`
+  - L151: `pub const fn generation(self) -> u32`
+  - L161: `pub const fn kind(self) -> Option<HandleKind>`
+  - L182: `pub const fn is_invalid(self) -> bool`
+  - L191: `pub fn is_kind(self, expected: HandleKind) -> bool`
+- **Unit Tests (7)**: `round_trips_all_fields` (L219), `boundary_values_survive` (L228), `generation_overflow_wraps_without_corrupting_neighbours` (L241), `stale_generation_is_a_different_handle` (L256), `unknown_kind_tag_does_not_panic` (L266), `invalid_handle_is_zero_and_typed_checks_fail` (L284), `kind_confusion_is_rejected` (L291)
+- **Security & Correctness Guarantees**: Prevents identity confusion (`AppId` enforces lowercase ASCII `[a-z0-9-]`, min 3 labels, non-digit label start, reserved `os.litric.*` check), path traversal (`as_path_component()`), and parser differentials (`pct::decode` rejects malformed `%` escapes or raw control/space bytes).
+
+## `src/litric-core/src/id.rs`
+- **Crate**: `litric-core` (Layer 3/4 Shared Foundation Contract (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §14, §42))
+- **Size & Digest**: 13367 bytes, 373 lines, SHA-256 `76238cbeb92ca35ac2e9da579c171749600eb9e1398d5d0320a32451a05572d9`
+- **Role & Responsibility**: Defines the immutable platform contract: validated `AppId` (reverse-DNS 3+ label identity), opaque `Handle` + `HandleKind`, structured `Error` + `ErrorKind`, semantic `Version` + `AbiVersion` (`litric-native-v1`), and strict RFC 3986 percent-encoding (`pct`) used across all LitricOS line protocols (`litric-sysd`, LBP/1, LFP/1).
+- **Module Documentation Summary**: Application identity. An [`AppId`] is the primary key of the whole platform: the sandbox is keyed on it, capability grants are keyed on it, storage namespaces are derived from it, and the audit log is indexed by it. Everything downstream trusts that an `AppId` value is well-formed, so **all validation happens here, once**. The threat this module defends against is identity confusion: if `com.example.app` and `com.example.App` and `com.example.app
+- **Public Symbols & Signatures (10)**:
+  - L19: `pub enum IdError`
+  - L107: `pub struct AppId(String);`
+  - L111: `pub const MAX_LEN: usize = 255;`
+  - L113: `pub const MAX_LABEL_LEN: usize = 63;`
+  - L115: `pub const MIN_LABELS: usize = 3;`
+  - L133: `pub fn parse(raw: &str) -> Result<Self, IdError>`
+  - L195: `pub fn parse_platform_reserved(raw: &str) -> Result<Self, IdError>`
+  - L204: `pub fn as_str(&self) -> &str`
+  - L210: `pub fn is_platform(&self) -> bool`
+  - L224: `pub fn as_path_component(&self) -> &str`
+- **Unit Tests (9)**: `accepts_ordinary_ids` (L240), `canonicalises_case` (L253), `rejects_structural_nonsense` (L263), `rejects_homograph_and_traversal_attempts` (L288), `rejects_hyphen_edges_and_leading_digits` (L308), `enforces_length_limits` (L324), `reserves_platform_namespace_from_third_parties` (L336), `near_miss_namespaces_are_not_reserved` (L350), `path_component_never_escapes` (L361)
+- **Security & Correctness Guarantees**: Prevents identity confusion (`AppId` enforces lowercase ASCII `[a-z0-9-]`, min 3 labels, non-digit label start, reserved `os.litric.*` check), path traversal (`as_path_component()`), and parser differentials (`pct::decode` rejects malformed `%` escapes or raw control/space bytes).
+
+## `src/litric-core/src/lib.rs`
+- **Crate**: `litric-core` (Layer 3/4 Shared Foundation Contract (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §14, §42))
+- **Size & Digest**: 970 bytes, 27 lines, SHA-256 `be110a953c64ad50f58e45d264d4b05c421f3e8c7d01a521ed88ef4d6e4e1170`
+- **Role & Responsibility**: Defines the immutable platform contract: validated `AppId` (reverse-DNS 3+ label identity), opaque `Handle` + `HandleKind`, structured `Error` + `ErrorKind`, semantic `Version` + `AbiVersion` (`litric-native-v1`), and strict RFC 3986 percent-encoding (`pct`) used across all LitricOS line protocols (`litric-sysd`, LBP/1, LFP/1).
+- **Module Documentation Summary**: LitricOS shared foundation types. Everything in this crate is part of the **public system contract**. Changing a type here is an ABI event, not a refactor — see `docs/adr/` and `LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` section 14. Design rules this crate follows, from RUNTIME section 42: * Structured errors, never strings. Applications must not parse English to decide what to do next. * Opaque handles for system-owned objects, so internal layout
+- **Public Symbols & Signatures (9)**:
+  - L18: `pub mod error;`
+  - L19: `pub mod handle;`
+  - L20: `pub mod id;`
+  - L21: `pub mod pct;`
+  - L22: `pub mod version;`
+  - L24: `pub use error::{Error, ErrorKind, Result};`
+  - L25: `pub use handle::{Handle, HandleKind};`
+  - L26: `pub use id::{AppId, IdError};`
+  - L27: `pub use version::{AbiVersion, Version, VersionError};`
+- **Unit Tests (0)**: Tested via sibling/crate test module
+- **Security & Correctness Guarantees**: Prevents identity confusion (`AppId` enforces lowercase ASCII `[a-z0-9-]`, min 3 labels, non-digit label start, reserved `os.litric.*` check), path traversal (`as_path_component()`), and parser differentials (`pct::decode` rejects malformed `%` escapes or raw control/space bytes).
+
+## `src/litric-core/src/pct.rs`
+- **Crate**: `litric-core` (Layer 3/4 Shared Foundation Contract (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §14, §42))
+- **Size & Digest**: 6991 bytes, 214 lines, SHA-256 `25d054a909286f10083b1dced7722d711b82bf36629a893e5459f923f2e3a2ca`
+- **Role & Responsibility**: Defines the immutable platform contract: validated `AppId` (reverse-DNS 3+ label identity), opaque `Handle` + `HandleKind`, structured `Error` + `ErrorKind`, semantic `Version` + `AbiVersion` (`litric-native-v1`), and strict RFC 3986 percent-encoding (`pct`) used across all LitricOS line protocols (`litric-sysd`, LBP/1, LFP/1).
+- **Module Documentation Summary**: Percent-encoding for LitricOS line protocols. Every LitricOS daemon speaks a text protocol of space-separated fields, one request per line (`litric-sysd`, LBP/1 in ADR-0018, LFP/1 in ADR-0019). A file name, a page title or a URL can contain spaces, newlines and bytes that are not UTF-8, so free text travels percent-encoded: every byte outside `A-Z a-z 0-9 - . _ ~` becomes `%XX`. One convention is added on top of RFC 3986: a field that is exactly 
+- **Public Symbols & Signatures (7)**:
+  - L22: `pub enum PctError`
+  - L58: `pub fn encode_bytes(bytes: &[u8]) -> String`
+  - L78: `pub fn encode(text: &str) -> String`
+  - L84: `pub fn encode_field(text: &str) -> String`
+  - L106: `pub fn decode_bytes(field: &str) -> Result<Vec<u8>, PctError>`
+  - L133: `pub fn decode(field: &str) -> Result<String, PctError>`
+  - L141: `pub fn decode_field(field: &str) -> Result<String, PctError>`
+- **Unit Tests (8)**: `every_byte_round_trips` (L154), `spaces_newlines_and_percent_are_escaped` (L165), `thai_text_round_trips_through_utf8_escapes` (L171), `empty_and_a_literal_dash_are_distinct_fields` (L179), `malformed_escapes_are_refused_not_passed_through` (L188), `raw_bytes_the_encoder_would_escape_are_refused` (L196), `lowercase_hex_is_accepted_on_input` (L205), `invalid_utf8_is_refused_for_text_but_available_as_bytes` (L210)
+- **Security & Correctness Guarantees**: Prevents identity confusion (`AppId` enforces lowercase ASCII `[a-z0-9-]`, min 3 labels, non-digit label start, reserved `os.litric.*` check), path traversal (`as_path_component()`), and parser differentials (`pct::decode` rejects malformed `%` escapes or raw control/space bytes).
+
+## `src/litric-core/src/version.rs`
+- **Crate**: `litric-core` (Layer 3/4 Shared Foundation Contract (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §14, §42))
+- **Size & Digest**: 10881 bytes, 328 lines, SHA-256 `3e20672c12665870b6b883ced81befb95afc90e011a3936fb6d5331fef2e6a0b`
+- **Role & Responsibility**: Defines the immutable platform contract: validated `AppId` (reverse-DNS 3+ label identity), opaque `Handle` + `HandleKind`, structured `Error` + `ErrorKind`, semantic `Version` + `AbiVersion` (`litric-native-v1`), and strict RFC 3986 percent-encoding (`pct`) used across all LitricOS line protocols (`litric-sysd`, LBP/1, LFP/1).
+- **Module Documentation Summary**: Versioning and ABI compatibility. Two different things live here and they must not be confused: * [`Version`] — an application's version. Ordering decides "is this an upgrade?", which drives anti-downgrade enforcement in the update path. * [`AbiVersion`] — the platform contract a binary was compiled against. Ordering is *not* the question; compatibility is. See `LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` section 14.
+- **Public Symbols & Signatures (16)**:
+  - L16: `pub enum VersionError`
+  - L46: `pub struct Version`
+  - L56: `pub const fn new(major: u32, minor: u32, patch: u32) -> Self`
+  - L69: `pub fn parse(raw: &str) -> Result<Self, VersionError>`
+  - L117: `pub const fn major(&self) -> u32`
+  - L122: `pub const fn minor(&self) -> u32`
+  - L127: `pub const fn patch(&self) -> u32`
+  - L132: `pub fn pre_release(&self) -> Option<&str>`
+  - L137: `pub const fn is_pre_release(&self) -> bool`
+  - L185: `pub struct AbiVersion`
+  - L192: `pub const CURRENT: Self = Self { major: 1, minor: 0 };`
+  - L196: `pub const fn new(major: u16, minor: u16) -> Self`
+  - L204: `pub fn parse(raw: &str) -> Result<Self, VersionError>`
+  - L226: `pub const fn can_host(self, target: Self) -> bool`
+  - L232: `pub const fn major(self) -> u16`
+  - L237: `pub const fn minor(self) -> u16`
+- **Unit Tests (6)**: `parses_and_orders_versions` (L253), `pre_release_sorts_below_its_release` (L263), `rejects_ambiguous_numeric_forms` (L276), `version_round_trips_through_display` (L293), `abi_hosting_is_asymmetric` (L301), `abi_parses_both_spellings` (L315)
+- **Security & Correctness Guarantees**: Prevents identity confusion (`AppId` enforces lowercase ASCII `[a-z0-9-]`, min 3 labels, non-digit label start, reserved `os.litric.*` check), path traversal (`as_path_component()`), and parser differentials (`pct::decode` rejects malformed `%` escapes or raw control/space bytes).
+
+## `src/litric-design/Cargo.toml`
+- **Crate**: `litric-design` (Layer 5 Foundation — Pure Design System Tokens (ADR-0009, DESIGN-SYSTEM-v3))
+- **Size & Digest**: 345 bytes, 12 lines, SHA-256 `a6db5c8be9a10c44d0ce9d5006b2fe7c18d796adc351736025928f42a09d9eae`
+- **Role & Responsibility**: Executable design tokens: WCAG 2.1 relative luminance and contrast math (`color.rs`), 4 themes (`Dark`, `Light`, `HighContrastDark`, `HighContrastLight`), `Palette`, adaptive `Glass` material (`MIN_TINT_ALPHA_PCT = 65`), 8-step `TypeStep` scale, 8-step `Space` scale, 6-step `Radius` scale, and 4 `Motion` spring presets (`INSTANT`, `FAST`, `NORMAL`, `SLOW` + `reduced()`).
+- **Manifest Keys & Dependencies**:
+  - L2: `name        = "litric-design"`
+  - L3: `description = "LitricOS design system: colour, type, spacing, motion and glass-material tokens, with contrast and legibility enforced by test"`
+  - L4: `version.workspace      = true`
+  - L5: `edition.workspace      = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace      = true`
+  - L10: `workspace = true`
+- **Security & Correctness Guarantees**: Prevents unreadable translucent glass UI: CI unit tests verify every theme's `text_primary` and `text_secondary` achieve WCAG AA (4.5:1) or AAA (7.0:1 for high-contrast themes) against worst-case pure white (`#FFFFFF`) and pure black (`#000000`) backdrops.
+
+## `src/litric-design/examples/tokens.rs`
+- **Crate**: `litric-design` (Layer 5 Foundation — Pure Design System Tokens (ADR-0009, DESIGN-SYSTEM-v3))
+- **Size & Digest**: 6565 bytes, 178 lines, SHA-256 `63e751c02e55c0356daab359d0ff81820424d0e5e63e958dd230da38834e1035`
+- **Role & Responsibility**: Executable design tokens: WCAG 2.1 relative luminance and contrast math (`color.rs`), 4 themes (`Dark`, `Light`, `HighContrastDark`, `HighContrastLight`), `Palette`, adaptive `Glass` material (`MIN_TINT_ALPHA_PCT = 65`), 8-step `TypeStep` scale, 8-step `Space` scale, 6-step `Radius` scale, and 4 `Motion` spring presets (`INSTANT`, `FAST`, `NORMAL`, `SLOW` + `reduced()`).
+- **Module Documentation Summary**: Emit every design token, and the adaptive-glass solution for a set of wallpapers, as JSON on stdout. This exists so that the published design page is *reported* rather than typed. A number written by hand into a document is a number that stops being true the first time the palette moves, and nobody notices, because documents do not fail. Run: ```text cargo run -p litric-design --example tokens > tokens.json ```
+- **Public Symbols & Signatures (0)**:
+- **Unit Tests (0)**: Tested via sibling/crate test module
+- **Security & Correctness Guarantees**: Prevents unreadable translucent glass UI: CI unit tests verify every theme's `text_primary` and `text_secondary` achieve WCAG AA (4.5:1) or AAA (7.0:1 for high-contrast themes) against worst-case pure white (`#FFFFFF`) and pure black (`#000000`) backdrops.
+
+## `src/litric-design/src/color.rs`
+- **Crate**: `litric-design` (Layer 5 Foundation — Pure Design System Tokens (ADR-0009, DESIGN-SYSTEM-v3))
+- **Size & Digest**: 7343 bytes, 225 lines, SHA-256 `6b8e23ae804ba4448fc48cc5e15ebd49d7ccae40fc3365b4fd13c1f80f0af7b5`
+- **Role & Responsibility**: Executable design tokens: WCAG 2.1 relative luminance and contrast math (`color.rs`), 4 themes (`Dark`, `Light`, `HighContrastDark`, `HighContrastLight`), `Palette`, adaptive `Glass` material (`MIN_TINT_ALPHA_PCT = 65`), 8-step `TypeStep` scale, 8-step `Space` scale, 6-step `Radius` scale, and 4 `Motion` spring presets (`INSTANT`, `FAST`, `NORMAL`, `SLOW` + `reduced()`).
+- **Module Documentation Summary**: Colour, luminance and contrast. Everything here exists to answer one question the design system must be able to answer mechanically: **can a person read this text on that surface?** Contrast is computed to WCAG 2.1, which defines relative luminance with a gamma decode and a fixed set of channel weights. It is not a matter of taste and it is not something to eyeball on a good monitor in a bright room.
+- **Public Symbols & Signatures (10)**:
+  - L14: `pub struct Rgb`
+  - L26: `pub const fn new(r: u8, g: u8, b: u8) -> Self`
+  - L32: `pub const fn hex(v: u32) -> Self`
+  - L42: `pub fn to_hex(self) -> String`
+  - L52: `pub fn luminance(self) -> f64`
+  - L68: `pub fn contrast(self, other: Self) -> f64`
+  - L81: `pub fn over(self, backdrop: Self, alpha: f64) -> Self`
+  - L103: `pub enum Conformance`
+  - L117: `pub fn of(ratio: f64) -> Self`
+  - L131: `pub fn passes_body_text(self) -> bool`
+- **Unit Tests (8)**: `hex_round_trips` (L142), `luminance_matches_the_wcag_reference_points` (L149), `contrast_black_on_white_is_the_maximum` (L162), `contrast_is_symmetric_and_self_is_one` (L168), `conformance_thresholds_are_the_wcag_ones` (L176), `compositing_at_the_extremes_is_exact` (L190), `compositing_is_clamped_against_out_of_range_alpha` (L198), `compositing_moves_luminance_monotonically` (L208)
+- **Security & Correctness Guarantees**: Prevents unreadable translucent glass UI: CI unit tests verify every theme's `text_primary` and `text_secondary` achieve WCAG AA (4.5:1) or AAA (7.0:1 for high-contrast themes) against worst-case pure white (`#FFFFFF`) and pure black (`#000000`) backdrops.
+
+## `src/litric-design/src/lib.rs`
+- **Crate**: `litric-design` (Layer 5 Foundation — Pure Design System Tokens (ADR-0009, DESIGN-SYSTEM-v3))
+- **Size & Digest**: 39821 bytes, 1139 lines, SHA-256 `abdda8de1040e9af072bbe712ddff843330a0fc8180debaca500f3e38f26245a`
+- **Role & Responsibility**: Executable design tokens: WCAG 2.1 relative luminance and contrast math (`color.rs`), 4 themes (`Dark`, `Light`, `HighContrastDark`, `HighContrastLight`), `Palette`, adaptive `Glass` material (`MIN_TINT_ALPHA_PCT = 65`), 8-step `TypeStep` scale, 8-step `Space` scale, 6-step `Radius` scale, and 4 `Motion` spring presets (`INSTANT`, `FAST`, `NORMAL`, `SLOW` + `reduced()`).
+- **Module Documentation Summary**: The LitricOS design system. **Layer 5 foundation.** Pure data and pure functions: no rendering, no toolkit, no I/O. `litric-shell` consumes these tokens; nothing else defines a colour, a radius or a duration. ADR-0009 makes that structurally true — there is one process drawing the UI, so there is no second toolkit that could disagree. Because the constraints are testable, and a stylesheet cannot fail CI. The specific thing this crate exists to pr
+- **Public Symbols & Signatures (39)**:
+  - L28: `pub mod color;`
+  - L30: `pub use color::{Conformance, Rgb};`
+  - L39: `pub enum ThemeKind`
+  - L54: `pub const fn all() -> &'static [Self]`
+  - L65: `pub const fn token(self) -> &'static str`
+  - L76: `pub const fn requires_aaa(self) -> bool`
+  - L87: `pub struct Palette`
+  - L114: `pub struct Theme`
+  - L126: `pub const fn of(kind: ThemeKind) -> Self`
+  - L215: `pub struct Glass`
+  - L237: `pub const MIN_TINT_ALPHA_PCT: u8 = 65;`
+  - L251: `pub const DARK: Self = Self`
+  - L272: `pub const LIGHT: Self = Self`
+  - L286: `pub const HIGH_CONTRAST: Self = Self`
+  - L300: `pub const MIN_AESTHETIC_ALPHA_PCT: u8 = 18;`
+  - L307: `pub const MAX_ADAPTIVE_ALPHA_PCT: u8 = 92;`
+  - L311: `pub fn tint_alpha(self) -> f64`
+  - L340: `pub fn adaptive_alpha_pct(tint: Rgb, text: Rgb, backdrop: Rgb, target: f64) -> Option<u8>`
+  - L361: `pub fn adapted_to(self, tint: Rgb, text: Rgb, backdrop: Rgb, target: f64) -> Self`
+  - L383: `pub fn effective_surface(self, tint: Rgb, backdrop: Rgb) -> Rgb`
+  - L395: `pub enum TypeStep`
+  - L417: `pub const fn all() -> &'static [Self]`
+  - L432: `pub const fn px(self) -> u16`
+  - L450: `pub const fn line_height_px(self) -> u16`
+  - L469: `pub const fn is_large_text(self) -> bool`
+  - L477: `pub enum Space`
+  - L499: `pub const fn all() -> &'static [Self]`
+  - L514: `pub const fn px(self) -> u16`
+  - L531: `pub enum Radius`
+  - L549: `pub const fn all() -> &'static [Self]`
+  - L562: `pub const fn px(self) -> u16`
+  - L585: `pub struct Motion`
+  - L596: `pub const INSTANT: Self = Self`
+  - L602: `pub const FAST: Self = Self`
+  - L608: `pub const NORMAL: Self = Self`
+  - L614: `pub const SLOW: Self = Self`
+  - L625: `pub const MAX_SETTLE_MS: u16 = 500;`
+  - L629: `pub const fn all() -> &'static [Self]`
+  - L638: `pub const fn reduced() -> Self`
+- **Unit Tests (25)**: `body_text_passes_aa_on_every_solid_surface_in_every_theme` (L658), `secondary_text_passes_aa_on_every_solid_surface` (L677), `text_on_accent_passes_aa_in_every_theme` (L698), `status_colours_are_readable_on_the_base_background` (L712), `body_text_stays_legible_on_glass_over_the_worst_backdrop` (L736), `secondary_text_stays_legible_on_glass_over_the_worst_backdrop` (L757), `adaptive_glass_is_far_more_transparent_over_a_dark_wallpaper` (L776), `adaptive_glass_firms_up_over_a_bright_wallpaper_without_being_told` (L802), `adaptive_glass_holds_aa_across_the_entire_backdrop_space` (L826), `adaptive_glass_returns_the_minimum_not_merely_a_sufficient_alpha` (L861), `adaptive_glass_never_becomes_a_hole_or_a_solid_slab` (L887), `high_contrast_glass_is_never_adapted` (L910), `every_theme_respects_the_glass_alpha_floor` (L931), `the_alpha_floor_is_where_legibility_actually_breaks` (L945), `high_contrast_themes_give_up_translucency_not_contrast` (L975), `the_type_scale_is_strictly_increasing_with_its_line_heights` (L996), `line_height_ratio_loosens_for_body_and_tightens_for_display` (L1018), `wcag_large_text_threshold_is_applied_at_24px` (L1035), `spacing_and_radius_scales_are_strictly_increasing` (L1043), `spacing_sits_on_a_grid` (L1057), `no_motion_token_exceeds_the_settle_budget` (L1071), `motion_tokens_are_ordered_and_springs_stay_damped` (L1083), `reduced_motion_settles_within_one_frame` (L1104), `theme_tokens_are_unique_and_every_theme_is_constructible` (L1115), `borders_are_visible_against_their_own_surface` (L1126)
+- **Security & Correctness Guarantees**: Prevents unreadable translucent glass UI: CI unit tests verify every theme's `text_primary` and `text_secondary` achieve WCAG AA (4.5:1) or AAA (7.0:1 for high-contrast themes) against worst-case pure white (`#FFFFFF`) and pure black (`#000000`) backdrops.
+
+## `src/litric-env/Cargo.toml`
+- **Crate**: `litric-env` (Layer 4/5 Execution Environment Model (ADR-0011))
+- **Size & Digest**: 391 bytes, 13 lines, SHA-256 `7d3e77c24a26121aa5daeb1fd842e88e7a4e4f958357ec8d1971ce72190780e7`
+- **Role & Responsibility**: Models LitricOS's 3 isolated execution environments (`EnvironmentId::Litric`, `Linux`, `Windows`), lifecycle states (`Cold`, `Starting`, `Ready`, `Suspended`, `Failed`), transition planning (`SwitchPlan`), resource budgets (`ResourceShare` summing to <= 100%), and strict cross-environment `BridgePolicy`.
+- **Manifest Keys & Dependencies**:
+  - L2: `name        = "litric-env"`
+  - L3: `description = "LitricOS environment manager: states, transitions, switching policy and resource budgets for LitricOS, Windows and Linux environments"`
+  - L4: `version.workspace      = true`
+  - L5: `edition.workspace      = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace      = true`
+  - L10: `workspace = true`
+  - L13: `litric-core = { path = "../litric-core" }`
+- **Security & Correctness Guarantees**: Enforces explicit cross-environment isolation: no implicit clipboard/filesystem sharing across environments; `SwitchAction::Freeze` pauses background environments within a 2-second grace window.
+
+## `src/litric-env/src/lib.rs`
+- **Crate**: `litric-env` (Layer 4/5 Execution Environment Model (ADR-0011))
+- **Size & Digest**: 41456 bytes, 1249 lines, SHA-256 `684337e35da53863df4a90bc86030e62a9a42a2a2ce98ea2f4307cbb87467898`
+- **Role & Responsibility**: Models LitricOS's 3 isolated execution environments (`EnvironmentId::Litric`, `Linux`, `Windows`), lifecycle states (`Cold`, `Starting`, `Ready`, `Suspended`, `Failed`), transition planning (`SwitchPlan`), resource budgets (`ResourceShare` summing to <= 100%), and strict cross-environment `BridgePolicy`.
+- **Module Documentation Summary**: LitricOS environment manager. **Layer 2 (Core Services).** Depends downward on `litric-core` and on nothing else. Performs no I/O and starts no virtual machines: it decides *what should happen* when the user presses `Win+N`, and `litric-envd` carries it out. Splitting the decision from the execution is what makes the policy testable on any host, with no hypervisor, which is why every rule below is backed by a test that runs today. LitricOS is the
+- **Public Symbols & Signatures (54)**:
+  - L42: `pub enum EnvironmentId`
+  - L54: `pub const fn all() -> &'static [Self]`
+  - L60: `pub const fn token(self) -> &'static str`
+  - L70: `pub const fn display_name(self) -> &'static str`
+  - L83: `pub const fn is_host(self) -> bool`
+  - L93: `pub const fn is_distributable(self) -> bool`
+  - L107: `pub enum EnvState`
+  - L127: `pub const fn token(self) -> &'static str`
+  - L141: `pub const fn consumes_cpu(self) -> bool`
+  - L151: `pub const fn holds_memory(self) -> bool`
+  - L162: `pub fn allowed_transitions(self) -> &'static [EnvState]`
+  - L183: `pub fn can_transition_to(self, next: Self) -> bool`
+  - L201: `pub enum Health`
+  - L218: `pub const fn token(self) -> &'static str`
+  - L234: `pub const fn switchable_without_warning(self) -> bool`
+  - L244: `pub struct Budget`
+  - L254: `pub const fn new(cpus: u32, memory_mb: u32) -> Self`
+  - L265: `pub struct HostReservation`
+  - L289: `pub struct Environment`
+  - L299: `pub const fn new(id: EnvironmentId, state: EnvState, budget: Budget) -> Self`
+  - L310: `pub const fn id(&self) -> EnvironmentId`
+  - L315: `pub const fn state(&self) -> EnvState`
+  - L320: `pub const fn health(&self) -> Health`
+  - L325: `pub const fn budget(&self) -> Budget`
+  - L330: `pub fn set_health(&mut self, health: Health)`
+  - L341: `pub enum SwitchOutcome`
+  - L372: `pub const fn will_switch(&self) -> bool`
+  - L385: `pub const fn latency_class(&self) -> LatencyClass`
+  - L399: `pub enum LatencyClass`
+  - L416: `pub struct Hotkey`
+  - L425: `pub const SUPER: u8 = 1 << 0;`
+  - L427: `pub const CTRL: u8 = 1 << 1;`
+  - L429: `pub const ALT: u8 = 1 << 2;`
+  - L431: `pub const SHIFT: u8 = 1 << 3;`
+  - L435: `pub const fn new(modifiers: u8, key: u16) -> Self`
+  - L445: `pub const fn has_modifier(self) -> bool`
+  - L453: `pub enum BindError`
+  - L482: `pub struct EnvironmentManager`
+  - L497: `pub const ESCAPE: Hotkey = Hotkey::new(Hotkey::CTRL | Hotkey::ALT, 0x0050);`
+  - L504: `pub fn new(total_cpus: u32, total_memory_mb: u32) -> Self`
+  - L540: `pub const fn active(&self) -> EnvironmentId`
+  - L546: `pub const fn reservation(&self) -> HostReservation`
+  - L552: `pub fn get(&self, id: EnvironmentId) -> Option<&Environment>`
+  - L558: `pub fn all(&self) -> Vec<&Environment>`
+  - L567: `pub fn binding_for(&self, key: Hotkey) -> Option<EnvironmentId>`
+  - L579: `pub fn rebind(&mut self, key: Hotkey, target: EnvironmentId) -> Result<(), BindError>`
+  - L604: `pub fn plan_switch(&self, target: EnvironmentId) -> SwitchOutcome`
+  - L638: `pub fn switch_to(&mut self, target: EnvironmentId) -> SwitchOutcome`
+  - L651: `pub fn transition(&mut self, id: EnvironmentId, next: EnvState) -> Result<(), TransitionError>`
+  - L682: `pub fn set_health(&mut self, id: EnvironmentId, health: Health) -> Result<(), TransitionError>`
+  - L701: `pub fn set_budget(&mut self, id: EnvironmentId, budget: Budget) -> Result<(), BudgetError>`
+  - L750: `pub fn committed_memory_mb(&self) -> u32`
+  - L761: `pub enum TransitionError`
+  - L797: `pub enum BudgetError`
+- **Unit Tests (20)**: `the_host_can_never_be_suspended_hibernated_or_stopped` (L859), `the_host_budget_cannot_be_set_by_anyone` (L884), `a_guest_cannot_be_budgeted_into_starving_the_host` (L893), `two_guests_are_budgeted_against_each_other_not_independently` (L928), `a_hibernated_guest_frees_its_memory_for_another` (L947), `suspend_holds_memory_and_hibernate_releases_it` (L968), `switching_reports_the_mechanism_not_just_success` (L981), `planning_a_switch_does_not_perform_it` (L1033), `a_failed_switch_leaves_the_display_where_it_was` (L1043), `a_compromised_environment_never_switches_silently` (L1052), `losing_the_active_environment_falls_back_to_the_host` (L1077), `a_failed_environment_is_reset_never_resumed` (L1095), `illegal_transitions_are_refused_without_mutating` (L1115), `the_default_bindings_are_win_1_2_3` (L1132), `the_escape_binding_always_reaches_the_host_and_cannot_be_taken` (L1149), `bindings_are_remappable_and_conflicts_are_refused` (L1168), `an_unmodified_key_cannot_be_a_switch_binding` (L1199), `windows_is_not_distributable_and_the_model_says_so` (L1212), `only_litric_is_the_host` (L1219), `tokens_are_unique_across_environments_and_states` (L1231)
+- **Security & Correctness Guarantees**: Enforces explicit cross-environment isolation: no implicit clipboard/filesystem sharing across environments; `SwitchAction::Freeze` pauses background environments within a 2-second grace window.
+
+## `src/litric-envd/Cargo.toml`
+- **Crate**: `litric-envd` (Layer 4 Environment Supervisor Daemon (`litric-envd` binary + library))
+- **Size & Digest**: 517 bytes, 22 lines, SHA-256 `c3311bd1cbb707b0cf1b440fefd16e94c9df6ef4cd8a65fe82d24be4b82f0b22`
+- **Role & Responsibility**: Supervises guest environments (`Linux` container and `Windows` KVM VM via `litric-winbridge`), builds deterministic launch commands (`CommandSpec`), tracks PIDs and exit codes (`GuestExit`), and writes `/run/litric/env/<env>.last-exit` every 500 ms.
+- **Manifest Keys & Dependencies**:
+  - L2: `name        = "litric-envd"`
+  - L3: `description = "LitricOS environment daemon: executes what litric-env decides — QEMU launch plans, guest supervision, suspend/resume"`
+  - L4: `version.workspace      = true`
+  - L5: `edition.workspace      = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace      = true`
+  - L10: `workspace = true`
+  - L13: `litric-core = { path = "../litric-core" }`
+  - L14: `litric-env  = { path = "../litric-env" }`
+  - L17: `name = "litric_envd"`
+  - L18: `path = "src/lib.rs"`
+  - L21: `name = "litric-envd"`
+  - L22: `path = "src/main.rs"`
+- **Security & Correctness Guarantees**: Runs with `#![forbid(unsafe_code)]`, systemd hardening (`ProtectSystem=strict`, `RuntimeDirectory=litric/env`), and refuses to launch `EnvironmentId::Litric` as a child guest.
+
+## `src/litric-envd/src/lib.rs`
+- **Crate**: `litric-envd` (Layer 4 Environment Supervisor Daemon (`litric-envd` binary + library))
+- **Size & Digest**: 25680 bytes, 743 lines, SHA-256 `5cd8e7120060b8054bc330e31e8bbf2b5a279dbd1a5cc9a987fa27f44a46aee2`
+- **Role & Responsibility**: Supervises guest environments (`Linux` container and `Windows` KVM VM via `litric-winbridge`), builds deterministic launch commands (`CommandSpec`), tracks PIDs and exit codes (`GuestExit`), and writes `/run/litric/env/<env>.last-exit` every 500 ms.
+- **Module Documentation Summary**: Litric environment daemon — the execution half of [`litric_env`]. **Layer 2/3 boundary.** [`litric_env`] decides (states, transitions, budgets, switch planning) and performs no I/O. This crate *executes*: it turns a decided transition into a real hypervisor action, and it is the only component permitted to start or stop a guest. A guest runs as a `qemu-system-x86_64` child process. Every property of that process — its CPU count, its memory ceilin
+- **Public Symbols & Signatures (27)**:
+  - L41: `pub enum PlanError`
+  - L78: `pub enum Firmware`
+  - L94: `pub struct Disk`
+  - L107: `pub struct LaunchPlan`
+  - L131: `pub fn monitor_socket(&self) -> PathBuf`
+  - L152: `pub fn launch_plan(`
+  - L192: `pub const QEMU_BINARY: &str = "qemu-system-x86_64";`
+  - L207: `pub fn build_argv(plan: &LaunchPlan) -> Vec<String>`
+  - L310: `pub fn build_command(plan: &LaunchPlan) -> Command`
+  - L320: `pub enum MonitorCommand`
+  - L334: `pub fn line(self, path: &str) -> String`
+  - L347: `pub struct GuestHandle`
+  - L358: `pub enum GuestExit`
+  - L373: `pub const fn new() -> Self`
+  - L383: `pub const fn is_running(&self) -> bool`
+  - L389: `pub const fn plan(&self) -> Option<&LaunchPlan>`
+  - L395: `pub const fn last_exit(&self) -> Option<&GuestExit>`
+  - L406: `pub fn spawn(&mut self, plan: LaunchPlan) -> std::io::Result<()>`
+  - L423: `pub fn poll(&mut self) -> Option<GuestExit>`
+  - L446: `pub fn kill(&mut self)`
+  - L467: `pub struct Supervisor`
+  - L476: `pub struct BTreeMapLite`
+  - L503: `pub fn new() -> Self`
+  - L511: `pub fn handle(&self, id: EnvironmentId) -> Option<&GuestHandle>`
+  - L519: `pub fn launch(&mut self, plan: LaunchPlan) -> std::io::Result<()>`
+  - L530: `pub fn poll(&mut self) -> Vec<(EnvironmentId, GuestExit)>`
+  - L542: `pub fn kill(&mut self, id: EnvironmentId)`
+- **Unit Tests (14)**: `the_argv_carries_the_approved_budget_and_nothing_else` (L577), `network_is_only_present_when_granted` (L586), `window_mode_uses_sdl_and_headless_uses_none` (L594), `the_monitor_socket_is_per_environment_and_per_run_directory` (L606), `no_reboot_is_always_passed` (L615), `the_host_never_gets_a_launch_plan` (L622), `a_running_guest_cannot_be_launched_again` (L637), `an_empty_budget_is_refused_before_any_disk_is_touched` (L657), `a_missing_disk_fails_the_plan_not_the_boot` (L672), `monitor_commands_spell_what_the_model_means` (L690), `the_supervisor_only_admits_guests` (L701), `a_guest_that_never_ran_has_no_exit_record` (L711), `killing_a_never_started_guest_is_a_no_op` (L720), `the_plan_round_trips_through_the_command_builder` (L728)
+- **Security & Correctness Guarantees**: Runs with `#![forbid(unsafe_code)]`, systemd hardening (`ProtectSystem=strict`, `RuntimeDirectory=litric/env`), and refuses to launch `EnvironmentId::Litric` as a child guest.
+
+## `src/litric-envd/src/main.rs`
+- **Crate**: `litric-envd` (Layer 4 Environment Supervisor Daemon (`litric-envd` binary + library))
+- **Size & Digest**: 1755 bytes, 45 lines, SHA-256 `c1c96180f601ad4dc0339f7d764f5fe12d38d6b40ebf9bd948298aeb22863955`
+- **Role & Responsibility**: Supervises guest environments (`Linux` container and `Windows` KVM VM via `litric-winbridge`), builds deterministic launch commands (`CommandSpec`), tracks PIDs and exit codes (`GuestExit`), and writes `/run/litric/env/<env>.last-exit` every 500 ms.
+- **Module Documentation Summary**: `litric-envd` — the environment daemon binary. A supervisor loop, deliberately small: it owns the [`Supervisor`], polls guest exits, and records state where the shell can read it. The full control protocol (hotkey wiring, the compositor's surface swap) lands with the shell integration; what ships today is the part that must be correct before anything sits on top of it — the launch/supervise/record core, running as a real process.
+- **Public Symbols & Signatures (0)**:
+- **Unit Tests (0)**: Tested via sibling/crate test module
+- **Security & Correctness Guarantees**: Runs with `#![forbid(unsafe_code)]`, systemd hardening (`ProtectSystem=strict`, `RuntimeDirectory=litric/env`), and refuses to launch `EnvironmentId::Litric` as a child guest.
+
+## `src/litric-locale/Cargo.toml`
+- **Crate**: `litric-locale` (Layer 3 System API — Time Zone & Regional Formatting)
+- **Size & Digest**: 300 bytes, 12 lines, SHA-256 `c005758e287e189f8686b086ef0c80e49a96bfb8f6dd42d695afe0bfa5f00862`
+- **Role & Responsibility**: Zero-dependency UTC civil calendar (`civil.rs` using Howard Hinnant's algorithm), RFC 8536 TZif v1/v2/v3 parser reading `/usr/share/zoneinfo` (`tz.rs`), and regional formatting (`locale.rs`) for 12/24h clocks, YMD/DMY/MDY dates, weekday headers, number grouping, and metric/imperial units.
+- **Manifest Keys & Dependencies**:
+  - L2: `name        = "litric-locale"`
+  - L3: `description = "LitricOS localisation: locale detection, IANA time zones, and regional formatting"`
+  - L4: `version.workspace      = true`
+  - L5: `edition.workspace      = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace      = true`
+  - L10: `workspace = true`
+- **Security & Correctness Guarantees**: Never fabricates timezone or locale data: if `/etc/localtime` or `TZ` is absent, falls back explicitly to `UTC` (`ZoneSource::FallbackUtc`) and `C` locale (`LocaleSource::Fallback`) and reports the fallback source in diagnostics.
+
+## `src/litric-locale/src/civil.rs`
+- **Crate**: `litric-locale` (Layer 3 System API — Time Zone & Regional Formatting)
+- **Size & Digest**: 11287 bytes, 350 lines, SHA-256 `8ae094f360634bb509718dd94540646712c06b8311b4c792847d6459ee4ebda9`
+- **Role & Responsibility**: Zero-dependency UTC civil calendar (`civil.rs` using Howard Hinnant's algorithm), RFC 8536 TZif v1/v2/v3 parser reading `/usr/share/zoneinfo` (`tz.rs`), and regional formatting (`locale.rs`) for 12/24h clocks, YMD/DMY/MDY dates, weekday headers, number grouping, and metric/imperial units.
+- **Module Documentation Summary**: Calendar arithmetic: seconds since the epoch to a date and back. Proleptic Gregorian, which is what Unix time is defined against. The conversion is Howard Hinnant's `civil_from_days`, a published algorithm whose correctness is established for every day in a ±32767-year range; it is implemented here rather than pulled in because the crate has no dependencies, and it is implemented *exactly* rather than approximately because a clock that is right e
+- **Public Symbols & Signatures (12)**:
+  - L16: `pub struct DateTime`
+  - L39: `pub enum Weekday`
+  - L58: `pub const ALL: [Self; 7] = [`
+  - L70: `pub fn from_monday_index(i: u32) -> Self`
+  - L76: `pub const fn monday_index(self) -> u32`
+  - L91: `pub const fn short_name(self) -> &'static str`
+  - L105: `pub const MONTH_SHORT: [&str; 12] = [`
+  - L111: `pub const fn days_in_month(year: i32, month: u8) -> u8`
+  - L123: `pub const fn is_leap(year: i32) -> bool`
+  - L135: `pub const fn days_from_civil(year: i32, month: u8, day: u8) -> i64`
+  - L190: `pub const fn from_unix(secs: i64) -> DateTime`
+  - L228: `pub const fn to_unix(dt: DateTime) -> i64`
+- **Unit Tests (9)**: `the_epoch_itself` (L241), `a_known_instant_round_trips` (L250), `dates_before_the_epoch_do_not_produce_nonsense` (L260), `a_leap_day_exists_and_the_day_after_it_is_march` (L270), `century_leap_rules_are_the_gregorian_ones` (L288), `every_day_of_a_leap_year_round_trips` (L304), `weekdays_advance_by_one_per_day_and_wrap` (L317), `a_far_future_date_is_still_right` (L327), `month_abbreviations_line_up_with_month_numbers` (L345)
+- **Security & Correctness Guarantees**: Never fabricates timezone or locale data: if `/etc/localtime` or `TZ` is absent, falls back explicitly to `UTC` (`ZoneSource::FallbackUtc`) and `C` locale (`LocaleSource::Fallback`) and reports the fallback source in diagnostics.
+
+## `src/litric-locale/src/lib.rs`
+- **Crate**: `litric-locale` (Layer 3 System API — Time Zone & Regional Formatting)
+- **Size & Digest**: 6928 bytes, 193 lines, SHA-256 `bc6a5d3cf4a1bfc1123f677c9938ebe321b4bae37063cf627ac61ab462e32c64`
+- **Role & Responsibility**: Zero-dependency UTC civil calendar (`civil.rs` using Howard Hinnant's algorithm), RFC 8536 TZif v1/v2/v3 parser reading `/usr/share/zoneinfo` (`tz.rs`), and regional formatting (`locale.rs`) for 12/24h clocks, YMD/DMY/MDY dates, weekday headers, number grouping, and metric/imperial units.
+- **Module Documentation Summary**: LitricOS localisation. **Layer 3 (System API).** No rendering, no devices, no clock of its own: it is handed a UTC instant and answers how this machine's user would write it. ```text UTC        what the kernel counts. No zone, no summer time. time zone  which offset applies at which instant. From /usr/share/zoneinfo. locale     how it is written. 24-hour or 12-hour, day before month. ``` They are independent. Somebody in Bangkok may prefer `en-GB
+- **Public Symbols & Signatures (14)**:
+  - L30: `pub mod civil;`
+  - L31: `pub mod locale;`
+  - L32: `pub mod tz;`
+  - L34: `pub use civil::{days_in_month, from_unix, is_leap, to_unix, DateTime, Weekday, MONTH_SHORT};`
+  - L35: `pub use locale::{DateOrder, HourCycle, Locale, LocaleSource, Measurement};`
+  - L36: `pub use tz::{detect, load_named, Offset, TimeZone, ZoneSource};`
+  - L43: `pub struct Regional`
+  - L53: `pub fn detect<F: Fn(&str) -> Option<String>>(root: &Path, env: F) -> Self`
+  - L64: `pub fn fallback(reason: &str) -> Self`
+  - L73: `pub fn local(&self, utc: i64) -> DateTime`
+  - L84: `pub fn clock(&self, utc: i64) -> String`
+  - L95: `pub fn date(&self, utc: i64) -> String`
+  - L104: `pub fn seconds_until_clock_changes(&self, utc: i64) -> i64`
+  - L116: `pub fn lines(&self, utc: i64) -> Vec<String>`
+- **Unit Tests (4)**: `an_undetectable_machine_says_utc_on_its_clock` (L140), `a_known_zone_shows_a_local_clock_with_no_suffix` (L148), `the_clock_sleeps_until_the_minute_turns` (L172), `detection_of_an_empty_root_is_honest_about_both_halves` (L181)
+- **Security & Correctness Guarantees**: Never fabricates timezone or locale data: if `/etc/localtime` or `TZ` is absent, falls back explicitly to `UTC` (`ZoneSource::FallbackUtc`) and `C` locale (`LocaleSource::Fallback`) and reports the fallback source in diagnostics.
+
+## `src/litric-locale/src/locale.rs`
+- **Crate**: `litric-locale` (Layer 3 System API — Time Zone & Regional Formatting)
+- **Size & Digest**: 24755 bytes, 699 lines, SHA-256 `c60d472e42b46e4768b239df8e0d13ec40babe332ad45b991b4d0845bc5782fe`
+- **Role & Responsibility**: Zero-dependency UTC civil calendar (`civil.rs` using Howard Hinnant's algorithm), RFC 8536 TZif v1/v2/v3 parser reading `/usr/share/zoneinfo` (`tz.rs`), and regional formatting (`locale.rs`) for 12/24h clocks, YMD/DMY/MDY dates, weekday headers, number grouping, and metric/imperial units.
+- **Module Documentation Summary**: Locale: what the user's region expects, separate from where the machine is. A locale decides how things are *written*. It does not decide what time it is — that is the time zone — and the two are genuinely independent: somebody in Bangkok may well prefer `en-GB` formatting, and a machine set to `th-TH` may be sitting in a rack in Frankfurt. Anything that reads one and assumes the other is wrong for real people. The region table below is a **heuri
+- **Public Symbols & Signatures (18)**:
+  - L26: `pub enum HourCycle`
+  - L35: `pub enum DateOrder`
+  - L46: `pub enum Measurement`
+  - L56: `pub enum LocaleSource`
+  - L76: `pub const fn is_known(&self) -> bool`
+  - L82: `pub fn token(&self) -> String`
+  - L132: `pub struct Locale`
+  - L189: `pub fn from_tag(raw: &str, source: LocaleSource) -> Self`
+  - L275: `pub fn detect<F: Fn(&str) -> Option<String>>(env: F, config: Option<&str>) -> Self`
+  - L311: `pub fn format_time(&self, dt: DateTime) -> String`
+  - L323: `pub fn format_time_seconds(&self, dt: DateTime) -> String`
+  - L335: `pub fn format_date(&self, dt: DateTime) -> String`
+  - L349: `pub fn format_date_medium(&self, dt: DateTime) -> String`
+  - L363: `pub fn week_header(&self) -> Vec<&'static str>`
+  - L372: `pub fn format_number(&self, value: f64, decimals: usize) -> String`
+  - L401: `pub fn format_percent(&self, fraction: f64, decimals: usize) -> String`
+  - L407: `pub fn format_temperature_c(&self, celsius: f64) -> String`
+  - L421: `pub fn lines(&self) -> Vec<String>`
+- **Unit Tests (18)**: `posix_and_bcp47_tags_both_parse` (L478), `a_language_without_a_region_is_accepted` (L488), `the_c_locale_is_the_fallback_and_is_not_american` (L496), `a_24_hour_locale_shows_a_24_hour_clock` (L510), `a_12_hour_locale_shows_a_12_hour_clock` (L520), `midnight_and_noon_are_twelve_not_zero` (L529), `seconds_are_available_without_changing_the_convention` (L538), `date_order_follows_the_region_and_no_country_is_hard_coded` (L546), `the_week_starts_where_the_region_starts_it` (L567), `numbers_use_the_regions_separators` (L582), `percentages_follow_the_number_format` (L594), `temperature_converts_for_the_regions_that_are_not_metric` (L602), `detection_follows_the_posix_precedence` (L611), `detection_falls_back_to_the_config_file_then_says_it_gave_up` (L631), `an_empty_environment_variable_is_ignored_rather_than_parsed` (L643), `the_keyboard_layout_comes_from_the_locale` (L653), `a_local_time_formats_the_same_instant_differently_in_two_places` (L671), `status_lines_say_where_every_setting_came_from` (L686)
+- **Security & Correctness Guarantees**: Never fabricates timezone or locale data: if `/etc/localtime` or `TZ` is absent, falls back explicitly to `UTC` (`ZoneSource::FallbackUtc`) and `C` locale (`LocaleSource::Fallback`) and reports the fallback source in diagnostics.
+
+## `src/litric-locale/src/tz.rs`
+- **Crate**: `litric-locale` (Layer 3 System API — Time Zone & Regional Formatting)
+- **Size & Digest**: 22186 bytes, 635 lines, SHA-256 `8eb6902251d5b46d6decd6dcecbd1edeb884961e82cec89a27879019996e1a51`
+- **Role & Responsibility**: Zero-dependency UTC civil calendar (`civil.rs` using Howard Hinnant's algorithm), RFC 8536 TZif v1/v2/v3 parser reading `/usr/share/zoneinfo` (`tz.rs`), and regional formatting (`locale.rs`) for 12/24h clocks, YMD/DMY/MDY dates, weekday headers, number grouping, and metric/imperial units.
+- **Module Documentation Summary**: IANA time zones, read from the system's own `zoneinfo` database. The clock in the top bar has to show the time where the machine is. Doing that correctly means three separate things, and conflating any two of them is how a desktop ends up an hour out twice a year: * **UTC** is what the kernel counts. It has no zone and no summer time. * **A time zone** is a rule: which offset applies at which instant. Not a number — `Europe/London` is +0 in Janua
+- **Public Symbols & Signatures (17)**:
+  - L31: `pub struct Offset`
+  - L43: `pub fn utc() -> Self`
+  - L53: `pub fn iso(&self) -> String`
+  - L70: `pub enum ZoneSource`
+  - L87: `pub const fn is_known(&self) -> bool`
+  - L93: `pub fn token(&self) -> String`
+  - L105: `pub struct TimeZone`
+  - L119: `pub fn utc(reason: &str) -> Self`
+  - L133: `pub fn name(&self) -> &str`
+  - L139: `pub const fn source(&self) -> &ZoneSource`
+  - L149: `pub fn offset_at(&self, utc: i64) -> &Offset`
+  - L174: `pub fn local(&self, utc: i64) -> civil::DateTime`
+  - L185: `pub fn next_transition(&self, utc: i64) -> Option<i64>`
+  - L194: `pub fn transition_count(&self) -> usize`
+  - L204: `pub fn parse(name: &str, data: &[u8], source: ZoneSource) -> Option<Self>`
+  - L367: `pub fn detect(root: &Path, tz_env: Option<&str>) -> TimeZone`
+  - L404: `pub fn load_named(root: &Path, name: &str, source: ZoneSource) -> Option<TimeZone>`
+- **Unit Tests (12)**: `a_fixed_offset_zone_parses_and_applies_everywhere` (L460), `a_zone_with_daylight_saving_changes_at_the_transition` (L473), `the_next_transition_is_findable_so_the_clock_knows_when_to_redraw` (L489), `local_time_is_utc_plus_the_offset_in_force` (L501), `a_negative_offset_moves_the_date_backwards` (L511), `offsets_that_are_not_whole_hours_format_correctly` (L533), `a_file_that_is_not_tzif_is_refused_rather_than_producing_an_empty_zone` (L551), `a_truncated_tzif_is_refused_rather_than_read_past_its_end` (L558), `utc_is_labelled_as_a_fallback_with_the_reason` (L570), `a_zone_name_cannot_escape_the_database` (L582), `detection_prefers_tz_then_localtime_then_says_it_gave_up` (L592), `a_machine_that_was_never_told_where_it_is_reports_utc_honestly` (L629)
+- **Security & Correctness Guarantees**: Never fabricates timezone or locale data: if `/etc/localtime` or `TZ` is absent, falls back explicitly to `UTC` (`ZoneSource::FallbackUtc`) and `C` locale (`LocaleSource::Fallback`) and reports the fallback source in diagnostics.
+
+## `src/litric-manifest/Cargo.toml`
+- **Crate**: `litric-manifest` (Layer 4 Runtime / SDK — Application Manifest Parser (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §26))
+- **Size & Digest**: 405 bytes, 14 lines, SHA-256 `2e36cd023127131de43740070d5496d71ae72c1657e2a5569eabc042a450f04a`
+- **Role & Responsibility**: Zero-I/O parser and validator for LitricOS `.manifest` files (strict INI subset with `[Application]`, `[Capabilities]`, `[Resources]`, `[Entrypoints]`), producing `Manifest`, `ResourceClass`, `LatencyClass`, and human-readable `consent_summary()`.
+- **Manifest Keys & Dependencies**:
+  - L2: `name        = "litric-manifest"`
+  - L3: `description = "LitricOS application manifest: parsing and validation of the declaration an installer shows the user"`
+  - L4: `version.workspace      = true`
+  - L5: `edition.workspace      = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace      = true`
+  - L10: `workspace = true`
+  - L13: `litric-core = { path = "../litric-core" }`
+  - L14: `litric-caps = { path = "../litric-caps" }`
+- **Security & Correctness Guarantees**: Hardened untrusted input parser (`MAX_LEN = 64 KiB`, `MAX_LINES = 2000`, `MAX_CAPABILITIES = 64`): rejects control characters, unknown sections/keys, duplicate keys (preventing last-wins bugs like BUG-0003), unknown/duplicate capabilities, and `..` in `Entrypoints.Main`.
+
+## `src/litric-manifest/src/lib.rs`
+- **Crate**: `litric-manifest` (Layer 4 Runtime / SDK — Application Manifest Parser (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §26))
+- **Size & Digest**: 30809 bytes, 953 lines, SHA-256 `b8ece1abfae1a2c5ccdc027a8c132b6c0a9c8b74fa312a689cc775706c590d10`
+- **Role & Responsibility**: Zero-I/O parser and validator for LitricOS `.manifest` files (strict INI subset with `[Application]`, `[Capabilities]`, `[Resources]`, `[Entrypoints]`), producing `Manifest`, `ResourceClass`, `LatencyClass`, and human-readable `consent_summary()`.
+- **Module Documentation Summary**: LitricOS application manifests. **Layer 4 (Runtime / SDK).** Depends downward on `litric-core` and `litric-caps`. No I/O: it turns bytes into a validated declaration, and the package service decides what to do with it. This parser runs **before any trust decision**. It reads bytes from a package that has not been installed, may not be signed, and may have been written specifically to attack it (RUNTIME section 26, load-time integrity). Every feat
+- **Public Symbols & Signatures (24)**:
+  - L45: `pub enum ResourceClass`
+  - L60: `pub fn parse(s: &str) -> Option<Self>`
+  - L72: `pub const fn token(self) -> &'static str`
+  - L91: `pub enum LatencyClass`
+  - L105: `pub fn parse(s: &str) -> Option<Self>`
+  - L116: `pub const fn token(self) -> &'static str`
+  - L137: `pub enum ManifestError`
+  - L264: `pub struct Manifest`
+  - L278: `pub const MAX_LEN: usize = 64 * 1024;`
+  - L280: `pub const MAX_LINES: usize = 2000;`
+  - L286: `pub const MAX_CAPABILITIES: usize = 64;`
+  - L290: `pub const fn id(&self) -> &AppId`
+  - L295: `pub fn name(&self) -> &str`
+  - L300: `pub const fn version(&self) -> &Version`
+  - L305: `pub fn publisher(&self) -> &str`
+  - L310: `pub const fn abi(&self) -> AbiVersion`
+  - L315: `pub fn capabilities(&self) -> &[Capability]`
+  - L320: `pub const fn resource_class(&self) -> ResourceClass`
+  - L325: `pub const fn latency_class(&self) -> LatencyClass`
+  - L330: `pub fn main(&self) -> &str`
+  - L336: `pub fn is_compatible_with(&self, platform: AbiVersion) -> bool`
+  - L346: `pub fn prompted_capabilities(&self) -> Vec<&Capability>`
+  - L358: `pub fn consent_summary(&self) -> Vec<String>`
+  - L372: `pub fn parse(text: &str) -> Result<Self, ManifestError>`
+- **Unit Tests (19)**: `parses_a_well_formed_manifest` (L630), `optional_sections_take_documented_defaults` (L644), `comments_blank_lines_and_whitespace_are_tolerated` (L665), `an_unknown_capability_is_a_hard_error` (L687), `an_unknown_key_or_section_is_a_hard_error` (L697), `a_duplicate_key_is_rejected_not_last_wins` (L712), `a_duplicate_capability_is_rejected` (L724), `every_required_field_is_actually_required` (L735), `rejects_a_malformed_application_id` (L756), `rejects_an_entrypoint_that_escapes_the_package` (L770), `rejects_a_capability_scope_with_traversal` (L787), `rejects_control_characters_used_to_smuggle_lines` (L799), `enforces_size_limits` (L817), `a_key_before_any_section_is_rejected` (L838), `parsing_never_panics_on_arbitrary_input` (L847), `the_consent_list_is_ordered_most_dangerous_first` (L867), `consent_lines_are_human_language_not_tokens` (L907), `abi_compatibility_is_asymmetric` (L921), `scoped_and_host_capabilities_both_parse` (L929)
+- **Security & Correctness Guarantees**: Hardened untrusted input parser (`MAX_LEN = 64 KiB`, `MAX_LINES = 2000`, `MAX_CAPABILITIES = 64`): rejects control characters, unknown sections/keys, duplicate keys (preventing last-wins bugs like BUG-0003), unknown/duplicate capabilities, and `..` in `Entrypoints.Main`.
+
+## `src/litric-storage/Cargo.toml`
+- **Crate**: `litric-storage` (Layer 3 System API — Logical Storage Namespace Broker (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §17))
+- **Size & Digest**: 399 bytes, 14 lines, SHA-256 `715809f5e7e61ffe0bfc86f1500be4b5b7bd3fa1e23cf899bd3d52e5d578cc7b`
+- **Role & Responsibility**: Parses logical `StorageUri` values across 7 schemes (`user://`, `media://`, `app://`, `cache://`, `config://`, `temp://`, `secure://`) and resolves them via `StorageBroker` and `Layout` into concrete filesystem paths after checking `Capability` grants.
+- **Manifest Keys & Dependencies**:
+  - L2: `name        = "litric-storage"`
+  - L3: `description = "LitricOS storage namespace broker: resolves logical URIs to real paths under capability control"`
+  - L4: `version.workspace      = true`
+  - L5: `edition.workspace      = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace      = true`
+  - L10: `workspace = true`
+  - L13: `litric-core = { path = "../litric-core" }`
+  - L14: `litric-caps = { path = "../litric-caps" }`
+- **Security & Correctness Guarantees**: Eliminates directory traversal and cross-app data access by construction: rejects `.` and `..` segments outright, requires `owner == caller` for per-app namespaces (`app://`, `cache://`, `config://`, `temp://`, `secure://`), refuses to resolve `secure://` to a filesystem path (`NotAFilesystemPath`), and requires `FsRead`/`FsWrite`/`FsList` capabilities for shared `user://` and `media://` URIs.
+
+## `src/litric-storage/src/lib.rs`
+- **Crate**: `litric-storage` (Layer 3 System API — Logical Storage Namespace Broker (`LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` §17))
+- **Size & Digest**: 34385 bytes, 1025 lines, SHA-256 `d42d76a30d896425384d1eed11b612f76f60d453a5f893ffcd014fbc18acd632`
+- **Role & Responsibility**: Parses logical `StorageUri` values across 7 schemes (`user://`, `media://`, `app://`, `cache://`, `config://`, `temp://`, `secure://`) and resolves them via `StorageBroker` and `Layout` into concrete filesystem paths after checking `Capability` grants.
+- **Module Documentation Summary**: LitricOS storage namespace broker. **Layer 3 (System API).** Depends downward on `litric-core` and `litric-caps`. Performs no I/O: it decides *which real path a logical URI means* and *whether the caller may have it*. The daemon that actually opens files calls in here first. `LITRIC_NATIVE_RUNTIME_ABI_SECURITY_v1.md` section 17 states the rule: *"An application must not assume `/dev/nvme0n1` or `C:\` exists in the native layer."* Applications add
+- **Public Symbols & Signatures (29)**:
+  - L51: `pub enum Namespace`
+  - L75: `pub const fn scheme(self) -> &'static str`
+  - L89: `pub const fn all() -> &'static [Self]`
+  - L107: `pub const fn is_per_app(self) -> bool`
+  - L120: `pub const fn requires_capability(self) -> bool`
+  - L126: `pub const fn is_persistent(self) -> bool`
+  - L132: `pub const fn is_discardable(self) -> bool`
+  - L146: `pub enum UriError`
+  - L205: `pub struct StorageUri`
+  - L216: `pub const MAX_LEN: usize = 4096;`
+  - L218: `pub const MAX_SEGMENT: usize = 255;`
+  - L224: `pub fn parse(raw: &str) -> Result<Self, UriError>`
+  - L292: `pub fn for_app(`
+  - L322: `pub const fn namespace(&self) -> Namespace`
+  - L328: `pub const fn owner(&self) -> Option<&AppId>`
+  - L334: `pub fn segments(&self) -> &[String]`
+  - L340: `pub fn to_uri(&self) -> String`
+  - L360: `pub fn as_scope(&self) -> Result<Scope, litric_caps::ScopeError>`
+  - L366: `pub fn is_within(&self, other: &Self) -> bool`
+  - L393: `pub struct Layout`
+  - L411: `pub fn for_home(home: &str) -> Self`
+  - L442: `pub enum ResolveError`
+  - L485: `pub enum Access`
+  - L497: `pub const fn capability(self) -> CapabilityId`
+  - L508: `pub struct StorageBroker`
+  - L515: `pub const fn new(layout: Layout) -> Self`
+  - L521: `pub const fn layout(&self) -> &Layout`
+  - L531: `pub fn required_capability(`
+  - L567: `pub fn resolve(`
+- **Unit Tests (21)**: `parses_every_namespace` (L625), `round_trips_through_the_canonical_form` (L646), `trailing_slash_is_normalised` (L661), `rejects_traversal_rather_than_resolving_it` (L672), `rejects_control_characters_backslashes_and_empty_segments` (L687), `rejects_unknown_and_absolute_paths` (L707), `private_namespace_requires_a_well_formed_owner` (L721), `parsing_never_panics_on_arbitrary_input` (L735), `containment_is_segment_wise` (L752), `containment_never_crosses_namespaces_or_owners` (L767), `one_app_cannot_reach_another_apps_private_storage` (L782), `an_app_reaches_its_own_private_storage_with_no_capability_at_all` (L806), `shared_namespaces_require_a_capability` (L828), `a_read_grant_does_not_permit_a_write` (L846), `a_grant_on_one_folder_does_not_reach_a_sibling` (L866), `resolution_places_each_namespace_under_its_own_root` (L889), `resolved_paths_never_escape_their_root` (L938), `secure_storage_has_no_filesystem_path` (L972), `namespace_properties_are_coherent` (L990), `schemes_are_unique` (L1004), `every_uri_produces_a_valid_capability_scope` (L1012)
+- **Security & Correctness Guarantees**: Eliminates directory traversal and cross-app data access by construction: rejects `.` and `..` segments outright, requires `owner == caller` for per-app namespaces (`app://`, `cache://`, `config://`, `temp://`, `secure://`), refuses to resolve `secure://` to a filesystem path (`NotAFilesystemPath`), and requires `FsRead`/`FsWrite`/`FsList` capabilities for shared `user://` and `media://` URIs.
+
+## `src/litric-text/Cargo.toml`
+- **Crate**: `litric-text` (Layer 5 Foundation — Offline OpenType Text Shaping & Glyph Rasterization)
+- **Size & Digest**: 304 bytes, 15 lines, SHA-256 `0793f7a8ded72319b3a329cded7bc7e15ecf14b1edaf7851a66ef9e39c4ebb90`
+- **Role & Responsibility**: Loads root-owned system fonts (`NotoSans`, `NotoSansThai`, `JetBrainsMono` in Regular and Bold) from `/usr/share/fonts`, shapes Unicode runs (including automatic Thai script run splitting `U+0E00..=U+0E7F`) with `harfrust`, rasterizes grayscale glyph masks with `fontdue`, and caches up to 512 shaped runs (`CACHE_LIMIT = 512`).
+- **Manifest Keys & Dependencies**:
+  - L2: `name = "litric-text"`
+  - L3: `description = "Offline OpenType shaping and software glyph rasterization for LitricOS"`
+  - L4: `version.workspace = true`
+  - L5: `edition.workspace = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace = true`
+  - L10: `workspace = true`
+  - L13: `fontdue = "0.9.4"`
+  - L14: `harfrust = "0.14.0"`
+- **Security & Correctness Guarantees**: Validates SFNT magic headers (`\0\x01\0\0`, `OTTO`, `true`, `typ1`), loads fonts exclusively from trusted system directories (unless overridden in tests), and uses `#![forbid(unsafe_code)]`.
+
+## `src/litric-text/src/lib.rs`
+- **Crate**: `litric-text` (Layer 5 Foundation — Offline OpenType Text Shaping & Glyph Rasterization)
+- **Size & Digest**: 24854 bytes, 708 lines, SHA-256 `6708e98b081e1c8284f6eac2733f401a7a06fd4695c2baf75142a763d6b7ae04`
+- **Role & Responsibility**: Loads root-owned system fonts (`NotoSans`, `NotoSansThai`, `JetBrainsMono` in Regular and Bold) from `/usr/share/fonts`, shapes Unicode runs (including automatic Thai script run splitting `U+0E00..=U+0E7F`) with `harfrust`, rasterizes grayscale glyph masks with `fontdue`, and caches up to 512 shaped runs (`CACHE_LIMIT = 512`).
+- **Module Documentation Summary**: Offline OpenType text layout for the LitricOS shell. Font files are read only from root-owned system font directories. Applications never provide font bytes. HarfRust shapes the Unicode run and fontdue turns the resulting glyph IDs into grayscale masks; the shell composites those masks into its existing software canvas.
+- **Public Symbols & Signatures (15)**:
+  - L23: `pub enum Face`
+  - L40: `pub struct Bitmap`
+  - L55: `pub struct Run`
+  - L94: `pub const DOCUMENTED_CAP_EM_RATIO: f32 = 0.7139;`
+  - L104: `pub struct Faces`
+  - L122: `pub const fn complete(self) -> bool`
+  - L128: `pub fn missing(self) -> Vec<&'static str>`
+  - L144: `pub struct TextSystem`
+  - L228: `pub fn load_system() -> Result<Self, String>`
+  - L240: `pub fn load_dir<P: AsRef<Path>>(dir: P) -> Result<Self, String>`
+  - L286: `pub fn from_bytes(`
+  - L362: `pub const fn faces(&self) -> Faces`
+  - L371: `pub const fn draws_thai(&self) -> bool`
+  - L377: `pub const fn cap_em_ratio(&self) -> f32`
+  - L382: `pub fn layout(&self, text: &str, face: Face, size: f32, tracking: f32) -> Option<Arc<Run>>`
+- **Unit Tests (5)**: `a_directory_with_no_latin_face_is_refused_with_the_paths_it_tried` (L618), `a_missing_script_face_is_substituted_rather_than_fatal` (L628), `the_documented_cap_ratio_matches_the_installed_face` (L660), `latin_regular_and_bold_have_distinct_real_weights` (L684), `mixed_english_and_thai_uses_shaped_thai_fallback` (L694)
+- **Security & Correctness Guarantees**: Validates SFNT magic headers (`\0\x01\0\0`, `OTTO`, `true`, `typ1`), loads fonts exclusively from trusted system directories (unless overridden in tests), and uses `#![forbid(unsafe_code)]`.
+
+## `src/litric-trash/Cargo.toml`
+- **Crate**: `litric-trash` (Layer 3 System API — freedesktop.org-Compatible Trash & Retention Policy)
+- **Size & Digest**: 347 bytes, 13 lines, SHA-256 `a6f6ba7753148d3f4cdc24b55b2033d2efc42855ea6b001c70dfdd791ed3ef47`
+- **Role & Responsibility**: Pure state machine for trashing, collision-safe naming (`unique_name`), non-overwriting restoration (`plan_restore` / `complete_restore`), permanent deletion, and age/capacity auto-emptying (`Retention`, `EmptyPlan`, `EmptyReason`).
+- **Manifest Keys & Dependencies**:
+  - L2: `name        = "litric-trash"`
+  - L3: `description = "LitricOS Trash: freedesktop.org-compatible deletion, restore and retention policy"`
+  - L4: `version.workspace      = true`
+  - L5: `edition.workspace      = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace      = true`
+  - L10: `workspace = true`
+  - L13: `litric-storage = { path = "../litric-storage" }`
+- **Security & Correctness Guarantees**: Prevents data loss: refuses to trash per-application private storage (`NotTrashable`), rejects items larger than total trash capacity (`TooLargeForTrash`), suffixes colliding filenames (`stem.2.ext`), and refuses to overwrite existing files on restore (`RestoreWouldOverwrite`).
+
+## `src/litric-trash/src/lib.rs`
+- **Crate**: `litric-trash` (Layer 3 System API — freedesktop.org-Compatible Trash & Retention Policy)
+- **Size & Digest**: 24030 bytes, 701 lines, SHA-256 `02c8f0d99a45190bad400fa4cebdcc3bdd600963d237a9a540225e6b2841a57f`
+- **Role & Responsibility**: Pure state machine for trashing, collision-safe naming (`unique_name`), non-overwriting restoration (`plan_restore` / `complete_restore`), permanent deletion, and age/capacity auto-emptying (`Retention`, `EmptyPlan`, `EmptyReason`).
+- **Module Documentation Summary**: LitricOS Trash. **Layer 3 (System API).** Depends downward on `litric-storage`. No I/O: it decides what a delete, a restore or an empty *means*, and `litric-filesd` performs it. This implements the freedesktop.org Trash specification rather than inventing a LitricOS format. A file trashed here stays trashable, listable and restorable by every other Linux tool, and a file trashed by another tool shows up in ours. A private format would buy nothing
+- **Public Symbols & Signatures (25)**:
+  - L43: `pub type Timestamp = u64;`
+  - L48: `pub enum TrashError`
+  - L95: `pub struct TrashedItem`
+  - L109: `pub fn name(&self) -> &str`
+  - L114: `pub const fn original(&self) -> &StorageUri`
+  - L119: `pub const fn deleted_at(&self) -> Timestamp`
+  - L124: `pub const fn size(&self) -> u64`
+  - L142: `pub struct Retention`
+  - L169: `pub struct EmptyPlan`
+  - L181: `pub enum EmptyReason`
+  - L194: `pub struct Trash`
+  - L202: `pub fn new(retention: Retention) -> Self`
+  - L211: `pub const fn retention(&self) -> Retention`
+  - L217: `pub fn items(&self) -> Vec<&TrashedItem>`
+  - L225: `pub fn used_bytes(&self) -> u64`
+  - L233: `pub fn len(&self) -> usize`
+  - L239: `pub fn is_empty(&self) -> bool`
+  - L250: `pub fn trash(`
+  - L323: `pub fn get(&self, name: &str) -> Option<&TrashedItem>`
+  - L335: `pub fn plan_restore(`
+  - L353: `pub fn complete_restore(&mut self, name: &str) -> Result<TrashedItem, TrashError>`
+  - L361: `pub fn delete_permanently(&mut self, name: &str) -> Result<TrashedItem, TrashError>`
+  - L366: `pub fn empty(&mut self) -> Vec<TrashedItem>`
+  - L379: `pub fn plan_auto_empty(&self, now: Timestamp) -> EmptyPlan`
+  - L428: `pub fn apply_auto_empty(&mut self, plan: &EmptyPlan) -> Vec<TrashedItem>`
+- **Unit Tests (17)**: `trashing_records_where_it_came_from` (L452), `a_name_collision_never_overwrites_the_earlier_file` (L464), `the_collision_suffix_keeps_the_extension_usable` (L489), `a_dotfile_is_not_treated_as_having_an_extension` (L500), `restore_returns_the_original_location` (L508), `restore_refuses_to_overwrite_whatever_is_there_now` (L522), `per_application_storage_does_not_go_to_the_user_trash` (L542), `an_item_larger_than_the_whole_trash_is_refused_rather_than_evicting_everything` (L560), `auto_empty_removes_by_age_oldest_first` (L575), `auto_empty_removes_by_capacity_oldest_first` (L591), `planning_an_empty_does_not_perform_it` (L607), `nothing_to_do_is_reported_as_nothing` (L620), `retention_can_be_disabled_and_then_only_capacity_applies` (L630), `used_bytes_tracks_add_and_remove` (L648), `emptying_returns_what_it_removed_oldest_first` (L661), `the_ledger_exposes_the_original_storage_uri_not_a_trashinfo_path` (L672), `missing_items_are_reported_not_silently_ignored` (L692)
+- **Security & Correctness Guarantees**: Prevents data loss: refuses to trash per-application private storage (`NotTrashable`), rejects items larger than total trash capacity (`TooLargeForTrash`), suffixes colliding filenames (`stem.2.ext`), and refuses to overwrite existing files on restore (`RestoreWouldOverwrite`).
+

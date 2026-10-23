@@ -79,6 +79,7 @@ ALLOWED = {
     },
     "src/litric-shell/src/e2e.rs": {
         "e2e_root": "removes the temporary fixture root it is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
+        "journey_files_selects_with_mouse_and_compresses_multiple_items": "removes the fixture root this journey made with `e2e_root` -- tagged with this process's id under the system temp directory -- after asserting the archive it asked for exists in it",
         "journey_defender_scans_and_reports_eicar_end_to_end": "removes the temporary root this journey created",
         "journey_trash_window_restores_after_files_trash": "removes the temporary root this journey created",
         "journey_right_click_desktop_menu_creates_a_folder_via_dialog": "removes the temporary root this journey created",
@@ -87,7 +88,26 @@ ALLOWED = {
     "src/litric-sysd/src/providers.rs": {
         "apply_file": "removes one Wi-Fi credential; the path is refused unless it is a direct child of iwd's state directory under the daemon root, and the network name was validated by `valid_ssid` before the path was built",
     },
+    "src/litric-shell/src/main.rs": {
+        "store_browser_data": "removes the `browser-data.conf.tmp.<pid>` file it created in the same call, and only on the failure path: the rename to the real path is what commits it, so the removal cannot touch anything but the temp file this process just made (BUG-0011 shape)",
+        "store_preferences": "removes the `settings.conf.tmp.<pid>` file it created in the same call, and only when the commit rename failed, so the removal cannot touch anything but the temp file this process just made (BUG-0011 shape)",
+    },
 }
+
+
+def blank(chunk):
+    """`chunk` with everything replaced by a space -- except newlines.
+
+    The newlines have to stay. `out.append(" " * (j - i))` in this function's
+    first version blanked a multi-line string literal into a single run of
+    spaces, which deleted the line breaks inside it, so every line below such a
+    literal was reported one line higher than it really is (main.rs builds its
+    `const USAGE` from continued string lines: 24 of them, so the check named
+    line 1071 for a deletion on 1093 and printed the line after it as evidence).
+    A linter that sends a reviewer to the wrong line is worse than no linter:
+    the first thing a review does is look where it was pointed.
+    """
+    return "".join("\n" if ch == "\n" else " " for ch in chunk)
 
 
 def code_only(text):
@@ -143,7 +163,7 @@ def code_only(text):
                 closer = '"' + "#" * hashes
                 end = text.find(closer, j + 1)
                 end = n if end == -1 else end + len(closer)
-                out.append(" " * (end - i))
+                out.append(blank(text[i:end]))
                 i = end
                 continue
         if ch == '"':
@@ -156,7 +176,7 @@ def code_only(text):
                     j += 1
                     break
                 j += 1
-            out.append(" " * (j - i))
+            out.append(blank(text[i:j]))
             i = j
             continue
         if ch == "'":
@@ -167,7 +187,7 @@ def code_only(text):
             else:
                 j += 1
             if j < n and text[j] == "'":
-                out.append(" " * (j + 1 - i))
+                out.append(blank(text[i : j + 1]))
                 i = j + 1
                 continue
         out.append(ch)

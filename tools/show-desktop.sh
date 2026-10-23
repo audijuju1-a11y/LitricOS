@@ -81,6 +81,21 @@ if [[ "$ACCEL" == "kvm" && ! -w /dev/kvm ]]; then
     log "/dev/kvm not writable -- using software emulation (slower)"
     ACCEL="tcg"
 fi
+
+# The display device, chosen by what this QEMU actually has.
+#
+# virtio-gpu-pci is the right device for a real machine and is what this script
+# asked for unconditionally -- and a QEMU built without it (Arch's qemu-base,
+# which is what the WSL builder has) exits with "'virtio-gpu-pci' is not a valid
+# device model name" before the firmware even runs, which reads like a broken
+# image rather than a missing device. VGA is the Bochs adapter every kernel can
+# drive through bochs-drm, and the guest kernel here has the fbdev emulation for
+# it, so the desktop lands on the same framebuffer either way.
+GPU=(-device virtio-gpu-pci,xres=1280,yres=800)
+if ! qemu-system-x86_64 -device help 2>/dev/null | grep -q '"virtio-gpu-pci"'; then
+    log "virtio-gpu-pci is not in this QEMU; using VGA for the guest display"
+    GPU=(-device VGA,vgamem_mb=32)
+fi
 CPU_ARGS=(-cpu host); [[ "$ACCEL" == "tcg" ]] && CPU_ARGS=(-cpu max)
 
 # WSLg quirk: the Wayland/EGL path has shown black or invisible windows here
@@ -120,8 +135,8 @@ exec qemu-system-x86_64 \
     -drive "if=pflash,format=raw,unit=1,file=${VARS}" \
     -drive "if=virtio,format=raw,file=${IMAGE}" \
     -device virtio-net-pci,netdev=n0,addr=0x0a -netdev user,id=n0 \
-    -device virtio-gpu-pci,xres=1280,yres=800 \
-    -device usb-ehci,id=ehci -device usb-tablet,bus=ehci.0 \
+    "${GPU[@]}" \
+    -device usb-ehci,id=ehci -device usb-tablet,bus=ehci.0 -device usb-kbd,bus=ehci.0 \
     -display "$BACKEND" \
     -monitor "unix:${LOG_DIR}/show-monitor.sock,server,nowait" \
     -serial "file:${LOG}" \

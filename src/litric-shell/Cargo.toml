@@ -18,6 +18,8 @@ litric-locale = { path = "../litric-locale" }
 litric-files  = { path = "../litric-files" }
 litric-defender = { path = "../litric-defender" }
 litric-core = { path = "../litric-core" }
+litric-text = { path = "../litric-text" }
+png = "0.18.1"
 
 [lib]
 name = "litric_shell"

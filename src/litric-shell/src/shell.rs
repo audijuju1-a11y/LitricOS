@@ -205,8 +205,19 @@ pub enum Overlay {
         /// Which window is highlighted.
         selected: usize,
     },
+    /// Mission Control: every window, on every workspace, at once.
+    Overview {
+        /// Which card is highlighted.
+        selected: usize,
+    },
     /// Quick settings.
     QuickSettings,
+    /// The power menu under the power and person icons on the right of the
+    /// system bar: lock, sleep, shut down, restart.
+    Power,
+    /// The LitricOS menu under the wordmark at the left of the system bar:
+    /// the session's own settings, and the lock.
+    Litro,
     /// The notification list.
     Notifications,
 }
@@ -225,39 +236,12 @@ impl Overlay {
             Self::None => "none",
             Self::Launcher { .. } => "launcher",
             Self::Switcher { .. } => "switcher",
+            Self::Overview { .. } => "overview",
             Self::QuickSettings => "quick-settings",
+            Self::Power => "power-menu",
+            Self::Litro => "litro-menu",
             Self::Notifications => "notifications",
         }
-    }
-}
-
-/// The shortcut chips across the top of the expanded launcher.
-///
-/// One list in one place: the draw side labels the buttons and the shell
-/// performs them, so a chip that is drawn is a chip that works — the same
-/// contract the context menu has.
-///
-/// The launcher's tiles are the applications; these are the *actions*, which is
-/// the addition this system makes to the prototype's design: the prototype put
-/// a link to its lock screen at the top right and left the rest to the grid.
-/// Here the row carries the things a launcher is for — the terminal, the file
-/// manager, settings, the monitor, the trash, the scanner.
-pub const SHORTCUT_CHIPS: [Action; 6] = [
-    Action::Open(App::Terminal),
-    Action::Open(App::Files),
-    Action::Open(App::Settings),
-    Action::Open(App::Activity),
-    Action::Open(App::Trash),
-    Action::OpenDefender,
-];
-
-/// The label on a shortcut chip.
-#[must_use]
-pub fn chip_label(action: Action) -> String {
-    match action {
-        Action::Open(app) => app.title().to_owned(),
-        Action::OpenDefender => App::Defender.title().to_owned(),
-        other => other.describe(),
     }
 }
 
@@ -278,6 +262,10 @@ pub enum Hot {
     QuickLink(u8),
     /// The terminal's input field.
     TerminalInput,
+    /// Clear the visible Terminal scrollback.
+    TerminalClear,
+    /// Start a fresh Terminal command session.
+    TerminalNewSession,
     /// The Apps menu.
     MenuApps,
     /// The Workspace menu.
@@ -302,12 +290,23 @@ pub enum Hot {
     StatusClock,
     /// The user menu.
     StatusUser,
+    /// A row in the power menu: lock, sleep, shut down, restart.
+    PowerItem(u8),
+    /// The LitricOS menu's session-settings row.
+    LitroSession,
+    /// The LitricOS menu's lock row.
+    LitroLock,
     /// A row in the launcher.
     LauncherItem(usize),
     /// The launcher's search field.
     LauncherSearch,
     /// A row in the window switcher.
     SwitcherItem(usize),
+    /// A window card in Mission Control.
+    OverviewItem(usize),
+    /// The dimmed desktop behind Mission Control: a click here puts the
+    /// overview away without choosing a window.
+    OverviewBackdrop,
     /// A toggle in quick settings.
     QuickToggle(u8),
     /// The power-profile selector in quick settings.
@@ -316,6 +315,24 @@ pub enum Hot {
     QuickEnvironment(u8),
     /// The browser's new-tab button.
     BrowserNewTab,
+    /// Navigate the active browser tab backward.
+    BrowserBack,
+    /// Navigate the active browser tab forward.
+    BrowserForward,
+    /// Add or remove the active address from bookmarks.
+    BrowserBookmark,
+    /// Show the recent history panel.
+    BrowserHistory,
+    /// Show saved addresses.
+    BrowserBookmarks,
+    /// Show downloaded files reported by browserd.
+    BrowserDownloads,
+    /// Show the current page's site permission state.
+    BrowserSitePermissions,
+    /// Open a history entry by its current visible index.
+    BrowserHistoryItem(usize),
+    /// Open a saved address by its index.
+    BrowserBookmarkItem(usize),
     /// A tab in the browser's tab strip.
     BrowserTab(usize),
     /// A tab's close button.
@@ -338,6 +355,18 @@ pub enum Hot {
     TrashEmpty,
     /// The Trash window's Restore button.
     TrashRestore,
+    /// The Trash window's permanently delete selected entry action.
+    TrashPurge,
+    /// Confirm a pending permanent Trash deletion.
+    TrashConfirm,
+    /// Cancel a pending permanent Trash deletion.
+    TrashCancel,
+    /// The Trash search field.
+    TrashFilter,
+    /// The Activity process search field.
+    ActivityFilter,
+    /// Sort the Activity table by a visible column.
+    ActivitySort(crate::taskmgr::Column),
     /// The lock screen's full-surface catcher: a click wakes the password
     /// field.
     LockWake,
@@ -357,14 +386,22 @@ pub enum Hot {
     LockReset,
     /// Close the customize sheet.
     LockDone,
+    /// A category row in Settings.
+    SettingsCategory(u8),
+    /// Change the shell interface language.
+    SettingsLanguage,
+    /// Cycle the supported colour themes.
+    SettingsTheme,
+    /// Toggle reduced motion in the shell.
+    SettingsMotion,
+    /// Finish first-run setup and show the desktop.
+    SetupDone,
     /// The dock's launcher button: expands the dock into the launcher.
     DockToggle,
     /// The dock's search bubble.
     DockSearch,
     /// Collapse the expanded dock back to its resting pill.
     DockCollapse,
-    /// A shortcut chip across the top of the expanded launcher.
-    LauncherShortcut(u8),
     /// The lock button at the top of the expanded launcher.
     DockLock,
     /// A dialog's confirm button.
@@ -377,6 +414,15 @@ pub enum Hot {
     NotificationsClear,
     /// The wallpaper.
     Desktop,
+}
+
+impl Hot {
+    /// Whether this hotspot is a useful stop in the shared keyboard focus
+    /// order. Full-surface catchers and window bodies are deliberately skipped.
+    #[must_use]
+    pub const fn keyboard_focusable(self) -> bool {
+        !matches!(self, Self::Window(_) | Self::Desktop | Self::LockWake)
+    }
 }
 
 /// How important a notification is.
@@ -746,6 +792,28 @@ pub struct SystemFacts {
     pub battery_charging: Option<bool>,
     /// Network state: `wifi`, `ethernet`, `offline`.
     pub network: Option<String>,
+    /// Bytes received on the machine's interfaces, cumulative, as the daemon
+    /// reports them (`net.iface ... rx=`). Loopback is left out: traffic that
+    /// never left the machine is not what a person watching a rate graph is
+    /// watching.
+    pub net_rx_bytes: Option<u64>,
+    /// Bytes transmitted, cumulative, on the same terms as
+    /// [`SystemFacts::net_rx_bytes`].
+    pub net_tx_bytes: Option<u64>,
+    /// Receive rate between the last two samples, bytes per second. `None`
+    /// until two samples a known interval apart exist, which is the same rule
+    /// the CPU's live figure follows.
+    pub net_rx_per_s: Option<f64>,
+    /// Transmit rate, bytes per second, on the same terms.
+    pub net_tx_per_s: Option<f64>,
+    /// When this sample was taken, on the shell's own clock, in milliseconds.
+    ///
+    /// Nothing else in the facts needs it: every other rate is a fraction of
+    /// the machine's own counters, which need no wall clock. A byte rate does,
+    /// so the time is carried from the one place that has a clock -- the
+    /// sample's entry to the shell -- rather than guessed from the frame
+    /// interval or assumed to be one second.
+    pub sampled_ms: Option<u64>,
     /// The CPU's model name, as the running kernel reports it. `None` when the
     /// kernel published none: the interface then shows no model rather than a
     /// name from a table compiled into the shell.
@@ -806,6 +874,52 @@ pub struct SystemFacts {
     pub auth_lock: Option<bool>,
     /// The user logged in on this machine, from logind's session record.
     pub session_user: Option<String>,
+    /// Keyboards, pointers and tablets the kernel is actually driving.
+    ///
+    /// Empty means the platform reported none, which on a desktop is a finding
+    /// worth showing: a machine with no keyboard attached and one whose
+    /// keyboard failed to probe both deliver no keystrokes, and Settings has to
+    /// be able to say which of the two it is looking at.
+    pub input_devices: Vec<InputDevice>,
+    /// Network interfaces, loopback included: a panel that hides `lo` is a
+    /// panel that cannot explain why the daemon is reachable on a machine with
+    /// no cable in it.
+    pub net_ifaces: Vec<NetIface>,
+    /// The Bluetooth verdict from the platform: `no-adapter`, `blocked`,
+    /// `no-daemon`, `ready` or `unknown`.
+    pub bt_state: Option<String>,
+    /// Bluetooth adapters, as `hci0 00:1a:7d:da:71:13`.
+    pub bt_adapters: Vec<String>,
+    /// Whether a Bluetooth daemon is installed.
+    pub bt_daemon: Option<bool>,
+    /// Sound cards, as `card0 HDA Intel PCH`.
+    pub audio_cards: Vec<String>,
+    /// Whether a sound server is running, as the platform reports it.
+    pub audio_server: Option<String>,
+}
+
+/// One input node, as Settings shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputDevice {
+    /// `/dev/input` node name, e.g. `event3`.
+    pub node: String,
+    /// The kernel's name for the device.
+    pub name: String,
+    /// `keyboard`, `mouse`, `tablet` or `other`.
+    pub kind: String,
+}
+
+/// One network interface, as Settings shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetIface {
+    /// Kernel name, e.g. `eth0`.
+    pub name: String,
+    /// `up`, `down` or `unknown`.
+    pub state: String,
+    /// The address, or `-` when the driver published none.
+    pub mac: String,
+    /// Whether the driver has a wireless directory.
+    pub wireless: bool,
 }
 
 /// One process as the system monitor shows it.
@@ -876,6 +990,23 @@ impl SystemFacts {
             .zip(self.core_ticks.iter())
             .filter_map(|(now, then)| tick_fraction(Some(*then), Some(*now)))
             .collect();
+        // Byte rates need three things: two counters and the time between them.
+        // A counter that went backwards (an interface reset, a machine that
+        // rebooted) produces nothing rather than a negative rate.
+        let seconds = match (self.sampled_ms, fresh.sampled_ms) {
+            (Some(then), Some(now)) => now
+                .checked_sub(then)
+                // Zero elapsed time is not a rate of zero, it is no measurement:
+                // dividing by it is how a shell reports an interface carrying
+                // infinity bytes a second.
+                .filter(|ms| *ms > 0)
+                .map(|ms| ms as f64 / 1000.0),
+            _ => None,
+        };
+        fresh.net_rx_per_s =
+            seconds.and_then(|s| byte_rate(self.net_rx_bytes, fresh.net_rx_bytes, s));
+        fresh.net_tx_per_s =
+            seconds.and_then(|s| byte_rate(self.net_tx_bytes, fresh.net_tx_bytes, s));
         // The process table's rates come from the same subtraction, against the
         // machine's own tick delta so a share reads as "of this machine" rather
         // than "of one core": eight cores fully busy is 1.0, not 8.0.
@@ -917,6 +1048,21 @@ pub fn tick_fraction(then: Option<(u64, u64)>, now: Option<(u64, u64)>) -> Optio
     Some((busy as f64 / elapsed as f64) as f32)
 }
 
+/// `(now - then) / seconds`, or `None` when the counters cannot support a
+/// rate. The `None` cases are the point: a first sample has nothing to subtract
+/// from, and a counter that went backwards is an interface that reset, not a
+/// machine receiving negative bytes.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+fn byte_rate(then: Option<u64>, now: Option<u64>, seconds: f64) -> Option<f64> {
+    let (then, now) = (then?, now?);
+    if seconds <= 0.0 {
+        return None;
+    }
+    let delta = now.checked_sub(then)?;
+    Some(delta as f64 / seconds)
+}
+
 impl SystemFacts {
     /// A value, or the word for "we do not know".
     #[must_use]
@@ -932,6 +1078,13 @@ impl Shell {
     /// the monitor has to see every sample the shell does; doing it in one place
     /// is what makes that true by construction rather than by remembering.
     pub fn sample(&mut self, fresh: SystemFacts) {
+        // The shell owns the clock, so the sample carries its time: a byte rate
+        // cannot be computed from counters alone. A caller that already stamped
+        // the facts -- a replay, a test -- keeps its own stamp.
+        let mut fresh = fresh;
+        if fresh.sampled_ms.is_none() {
+            fresh.sampled_ms = Some(self.now_ms);
+        }
         self.facts.observe(fresh);
         self.activity.observe(&self.facts);
     }
@@ -949,6 +1102,10 @@ pub enum Effect {
     /// machine that can check a password *and* a daemon that did not refuse —
     /// and otherwise shows [`Shell::lock_refusal`] as it stands.
     RequestLock,
+    /// Persist a shell-owned preference after applying it optimistically.
+    PersistPreferences(crate::settings::Preferences),
+    /// Persist Browser history and bookmarks after a user action.
+    PersistBrowserData,
     /// Check this password, and unlock if it verifies.
     ///
     /// The secret leaves the shell here and nowhere else. It is a [`Secret`] so
@@ -1179,6 +1336,28 @@ impl Shell {
                             t.error = true;
                         }
                         self.browser.status = line;
+                    } else if line.starts_with("DOWNLOADS ") {
+                        let total = line
+                            .split_whitespace()
+                            .nth(1)
+                            .and_then(|count| count.parse::<usize>().ok())
+                            .unwrap_or(0);
+                        self.browser.downloads_status = Some(format!("{total} file(s)"));
+                    } else if let Some(rest) = line.strip_prefix("DOWNLOAD ") {
+                        let mut parts = rest.split_whitespace();
+                        let name = parts
+                            .next()
+                            .and_then(|field| litric_core::pct::decode(field).ok())
+                            .unwrap_or_default();
+                        let size = parts
+                            .next()
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(0);
+                        if !name.is_empty() {
+                            self.browser
+                                .downloads
+                                .push(crate::apps::BrowserDownload { name, size });
+                        }
                     }
                 }
                 Incoming::Closed(_) => closed = true,
@@ -1284,15 +1463,17 @@ impl Shell {
         if cmd.is_empty() {
             return;
         }
-        self.terminal.echo_command(&cmd);
         #[cfg(unix)]
         {
             if self.terminal_job.is_some() {
                 self.terminal
                     .push_line("litric: a command is still running");
+                self.terminal.input = cmd;
                 self.request_full_redraw();
                 return;
             }
+            self.terminal.remember_command(&cmd);
+            self.terminal.echo_command(&cmd);
             let (tx, rx) = std::sync::mpsc::channel::<String>();
             self.terminal.busy = true;
             self.terminal_job = Some(rx);
@@ -1331,6 +1512,8 @@ impl Shell {
         }
         #[cfg(not(unix))]
         {
+            self.terminal.remember_command(&cmd);
+            self.terminal.echo_command(&cmd);
             self.terminal.note =
                 Some("การรันคำสั่ง Linux ต้องอยู่บน LitricOS เครื่องจริง — บิลด์นี้รันบนโฮสต์ Windows".to_owned());
         }
@@ -1386,7 +1569,18 @@ impl Shell {
                     .trash(&p, now)
                     .map(|_| format!("Moved to trash: {p}"))
             }
+            FilesOp::TrashMany(paths) => {
+                let now = u64::try_from(self.clock_seconds().max(0)).unwrap_or(0);
+                paths
+                    .iter()
+                    .try_for_each(|path| bridge.trash(path, now))
+                    .map(|()| format!("Moved {} selected items to trash", paths.len()))
+            }
             FilesOp::Delete(p) => bridge.delete(&p).map(|_| format!("Deleted: {p}")),
+            FilesOp::DeleteMany(paths) => paths
+                .iter()
+                .try_for_each(|path| bridge.delete(path))
+                .map(|()| format!("Permanently deleted {} selected items", paths.len())),
             FilesOp::PasteCopy => match self.files.clipboard.clone() {
                 Some((false, p)) => bridge
                     .copy(&p, &self.files.path)
@@ -1410,6 +1604,12 @@ impl Shell {
                     }
                     None => Err(crate::fsbridge::FsError::NotFound),
                 }
+            }
+            FilesOp::CompressMany { name, sources } => {
+                let dest = format!("{}/{}", self.files.path.trim_end_matches('/'), name);
+                bridge
+                    .compress(&dest, &sources)
+                    .map(|_| format!("Created {dest} from {} items", sources.len()))
             }
             FilesOp::Extract(p) => bridge.extract(&p).map(|d| format!("Extracted to {d}")),
         };
@@ -1557,6 +1757,11 @@ impl Shell {
             }
             MA::OpenTrash => return self.perform(Action::Open(App::Trash)),
             MA::EmptyTrash => {
+                if self.trash.confirm != Some(crate::apps::TrashConfirmation::Empty) {
+                    self.trash.confirm = Some(crate::apps::TrashConfirmation::Empty);
+                    return Vec::new();
+                }
+                self.trash.confirm = None;
                 let zone = self.regional.zone.clone();
                 let Ok(bridge) = self.try_files_bridge(zone) else {
                     self.trash.error = Some("the file service is not available".to_owned());
@@ -1579,25 +1784,60 @@ impl Shell {
                 }
             }
             MA::Restore => {
-                if let Some(name) = self.trash.selected_name() {
-                    let zone = self.regional.zone.clone();
-                    let Ok(bridge) = self.try_files_bridge(zone) else {
-                        self.trash.error = Some("the file service is not available".to_owned());
-                        return Vec::new();
-                    };
-                    match bridge.trash_restore(&name) {
-                        Ok(dir) => {
-                            self.trash.listed = false;
-                            self.notify(
-                                "Trash",
-                                "Restored",
-                                &format!("{name} back in {dir}"),
-                                Priority::Low,
-                                Some(4_000),
-                            );
+                if self.trash.has_visible_selection() {
+                    if let Some(name) = self.trash.selected_name() {
+                        let zone = self.regional.zone.clone();
+                        let Ok(bridge) = self.try_files_bridge(zone) else {
+                            self.trash.error = Some("the file service is not available".to_owned());
+                            return Vec::new();
+                        };
+                        match bridge.trash_restore(&name) {
+                            Ok(dir) => {
+                                self.trash.listed = false;
+                                self.notify(
+                                    "Trash",
+                                    "Restored",
+                                    &format!("{name} back in {dir}"),
+                                    Priority::Low,
+                                    Some(4_000),
+                                );
+                            }
+                            Err(e) => self.trash.error = Some(e.to_string()),
                         }
-                        Err(e) => self.trash.error = Some(e.to_string()),
                     }
+                }
+            }
+            MA::PurgeTrashItem => {
+                if !self.trash.has_visible_selection() {
+                    return Vec::new();
+                }
+                let Some(name) = self.trash.selected_name() else {
+                    return Vec::new();
+                };
+                let pending = crate::apps::TrashConfirmation::Purge(name.clone());
+                if self.trash.confirm.as_ref() != Some(&pending) {
+                    self.trash.confirm = Some(pending);
+                    return Vec::new();
+                }
+                self.trash.confirm = None;
+                let zone = self.regional.zone.clone();
+                let Ok(bridge) = self.try_files_bridge(zone) else {
+                    self.trash.error = Some("the file service is not available".to_owned());
+                    return Vec::new();
+                };
+                match bridge.trash_purge(&name) {
+                    Ok(()) => {
+                        self.trash.listed = false;
+                        self.trash.selected = None;
+                        self.notify(
+                            "Trash",
+                            "Deleted permanently",
+                            &name,
+                            Priority::Normal,
+                            Some(4_000),
+                        );
+                    }
+                    Err(e) => self.trash.error = Some(e.to_string()),
                 }
             }
             MA::OpenSelection => {
@@ -1609,7 +1849,7 @@ impl Shell {
                 }
             }
             MA::NextWallpaper => {
-                self.cycle_theme();
+                return self.cycle_theme();
             }
             MA::EngineGoogle => {
                 self.browser.engine = crate::apps::SearchEngine::Google;
@@ -1682,21 +1922,6 @@ impl Shell {
             );
         }
         Vec::new()
-    }
-
-    /// Cycle the desktop's theme: the wallpaper picker's one honest setting.
-    /// ThemeKind is non-exhaustive, so an unknown kind falls through to Dark.
-    pub fn cycle_theme(&mut self) {
-        let next = match self.tokens.theme.kind {
-            litric_design::ThemeKind::Dark => litric_design::ThemeKind::Light,
-            litric_design::ThemeKind::Light => litric_design::ThemeKind::HighContrastDark,
-            litric_design::ThemeKind::HighContrastDark => {
-                litric_design::ThemeKind::HighContrastLight
-            }
-            _ => litric_design::ThemeKind::Dark,
-        };
-        self.tokens = crate::ui::Tokens::new(litric_design::Theme::of(next), self.tokens.scale);
-        self.request_full_redraw();
     }
 
     /// Refresh the Trash listing when the window is open and stale.
@@ -1785,12 +2010,19 @@ pub struct Shell {
     pub mode: DesktopMode,
     /// Which overlay is showing.
     pub overlay: Overlay,
+    /// The last non-launcher overlay that has stopped receiving input but is
+    /// still being drawn through its exit spring. Keeping visual lifetime
+    /// separate from logical lifetime prevents a closing panel from stealing
+    /// clicks while also avoiding the old one-frame disappearance.
+    retiring_overlay: Option<Overlay>,
     /// Waiting notifications.
     pub notifications: Notifications,
     /// Quick settings.
     pub quick: QuickSettings,
     /// The environments.
     pub environments: Vec<EnvRow>,
+    /// Shell-owned language, theme and accessibility settings.
+    pub settings: crate::settings::Model,
     /// The numbers on screen.
     pub facts: SystemFacts,
     /// The Activity window's model: machine meters, the process table, and what
@@ -1815,17 +2047,21 @@ pub struct Shell {
     pub trash: crate::apps::TrashApp,
     /// The Terminal application model.
     pub terminal: crate::apps::TerminalApp,
-    /// Whether the dock is pinned open (off = auto-hide at the bottom edge).
-    pub dock_pinned: bool,
     /// The running terminal command's output channel (unix only).
     #[cfg(unix)]
     terminal_job: Option<std::sync::mpsc::Receiver<String>>,
     /// An open context menu, if any.
     pub context_menu: Option<crate::apps::ContextMenu>,
+    /// A context-menu snapshot retained only for its short visual exit.
+    retiring_context_menu: Option<crate::apps::ContextMenu>,
     /// The desktop's icon grid.
     pub desktop_icons: crate::apps::DesktopIcons,
     /// An open dialog on the desktop itself (new folder on the wallpaper).
     pub desktop_dialog: Option<crate::apps::DesktopDialog>,
+    /// A dialog that is logically gone but still completing its exit. It has
+    /// no hotspots, so confirmation and cancellation can never be repeated by
+    /// clicking a fading image of the old dialog.
+    retiring_desktop_dialog: Option<crate::apps::DesktopDialog>,
     /// The desktop dialog's text field.
     pub desktop_dialog_field: String,
     /// The desktop dialog field's selection.
@@ -1844,10 +2080,23 @@ pub struct Shell {
     /// the look. Every field it holds while locked is invisible to every other
     /// surface, because while it is locked nothing else is drawn at all.
     pub lock: crate::lock::LockState,
+    /// The lock surface's memory between frames: the picture behind it and the
+    /// blurred copy its glass panels sample.
+    ///
+    /// Kept here rather than in [`crate::lock::LockState`] because it is a
+    /// picture, not a state: the same surface draws whatever is in the cache,
+    /// and dropping the cache changes nothing a person can see.
+    pub lock_cache: crate::lock::Cache,
 
     hot: Hotspots<Hot>,
     pointer: Point,
+    /// The pointer's last move, when that move changed nothing but the pointer
+    /// itself: no hover change, no drag, no title-bar zone crossed. The
+    /// compositor can then animate the arrow without composing the desktop.
+    cursor_step: Option<(Point, Point)>,
     hovered: Option<Hot>,
+    /// Current target in the shell-wide Tab/Shift+Tab focus order.
+    keyboard_focus: Option<Hot>,
     pressed: Option<Hot>,
     meta_tap: MetaTap,
     last_input_ms: u64,
@@ -1867,22 +2116,105 @@ pub struct Shell {
     frames: u64,
     /// The shell's overlay springs, stepped once per frame in `tick`.
     anims: crate::anim::ShellAnims,
+    /// Notification copies retained while their banner spring exits. The live
+    /// notification queue remains authoritative; this is drawing data only and
+    /// is bounded by the queue's capacity plus at most one short exit per item.
+    retiring_banners: Vec<Notification>,
     /// Whether Alt is still held while the switcher is open.
     switcher_holding: bool,
     /// The focused window when damage was last taken. A focus change repaints
     /// both windows and the top bar's title.
     drawn_focus: Option<WindowId>,
+    /// The dock's fully open rectangle, as the draw side last laid it out.
+    /// Damaged instead of the whole screen while the dock animates.
+    dock_settled: Option<Rect>,
     /// The clock text as of the last time the shell's time moved. The top bar
     /// is damaged when it changes and not otherwise.
     drawn_clock: String,
+    /// When the boot intro started, or `None` when no intro is playing.
+    boot_started_ms: Option<u64>,
 }
 
+/// How long the boot intro runs, in ms. The pen write takes most of it; the
+/// rest is the short hold before the desktop takes over.
+pub const BOOT_INTRO_MS: u64 = 2_400;
+
+/// The part of the intro during which the pen writes the mark. The remainder
+/// holds the finished mark before the desktop appears.
+pub const BOOT_WRITE_MS: u64 = 1_900;
+
 impl Shell {
+    /// Replace startup defaults with a validated preference record.
+    pub fn load_preferences(&mut self, preferences: crate::settings::Preferences) {
+        self.settings = crate::settings::Model::new(preferences);
+        self.tokens.theme = litric_design::Theme::of(preferences.theme);
+        self.quick.reduce_motion = preferences.reduce_motion;
+        self.request_full_redraw();
+    }
+
+    /// Begin a shell-owned preference update and return its persistence effect.
+    fn save_preferences(&mut self, preferences: crate::settings::Preferences) -> Vec<Effect> {
+        let Some(next) = self.settings.begin(preferences) else {
+            return Vec::new();
+        };
+        self.tokens.theme = litric_design::Theme::of(next.theme);
+        self.quick.reduce_motion = next.reduce_motion;
+        self.request_full_redraw();
+        vec![Effect::PersistPreferences(next)]
+    }
+
+    /// Complete a preference write, rolling back the live theme and motion if
+    /// persistence failed.
+    pub fn finish_preferences_save(&mut self, result: Result<(), String>) {
+        self.settings.finish(result);
+        let preferences = self.settings.preferences;
+        self.tokens.theme = litric_design::Theme::of(preferences.theme);
+        self.quick.reduce_motion = preferences.reduce_motion;
+        self.request_full_redraw();
+    }
+
+    fn toggle_language(&mut self) -> Vec<Effect> {
+        let mut next = self.settings.preferences;
+        next.language = match next.language {
+            crate::i18n::Language::Thai => crate::i18n::Language::English,
+            crate::i18n::Language::English => crate::i18n::Language::Thai,
+        };
+        self.save_preferences(next)
+    }
+
+    fn cycle_theme(&mut self) -> Vec<Effect> {
+        let themes = litric_design::ThemeKind::all();
+        let current = self.settings.preferences.theme;
+        let next_theme = themes
+            .iter()
+            .position(|kind| *kind == current)
+            .and_then(|index| themes.get(index.saturating_add(1)).copied())
+            .or_else(|| themes.first().copied());
+        let Some(theme) = next_theme else {
+            return Vec::new();
+        };
+        let mut next = self.settings.preferences;
+        next.theme = theme;
+        self.save_preferences(next)
+    }
+
+    fn toggle_reduced_motion(&mut self) -> Vec<Effect> {
+        let mut next = self.settings.preferences;
+        next.reduce_motion = !next.reduce_motion;
+        self.save_preferences(next)
+    }
+
     /// A desktop for a display of this size.
     #[must_use]
     pub fn new(tokens: Tokens, width: f32, height: f32, regional: Regional) -> Self {
         let top = tokens.px(Self::TOP_BAR_LOGICAL);
         let drawn_clock = regional.clock(0);
+        let theme = tokens.theme.kind;
+        let language = if regional.locale.tag.starts_with("en") {
+            crate::i18n::Language::English
+        } else {
+            crate::i18n::Language::Thai
+        };
         Self {
             wm: WindowManager::new(width, height, top),
             tokens,
@@ -1890,9 +2222,13 @@ impl Shell {
             regional,
             mode: DesktopMode::Loading,
             overlay: Overlay::None,
+            retiring_overlay: None,
             notifications: Notifications::default(),
             quick: QuickSettings::default(),
             environments: Vec::new(),
+            settings: crate::settings::Model::new(crate::settings::Preferences::new(
+                theme, language,
+            )),
             facts: SystemFacts::default(),
             activity: crate::taskmgr::TaskManager::new(),
             files: crate::apps::FilesApp::default(),
@@ -1901,12 +2237,13 @@ impl Shell {
             defender: DefenderState::default(),
             trash: crate::apps::TrashApp::default(),
             terminal: crate::apps::TerminalApp::new(),
-            dock_pinned: false,
             #[cfg(unix)]
             terminal_job: None,
             context_menu: None,
-            desktop_icons: crate::apps::DesktopIcons::standard(),
+            retiring_context_menu: None,
+            desktop_icons: crate::apps::DesktopIcons::minimal(),
             desktop_dialog: None,
+            retiring_desktop_dialog: None,
             desktop_dialog_field: String::new(),
             desktop_dialog_selection: None,
             browser_session: None,
@@ -1914,9 +2251,12 @@ impl Shell {
             diagnostics: false,
             idle_policy: IdlePolicy::default(),
             lock: crate::lock::LockState::default(),
+            lock_cache: crate::lock::Cache::default(),
             hot: Hotspots::default(),
             pointer: Point::new(width / 2.0, height / 2.0),
+            cursor_step: None,
             hovered: None,
+            keyboard_focus: None,
             pressed: None,
             meta_tap: MetaTap::default(),
             last_input_ms: 0,
@@ -1926,21 +2266,69 @@ impl Shell {
             full_redraw: true,
             frames: 0,
             anims: crate::anim::ShellAnims::new(),
+            retiring_banners: Vec::new(),
             switcher_holding: false,
             drawn_focus: None,
+            dock_settled: None,
+            boot_started_ms: None,
             drawn_clock,
         }
     }
 
+    /// Publish the rectangle the dock occupies when its panel is fully open.
+    ///
+    /// Only the draw side knows how tall the panel is for the current contents
+    /// (a search that matches two rows is a short panel), so it says so here.
+    /// The morph grows bottom-up at a fixed width, so every frame of it lies
+    /// inside this rectangle -- which is why an animation frame damages the
+    /// panel rather than the screen.
+    pub fn set_dock_settled(&mut self, rect: Rect) {
+        self.dock_settled = Some(rect);
+    }
+
+    /// The rectangle of the fully open dock, if it has ever been drawn.
+    #[must_use]
+    pub const fn dock_settled(&self) -> Option<Rect> {
+        self.dock_settled
+    }
+
     /// The top bar's height in logical units. There is no bottom bar: one
     /// system bar carries everything, which is the whole layout decision.
-    pub const TOP_BAR_LOGICAL: f32 = 28.0;
+    ///
+    /// The dock is not a system bar -- it holds applications, not the machine's
+    /// state -- so it is not measured here.
+    pub const TOP_BAR_LOGICAL: f32 = 24.0;
 
     /// The top bar's rectangle.
     #[must_use]
     pub fn top_bar(&self) -> Rect {
         let s = self.wm.screen();
         Rect::new(0.0, 0.0, s.w, self.tokens.px(Self::TOP_BAR_LOGICAL))
+    }
+
+    /// The windows Mission Control shows, in card order: by workspace, then by
+    /// the order they were opened.
+    ///
+    /// Stable ordering is the point. Cards that reordered themselves as the
+    /// pointer moved would move the target of a click that was already on its
+    /// way to one of them.
+    #[must_use]
+    pub fn overview_ids(&self) -> Vec<WindowId> {
+        let mut ids: Vec<(usize, WindowId)> =
+            self.wm.all().iter().map(|w| (w.workspace, w.id)).collect();
+        ids.sort_unstable();
+        ids.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// Bring the window a Mission Control card stands for to the user: its
+    /// workspace, out of a minimize if it was in one, and the keyboard.
+    pub fn overview_open(&mut self, index: usize) {
+        let ids = self.overview_ids();
+        if let Some(id) = ids.get(index).copied() {
+            self.wm.reveal(id);
+        }
+        self.overlay = Overlay::None;
+        self.overlay_damage();
     }
 
     /// Where the pointer is.
@@ -1953,6 +2341,57 @@ impl Shell {
     #[must_use]
     pub const fn hovered(&self) -> Option<Hot> {
         self.hovered
+    }
+
+    /// Whether a control is under the pointer or has keyboard focus.
+    #[must_use]
+    pub fn is_highlighted(&self, hot: Hot) -> bool {
+        matches!(self.hovered, Some(h) if h == hot)
+            || matches!(self.keyboard_focus, Some(h) if h == hot)
+    }
+
+    /// The current keyboard target, primarily for diagnostics and tests.
+    #[must_use]
+    pub const fn keyboard_focus(&self) -> Option<Hot> {
+        self.keyboard_focus
+    }
+
+    fn move_keyboard_focus(&mut self, backwards: bool) {
+        let candidates: Vec<Hot> = self
+            .hot
+            .ids()
+            .filter(|hot| hot.keyboard_focusable())
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let current = self
+            .keyboard_focus
+            .and_then(|focused| candidates.iter().position(|hot| *hot == focused));
+        let next = match (current, backwards) {
+            (Some(0), true) => candidates.len().saturating_sub(1),
+            (Some(index), true) => index.saturating_sub(1),
+            // Wrap at the end of the list. The guard above keeps the list
+            // non-empty; `checked_rem` keeps that a fact of the arithmetic
+            // rather than an assumption about the guard.
+            (Some(index), false) => index
+                .saturating_add(1)
+                .checked_rem(candidates.len())
+                .unwrap_or(0),
+            (None, true) => candidates.len().saturating_sub(1),
+            (None, false) => 0,
+        };
+        self.keyboard_focus = candidates.get(next).copied();
+        self.request_full_redraw();
+    }
+
+    fn keyboard_focus_is_text_field(&self) -> bool {
+        matches!(
+            self.keyboard_focus,
+            Some(Hot::TerminalInput | Hot::BrowserOmnibox | Hot::TrashFilter | Hot::ActivityFilter)
+                | Some(Hot::Files(crate::apps::FilesHot::Filter))
+                | Some(Hot::LauncherSearch)
+        )
     }
 
     /// What the pointer is pressed on.
@@ -1989,6 +2428,155 @@ impl Shell {
     /// the window list's final order; elevation is sampled there.
     pub fn anims_mut(&mut self) -> &mut crate::anim::ShellAnims {
         &mut self.anims
+    }
+
+    /// An overlay that is visually leaving but no longer owns input.
+    #[must_use]
+    pub const fn retiring_overlay(&self) -> Option<&Overlay> {
+        self.retiring_overlay.as_ref()
+    }
+
+    /// A context menu that is visually leaving but cannot be activated.
+    #[must_use]
+    pub const fn retiring_context_menu(&self) -> Option<&crate::apps::ContextMenu> {
+        self.retiring_context_menu.as_ref()
+    }
+
+    /// A desktop dialog that is visually leaving but cannot be confirmed
+    /// again. This is intentionally separate from `desktop_dialog`, whose
+    /// presence is the source of truth for input and system actions.
+    #[must_use]
+    pub const fn retiring_desktop_dialog(&self) -> Option<&crate::apps::DesktopDialog> {
+        self.retiring_desktop_dialog.as_ref()
+    }
+
+    /// Notification banners that are finishing their visual exit.
+    #[must_use]
+    pub fn retiring_banners(&self) -> &[Notification] {
+        &self.retiring_banners
+    }
+
+    /// Replace the logical overlay while allowing its visual predecessor to
+    /// complete a short, non-interactive exit. The dock/launcher is the one
+    /// exception: it owns its own persistent surface and can close in place,
+    /// so duplicating it as an overlay would be visually wrong.
+    fn set_overlay(&mut self, next: Overlay) {
+        if self.overlay == next {
+            return;
+        }
+        if self
+            .retiring_overlay
+            .as_ref()
+            .is_some_and(|old| Self::same_overlay_kind(old, &next))
+        {
+            // Reopening the same surface reverses the same spring instead of
+            // drawing two copies of a panel over each other.
+            self.retiring_overlay = None;
+        }
+        let old = std::mem::replace(&mut self.overlay, next);
+        if old.is_open() && !matches!(old, Overlay::Launcher { .. }) {
+            self.retiring_overlay = Some(old);
+        }
+        self.overlay_damage();
+    }
+
+    /// Whether two overlay values draw the same kind of surface. Their query
+    /// or keyboard-selection payload does not alter that visual ownership.
+    fn same_overlay_kind(left: &Overlay, right: &Overlay) -> bool {
+        std::mem::discriminant(left) == std::mem::discriminant(right)
+    }
+
+    /// Replace a context menu and preserve only the outgoing pixels needed for
+    /// its exit. A newly opened menu cancels any old exit so stale menu items
+    /// cannot briefly appear beside the new pointer location.
+    fn set_context_menu(&mut self, next: Option<crate::apps::ContextMenu>) {
+        if self.context_menu == next {
+            return;
+        }
+        if next.is_some() {
+            self.retiring_context_menu = None;
+        }
+        let old = std::mem::replace(&mut self.context_menu, next);
+        if let Some(menu) = old {
+            self.retiring_context_menu = Some(menu);
+        }
+        self.request_full_redraw();
+    }
+
+    /// Replace or dismiss a desktop dialog. The live option controls input;
+    /// its former value is only a display snapshot until the dialog spring
+    /// reaches rest at zero.
+    fn set_desktop_dialog(&mut self, next: Option<crate::apps::DesktopDialog>) {
+        if self.desktop_dialog == next {
+            return;
+        }
+        if next.is_some() {
+            self.retiring_desktop_dialog = None;
+        }
+        let old = std::mem::replace(&mut self.desktop_dialog, next);
+        if let Some(dialog) = old {
+            self.retiring_desktop_dialog = Some(dialog);
+        }
+        self.request_full_redraw();
+    }
+
+    /// Retain an outgoing banner only when it has actually been made visible.
+    /// This keeps Do Not Disturb-suppressed notifications from allocating a
+    /// redundant visual snapshot.
+    fn retire_banner(&mut self, notification: Notification) {
+        if self.anims.banner_reveal(notification.id) <= 0.0 {
+            return;
+        }
+        if !self
+            .retiring_banners
+            .iter()
+            .any(|old| old.id == notification.id)
+        {
+            self.retiring_banners.push(notification);
+        }
+        self.anims.retire_banner(
+            self.retiring_banners
+                .last()
+                .map_or(0, |banner| banner.id),
+        );
+    }
+
+    /// Dismiss one notification while preserving a banner exit when needed.
+    fn dismiss_notification(&mut self, id: u32) -> bool {
+        let snapshot = self
+            .notifications
+            .items()
+            .into_iter()
+            .find(|notification| notification.id == id)
+            .cloned();
+        let removed = self.notifications.dismiss(id);
+        if removed {
+            if let Some(notification) = snapshot {
+                self.retire_banner(notification);
+            }
+            self.request_full_redraw();
+        }
+        removed
+    }
+
+    /// Clear every bulk-dismissible notification while giving visible banners
+    /// the same exit path as individually dismissed items.
+    fn clear_notifications(&mut self) -> usize {
+        let snapshots: Vec<Notification> = self
+            .notifications
+            .items()
+            .into_iter()
+            .filter(|notification| notification.priority != Priority::Critical)
+            .cloned()
+            .collect();
+        let cleared = self.notifications.clear();
+        if cleared > 0 {
+            for notification in snapshots {
+                self.retire_banner(notification);
+            }
+            self.request_full_redraw();
+        }
+        cleared
     }
 
     /// Count a frame.
@@ -2064,6 +2652,9 @@ impl Shell {
     /// it happens whatever this returns. See `litric_input::Waker`.
     #[must_use]
     pub fn wake_after_ms(&self, now_ms: u64) -> u64 {
+        if self.boot_intro_progress(now_ms).is_some() {
+            return LifeState::Active.frame_interval_ms();
+        }
         if self.is_dirty() {
             return match self.life() {
                 LifeState::WindowInteraction => LifeState::WindowInteraction.frame_interval_ms(),
@@ -2167,15 +2758,22 @@ impl Shell {
     /// else; the content that was on the screen is gone from the frame buffer on
     /// the next frame, because the lock surface starts by clearing it. The
     /// account the password is checked against is the one logind says is logged
-    /// in, not a name typed anywhere.
+    /// in. The single-user image has no PAM/logind desktop session yet, so its
+    /// configured desktop account (`litric`) is the fallback.
     pub fn lock_now(&mut self) -> bool {
         if !self.can_lock() {
             return false;
         }
         self.lock.locked = true;
-        self.lock.back();
         self.lock.verdict = crate::lock::Verdict::Idle;
-        self.lock.user = self.facts.session_user.clone().unwrap_or_default();
+        self.lock.user = self
+            .facts
+            .session_user
+            .clone()
+            .unwrap_or_else(|| "litric".to_owned());
+        // The password field is immediately visible. Requiring an extra
+        // Space/Enter press hid the only useful lock action behind a hint.
+        self.lock.wake();
         self.lock.flow_ms = 0;
         self.pointer = Point::new(self.wm.screen().w / 2.0, self.wm.screen().h / 2.0);
         // Every overlay is a surface the lock does not draw, so an open menu
@@ -2226,6 +2824,41 @@ impl Shell {
 
     /// Handle one event while the session is locked.
     ///
+    /// Input for the first-run setup screen: the lock screen's hotspots and
+    /// pointer handling, plus Tab and Enter so every choice works from the
+    /// keyboard. The desktop does not run until setup is recorded as done.
+    fn setup_input(&mut self, ev: &InputEvent) -> Vec<Effect> {
+        match ev {
+            InputEvent::KeyDown {
+                key, mods, repeat, ..
+            } => {
+                if *repeat {
+                    return Vec::new();
+                }
+                match key {
+                    Key::Tab => {
+                        self.move_keyboard_focus(mods.shift);
+                        Vec::new()
+                    }
+                    Key::Enter => match self.keyboard_focus {
+                        Some(hot) => self.activate(hot),
+                        None => Vec::new(),
+                    },
+                    _ => Vec::new(),
+                }
+            }
+            _ => self.locked_input(ev),
+        }
+    }
+
+    /// Record first-run setup as finished. A failed write rolls back in
+    /// `settings`, so the setup screen stays up and the choice is not lost.
+    fn finish_first_run(&mut self) -> Vec<Effect> {
+        let mut next = self.settings.preferences;
+        next.onboarded = true;
+        self.save_preferences(next)
+    }
+
     /// The lock surface owns the keyboard and the pointer: nothing else in the
     /// shell sees an event while this returns `true`, which is what "locked"
     /// means on a framebuffer desktop with no client surfaces to hide.
@@ -2350,23 +2983,83 @@ impl Shell {
         })
     }
 
+    /// Begin the boot intro at `now_ms`. The desktop is drawn underneath it.
+    pub fn start_boot_intro(&mut self, now_ms: u64) {
+        self.boot_started_ms = Some(now_ms);
+        self.request_full_redraw();
+    }
+
+    /// Start the boot intro at the shell's own clock.
+    ///
+    /// `main` passes wall time because it has it; a renderer that has been
+    /// ticking a shell for its own reasons (the frame dump) does not, and
+    /// guessing produced an intro that had already finished before its first
+    /// frame.
+    pub fn restart_boot_intro(&mut self) {
+        self.start_boot_intro(self.now_ms);
+    }
+
+    /// The boot intro's progress from 0 to 1 at `now_ms`, or `None` once it
+    /// has finished or was never started.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn boot_intro_progress(&self, now_ms: u64) -> Option<f32> {
+        let started = self.boot_started_ms?;
+        let elapsed = now_ms.saturating_sub(started);
+        if elapsed >= BOOT_INTRO_MS {
+            return None;
+        }
+        // Reduced motion: no pen write, so the finished mark is shown for the
+        // same hold and then the desktop takes over, as it does otherwise.
+        if self.quick.reduce_motion {
+            return Some(1.0);
+        }
+        Some((elapsed as f32 / BOOT_WRITE_MS as f32).min(1.0))
+    }
+
+    /// What the boot intro says under the mark at this moment.
+    ///
+    /// A stage, not a spinner: "Getting things ready" is the first thing the
+    /// machine says, and it keeps saying something true as the session comes
+    /// up. The words are stages of the same length as the intro, so the note
+    /// and the pen finish together rather than one running out before the
+    /// other.
+    #[must_use]
+    pub fn boot_intro_note(&self) -> &'static str {
+        let Some(started) = self.boot_started_ms else {
+            return "";
+        };
+        let elapsed = self.now_ms.saturating_sub(started);
+        if elapsed < 800 {
+            "Getting things ready"
+        } else if elapsed < 1_700 {
+            "Starting your session"
+        } else {
+            "Almost there"
+        }
+    }
+
+    /// [`Self::boot_intro_progress`] at the shell's own clock, for drawing.
+    #[must_use]
+    pub fn boot_intro_now(&self) -> Option<f32> {
+        self.boot_intro_progress(self.now_ms)
+    }
+
     /// Move time forward without any input, for the idle timers and the clock.
     pub fn tick(&mut self, now_ms: u64) {
         self.set_now(now_ms);
-        // The lock screen's colour fields drift on the same monotonic clock, and
-        // a locked frame is always damage: the fields have moved and the clock
-        // may be breathing, so the compositor cannot idle behind it.
-        if self.lock.locked {
-            self.lock.advance(now_ms);
+        // The intro repaints every tick while it plays, and once more when it
+        // ends so the desktop comes back without waiting for input.
+        if self.boot_started_ms.is_some() {
+            if self.boot_intro_progress(now_ms).is_none() {
+                self.boot_started_ms = None;
+            }
             self.request_full_redraw();
         }
-        // The dock reveals when the pointer rests near the bottom edge, or
-        // stays open when pinned. Hotspots for it are gated on full reveal.
-        {
-            let band = self.tokens.px(72.0);
-            let near = self.wm.screen().h - self.pointer.y <= band;
-            let want = near || self.dock_pinned;
-            self.anims.dock.set_target(if want { 1.0 } else { 0.0 });
+        // A still lock has no reason to repaint until its clock changes. When
+        // the user enables motion, redraw at the animation's bounded 30 Hz.
+        if self.lock.locked && self.lock.advance(now_ms) {
+            self.request_full_redraw();
         }
         if self.terminal_pump() {
             self.request_full_redraw();
@@ -2374,10 +3067,27 @@ impl Shell {
         // The overlay springs follow the overlay state and advance one step.
         // sync() is idempotent, so doing it here means no call site that
         // opens or closes an overlay has to remember the animation exists.
+        // The power and LitricOS menus are popovers of the same kind as quick
+        // settings, so they share its reveal spring: two panels that can never
+        // be open at once do not need two identical springs, and the one they
+        // share already has the grammar every other top-bar panel uses.
+        let panel_open = matches!(
+            self.overlay,
+            Overlay::QuickSettings | Overlay::Power | Overlay::Litro
+        );
+        let active: Vec<u32> = self.notifications.items().iter().map(|n| n.id).collect();
+        let retiring: Vec<u32> = self.retiring_banners.iter().map(|n| n.id).collect();
         self.anims.sync(
-            self.overlay.is_open(),
-            self.context_menu.is_some(),
             matches!(self.overlay, Overlay::Launcher { .. }),
+            panel_open,
+            matches!(self.overlay, Overlay::Notifications),
+            matches!(self.overlay, Overlay::Switcher { .. }),
+            matches!(self.overlay, Overlay::Overview { .. }),
+            self.context_menu.is_some(),
+            self.desktop_dialog.is_some(),
+            self.quick.reduce_motion,
+            &active,
+            &retiring,
         );
         // Focus elevation belongs to tick for the same reason: the window
         // list is state, the draw side only samples values.
@@ -2399,11 +3109,27 @@ impl Shell {
         // tokens' settle budgets measure milliseconds rather than frames, and
         // an animation looks the same at every pace.
         let dt = self.animation_step_ms(now_ms);
-        if self.anims.step(dt) {
+        let moved = self.anims.step(dt);
+        if moved.dock {
             // A spring that moved is damage (BUG-0019). `step` reports whether
             // the value changed, not whether it is still going, so a spring
-            // that reaches its settle budget and snaps the rest of the way
-            // in a stalled frame still has pixels that must be drawn.
+            // that reaches its settle budget and snaps the rest of the way in
+            // a stalled frame still has pixels that must be drawn.
+            //
+            // The dock's pixels are bounded: it grows out of a strip at the
+            // bottom centre into a panel the same width, so every frame of the
+            // morph lies inside the settled panel. Damaging that rectangle
+            // instead of the screen is what takes the launcher from a handful
+            // of composed frames a second to a smooth one: a full frame is
+            // millions of pixels of wallpaper and glass, and the panel is a
+            // fraction of it. Falls back to a full redraw before the dock has
+            // ever been drawn, when there is no rectangle to trust.
+            match self.dock_settled {
+                Some(rect) => self.damage.push(rect.inflate(self.tokens.px(56.0))),
+                None => self.request_full_redraw(),
+            }
+        }
+        if moved.other {
             self.request_full_redraw();
         }
         // The Defender's scan and the browser's engine pump run between
@@ -2445,8 +3171,12 @@ impl Shell {
         let clock = self.regional.clock(self.clock_seconds());
         if clock != self.drawn_clock {
             self.drawn_clock = clock;
-            let bar = self.top_bar();
-            self.damage.push(bar);
+            if self.lock.locked {
+                self.request_full_redraw();
+            } else {
+                let bar = self.top_bar();
+                self.damage.push(bar);
+            }
         }
     }
 
@@ -2570,6 +3300,21 @@ impl Shell {
 
     /// The overlay's region, for damage when it opens or closes.
     fn overlay_damage(&mut self) {
+        // The launcher is the dock, and the dock is the one animated surface
+        // whose extent the shell knows: the draw side publishes the rectangle
+        // it occupies fully open, and every frame of the morph lies inside it.
+        // So opening or closing the launcher damages that rectangle -- which is
+        // most of what made the animation smooth. Any other overlay still takes
+        // the whole screen, because its extent is not tracked and a repaint
+        // that misses a pixel is worse than a slow one.
+        let dock_only = matches!(self.overlay, Overlay::Launcher { .. })
+            || (matches!(self.overlay, Overlay::None) && self.retiring_overlay.is_none());
+        if dock_only {
+            if let Some(rect) = self.dock_settled {
+                self.damage.push(rect.inflate(self.tokens.px(56.0)));
+                return;
+            }
+        }
         // Overlays are large and can move; repainting the whole screen when one
         // opens or closes is cheaper than tracking their exact extent and
         // getting it subtly wrong.
@@ -2581,6 +3326,11 @@ impl Shell {
     /// Handle one input event. Returns anything `main` must act on.
     pub fn handle(&mut self, ev: &InputEvent, now_ms: u64) -> Vec<Effect> {
         self.set_now(now_ms);
+        // A move is the only thing that can be answered by moving the arrow
+        // alone; anything else drops that shortcut.
+        if !matches!(ev, InputEvent::PointerMove { .. }) {
+            self.cursor_step = None;
+        }
         if ev.is_user_activity() {
             let was = self.life();
             self.last_input_ms = now_ms;
@@ -2600,6 +3350,9 @@ impl Shell {
         // client surfaces to take away.
         if self.lock.locked {
             return self.locked_input(ev);
+        }
+        if !self.settings.preferences.onboarded {
+            return self.setup_input(ev);
         }
 
         match ev {
@@ -2641,6 +3394,32 @@ impl Shell {
             return Vec::new();
         }
         self.meta_tap.interfere();
+
+        // One focus order for the controls each frame actually drew. Tab and
+        // Shift+Tab work across app chrome and panel controls; Enter activates
+        // the focused control. Text fields keep Enter's app-specific meaning.
+        if key == Key::Tab
+            && !repeat
+            && !mods.alt
+            && !mods.meta
+            && !mods.ctrl
+            && !matches!(&self.overlay, Overlay::Switcher { .. })
+        {
+            self.move_keyboard_focus(mods.shift);
+            return Vec::new();
+        }
+        if key == Key::Enter
+            && !repeat
+            && !self.overlay.is_open()
+            && !self.keyboard_focus_is_text_field()
+            && self
+                .keyboard_focus
+                .is_some_and(|hot| self.hot.rect_of(hot).is_some())
+        {
+            if let Some(hot) = self.keyboard_focus {
+                return self.activate(hot);
+            }
+        }
 
         // The launcher and the switcher eat navigation keys before the global
         // table sees them, so Escape closes the launcher rather than doing
@@ -2697,45 +3476,110 @@ impl Shell {
 
     /// Keys the open overlay consumes. `None` means it did not want the key.
     fn overlay_key(&mut self, key: Key, mods: Modifiers) -> Option<Vec<Effect>> {
-        match &mut self.overlay {
-            Overlay::Launcher { query, selected } => match key {
+        // The launcher is handled before the mutable match: a system-wide
+        // search reads the window list, which borrows the manager the match
+        // would otherwise hold.
+        if let Overlay::Launcher { query, selected } = &self.overlay {
+            let query = query.clone();
+            let selected = *selected;
+            // With nothing typed the launcher is the application grid, and
+            // the grid's rows are `App::ALL` in draw order. Once a query is
+            // typed the same row indices address the system-wide results.
+            let searching = !query.trim().is_empty();
+            let count = if searching {
+                crate::seek::search(self, &query).len()
+            } else {
+                App::ALL.len()
+            };
+            match key {
                 Key::Escape => {
                     self.overlay = Overlay::None;
                     self.overlay_damage();
-                    Some(Vec::new())
                 }
                 Key::Down => {
-                    let n = App::search(query).len();
-                    if n > 0 {
-                        *selected = selected.saturating_add(1).checked_rem(n).unwrap_or(0);
-                    }
+                    let next = if count == 0 {
+                        0
+                    } else {
+                        selected.saturating_add(1).checked_rem(count).unwrap_or(0)
+                    };
+                    self.overlay = Overlay::Launcher {
+                        query,
+                        selected: next,
+                    };
                     self.overlay_damage();
-                    Some(Vec::new())
                 }
                 Key::Up => {
-                    let n = App::search(query).len();
-                    if n > 0 {
-                        *selected = selected.checked_sub(1).unwrap_or(n.saturating_sub(1));
-                    }
+                    let next = if count == 0 {
+                        0
+                    } else {
+                        selected.checked_sub(1).unwrap_or(count.saturating_sub(1))
+                    };
+                    self.overlay = Overlay::Launcher {
+                        query,
+                        selected: next,
+                    };
                     self.overlay_damage();
-                    Some(Vec::new())
                 }
                 Key::Enter => {
-                    let q = query.clone();
-                    let idx = *selected;
-                    let app = App::search(&q).get(idx).copied();
+                    let hit = if searching {
+                        crate::seek::search(self, &query)
+                            .get(selected)
+                            .map(|result| result.hit)
+                    } else {
+                        App::ALL.get(selected).copied().map(crate::seek::Hit::App)
+                    };
                     self.overlay = Overlay::None;
                     self.overlay_damage();
-                    Some(app.map_or_else(Vec::new, |a| self.open_app(a)))
+                    return Some(hit.map_or_else(Vec::new, |hit| self.seek_open(hit)));
                 }
                 Key::Backspace => {
-                    query.pop();
-                    *selected = 0;
+                    let mut shorter = query;
+                    shorter.pop();
+                    self.overlay = Overlay::Launcher {
+                        query: shorter,
+                        selected: 0,
+                    };
                     self.overlay_damage();
-                    Some(Vec::new())
                 }
-                _ => None,
-            },
+                _ => return None,
+            }
+            return Some(Vec::new());
+        }
+
+        // Mission Control is handled before the mutable match: it needs to
+        // read the window list, which borrows the manager the match would hold.
+        if let Overlay::Overview { selected } = &self.overlay {
+            let mut selected = *selected;
+            let ids = self.overview_ids();
+            let count = ids.len();
+            let cols = crate::overview::columns(count);
+            match key {
+                Key::Escape => {
+                    self.overlay = Overlay::None;
+                    self.overlay_damage();
+                }
+                Key::Enter => {
+                    self.overview_open(selected);
+                }
+                Key::Left | Key::Up | Key::Right | Key::Down | Key::Tab => {
+                    let step = match key {
+                        Key::Left => crate::overview::Step::Left,
+                        Key::Up => crate::overview::Step::Up,
+                        Key::Right => crate::overview::Step::Right,
+                        _ => crate::overview::Step::Down,
+                    };
+                    selected = crate::overview::step(selected, count, cols, step);
+                    self.overlay = Overlay::Overview { selected };
+                    self.overlay_damage();
+                }
+                _ => return None,
+            }
+            return Some(Vec::new());
+        }
+        match &mut self.overlay {
+            // Handled before the mutable match for the same reason as Mission
+            // Control: searching the system needs to read the window list.
+            Overlay::Launcher { .. } => None,
             Overlay::Switcher { selected } => match key {
                 Key::Tab => {
                     let n = self.wm.switcher_order().len();
@@ -2753,7 +3597,9 @@ impl Shell {
                 }
                 _ => None,
             },
-            Overlay::QuickSettings | Overlay::Notifications => {
+            // Mission Control returned above; it never reaches this match.
+            Overlay::Overview { .. } => None,
+            Overlay::QuickSettings | Overlay::Notifications | Overlay::Power | Overlay::Litro => {
                 if key == Key::Escape {
                     self.overlay = Overlay::None;
                     self.overlay_damage();
@@ -2785,6 +3631,12 @@ impl Shell {
             .and_then(|id| self.wm.window(id))
             .map(|w| w.app_id.clone())?;
         match app_id.as_str() {
+            "com.litric.settings" => match key {
+                Key::Char('l') if mods.ctrl => Some(self.toggle_language()),
+                Key::Char('t') if mods.ctrl => Some(self.cycle_theme()),
+                Key::Char('m') if mods.ctrl => Some(self.toggle_reduced_motion()),
+                _ => None,
+            },
             "com.litric.browser" => match key {
                 Key::Escape => {
                     self.browser.omnibox_focus = false;
@@ -2793,24 +3645,56 @@ impl Shell {
                 Key::Enter => {
                     if let Some(url) = self.browser.commit_omnibox() {
                         self.browser_navigate(&url);
+                        self.request_full_redraw();
+                        Some(vec![Effect::PersistBrowserData])
+                    } else {
+                        self.request_full_redraw();
+                        Some(Vec::new())
                     }
-                    self.request_full_redraw();
-                    Some(Vec::new())
                 }
                 _ => None,
             },
             "com.litric.terminal" => match key {
+                Key::Char('l') if mods.ctrl => {
+                    self.terminal.clear_screen();
+                    self.request_full_redraw();
+                    Some(Vec::new())
+                }
                 Key::Enter => {
                     self.terminal_run();
                     Some(Vec::new())
                 }
+                Key::Up => {
+                    self.terminal.history_up();
+                    self.request_full_redraw();
+                    Some(Vec::new())
+                }
+                Key::Down => {
+                    self.terminal.history_down();
+                    self.request_full_redraw();
+                    Some(Vec::new())
+                }
                 Key::Backspace => {
                     self.terminal.input.pop();
+                    self.terminal.history_cursor = None;
                     self.request_full_redraw();
                     Some(Vec::new())
                 }
                 Key::Escape => {
                     self.terminal.focused = false;
+                    self.request_full_redraw();
+                    Some(Vec::new())
+                }
+                _ => None,
+            },
+            "com.litric.activity" => match key {
+                Key::Backspace => {
+                    self.activity.prefs.filter_text.pop();
+                    self.request_full_redraw();
+                    Some(Vec::new())
+                }
+                Key::Escape => {
+                    self.activity.prefs.filter_text.clear();
                     self.request_full_redraw();
                     Some(Vec::new())
                 }
@@ -2838,16 +3722,18 @@ impl Shell {
                 Key::Down => {
                     let n = self.files.visible().len();
                     if n > 0 {
-                        self.files.selected = Some(
-                            self.files
-                                .selected
-                                .map_or(0, |i| i.saturating_add(1).min(n.saturating_sub(1))),
-                        );
+                        let next = self
+                            .files
+                            .selected
+                            .map_or(0, |i| i.saturating_add(1).min(n.saturating_sub(1)));
+                        self.files.select_row(next);
                     }
                     Some(Vec::new())
                 }
                 Key::Up => {
-                    self.files.selected = self.files.selected.map(|i| i.saturating_sub(1));
+                    if let Some(current) = self.files.selected {
+                        self.files.select_row(current.saturating_sub(1));
+                    }
                     Some(Vec::new())
                 }
                 Key::Escape => {
@@ -2870,34 +3756,47 @@ impl Shell {
                     Some(Vec::new())
                 }
                 Key::Delete if self.files.dialog.is_none() => {
+                    let paths = self.files.selected_paths();
                     if mods.ctrl {
                         // Shift+Delete would purge; plain Ctrl+Delete is
                         // nothing. A permanent delete needs a confirm first.
-                        if let Some(p) = self.files.selected_path() {
+                        if let Some(action) = selection_action(
+                            &paths,
+                            crate::apps::FilesOp::Delete,
+                            crate::apps::FilesOp::DeleteMany,
+                        ) {
                             self.files.ask_confirm(
                                 "Delete permanently",
-                                &format!("Delete {p} for ever?"),
-                                crate::apps::FilesOp::Delete(p),
+                                &format!("Delete {} selected item(s) permanently?", paths.len()),
+                                action,
                             );
                             self.request_full_redraw();
                         }
                         Some(Vec::new())
                     } else if mods.shift {
-                        if let Some(p) = self.files.selected_path() {
+                        if let Some(action) = selection_action(
+                            &paths,
+                            crate::apps::FilesOp::Delete,
+                            crate::apps::FilesOp::DeleteMany,
+                        ) {
                             self.files.ask_confirm(
                                 "Delete permanently",
-                                &format!("Delete {p} for ever?"),
-                                crate::apps::FilesOp::Delete(p),
+                                &format!("Delete {} selected item(s) permanently?", paths.len()),
+                                action,
                             );
                             self.request_full_redraw();
                         }
                         Some(Vec::new())
                     } else {
-                        if let Some(p) = self.files.selected_path() {
+                        if let Some(action) = selection_action(
+                            &paths,
+                            crate::apps::FilesOp::Trash,
+                            crate::apps::FilesOp::TrashMany,
+                        ) {
                             self.files.ask_confirm(
                                 "Move to trash",
-                                &format!("Move {p} to the trash?"),
-                                crate::apps::FilesOp::Trash(p),
+                                &format!("Move {} selected item(s) to the trash?", paths.len()),
+                                action,
                             );
                             self.request_full_redraw();
                         }
@@ -2934,11 +3833,7 @@ impl Shell {
                     Some(Vec::new())
                 }
                 Key::Char('a') if mods.ctrl => {
-                    // Select-all selects the first row of the visible view;
-                    // the table is single-select this phase.
-                    if !self.files.visible().is_empty() {
-                        self.files.selected = Some(0);
-                    }
+                    self.files.select_all_visible();
                     Some(Vec::new())
                 }
                 Key::Enter => {
@@ -2959,8 +3854,50 @@ impl Shell {
                 _ => None,
             },
             "com.litric.trash" => match key {
+                Key::Backspace => {
+                    self.trash.filter.pop();
+                    if !self.trash.has_visible_selection() {
+                        self.trash.selected = None;
+                    }
+                    self.request_full_redraw();
+                    Some(Vec::new())
+                }
+                Key::Escape => {
+                    if self.trash.confirm.take().is_none() {
+                        self.trash.filter.clear();
+                    }
+                    self.request_full_redraw();
+                    Some(Vec::new())
+                }
+                Key::Down => {
+                    let visible = self.trash.visible_indices();
+                    let next = self
+                        .trash
+                        .selected
+                        .and_then(|selected| visible.iter().position(|index| *index == selected))
+                        .map_or(0, |position| {
+                            position
+                                .saturating_add(1)
+                                .min(visible.len().saturating_sub(1))
+                        });
+                    self.trash.selected = visible.get(next).copied();
+                    self.request_full_redraw();
+                    Some(Vec::new())
+                }
+                Key::Up => {
+                    let visible = self.trash.visible_indices();
+                    let previous = self
+                        .trash
+                        .selected
+                        .and_then(|selected| visible.iter().position(|index| *index == selected))
+                        .unwrap_or(0)
+                        .saturating_sub(1);
+                    self.trash.selected = visible.get(previous).copied();
+                    self.request_full_redraw();
+                    Some(Vec::new())
+                }
                 Key::Enter => Some(self.perform_menu(crate::apps::MenuAction::Restore)),
-                Key::Delete => Some(self.perform_menu(crate::apps::MenuAction::EmptyTrash)),
+                Key::Delete => Some(self.perform_menu(crate::apps::MenuAction::PurgeTrashItem)),
                 _ => None,
             },
             _ => None,
@@ -2980,21 +3917,33 @@ impl Shell {
             self.desktop_dialog_field.push_str(&clean);
             return;
         }
-        // Otherwise a focused app text field eats characters before overlays do —
-        // the omnibox, the Files filter and the Files dialogs.
-        if self.text_into_app(text) {
+        // An open launcher owns the keyboard, including over a focused
+        // application. It is a search field drawn on top of the desktop; a
+        // character typed into it that landed in the Files filter behind it
+        // would be a character the user never sees.
+        if self.text_into_launcher(text) {
             return;
         }
-        if let Overlay::Launcher { query, selected } = &mut self.overlay {
-            // Control characters never reach a text field: a Tab or a newline
-            // in a search box is a rendering problem waiting to happen.
-            let clean: String = text.chars().filter(|c| !c.is_control()).collect();
-            if !clean.is_empty() {
-                query.push_str(&clean);
-                *selected = 0;
-                self.overlay_damage();
-            }
+        // Otherwise a focused app text field eats characters — the omnibox,
+        // the Files filter and the Files dialogs.
+        let _ = self.text_into_app(text);
+    }
+
+    /// Feed typed characters into the launcher's search field. Returns whether
+    /// the launcher is open and therefore owns the keyboard.
+    fn text_into_launcher(&mut self, text: &str) -> bool {
+        let Overlay::Launcher { query, selected } = &mut self.overlay else {
+            return false;
+        };
+        // Control characters never reach a text field: a Tab or a newline in a
+        // search box is a rendering problem waiting to happen.
+        let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+        if !clean.is_empty() {
+            query.push_str(&clean);
+            *selected = 0;
+            self.overlay_damage();
         }
+        true
     }
 
     /// Feed typed characters into the focused app window's field. Returns
@@ -3032,6 +3981,20 @@ impl Shell {
                 }
                 "com.litric.terminal" if self.terminal.focused => {
                     self.terminal.input.push_str(&clean);
+                    self.terminal.history_cursor = None;
+                    true
+                }
+                "com.litric.activity" => {
+                    self.activity.prefs.filter_text.push_str(&clean);
+                    self.request_full_redraw();
+                    true
+                }
+                "com.litric.trash" => {
+                    self.trash.filter.push_str(&clean);
+                    if !self.trash.has_visible_selection() {
+                        self.trash.selected = None;
+                    }
+                    self.request_full_redraw();
                     true
                 }
                 "com.litric.files" => {
@@ -3047,11 +4010,30 @@ impl Shell {
         let before = self.pointer;
         self.pointer = at;
 
-        if self.wm.is_dragging() {
+        // Coalesce with the previous move when that one was also the arrow
+        // alone. A 1 kHz mouse otherwise queues a hundred damage pairs before
+        // the next frame and looks like a burst of work.
+        //
+        // The *origin* has to survive the merge. The compositor will only move
+        // the arrow it actually drew, so the step has to say where the arrow
+        // was left, not where the pointer was one event ago -- otherwise every
+        // merged move fails its check and composes the whole screen, which is
+        // the stutter this coalescing exists to prevent.
+        let mut origin = None;
+        if self.cursor_step.is_some() && self.damage.len() == 2 {
+            self.damage.clear();
+            origin = self.cursor_step.map(|(from, _)| from);
+        }
+
+        let dragging = self.wm.is_dragging();
+        if dragging {
             self.wm.update_drag(at.x, at.y);
         }
 
         let now = self.hot.hit(at.x, at.y);
+        // A hover change repaints two controls and is still cheap; a drag moves
+        // a window and is not. Only the plain move is the cursor's own frame.
+        let mut only_cursor = now == self.hovered && !dragging;
         if now != self.hovered {
             // Repaint what was hovered and what is now, so the highlight moves
             // without repainting the whole screen.
@@ -3075,16 +4057,54 @@ impl Shell {
                 let b = to_rect(chrome.button_rect(&frame, n));
                 let zone = b.inflate(near);
                 if zone.contains(before.x, before.y) != zone.contains(at.x, at.y) {
+                    only_cursor = false;
                     self.damage.push(b.inflate(2.0));
                 }
             }
         }
 
-        // The cursor itself: repaint where it was and where it is.
+        // The cursor itself: repaint where it was left and where it is now.
         let s = self.tokens.scale;
-        self.damage
-            .push(crate::ui::cursor_bounds(before.x, before.y, s));
+        let from = origin.unwrap_or(before);
+        self.damage.push(crate::ui::cursor_bounds(from.x, from.y, s));
         self.damage.push(crate::ui::cursor_bounds(at.x, at.y, s));
+        self.cursor_step = if only_cursor { Some((from, at)) } else { None };
+    }
+
+    /// Whether the last move is a cursor-only step, without consuming it.
+    ///
+    /// The display loop paces these: it asks first, waits out the rest of the
+    /// pointer's own interval, and only then takes one. Peeking matters --
+    /// taking a step early would move the compositor's arrow to a position the
+    /// shell then treats as its last drawn one only on the next take, and the
+    /// step after that would fail its damage comparison and compose a whole
+    /// frame, which is the stutter pacing is meant to remove.
+    #[must_use]
+    pub fn cursor_step_pending(&self) -> bool {
+        self.cursor_step.is_some()
+    }
+
+    /// Take the pointer's last move when the only damage it caused was the
+    /// arrow, and clear that damage.
+    ///
+    /// `None` on any frame with something else to draw: a full redraw, a moved
+    /// window, a spring in flight. The caller composes normally then. When this
+    /// returns `Some`, the only thing that changed on screen is where the arrow
+    /// is, which is exactly what [`crate::desktop::Compositor::move_cursor`]
+    /// can paint on its own.
+    pub fn take_cursor_step(&mut self) -> Option<(Point, Point)> {
+        let step = self.cursor_step.take()?;
+        if self.full_redraw || self.wm.is_dirty() || self.wm.focused() != self.drawn_focus {
+            return None;
+        }
+        let s = self.tokens.scale;
+        let from = crate::ui::cursor_bounds(step.0.x, step.0.y, s);
+        let to = crate::ui::cursor_bounds(step.1.x, step.1.y, s);
+        if self.damage.len() != 2 || !self.damage.contains(&from) || !self.damage.contains(&to) {
+            return None;
+        }
+        self.damage.clear();
+        Some(step)
     }
 
     fn pointer_button(
@@ -3130,7 +4150,7 @@ impl Shell {
                     if let Some(Hot::Files(crate::apps::FilesHot::Row(i))) =
                         self.hot.hit(at.x, at.y)
                     {
-                        self.files.selected = Some(i);
+                        self.files.select_row(i);
                     }
                 }
                 self.context_menu =
@@ -3139,6 +4159,8 @@ impl Shell {
             }
             return Vec::new();
         }
+
+        self.keyboard_focus = None;
 
         // The top bar, overlays, menus and the dock sit above every window —
         // but a desktop icon does not. An icon beneath a window is invisible
@@ -3215,7 +4237,11 @@ impl Shell {
     fn activate(&mut self, hot: Hot) -> Vec<Effect> {
         self.request_full_redraw();
         match hot {
-            Hot::Logo | Hot::MenuApps => self.perform(Action::ToggleLauncher),
+            // The wordmark is the one label on the bar that means the system
+            // itself, so the session's settings belong under it. The Apps menu
+            // opens the launcher, which is what its name says.
+            Hot::Logo => self.perform(Action::ToggleLitroMenu),
+            Hot::MenuApps => self.perform(Action::ToggleLauncher),
             // A click on a window's body focuses the window and nothing else:
             // it is the backdrop the real controls sit on, never a shortcut
             // for whatever happens to be under the window.
@@ -3244,11 +4270,9 @@ impl Shell {
                 ];
                 if let Some(url) = urls.get(usize::from(i)) {
                     let url = (*url).to_owned();
-                    if let Some(t) = self.browser.tabs.get_mut(self.browser.active) {
-                        t.url.clone_from(&url);
-                        t.error = false;
-                    }
+                    self.browser.navigate_active_to(&url);
                     self.browser_navigate(&url);
+                    return vec![Effect::PersistBrowserData];
                 }
                 Vec::new()
             }
@@ -3256,8 +4280,36 @@ impl Shell {
                 self.terminal.focused = true;
                 Vec::new()
             }
+            Hot::TerminalClear => {
+                self.terminal.clear_screen();
+                Vec::new()
+            }
+            Hot::TerminalNewSession => {
+                if !self.terminal.new_session() {
+                    self.terminal.note = Some(
+                        "A command is still running; wait for it to finish before starting a new session."
+                            .to_owned(),
+                    );
+                }
+                Vec::new()
+            }
+            Hot::ActivityFilter => Vec::new(),
+            Hot::ActivitySort(column) => {
+                let key = column.sort_key();
+                let ascending = if self.activity.prefs.sort.0 == key {
+                    !self.activity.prefs.sort.1
+                } else {
+                    !self.activity.prefs.first_click_desc(column)
+                };
+                self.activity.prefs.sort_by(key, ascending);
+                Vec::new()
+            }
+            Hot::TrashFilter => Vec::new(),
             Hot::MenuWorkspace | Hot::StatusMetrics => self.perform(Action::Open(App::Activity)),
-            Hot::MenuEnvironment | Hot::StatusPower => self.perform(Action::ToggleQuickSettings),
+            Hot::MenuEnvironment => self.perform(Action::ToggleQuickSettings),
+            // The power glyph opens the power menu, not quick settings: the icon
+            // is a promise about what the click does.
+            Hot::StatusPower => self.perform(Action::TogglePowerMenu),
             Hot::Workspace(n) => {
                 self.wm.set_workspace(usize::from(n));
                 Vec::new()
@@ -3267,7 +4319,40 @@ impl Shell {
             }
             Hot::StatusNotifications => self.perform(Action::ToggleNotifications),
             Hot::StatusClock => self.perform(Action::ToggleNotifications),
-            Hot::StatusUser => self.perform(Action::Open(App::Settings)),
+            // The person icon opens the same power menu: the two icons sit
+            // together at the end of the bar and mean one thing between them.
+            Hot::StatusUser => self.perform(Action::TogglePowerMenu),
+            Hot::PowerItem(n) => {
+                // Row order is lock, sleep, shut down, restart. Lock is
+                // reversible and needs no confirmation; the three that end the
+                // session open the same confirmation the panel's session rows
+                // did, because a menu row that powers a machine off on one
+                // click is exactly what the live-consent rule forbids.
+                self.overlay_damage();
+                self.overlay = Overlay::None;
+                let command = match n {
+                    0 => return vec![Effect::RequestLock],
+                    1 => PowerCommand::Suspend,
+                    2 => PowerCommand::PowerOff,
+                    _ => PowerCommand::Restart,
+                };
+                self.desktop_dialog =
+                    Some(crate::apps::DesktopDialog::PowerConfirm { command });
+                self.desktop_dialog_field.clear();
+                self.desktop_dialog_selection = None;
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::LitroSession => {
+                self.overlay_damage();
+                self.overlay = Overlay::None;
+                self.perform(Action::Open(App::Settings))
+            }
+            Hot::LitroLock => {
+                self.overlay_damage();
+                self.overlay = Overlay::None;
+                vec![Effect::RequestLock]
+            }
             Hot::LauncherSearch => Vec::new(),
             Hot::LockWake => {
                 self.lock.wake();
@@ -3299,23 +4384,44 @@ impl Shell {
                 self.lock.edit = false;
                 Vec::new()
             }
+            Hot::SettingsCategory(index) => {
+                if let Some(page) = crate::settings::Page::from_index(index) {
+                    self.settings.page = page;
+                }
+                Vec::new()
+            }
+            Hot::SettingsLanguage => self.toggle_language(),
+            Hot::SettingsTheme => self.cycle_theme(),
+            Hot::SettingsMotion => self.toggle_reduced_motion(),
+            Hot::SetupDone => self.finish_first_run(),
             // The dock and the launcher it becomes.
             Hot::DockToggle => self.perform(Action::ToggleLauncher),
             Hot::DockSearch => self.perform(Action::ToggleLauncher),
             Hot::DockCollapse => self.perform(Action::CloseOverlay),
             Hot::DockLock => self.perform(Action::Lock),
-            Hot::LauncherShortcut(i) => {
-                let action = SHORTCUT_CHIPS.get(usize::from(i)).copied();
-                action.map_or_else(Vec::new, |a| self.perform(a))
-            }
             Hot::LauncherItem(i) => {
                 let query = match &self.overlay {
                     Overlay::Launcher { query, .. } => query.clone(),
                     _ => String::new(),
                 };
-                let app = App::search(&query).get(i).copied();
+                let hit = if query.trim().is_empty() {
+                    App::ALL.get(i).copied().map(crate::seek::Hit::App)
+                } else {
+                    crate::seek::search(self, &query)
+                        .get(i)
+                        .map(|result| result.hit)
+                };
                 self.overlay = Overlay::None;
-                app.map_or_else(Vec::new, |a| self.open_app(a))
+                hit.map_or_else(Vec::new, |hit| self.seek_open(hit))
+            }
+            Hot::OverviewBackdrop => {
+                self.overlay = Overlay::None;
+                self.overlay_damage();
+                Vec::new()
+            }
+            Hot::OverviewItem(i) => {
+                self.overview_open(i);
+                Vec::new()
             }
             Hot::SwitcherItem(i) => {
                 let order: Vec<WindowId> = self.wm.switcher_order().iter().map(|w| w.id).collect();
@@ -3369,6 +4475,70 @@ impl Shell {
                 // search committed from the omnibox must reach the engine.
                 if let Some(url) = crate::apps::browser_action(&mut self.browser, hot) {
                     self.browser_navigate(&url);
+                    return vec![Effect::PersistBrowserData];
+                }
+                Vec::new()
+            }
+            Hot::BrowserBack => {
+                if let Some(url) = self.browser.back() {
+                    self.browser_navigate(&url);
+                }
+                Vec::new()
+            }
+            Hot::BrowserForward => {
+                if let Some(url) = self.browser.forward() {
+                    self.browser_navigate(&url);
+                }
+                Vec::new()
+            }
+            Hot::BrowserBookmark => {
+                let saved = self.browser.toggle_bookmark();
+                self.browser.status = if saved {
+                    "bookmark added".to_owned()
+                } else {
+                    "bookmark removed".to_owned()
+                };
+                vec![Effect::PersistBrowserData]
+            }
+            Hot::BrowserHistory => {
+                self.browser.panel = crate::apps::BrowserPanel::History;
+                Vec::new()
+            }
+            Hot::BrowserBookmarks => {
+                self.browser.panel = crate::apps::BrowserPanel::Bookmarks;
+                Vec::new()
+            }
+            Hot::BrowserDownloads => {
+                self.browser.panel = crate::apps::BrowserPanel::Downloads;
+                self.browser.downloads.clear();
+                self.browser.downloads_status = Some("Loading…".to_owned());
+                if let Some(link) = self.browser_session.as_mut() {
+                    if let Err(error) = link.send_line("DOWNLOADS") {
+                        self.browser.downloads_status = Some(format!("Unavailable: {error}"));
+                    }
+                } else {
+                    self.browser.downloads_status =
+                        Some("Browser engine session is not connected".to_owned());
+                }
+                Vec::new()
+            }
+            Hot::BrowserSitePermissions => {
+                self.browser.panel = crate::apps::BrowserPanel::SitePermissions;
+                Vec::new()
+            }
+            Hot::BrowserHistoryItem(index) => {
+                if let Some(url) = self.browser.history.get(index).cloned() {
+                    self.browser.navigate_active_to(&url);
+                    self.browser_navigate(&url);
+                    return vec![Effect::PersistBrowserData];
+                }
+                Vec::new()
+            }
+            Hot::BrowserBookmarkItem(index) => {
+                if let Some(url) = self.browser.bookmarks.get(index).cloned() {
+                    self.browser.navigate_active_to(&url);
+                    self.browser_navigate(&url);
+                    return vec![Effect::PersistBrowserData];
                 }
                 Vec::new()
             }
@@ -3413,6 +4583,7 @@ impl Shell {
                 // desktop has them, which is what every file manager does.
                 self.desktop_icons.select(None);
                 self.files.selected = None;
+                self.files.selected_rows.clear();
                 self.context_menu = None;
                 Vec::new()
             }
@@ -3424,10 +4595,25 @@ impl Shell {
             }
             Hot::TrashRow(i) => {
                 self.trash.selected = Some(i);
+                self.trash.confirm = None;
                 Vec::new()
             }
             Hot::TrashEmpty => self.perform_menu(crate::apps::MenuAction::EmptyTrash),
             Hot::TrashRestore => self.perform_menu(crate::apps::MenuAction::Restore),
+            Hot::TrashPurge => self.perform_menu(crate::apps::MenuAction::PurgeTrashItem),
+            Hot::TrashConfirm => match self.trash.confirm.clone() {
+                Some(crate::apps::TrashConfirmation::Empty) => {
+                    self.perform_menu(crate::apps::MenuAction::EmptyTrash)
+                }
+                Some(crate::apps::TrashConfirmation::Purge(_)) => {
+                    self.perform_menu(crate::apps::MenuAction::PurgeTrashItem)
+                }
+                None => Vec::new(),
+            },
+            Hot::TrashCancel => {
+                self.trash.confirm = None;
+                Vec::new()
+            }
             Hot::DialogConfirm => {
                 if self.desktop_dialog.is_some() {
                     self.submit_desktop_dialog()
@@ -3548,8 +4734,20 @@ impl Shell {
                 Vec::new()
             }
             Action::MinimizeWindow => {
+                // Windows' one sensible rule: the first press puts a snapped or
+                // maximized window back, the second one minimizes it. A single
+                // press that hides a window the user only wanted smaller is a
+                // press that loses their work.
                 if let Some(id) = focused {
-                    self.wm.minimize(id);
+                    let state = self.wm.window(id).map(|w| w.state);
+                    if matches!(
+                        state,
+                        Some(WindowState::Maximized | WindowState::Snapped(_))
+                    ) {
+                        self.wm.restore(id);
+                    } else {
+                        self.wm.minimize(id);
+                    }
                 }
                 Vec::new()
             }
@@ -3559,16 +4757,50 @@ impl Shell {
                 }
                 Vec::new()
             }
-            Action::SnapLeft => {
+            Action::SnapLeft
+            | Action::SnapRight
+            | Action::SnapTopLeft
+            | Action::SnapTopRight
+            | Action::SnapBottomLeft
+            | Action::SnapBottomRight => {
+                let edge = match action {
+                    Action::SnapLeft => litric_wm::SnapEdge::Left,
+                    Action::SnapRight => litric_wm::SnapEdge::Right,
+                    Action::SnapTopLeft => litric_wm::SnapEdge::TopLeft,
+                    Action::SnapTopRight => litric_wm::SnapEdge::TopRight,
+                    Action::SnapBottomLeft => litric_wm::SnapEdge::BottomLeft,
+                    _ => litric_wm::SnapEdge::BottomRight,
+                };
                 if let Some(id) = focused {
-                    self.wm.snap(id, litric_wm::SnapEdge::Left);
+                    self.wm.snap(id, edge);
                 }
                 Vec::new()
             }
-            Action::SnapRight => {
+            Action::RestoreWindow => {
                 if let Some(id) = focused {
-                    self.wm.snap(id, litric_wm::SnapEdge::Right);
+                    self.wm.restore(id);
                 }
+                Vec::new()
+            }
+            Action::CycleAppWindow => {
+                // The window the user lands on is revealed by the manager:
+                // another workspace and a minimize are both undone, so the key
+                // never focuses something that cannot be seen.
+                self.wm.cycle_app(true);
+                Vec::new()
+            }
+            Action::ToggleOverview => {
+                self.overlay_damage();
+                self.overlay = if matches!(self.overlay, Overlay::Overview { .. }) {
+                    Overlay::None
+                } else {
+                    let selected = self
+                        .wm
+                        .focused()
+                        .and_then(|id| self.wm.all().iter().position(|w| w.id == id))
+                        .unwrap_or(0);
+                    Overlay::Overview { selected }
+                };
                 Vec::new()
             }
             Action::CenterWindow => {
@@ -3609,6 +4841,24 @@ impl Shell {
                     Overlay::None
                 } else {
                     Overlay::QuickSettings
+                };
+                Vec::new()
+            }
+            Action::TogglePowerMenu => {
+                self.overlay_damage();
+                self.overlay = if self.overlay == Overlay::Power {
+                    Overlay::None
+                } else {
+                    Overlay::Power
+                };
+                Vec::new()
+            }
+            Action::ToggleLitroMenu => {
+                self.overlay_damage();
+                self.overlay = if self.overlay == Overlay::Litro {
+                    Overlay::None
+                } else {
+                    Overlay::Litro
                 };
                 Vec::new()
             }
@@ -3674,11 +4924,16 @@ impl Shell {
                 Vec::new()
             }
             Action::FilesTrash => {
-                if let Some(p) = self.files.selected_path() {
+                let paths = self.files.selected_paths();
+                if let Some(action) = selection_action(
+                    &paths,
+                    crate::apps::FilesOp::Trash,
+                    crate::apps::FilesOp::TrashMany,
+                ) {
                     self.files.ask_confirm(
                         "Move to trash",
-                        &format!("Move {p} to the trash?"),
-                        crate::apps::FilesOp::Trash(p),
+                        &format!("Move {} selected item(s) to the trash?", paths.len()),
+                        action,
                     );
                     self.request_full_redraw();
                 }
@@ -3740,6 +4995,27 @@ impl Shell {
         self.wm
             .open(app.app_id(), app.title(), (w * scale, h * scale));
         vec![Effect::Launched(app)]
+    }
+
+    /// Run one system-wide search result.
+    ///
+    /// This is the only place that knows how a result becomes a consequence, so
+    /// the keyboard and the pointer cannot disagree about what a row means.
+    pub fn seek_open(&mut self, hit: crate::seek::Hit) -> Vec<Effect> {
+        match hit {
+            crate::seek::Hit::App(app) => self.open_app(app),
+            crate::seek::Hit::Action(action) => self.perform(action),
+            crate::seek::Hit::Setting(page) => {
+                self.settings.page = page;
+                self.open_app(App::Settings)
+            }
+            crate::seek::Hit::Window(id) => {
+                // The manager undoes a minimize and switches workspaces; the
+                // search field never has to know which of those is needed.
+                self.wm.reveal(id);
+                Vec::new()
+            }
+        }
     }
 
     /// Post a notification, respecting Do Not Disturb.
@@ -3832,6 +5108,25 @@ pub fn to_rect(r: WmRect) -> Rect {
 /// What the top bar shows from the facts, as it shows it: the CPU and memory
 /// text of `views::draw_top_bar`, and the battery level and network state its
 /// icons are coloured by.
+/// The file operation for a selection: the single-item variant for one item,
+/// the bulk variant for the rest, and nothing at all for an empty selection.
+///
+/// Every destructive action in Files needs this decision, and the way it was
+/// written — `if !paths.is_empty() { if paths.len() == 1 { paths[0] … } }` — is a
+/// panic waiting for the one caller that forgets the guard. Matching on the
+/// slice says the same thing in one place, and cannot fail.
+fn selection_action<T>(
+    paths: &[String],
+    one: fn(String) -> T,
+    many: fn(Vec<String>) -> T,
+) -> Option<T> {
+    match paths {
+        [] => None,
+        [only] => Some(one(only.clone())),
+        several => Some(many(several.to_vec())),
+    }
+}
+
 fn top_bar_view(f: &SystemFacts) -> (String, Option<u8>, Option<String>) {
     let mem = match (f.mem_used_mb, f.mem_total_mb) {
         (Some(u), Some(_)) => format!("{u} MB"),
@@ -4421,6 +5716,15 @@ mod tests {
             s.wm.window(id).map(|w| w.state),
             Some(WindowState::Snapped(_))
         ));
+        // Win+Down restores a snapped window first, and only the second press
+        // hides it: the user asked for smaller, not for gone.
+        s.perform(Action::MinimizeWindow);
+        assert_eq!(s.wm.window(id).map(|w| w.state), Some(WindowState::Normal));
+        assert_eq!(
+            s.wm.window(id).map(|w| w.frame),
+            s.wm.window(id).map(|w| w.restore),
+            "restoring did not put the window back to its own size"
+        );
         s.perform(Action::MinimizeWindow);
         assert_eq!(
             s.wm.window(id).map(|w| w.state),
@@ -4474,6 +5778,69 @@ mod tests {
     }
 
     #[test]
+    fn a_pointer_move_repaints_only_the_arrow_and_matches_a_whole_frame() {
+        // The shortcut is only worth having if it is invisible. Two identical
+        // shells get the same move: one answers it by restoring the pixels
+        // under the old arrow, the other by composing the frame the slow way.
+        // Every pixel of the two frames must agree, or the arrow is smearing
+        // something the composition would have fixed.
+        use crate::desktop::Compositor;
+        use litric_design::{Theme, ThemeKind};
+        let theme = Theme::of(ThemeKind::Dark);
+        let mut fast = shell();
+        let mut full = shell();
+        let mut a = Compositor::new(1280, 800, &theme);
+        let mut b = Compositor::new(1280, 800, &theme);
+        let move_to = |s: &mut Shell, x: f32, y: f32, t: u64| {
+            s.handle(
+                &InputEvent::PointerMove {
+                    at: Point::new(x, y),
+                    delta: Point::new(1.0, 1.0),
+                },
+                t,
+            );
+        };
+        // `take_damage` is what the loop does before it composes: it is also
+        // what clears the full-redraw flag a frame answers.
+        let _ = fast.take_damage();
+        let _ = full.take_damage();
+        let _ = a.repaint(&mut fast, true, &[]);
+        let _ = b.repaint(&mut full, true, &[]);
+
+        move_to(&mut fast, 100.0, 120.0, 1_000);
+        move_to(&mut full, 100.0, 120.0, 1_000);
+        let _ = fast.take_damage();
+        let _ = full.take_damage();
+        let _ = a.repaint(&mut fast, true, &[]);
+        let _ = b.repaint(&mut full, true, &[]);
+
+        move_to(&mut fast, 300.0, 260.0, 1_016);
+        move_to(&mut full, 300.0, 260.0, 1_016);
+        let (from, to) = fast
+            .take_cursor_step()
+            .expect("a move over the bare desktop is the arrow's own frame");
+        let plan = a
+            .move_cursor(&fast, from, to)
+            .expect("the cursor was where the last frame left it");
+        assert!(
+            matches!(plan, crate::canvas::Repaint::Regions(_)),
+            "the shortcut repainted: {plan:?}"
+        );
+        let damage = full.take_damage();
+        let _ = b.repaint(&mut full, false, &damage);
+
+        let mut mismatched = 0u32;
+        for y in 0..800 {
+            for x in 0..1280 {
+                if a.scene.get(x, y) != b.scene.get(x, y) {
+                    mismatched = mismatched.saturating_add(1);
+                }
+            }
+        }
+        assert_eq!(mismatched, 0, "{mismatched} pixels differ from a full composition");
+    }
+
+    #[test]
     fn clicking_a_hotspot_activates_it_only_if_the_release_lands_there_too() {
         let mut s = shell();
         s.hotspots_mut()
@@ -4510,7 +5877,10 @@ mod tests {
         };
         s.handle(&down, 300);
         s.handle(&up_on, 400);
-        assert!(matches!(s.overlay, Overlay::Launcher { .. }));
+        // The mark opens the LitricOS menu; the Apps menu is what opens the
+        // launcher. Either answer proves the release-on-target rule; the
+        // mark's own menu is what this hotspot is.
+        assert!(matches!(s.overlay, Overlay::Litro));
     }
 
     #[test]
@@ -4731,7 +6101,7 @@ mod tests {
         // A settle budget is in milliseconds and has to mean milliseconds.
         for pace in [8_u64, 16, 33, 100] {
             let mut s = shell();
-            s.activate(Hot::Logo);
+            s.activate(Hot::MenuApps);
             let mut t = 1_000;
             s.tick(t);
             let started = t;
@@ -4768,6 +6138,52 @@ mod tests {
         s.quick.adaptive_idle = false;
         s.tick(500_000);
         assert_eq!(s.life(), LifeState::Active);
+    }
+
+    #[test]
+    fn a_network_rate_is_a_difference_and_nothing_is_invented_without_one() {
+        // 2 000 bytes received in two seconds is 1 000 bytes a second. The
+        // counters are cumulative, so this is the only way to know it.
+        let first = SystemFacts {
+            sampled_ms: Some(1_000),
+            net_rx_bytes: Some(1_000),
+            net_tx_bytes: Some(500),
+            ..SystemFacts::default()
+        };
+        let second = SystemFacts {
+            sampled_ms: Some(3_000),
+            net_rx_bytes: Some(3_000),
+            net_tx_bytes: Some(1_500),
+            ..SystemFacts::default()
+        };
+        let mut seen = first.clone();
+        seen.observe(second.clone());
+        assert_eq!(seen.net_rx_per_s, Some(1_000.0));
+        assert_eq!(seen.net_tx_per_s, Some(500.0));
+
+        // One sample is not a rate, whatever it says.
+        let mut only = SystemFacts::default();
+        only.observe(first.clone());
+        assert_eq!(only.net_rx_per_s, None, "a first sample has no interval");
+
+        // An interface that reset reports nothing rather than a negative rate.
+        let after_reset = SystemFacts {
+            sampled_ms: Some(5_000),
+            net_rx_bytes: Some(10),
+            net_tx_bytes: Some(1_500),
+            ..SystemFacts::default()
+        };
+        let mut reset = second.clone();
+        reset.observe(after_reset);
+        assert_eq!(reset.net_rx_per_s, None, "a counter that went backwards");
+
+        // A machine that reports no counters keeps saying so.
+        let mut bare = SystemFacts::default();
+        bare.observe(SystemFacts {
+            sampled_ms: Some(1_000),
+            ..SystemFacts::default()
+        });
+        assert_eq!(bare.net_rx_per_s, None);
     }
 
     #[test]
@@ -5107,5 +6523,117 @@ mod tests {
         );
         assert!(d.iter().any(|l| l.starts_with("windows=")), "{d:?}");
         assert!(d.iter().any(|l| l.starts_with("tz.")), "{d:?}");
+    }
+
+    #[test]
+    fn mission_control_shows_every_workspace_and_opens_the_chosen_window() {
+        let mut s = shell();
+        let a = s.wm.open("com.litric.files", "Documents", (500.0, 400.0));
+        s.wm.set_workspace(1);
+        let b = s.wm.open("com.litric.terminal", "Terminal", (500.0, 400.0));
+        s.wm.set_workspace(0);
+        assert_eq!(s.wm.focused(), Some(a));
+
+        s.handle(&key(Key::Tab, meta()), 1000);
+        assert!(
+            matches!(s.overlay, Overlay::Overview { .. }),
+            "Win+Tab did not open Mission Control: {:?}",
+            s.overlay
+        );
+        // Cards are ordered by workspace, so the second card is the Terminal
+        // on workspace 2 even though it is not the most recently used window.
+        s.handle(&key(Key::Right, Modifiers::NONE), 1010);
+        s.handle(&key(Key::Enter, Modifiers::NONE), 1020);
+        assert_eq!(s.overlay, Overlay::None);
+        assert_eq!(s.wm.active_workspace(), 1);
+        assert_eq!(s.wm.focused(), Some(b));
+    }
+
+    #[test]
+    fn mission_control_closes_on_escape_and_the_backdrop() {
+        let mut s = shell();
+        s.wm.open("com.litric.files", "Documents", (400.0, 300.0));
+        s.perform(Action::ToggleOverview);
+        assert!(matches!(s.overlay, Overlay::Overview { .. }));
+        s.handle(&key(Key::Escape, Modifiers::NONE), 1000);
+        assert_eq!(s.overlay, Overlay::None);
+
+        s.perform(Action::ToggleOverview);
+        let out = s.activate(Hot::OverviewBackdrop);
+        assert!(out.is_empty());
+        assert_eq!(s.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn the_quarters_snap_to_the_work_area() {
+        let mut s = shell();
+        let id = s.wm.open("com.litric.files", "Documents", (400.0, 300.0));
+        for (action, edge) in [
+            (Action::SnapTopLeft, litric_wm::SnapEdge::TopLeft),
+            (Action::SnapTopRight, litric_wm::SnapEdge::TopRight),
+            (Action::SnapBottomLeft, litric_wm::SnapEdge::BottomLeft),
+            (Action::SnapBottomRight, litric_wm::SnapEdge::BottomRight),
+        ] {
+            s.perform(action);
+            let w = s.wm.window(id).expect("the window is still open");
+            assert_eq!(w.state, litric_wm::WindowState::Snapped(edge));
+            assert_eq!(w.frame, edge.bounds(s.wm.work_area()));
+        }
+    }
+
+    #[test]
+    fn the_minimize_key_restores_before_it_hides() {
+        let mut s = shell();
+        let id = s.wm.open("com.litric.files", "Documents", (400.0, 300.0));
+        s.perform(Action::ToggleMaximize);
+        assert_eq!(
+            s.wm.window(id).map(|w| w.state),
+            Some(WindowState::Maximized)
+        );
+        s.perform(Action::MinimizeWindow);
+        assert_eq!(
+            s.wm.window(id).map(|w| w.state),
+            Some(WindowState::Normal),
+            "the first minimize hid a window the user only wanted smaller"
+        );
+        s.perform(Action::MinimizeWindow);
+        assert_eq!(
+            s.wm.window(id).map(|w| w.state),
+            Some(WindowState::Minimized),
+            "the second minimize did not hide the window"
+        );
+    }
+
+    #[test]
+    fn the_application_cycle_stays_inside_the_application() {
+        let mut s = shell();
+        let first = s.wm.open("com.litric.files", "One", (400.0, 300.0));
+        let second = s.wm.open("com.litric.files", "Two", (400.0, 300.0));
+        s.wm.open("com.litric.terminal", "Terminal", (400.0, 300.0));
+        s.wm.focus_window(second);
+        s.perform(Action::CycleAppWindow);
+        assert_eq!(s.wm.focused(), Some(first));
+        assert_eq!(
+            s.wm.focused()
+                .and_then(|id| s.wm.window(id))
+                .map(|w| w.app_id.clone()),
+            Some("com.litric.files".to_owned())
+        );
+    }
+
+    #[test]
+    fn first_run_setup_finishes_from_the_keyboard() {
+        let mut s = shell();
+        s.settings.preferences.onboarded = false;
+
+        // Enter on the focused Finish control records setup as done.
+        s.keyboard_focus = Some(Hot::SetupDone);
+        let effects = s.handle(&key(Key::Enter, Modifiers::NONE), 3_000);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::PersistPreferences(p) if p.onboarded)),
+            "finishing setup persists onboarded=true"
+        );
     }
 }

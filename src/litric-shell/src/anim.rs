@@ -52,8 +52,6 @@ pub struct ShellAnims {
     pub notifications: Anim,
     /// The context menu's reveal.
     pub context_menu: Anim,
-    /// The dock's slide-up from the bottom edge.
-    pub dock: Anim,
     /// The dock's expansion into the launcher, 0 = pill, 1 = panel.
     ///
     /// Its own spring rather than the launcher overlay's, because the two are
@@ -63,8 +61,46 @@ pub struct ShellAnims {
     /// list, and a dock that expanded when a notification arrived would be a
     /// bug with a nice animation.
     pub launcher_morph: Anim,
+    /// Mission Control is a destination-level transition: it owns the whole
+    /// workspace rather than behaving like a small popover, so it gets the
+    /// longer `SLOW` token.
+    pub overview: Anim,
+    /// The window switcher is deliberately faster than Mission Control. It is
+    /// a transient decision surface held while Alt is down, not a mode the
+    /// person should have to wait to enter or leave.
+    pub switcher: Anim,
+    /// Desktop-owned confirmations and errors. The logical dialog can stop
+    /// accepting input before this spring returns to zero; the renderer keeps
+    /// a visual snapshot for that short exit, which prevents click-through.
+    pub dialog: Anim,
+    /// Per-notification banner entrance and exit springs. A bounded map is
+    /// essential here: notifications can arrive for the whole lifetime of a
+    /// session, so animation bookkeeping must not become a leak.
+    banners: BannerAnims,
     /// Per-window elevation, for the focus transition.
     pub focus: FocusAnims,
+    /// What moved on the last step, so the frame the shell damages is no larger
+    /// than what actually changed.
+    last_moved: Moved,
+}
+
+/// Which springs moved, grouped by where their pixels are.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Moved {
+    /// The dock and the launcher it morphs into: one surface at the bottom
+    /// centre of the screen, and the only animated surface whose footprint the
+    /// shell can bound exactly.
+    pub dock: bool,
+    /// Any other spring. These keep the whole-frame redraw.
+    pub other: bool,
+}
+
+impl Moved {
+    /// Nothing moved.
+    #[must_use]
+    pub const fn none(self) -> bool {
+        !self.dock && !self.other
+    }
 }
 
 impl ShellAnims {
@@ -76,9 +112,13 @@ impl ShellAnims {
             quick_settings: Anim::at(0.0, Motion::FAST),
             notifications: Anim::at(0.0, Motion::FAST),
             context_menu: Anim::at(0.0, Motion::INSTANT),
-            dock: Anim::at(0.0, Motion::NORMAL),
             launcher_morph: Anim::at(0.0, Motion::NORMAL),
+            overview: Anim::at(0.0, Motion::SLOW),
+            switcher: Anim::at(0.0, Motion::FAST),
+            dialog: Anim::at(0.0, Motion::NORMAL),
+            banners: BannerAnims::default(),
             focus: FocusAnims::default(),
+            last_moved: Moved::default(),
         }
     }
 
@@ -86,31 +126,110 @@ impl ShellAnims {
     /// calling it every frame with no state change is a no-op by
     /// [`Anim::set_target`]'s contract, and it is called from `tick`, so the
     /// shell never has to remember which call site opened what.
-    pub fn sync(&mut self, overlay_open: bool, menu_open: bool, launcher_open: bool) {
-        self.launcher.set_target(f32::from(overlay_open));
-        self.quick_settings.set_target(f32::from(overlay_open));
-        self.notifications.set_target(f32::from(overlay_open));
+    // Ten booleans and two slices, all of them facts about one frame. Grouping
+    // them into a struct would name the same fields and add a type every call
+    // site has to build, so the count is the signature rather than a smell.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sync(
+        &mut self,
+        launcher_open: bool,
+        quick_settings_open: bool,
+        notifications_open: bool,
+        switcher_open: bool,
+        overview_open: bool,
+        menu_open: bool,
+        dialog_open: bool,
+        reduce_motion: bool,
+        active_banners: &[u32],
+        retiring_banners: &[u32],
+    ) {
+        self.set_reduced_motion(reduce_motion);
+        self.launcher.set_target(f32::from(launcher_open));
+        self.quick_settings.set_target(f32::from(quick_settings_open));
+        self.notifications.set_target(f32::from(notifications_open));
         self.context_menu.set_target(f32::from(menu_open));
         self.launcher_morph.set_target(f32::from(launcher_open));
+        self.switcher.set_target(f32::from(switcher_open));
+        self.overview.set_target(f32::from(overview_open));
+        self.dialog.set_target(f32::from(dialog_open));
+        self.banners.sync(active_banners, retiring_banners);
     }
 
-    /// Step every spring; returns whether any of them moved the value or is
-    /// still moving.
+    /// Start a banner from its visual origin. This is called when a
+    /// notification is posted rather than waiting for the next frame to
+    /// discover it, which makes the first animated frame deterministic.
+    pub fn show_banner(&mut self, id: u32) {
+        self.banners.show(id);
+    }
+
+    /// Ask a banner to leave while the shell retains its content long enough
+    /// for the exit to be drawn.
+    pub fn retire_banner(&mut self, id: u32) {
+        self.banners.retire(id);
+    }
+
+    /// The current visual progress for a notification banner.
+    #[must_use]
+    pub fn banner_reveal(&self, id: u32) -> f32 {
+        self.banners.reveal(id)
+    }
+
+    /// Apply the accessibility policy to every spring. Motion tokens retain
+    /// their semantic role as `base_motion`; reduced motion swaps the active
+    /// spring for `Motion::reduced()` and therefore lands on the target in one
+    /// frame instead of merely making travel a little shorter.
+    fn set_reduced_motion(&mut self, reduce_motion: bool) {
+        for spring in [
+            &mut self.launcher,
+            &mut self.quick_settings,
+            &mut self.notifications,
+            &mut self.context_menu,
+            &mut self.launcher_morph,
+            &mut self.overview,
+            &mut self.switcher,
+            &mut self.dialog,
+        ] {
+            spring.set_reduced_motion(reduce_motion);
+        }
+        self.banners.set_reduced_motion(reduce_motion);
+        self.focus.set_reduced_motion(reduce_motion);
+    }
+
+    /// Step every spring; returns which of them moved the value or are still
+    /// moving.
     ///
     /// A false return is the compositor's permission to idle: if no other
     /// damage exists, there is no frame left worth drawing. It is therefore a
     /// claim about the *pixels*, which is why [`Anim::step`] reports a snap that
     /// changed the value as a move.
-    pub fn step(&mut self, dt_ms: u32) -> bool {
-        let mut moving = false;
-        moving |= self.launcher.step(dt_ms);
-        moving |= self.quick_settings.step(dt_ms);
-        moving |= self.notifications.step(dt_ms);
-        moving |= self.context_menu.step(dt_ms);
-        moving |= self.dock.step(dt_ms);
-        moving |= self.launcher_morph.step(dt_ms);
-        moving |= self.focus.step(dt_ms);
-        moving
+    ///
+    /// The springs are grouped by *where their pixels are*, because that is
+    /// what the caller needs to know: a dock that grows repaints the strip it
+    /// grows out of, and repainting the whole screen for it is what made the
+    /// launcher open at five frames a second. Everything the shell cannot
+    /// bound so tightly is simply `other`.
+    pub fn step(&mut self, dt_ms: u32) -> Moved {
+        // The dock and its morph move the same surface, so they are one group.
+        let mut moved = Moved {
+            dock: self.launcher.step(dt_ms) | self.launcher_morph.step(dt_ms),
+            ..Moved::default()
+        };
+        moved.other = self.quick_settings.step(dt_ms);
+        moved.other |= self.notifications.step(dt_ms);
+        moved.other |= self.context_menu.step(dt_ms);
+        moved.other |= self.overview.step(dt_ms);
+        moved.other |= self.switcher.step(dt_ms);
+        moved.other |= self.dialog.step(dt_ms);
+        moved.other |= self.banners.step(dt_ms);
+        moved.other |= self.focus.step(dt_ms);
+        self.last_moved = moved;
+        moved
+    }
+
+    /// Which springs moved on the last [`ShellAnims::step`].
+    #[must_use]
+    pub const fn last_moved(&self) -> Moved {
+        self.last_moved
     }
 
     /// Whether any spring is mid-flight, so the frame loop cannot idle yet.
@@ -120,8 +239,11 @@ impl ShellAnims {
             && self.quick_settings.settled()
             && self.notifications.settled()
             && self.context_menu.settled()
-            && self.dock.settled()
-            && self.launcher_morph.settled())
+            && self.launcher_morph.settled()
+            && self.overview.settled()
+            && self.switcher.settled()
+            && self.dialog.settled()
+            && !self.banners.animating())
             || self.focus.animating()
     }
 }
@@ -170,10 +292,95 @@ impl FocusAnims {
         moving
     }
 
+    /// Give every extant focus spring the user-selected motion policy.
+    fn set_reduced_motion(&mut self, reduce_motion: bool) {
+        for spring in self.springs.values_mut() {
+            spring.set_reduced_motion(reduce_motion);
+        }
+    }
+
     /// Whether any window is mid-transition.
     #[must_use]
     pub fn animating(&self) -> bool {
         self.springs.values().any(|s| !s.settled())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Notification-banner springs
+// ---------------------------------------------------------------------------
+
+/// The visual lifecycle of the small, bounded notification-banner stack.
+///
+/// It deliberately stores only a scalar per notification. Notification text,
+/// priority and actions remain owned by the shell; this type owns the one
+/// rendering concern that has to outlive a logical dismissal for an exit
+/// animation to be possible.
+#[derive(Debug, Clone, Default)]
+struct BannerAnims {
+    springs: BTreeMap<u32, Anim>,
+}
+
+impl BannerAnims {
+    /// Begin showing `id` from rest.
+    fn show(&mut self, id: u32) {
+        let spring = self
+            .springs
+            .entry(id)
+            .or_insert_with(|| Anim::at(0.0, Motion::FAST));
+        spring.set_target(1.0);
+    }
+
+    /// Begin hiding `id`; the shell keeps its visual snapshot until this has
+    /// settled, then drops both snapshot and spring on a later `sync`.
+    fn retire(&mut self, id: u32) {
+        if let Some(spring) = self.springs.get_mut(&id) {
+            spring.set_target(0.0);
+        }
+    }
+
+    /// Synchronise bounded lifetime with the notification model. A plain
+    /// `BTreeMap` otherwise retains one scalar for every banner ever posted in
+    /// a long-lived session.
+    fn sync(&mut self, active: &[u32], retiring: &[u32]) {
+        for id in active {
+            self.show(*id);
+        }
+        for id in retiring {
+            self.retire(*id);
+        }
+        for (id, spring) in &mut self.springs {
+            if !active.contains(id) && !retiring.contains(id) {
+                spring.set_target(0.0);
+            }
+        }
+        self.springs.retain(|id, spring| {
+            active.contains(id) || retiring.contains(id) || !spring.settled()
+        });
+    }
+
+    /// Step all entries and report whether any pixels changed.
+    fn step(&mut self, dt_ms: u32) -> bool {
+        self.springs.values_mut().any(|spring| spring.step(dt_ms))
+    }
+
+    /// Whether any banner remains in flight.
+    fn animating(&self) -> bool {
+        self.springs.values().any(|spring| !spring.settled())
+    }
+
+    /// Current visual progress. A missing entry is deliberately zero: callers
+    /// only draw ids they have explicitly registered through `show` or kept as
+    /// an exit snapshot.
+    fn reveal(&self, id: u32) -> f32 {
+        self.springs.get(&id).map_or(0.0, Anim::value)
+    }
+
+    /// Change every retained entry's accessibility policy.
+    fn set_reduced_motion(&mut self, reduce_motion: bool) {
+        for spring in self.springs.values_mut() {
+            spring.set_reduced_motion(reduce_motion);
+        }
     }
 }
 
@@ -204,6 +411,10 @@ pub struct Anim {
     target: f32,
     /// Which spring: stiffness, damping, and the settle budget.
     motion: Motion,
+    /// The semantic token this value normally uses. `motion` can temporarily
+    /// become `Motion::reduced()` without losing the correct token to restore
+    /// when the accessibility preference changes again.
+    base_motion: Motion,
     /// Time since [`Anim::set_target`] last gave this spring a job.
     elapsed_ms: u32,
 }
@@ -217,6 +428,7 @@ impl Anim {
             velocity: 0.0,
             target: value,
             motion,
+            base_motion: motion,
             elapsed_ms: 0,
         }
     }
@@ -252,6 +464,26 @@ impl Anim {
         }
         self.target = target;
         self.elapsed_ms = 0;
+    }
+
+    /// Honour the reduced-motion preference without changing the semantic
+    /// token assigned to this value. Any momentum is cleared when motion is
+    /// reduced so a prior high-velocity travel cannot leak into the one-frame
+    /// accessibility transition.
+    pub fn set_reduced_motion(&mut self, reduce_motion: bool) {
+        let next = if reduce_motion {
+            Motion::reduced()
+        } else {
+            self.base_motion
+        };
+        if self.motion == next {
+            return;
+        }
+        self.motion = next;
+        self.elapsed_ms = 0;
+        if reduce_motion {
+            self.velocity = 0.0;
+        }
     }
 
     /// Jump to `value` and stop there. For state changes that must not

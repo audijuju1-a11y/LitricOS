@@ -48,6 +48,8 @@ pub enum Icon {
     Notifications,
     /// Wi-Fi arcs.
     Network,
+    /// The Bluetooth rune.
+    Bluetooth,
     /// A speaker: audio.
     Audio,
     /// A speaker with a slash: muted.
@@ -105,6 +107,7 @@ impl Icon {
             Self::Search => "search",
             Self::Notifications => "notifications",
             Self::Network => "network",
+            Self::Bluetooth => "bluetooth",
             Self::Audio => "audio",
             Self::AudioMuted => "audio-muted",
             Self::Battery => "battery",
@@ -128,7 +131,7 @@ impl Icon {
     }
 
     /// Every icon, for the specimen sheet and the tests.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 32] = [
         Self::Litric,
         Self::Files,
         Self::Browser,
@@ -141,6 +144,7 @@ impl Icon {
         Self::Search,
         Self::Notifications,
         Self::Network,
+        Self::Bluetooth,
         Self::Audio,
         Self::AudioMuted,
         Self::Battery,
@@ -355,6 +359,14 @@ pub fn draw(canvas: &mut Canvas, icon: Icon, box_: Rect, color: u32, weight: f32
                 arc(canvas, 0.5, 0.74, r, 200.0, 340.0);
             }
             dot(canvas, 0.5, 0.76, 0.055);
+        }
+        Icon::Bluetooth => {
+            // The rune: a spine with two fins, each meeting it at the same
+            // angle. Two polylines rather than one closed path so the crossing
+            // stays a crossing instead of collapsing into a triangle.
+            line(canvas, (0.5, 0.10), (0.5, 0.90));
+            poly(canvas, &[(0.5, 0.10), (0.76, 0.32), (0.26, 0.70)]);
+            poly(canvas, &[(0.5, 0.90), (0.76, 0.68), (0.26, 0.30)]);
         }
         Icon::Audio | Icon::AudioMuted => {
             poly(
@@ -620,7 +632,9 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len(), "two icons share a name");
-        assert_eq!(before, 31);
+        // The literal is deliberate: adding an icon means looking at this line
+        // and deciding where it belongs in the set, not only appending it.
+        assert_eq!(before, 32);
     }
 
     #[test]

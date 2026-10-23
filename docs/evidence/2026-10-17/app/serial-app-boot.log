@@ -1,0 +1,40 @@
+[   14.342227] litric-sysd[398]: litric.mem.total_kb=1483536
+[   14.344978] litric-sysd[398]: litric.mem.available_kb=1022320
+[   14.348292] litric-sysd[398]: litric.mem.used_kb=461216
+[   14.350518] litric-sysd[398]: litric.mem.cached_kb=282644
+[   14.352570] litric-sysd[398]: litric.mem.swap_used_kb=0
+[   14.359838] litric-sysd[398]: litric.cpus=2
+[   14.363074] litric-sysd[398]: litric.cpu.busy_since_boot_pct=57.5
+[   14.364336] litric-sysd[398]: litric.cpu.busy_ticks=1532
+[   14.366730] litric-sysd[398]: litric.cpu.total_ticks=2663
+[   14.369834] litric-sysd[398]: litric.cpu.core0.busy_ticks=884
+[   14.371933] litric-sysd[398]: litric.cpu.core0.total_ticks=1354
+[   14.373734] litric-sysd[398]: litric.cpu.core1.busy_ticks=648
+[   14.375118] litric-sysd[398]: litric.cpu.core1.total_ticks=1307
+[   14.382198] litric-sysd[398]: litric.cpu.model=Intel(R) Core(TM) i3-10105F CPU @ 3.70GHz
+[   14.471460] litric-sysd[398]: litric.mount.41=/sys/fs/cgroup/system.slice/litric-sysd.service/memory.pressure|cgroup2|rw|cgroup2
+[   14.497763] litric-sysd[398]: litric.proc=8|kworker/R-netns|I|2|1|0|-|0|
+[   14.507255] litric-sysd[398]: litric.proc=14|kworker/R-mm_percpu_wq|I|2|1|0|-|0|
+[   14.529425] litric-sysd[398]: litric.proc=23|cpuhp/0|S|2|1|0|-|0|
+[   14.530738] litric-sysd[398]: litric.proc=24|cpuhp/1|S|2|1|0|-|0|
+[   14.541891] litric-sysd[398]: litric.proc=31|kworker/R-inet_frag_wq|I|2|1|0|-|0|
+[   14.712916] litric-sysd[398]: litric.proc=293|systemd-networkd|S|1|1|6|10520|977|/usr/lib/systemd/systemd-networkd
+[   14.784384] litric-sysd[398]: net.iface.count=2
+[   14.784619] litric-sysd[398]: net.iface enp0s4 state=up carrier=1 mac=52:54:00:12:34:56 mtu=1500 rx=356 tx=1400
+[   14.784857] litric-sysd[398]: net.iface lo state=unknown carrier=1 mac=00:00:00:00:00:00 mtu=65536 rx=0 tx=0
+[   14.785474] litric-sysd[398]: net.addr enp0s4 family=4 addr=10.0.2.15 prefix=24 scope=global
+[   14.786543] litric-sysd[398]: net.addr enp0s4 family=6 addr=fe80::5054:ff:fe12:3456 prefix=64 scope=link
+[   14.786839] litric-sysd[398]: net.addr lo family=4 addr=127.0.0.1 prefix=8 scope=host
+[   14.787811] litric-sysd[398]: net.addr lo family=6 addr=::1 prefix=128 scope=host
+[   14.788338] litric-sysd[398]: net.route destination=0.0.0.0/0 via=10.0.2.2 dev=enp0s4 metric=0
+[   14.789364] litric-sysd[398]: net.route destination=10.0.2.0/24 via=- dev=enp0s4 metric=0
+[   14.789870] litric-sysd[398]: net.dns nameserver=10.0.2.3
+[   14.790364] litric-sysd[398]: net.dns search=.
+[   14.790719] litric-sysd[398]: net.dns.source=resolved
+[   14.790918] litric-sysd[398]: net.addr.v4=iproute2
+[   14.970423] litric-shell[419]: litric.shell.version=0.2.0
+[   14.971839] litric-shell[419]: litric.shell.canvas=1280x800
+[   14.973226] litric-shell[419]: litric.shell.scale=1.00
+[   14.975821] litric-shell[419]: litric.shell.theme=dark
+[   14.977378] litric-shell[419]: litric.shell.facts.source=litric-sysd
+[   14.980766] litric-shell[419]: litric.shell.environments=3

@@ -226,6 +226,22 @@ mod broker {
             .as_ref()
     }
 
+    /// The broker-owned download directory, if the service supplied one.
+    static DOWNLOAD_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> =
+        std::sync::OnceLock::new();
+
+    fn downloads_dir() -> Option<&'static std::path::PathBuf> {
+        DOWNLOAD_DIR
+            .get_or_init(|| {
+                let args = std::env::args().collect::<Vec<_>>();
+                args.iter()
+                    .position(|arg| arg == "--downloads")
+                    .and_then(|index| args.get(index + 1))
+                    .map(std::path::PathBuf::from)
+            })
+            .as_ref()
+    }
+
     impl ChromiumProc {
         /// Spawn headless Chromium with the debugging pipe on fd 3/4.
         pub fn spawn(binary: &Path) -> io::Result<Self> {
@@ -288,13 +304,27 @@ mod broker {
             let cdp_in = unsafe { std::fs::File::from_raw_fd(in_w) };
             #[allow(unsafe_code)]
             let cdp_out = unsafe { BufReader::new(std::fs::File::from_raw_fd(out_r)) };
-            Ok(Self {
+            let mut proc = Self {
                 child,
                 cdp_in,
                 cdp_out,
                 next_id: AtomicU64::new(1),
                 targets: HashMap::new(),
-            })
+            };
+            if let Some(downloads) = downloads_dir() {
+                if let Err(error) = std::fs::create_dir_all(downloads) {
+                    eprintln!("browserd: download directory unavailable: {error}");
+                } else {
+                    let params = format!(
+                        r#"{{"behavior":"allow","downloadPath":"{}","eventsEnabled":true}}"#,
+                        json_escape(&downloads.display().to_string())
+                    );
+                    if let Err(error) = proc.call("Browser.setDownloadBehavior", &params) {
+                        eprintln!("browserd: download integration unavailable: {error}");
+                    }
+                }
+            }
+            Ok(proc)
         }
 
         /// One CDP request/response round trip (NUL-delimited messages).
@@ -579,6 +609,47 @@ mod broker {
                                 if writeln!(&mut writer, "{line}").is_err() {
                                     return;
                                 }
+                            }
+                        }
+                    }
+                    "DOWNLOADS" => {
+                        let Some(dir) = downloads_dir() else {
+                            if writeln!(&mut writer, "ERR downloads are not configured").is_err() {
+                                return;
+                            }
+                            continue;
+                        };
+                        let entries = match std::fs::read_dir(dir) {
+                            Ok(entries) => entries,
+                            Err(error) => {
+                                let line = format!("ERR {}", super::pct_encode(&error.to_string()));
+                                if writeln!(&mut writer, "{line}").is_err() {
+                                    return;
+                                }
+                                continue;
+                            }
+                        };
+                        let mut files = Vec::new();
+                        for entry in entries.filter_map(Result::ok) {
+                            let Ok(name) = entry.file_name().into_string() else {
+                                continue;
+                            };
+                            let Ok(metadata) = entry.metadata() else {
+                                continue;
+                            };
+                            if metadata.is_file() && !name.starts_with('.') {
+                                files.push((name, metadata.len()));
+                            }
+                        }
+                        files.sort_by_key(|(name, _)| name.to_lowercase());
+                        if writeln!(&mut writer, "DOWNLOADS {}", files.len()).is_err() {
+                            return;
+                        }
+                        for (name, size) in files {
+                            if writeln!(&mut writer, "DOWNLOAD {} {size}", super::pct_encode(&name))
+                                .is_err()
+                            {
+                                return;
                             }
                         }
                     }

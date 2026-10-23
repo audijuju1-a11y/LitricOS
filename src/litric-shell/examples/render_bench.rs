@@ -32,7 +32,7 @@ use std::time::Instant;
 use litric_design::{Theme, ThemeKind};
 use litric_input::event::{InputEvent, Point};
 use litric_locale::Regional;
-use litric_shell::canvas::{rgb, Canvas, Rect};
+use litric_shell::canvas::{rgb, Canvas, Rect, Site};
 use litric_shell::desktop;
 use litric_shell::fb::{FbInfo, Framebuffer};
 use litric_shell::lock::Stage;
@@ -133,13 +133,23 @@ struct Frame {
 /// One frame exactly as `litric-shell`'s loop drew it at the time of writing:
 /// restore the wallpaper (everywhere, or inside each damage rectangle grown by
 /// two pixels), then draw the whole desktop unclipped.
+///
+/// A locked frame restores nothing, mirroring [`Compositor::repaint`], which
+/// skips the same copy for the same reason: the lock paints an opaque
+/// background over every pixel it visits, so the wallpaper underneath it could
+/// not be seen. A benchmark that kept restoring would be timing work the shell
+/// does not do.
+///
+/// [`Compositor::repaint`]: litric_shell::desktop::Compositor::repaint
 fn frame(b: &mut Bench) -> Frame {
     let full = b.shell.needs_full_redraw();
     let damage = b.shell.take_damage();
     let screen = Rect::new(0.0, 0.0, W as f32, H as f32);
     let mut restored_px = 0.0_f64;
     b.scene.reset_pixels_visited();
-    if full {
+    if b.shell.lock.locked {
+        // Nothing to restore.
+    } else if full {
         b.scene.blit_from(&b.wallpaper, screen);
         restored_px = f64::from(screen.w * screen.h);
     } else {
@@ -172,6 +182,10 @@ fn lock_frames(b: &mut Bench, now: &mut u64, name: &str) {
     let mut damage = 0_usize;
     let mut restored = 0.0_f64;
     let mut visited = 0_u64;
+    // Where the pixels went, summed over the runs. BUG-0018 asks for this
+    // split: the total alone does not say whether a locked frame spent its
+    // work on the glass blur or on the fields and the glow.
+    let mut sites = [0_u64; Site::COUNT];
     for _ in 0..RUNS {
         *now = (*now).saturating_add(33);
         b.shell.tick(*now);
@@ -182,10 +196,26 @@ fn lock_frames(b: &mut Bench, now: &mut u64, name: &str) {
         damage = f.damage.len();
         restored = f.restored_px;
         visited = f.visited_px;
+        for (s, n) in b.scene.pixels_visited_by_site() {
+            if let Some(c) = sites.get_mut(s.index()) {
+                *c = c.saturating_add(n);
+            }
+        }
     }
     println!(
         "{name}.full={full} damage_rects={damage} restored_px={restored:.0} visited_px={visited}"
     );
+    let split = Site::ALL
+        .into_iter()
+        .filter_map(|s| {
+            sites.get(s.index()).copied().filter(|n| *n > 0).map(|n| {
+                let per_run = n.checked_div(RUNS as u64).unwrap_or(0);
+                format!("{}={per_run}", s.label())
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("{name}.sites_per_frame={split}");
     report(name, times);
 }
 

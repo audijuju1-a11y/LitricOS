@@ -1,0 +1,1256 @@
+# Batch B08: `litric-shell` crate — file-level analysis
+
+This report covers 32 inventoried crate files: the package manifest, Rust library/binary modules, frame/benchmark examples, and integration audits. The crate is the Layer 5 software-rendered desktop and owns the shell state, drawing, framebuffer output, UI models, input-driven journeys and system-service bridges.
+
+## Architecture and boundaries
+
+`main.rs` orchestrates startup, framebuffer/input discovery, daemon links, frame scheduling, state sampling and status reporting. The library separates state/policy (`shell`, `apps`, `settings`, `taskmgr`, `textedit`, `shortcuts`, `lock`) from rendering (`canvas`, `desktop`, `ui`, `views`, `icons`, `font`) and adapters (`fb`, `link`, `fsbridge`, `domkey`, `i18n`). `anim` steps the design-token springs; `activity` and `monitor` render system/process facts; `e2e` exercises synthetic user journeys. This remains a software framebuffer desktop; `views` maps visible controls to hotspots and `shell` handles what input means.
+
+## File analysis
+
+### `src/litric-shell/Cargo.toml`
+
+- Inventory `F0732`; configuration/cargo-manifest; 769 bytes; `TOML`.
+- Verified source length: 29 lines; SHA-256 `78be9f9d816a169c616e9a53bf3f16c29afd27160c54ffa8cdbcd88f94d52b22`.
+- Package/build contract:
+  - L1: `[package]`
+  - L2: `name        = "litric-shell"`
+  - L3: `description = "LitricOS shell: the desktop that appears at boot"`
+  - L4: `version.workspace      = true`
+  - L5: `edition.workspace      = true`
+  - L6: `rust-version.workspace = true`
+  - L7: `license.workspace      = true`
+  - L9: `[lints]`
+  - L10: `workspace = true`
+  - L12: `[dependencies]`
+  - L13: `litric-design = { path = "../litric-design" }`
+  - L14: `litric-sysd   = { path = "../litric-sysd" }`
+  - L15: `litric-input  = { path = "../litric-input" }`
+  - L16: `litric-wm     = { path = "../litric-wm" }`
+  - L17: `litric-locale = { path = "../litric-locale" }`
+  - L18: `litric-files  = { path = "../litric-files" }`
+  - L19: `litric-defender = { path = "../litric-defender" }`
+  - L20: `litric-core = { path = "../litric-core" }`
+  - L21: `litric-text = { path = "../litric-text" }`
+  - L23: `[lib]`
+  - L24: `name = "litric_shell"`
+  - L25: `path = "src/lib.rs"`
+  - L27: `[[bin]]`
+  - L28: `name = "litric-shell"`
+  - L29: `path = "src/main.rs"`
+
+### `src/litric-shell/examples/frame_dump.rs`
+
+- Inventory `F0733`; project source/rust-example; 29345 bytes; `Rust`.
+- Verified source length: 759 lines; SHA-256 `a231a9f58be436ef63bb4ccbb2d45366412a0c940fa7ef16c878a310e0c79814`.
+- Module intent: Dump the desktop's real frames to PPM files, without a display and without a virtual machine. The governance plan (04-QA-LINT-GOVERNANCE §2) requires ten golden screens and says they must come from the machine, not from a mock renderer. That is the right rule for release evidence, but it has a cost the project has been paying: until someone boots QEMU, nobody can see what a change did to the interface, and a review of a UI diff is a review of an argument. This example is the half of that pipeline that runs anywhere. It drives the *shipping* composition -- [`views::draw`] and [`desktop::wallpaper`], the same functions `main.rs` calls on a booted machine -- into an in-memory [`Canvas`], and writes each frame as a P6 PPM that `tools/ppm2png.py` turns into a PNG. Nothing here reimplements drawing, so a frame dumped here differs from a frame on the machine only by the facts that were fed in. 
+- Internal section markers: The lock and overlay scenes are dumped here rather than in the app list.
+- Public API and major declarations (6):
+  - L59: `const W: u32 = 1280;`
+  - L60: `const H: u32 = 800;`
+  - L63: `struct Rig {`
+  - L216: `const CORE_BUSY: [u64; 8] = [18, 7, 42, 5, 11, 30, 2, 9];`
+  - L221: `const HISTORY_STEPS: u64 = 40;`
+  - L632: `type Scene = (&'static str, fn(&mut Rig));`
+
+### `src/litric-shell/examples/render_bench.rs`
+
+- Inventory `F0734`; project source/rust-example; 15956 bytes; `Rust`.
+- Verified source length: 456 lines; SHA-256 `4d5572ee9eb5f56f0abe2d6fcedc88106116dea24c1d686ad9d34fb553ad3b7a`.
+- Module intent: Render benchmark for the desktop's frame path. Builds the first-run desktop `litric-shell` shows at start (the Activity and Environments windows open, Activity focused) at 1280x800 and times the frame path the binary's loop uses: a full frame, the partial frame after one pointer move, the frame after opening a window, and presenting to a regular file that stands in for `/dev/fb0`. The lock screen is measured last and in four states -- as it opens, with the password field out, with the customize sheet open, and with motion off -- because a locked shell composes in full on every tick and is therefore the most expensive steady state the shell has. The system facts are fixed numbers set here, not readings: the benchmark measures drawing, and drawing the same text on every run is what makes two runs comparable. cargo run --release -p litric-shell --example render_bench -- [DIR] `DIR` is where
+- Public API and major declarations (5):
+  - L44: `const W: u32 = 1280;`
+  - L45: `const H: u32 = 800;`
+  - L46: `const RUNS: usize = 15;`
+  - L48: `struct Bench {`
+  - L126: `struct Frame {`
+
+### `src/litric-shell/src/activity.rs`
+
+- Inventory `F0735`; project source/rust-source; 24013 bytes; `Rust`.
+- Verified source length: 661 lines; SHA-256 `ac8b28e4c78b1dd876ac03a9ff7864d95e5e27ee3d6be2777f4e8d4f0518b4d3`.
+- Module intent: The Activity window: the machine meters and the process table. Everything here is drawn *from* [`TaskManager`]: the columns, their order, their widths, their alignment, the sort, the filters, the row height, the row tints and the zebra shading are all preferences, so a preference the model does not read cannot appear on this screen. That is the property a picture cannot check and a test can. Three rules hold here as everywhere else in this shell: 1. **A cell is elided to its own column**, never to the window. A value that runs past its column is a value drawn over its neighbour, which is the defect this project has already fixed once. 2. **A reading that was never measured is a dash.** A machine that did not report its swap is not a machine using no swap. 3. **Nothing is dropped in silence.** Rows the window had no room for, and columns too narrow to hold their own heading, are counted i
+- Internal section markers: The most important note goes on the screen even when it does not; The note about the hidden rows is the one that has to survive a narrow.
+- Public API and major declarations (8):
+  - L35: `pub struct Report {`
+  - L49: `pub fn complete(&self) -> bool {`
+  - L56: `pub fn processes(n: usize) -> String {`
+  - L66: `pub fn columns_word(n: usize) -> String {`
+  - L84: `pub fn column_widths(m: &TaskManager, scale: f32, room: f32) -> (Vec<(Column, f32)>, usize) {`
+  - L109: `pub fn row_height(t: &Tokens, m: &TaskManager) -> f32 {`
+  - L123: `pub fn table(canvas: &mut Canvas, t: &Tokens, m: &TaskManager, body: Rect) -> Report {`
+  - L372: `pub fn meters(canvas: &mut Canvas, t: &Tokens, m: &TaskManager, content: &Rect, mut y: f32) -> f32 {`
+- Inline tests (9): `a_count_is_pluralised_and_a_single_one_is_not` (L474), `a_row_is_never_shorter_than_its_own_text` (L483), `columns_keep_their_natural_width_and_the_last_ones_are_dropped_when_they_cannot` (L503), `the_table_shows_every_process_and_says_what_it_could_not_fit` (L543), `a_window_with_no_room_says_what_it_hid_rather_than_hiding_it` (L560), `the_same_table_is_still_readable_at_a_larger_scale_and_a_different_width` (L599), `an_empty_table_says_the_daemon_did_not_answer_rather_than_nothing_is_running` (L611), `a_meter_draws_the_band_it_crossed_and_the_marks_that_are_on` (L624), `an_unmeasured_meter_is_a_dash_and_claims_nothing` (L645)
+
+### `src/litric-shell/src/anim.rs`
+
+- Inventory `F0736`; project source/rust-source; 18021 bytes; `Rust`.
+- Verified source length: 463 lines; SHA-256 `c2c1985ffa8952e8cdf5dc96532989767c11a9d01f3e472297331bbdbd36ce01`.
+- Module intent: The shell's animation integrator: the one place springs are stepped. `litric-design` has always defined the motion tokens — [`Motion::INSTANT`] through [`Motion::SLOW`], a settle budget, and a reduced-motion token — but nothing stepped them, so every state change in the shell jumped between its two end states in a single frame. That is the "กระตุก" the UI audit traced: the system's motion vocabulary existed and was unused. An [`Anim`] is one animated scalar. It holds a value, a velocity, and a target, and [`Anim::step`] advances the value with semi-implicit Euler integration of the spring defined by its [`Motion`] token. Three properties are the point: * **Interruptible** (ADR-0009): retargeting mid-flight keeps the velocity, so grabbing a panel that is still opening never waits for the opening to finish — it redirects. * **Bounded**: a spring that rings forever is a bug wearing a physic
+- Internal section markers: Shell springs; Window focus springs; The value must still be between where it was and where it is.
+- Public API and major declarations (21):
+  - L46: `pub struct ShellAnims {`
+  - L71: `pub fn new() -> Self {`
+  - L86: `pub fn sync(&mut self, overlay_open: bool, menu_open: bool, launcher_open: bool) {`
+  - L101: `pub fn step(&mut self, dt_ms: u32) -> bool {`
+  - L114: `pub fn animating(&self) -> bool {`
+  - L141: `pub struct FocusAnims {`
+  - L149: `pub fn elevation(&mut self, id: u32, focused: bool) -> f32 {`
+  - L160: `pub fn step(&mut self, dt_ms: u32) -> bool {`
+  - L170: `pub fn animating(&self) -> bool {`
+  - L180: `const MAX_STEP_MS: u32 = 100;`
+  - L183: `const SETTLE_EPSILON: f32 = 0.001;`
+  - L184: `const SETTLE_VELOCITY: f32 = 0.01;`
+  - L193: `pub struct Anim {`
+  - L209: `pub const fn at(value: f32, motion: Motion) -> Self {`
+  - L221: `pub const fn value(&self) -> f32 {`
+  - L227: `pub const fn target(&self) -> f32 {`
+  - L233: `pub const fn settled(&self) -> bool {`
+  - L244: `pub fn set_target(&mut self, target: f32) {`
+  - L254: `pub fn snap_to(&mut self, value: f32) {`
+  - L283: `pub fn step(&mut self, dt_ms: u32) -> bool {`
+  - L319: `const DT: u32 = 16;`
+- Inline tests (10): `a_retargeted_spring_settles_on_the_new_target_within_budget` (L322), `retargeting_mid_flight_keeps_momentum_instead_of_restarting` (L335), `interrupting_a_closing_panel_reopens_smoothly` (L355), `reduced_motion_arrives_in_one_step_without_travel` (L374), `a_budget_snap_that_moves_the_value_reports_the_move` (L392), `a_step_that_changes_nothing_reports_nothing` (L415), `a_stalled_compositor_cannot_teleport_the_value` (L425), `the_same_seed_of_steps_gives_the_same_sequence` (L434), `retargeting_to_the_current_target_is_a_no_op` (L446), `a_spring_at_rest_spends_no_frames` (L458)
+
+### `src/litric-shell/src/apps.rs`
+
+- Inventory `F0737`; project source/rust-source; 77696 bytes; `Rust`.
+- Verified source length: 2296 lines; SHA-256 `168de7a004ee38ec0c3e51fc37a2569ddce1a8940cdd4738841beab550cf094f`.
+- Module intent: The shell's application models: Files, Litric Browser, the Defender and the desktop's icon grid. These are *models*, not views: they hold state and produce decisions, and [`crate::views`] draws whatever the model reports. Nothing here touches the framebuffer. Research baseline (Windows 11 File Explorer): navigation pane with pinned places, breadcrumb address bar, command bar, details pane, list/details view modes, search, tabs. This model implements the state machine behind that surface on LitricOS primitives: logical paths resolve through [`crate::fsbridge`]'s no-symlink-follow root, listing maps to a table with sortable columns, a details selection, a search filter, and pinned places (Quick access). The model also owns the Files clipboard (copy/cut) and the pending dialog state (rename, new folder), so the window manager's input handler stays a thin router. Research baseline (Chromium)
+- Internal section markers: Keep a sample of clean rows so an in-progress window is not; Terminal.
+- Public API and major declarations (99):
+  - L43: `pub struct FileViewer {`
+  - L56: `pub fn window(&self, rows: usize) -> (Vec<String>, usize) {`
+  - L96: `pub struct FileRow {`
+  - L109: `pub enum FileKind {`
+  - L123: `pub fn from_token(token: &str) -> Self {`
+  - L134: `pub const fn token(self) -> &'static str {`
+  - L146: `pub enum SortKey {`
+  - L157: `pub enum FilesFocus {`
+  - L166: `pub enum DialogKind {`
+  - L201: `pub enum DesktopDialog {`
+  - L215: `pub enum FilesOp {`
+  - L243: `pub struct FilesApp {`
+  - L325: `pub const DEFAULT_PLACES: [(&str, &str); 6] = [`
+  - L336: `pub fn visible(&self) -> Vec<&FileRow> {`
+  - L393: `pub fn breadcrumbs(&self) -> Vec<String> {`
+  - L405: `pub fn breadcrumb_path(&self, i: usize) -> String {`
+  - L419: `pub fn navigate(&mut self, path: &str) {`
+  - L434: `pub fn go_back(&mut self) -> bool {`
+  - L447: `pub fn go_forward(&mut self) -> bool {`
+  - L461: `pub fn go_up(&mut self) {`
+  - L473: `pub fn toggle_sort(&mut self, key: SortKey) {`
+  - L484: `pub fn apply_list_reply(&mut self, reply: &str) {`
+  - L523: `pub fn apply_entries(&mut self, rows: Vec<FileRow>) {`
+  - L533: `pub fn selection(&self) -> Option<&FileRow> {`
+  - L544: `pub fn selected_path(&self) -> Option<String> {`
+  - L557: `pub fn selected_paths(&self) -> Vec<String> {`
+  - L587: `pub fn row_is_selected(&self, index: usize) -> bool {`
+  - L597: `pub fn select_row(&mut self, index: usize) {`
+  - L607: `pub fn toggle_row(&mut self, index: usize) {`
+  - L639: `pub fn select_all_visible(&mut self) {`
+  - L653: `pub fn copy_selection(&mut self) -> bool {`
+  - L664: `pub fn cut_selection(&mut self) -> bool {`
+  - L675: `pub fn ask_new_folder(&mut self) {`
+  - L682: `pub fn ask_new_file(&mut self) {`
+  - L691: `pub fn ask_rename(&mut self) {`
+  - L708: `pub fn ask_confirm(&mut self, title: &str, detail: &str, action: FilesOp) {`
+  - L737: `pub fn close_dialog(&mut self) {`
+  - L747: `pub struct BrowserTab {`
+  - L762: `pub enum BrowserPanel {`
+  - L778: `pub struct BrowserDownload {`
+  - L787: `pub enum SearchEngine {`
+  - L798: `pub const ALL: [Self; 3] = [Self::Google, Self::DuckDuckGo, Self::Bing];`
+  - L802: `pub const fn title(self) -> &'static str {`
+  - L812: `pub fn search_url(self, query: &str) -> String {`
+  - L823: `pub const fn label(self) -> &'static str {`
+  - L834: `pub struct BrowserApp {`
+  - L897: `pub fn tab(&self) -> Option<&BrowserTab> {`
+  - L902: `pub fn select(&mut self, i: usize) {`
+  - L913: `pub fn close(&mut self, i: usize) {`
+  - L938: `pub fn new_tab(&mut self) {`
+  - L957: `pub fn commit_omnibox(&mut self) -> Option<String> {`
+  - L974: `pub fn navigate_active_to(&mut self, url: &str) {`
+  - L998: `pub fn record_visit(&mut self, url: &str) {`
+  - L1010: `pub fn back(&mut self) -> Option<String> {`
+  - L1024: `pub fn forward(&mut self) -> Option<String> {`
+  - L1040: `pub fn can_go_back(&self) -> bool {`
+  - L1046: `pub fn can_go_forward(&self) -> bool {`
+  - L1052: `pub fn toggle_bookmark(&mut self) -> bool {`
+  - L1067: `pub fn is_bookmarked(&self) -> bool {`
+  - L1075: `pub fn navigate_active(&mut self) -> Option<String> {`
+  - L1086: `pub struct ThreatRow {`
+  - L1097: `pub enum ScanState {`
+  - L1120: `pub struct DefenderApp {`
+  - L1136: `pub fn start(&mut self, total: usize) {`
+  - L1145: `pub fn record(&mut self, path: &str, decision: &Decision) {`
+  - L1176: `pub fn finish(&mut self) {`
+  - L1198: `pub struct DesktopIcon {`
+  - L1207: `pub enum IconTarget {`
+  - L1218: `pub struct DesktopIcons {`
+  - L1229: `pub fn minimal() -> Self {`
+  - L1257: `pub fn standard() -> Self {`
+  - L1307: `pub fn select(&mut self, i: Option<usize>) {`
+  - L1326: `pub enum FilesHot {`
+  - L1366: `pub fn files_action(app: &mut FilesApp, hot: FilesHot) -> Option<String> {`
+  - L1477: `pub fn browser_action(app: &mut BrowserApp, hot: Hot) -> Option<String> {`
+  - L1498: `pub enum MenuItem {`
+  - L1509: `pub enum MenuAction {`
+  - L1570: `pub struct ContextMenu {`
+  - L1581: `pub enum MenuSurface {`
+  - L1602: `pub fn for_surface(surface: MenuSurface, at: (f32, f32)) -> Self {`
+  - L1655: `pub fn height(&self, row_h: f32) -> f32 {`
+  - L1668: `pub struct TrashApp {`
+  - L1685: `pub enum TrashConfirmation {`
+  - L1695: `pub fn selected_name(&self) -> Option<String> {`
+  - L1702: `pub fn count(&self) -> usize {`
+  - L1708: `pub fn visible_indices(&self) -> Vec<usize> {`
+  - L1724: `pub fn has_visible_selection(&self) -> bool {`
+  - L1734: `pub fn dialog_field_key(`
+  - L1768: `pub struct TerminalApp {`
+  - L1792: `pub const MAX_LINES: usize = 400;`
+  - L1794: `pub const MAX_HISTORY: usize = 100;`
+  - L1798: `pub fn new() -> Self {`
+  - L1815: `pub fn push_line(&mut self, line: impl Into<String>) {`
+  - L1823: `pub fn echo_command(&mut self, cmd: &str) {`
+  - L1829: `pub fn remember_command(&mut self, cmd: &str) {`
+  - L1841: `pub fn history_up(&mut self) {`
+  - L1861: `pub fn history_down(&mut self) {`
+  - L1879: `pub fn clear_screen(&mut self) {`
+  - L1889: `pub fn new_session(&mut self) -> bool {`
+- Inline tests (24): `list_reply_parses_into_sorted_rows` (L1914), `history_works_like_explorers_back_forward_stack` (L1924), `up_from_a_nested_path_goes_to_its_parent` (L1939), `breadcrumbs_and_crumb_targets_match_the_path` (L1949), `sorting_toggles_and_switches_columns` (L1958), `the_filter_narrows_without_touching_the_listing` (L1979), `selection_survives_through_the_visible_view` (L1988), `multiple_selection_tracks_names_when_sorted_and_compresses_together` (L2001), `select_all_uses_the_visible_rows_and_filter_is_respected` (L2033), `a_files_place_click_navigates_and_pins` (L2049), `a_header_click_only_resorts` (L2057), `clipboard_records_copy_and_cut` (L2064), `dialogs_open_with_the_right_field_and_selection` (L2082), `browser_tabs_open_close_and_keep_the_window_alive` (L2109), `browser_history_back_forward_and_new_navigation_trim_forward` (L2119), `browser_bookmarks_toggle_and_remain_unique` (L2138), `decoding_covers_percent_and_dash_forms` (L2149), `browser_hotspots_map_totally` (L2157), `the_omnibox_searches_google_by_default` (L2173), `search_engines_build_their_urls_and_round_trip` (L2192), `the_defender_model_tracks_a_scan_end_to_end` (L2217), `the_defender_model_stays_bounded_on_big_scans` (L2244), `the_desktop_grid_has_the_standard_icons` (L2261), `first_boot_desktop_keeps_only_frequent_destinations` (L2278)
+
+### `src/litric-shell/src/canvas.rs`
+
+- Inventory `F0738`; project source/rust-source; 78572 bytes; `Rust`.
+- Verified source length: 2095 lines; SHA-256 `b4adcb205ed7bcce46016d003d3c7c93f48432f3f835344bc3654a49db4a7d30`.
+- Module intent: A software raster canvas. Every pixel LitricOS puts on a screen goes through here. There is no GPU in this path and, for a desktop that is mostly flat colour and one blur, there does not need to be: a compositor that needs a GPU to draw a menu bar is a compositor that cannot draw a menu bar when the GPU driver is the thing that broke. Pixels are `0xAARRGGBB` in a `Vec<u32>`, host byte order. The conversion to whatever the framebuffer actually wants happens once, at the edge, in [`crate::fb`]. Shapes are drawn from signed distance functions rather than by filling scanlines. A rounded rectangle knows how far every pixel is from its edge, so the edge pixel gets partial coverage and the corner is smooth. This is the difference between a desktop that looks drawn and one that looks computed, and it costs one `sqrt` per pixel of the shape's bounding box. Every drawing loop takes its pixel range
+- Internal section markers: Coverage is computed from a distance function and can arrive slightly; The drawing loops take their range from the clip rather than testing; The backdrop is the same blur and saturation the live path applies.
+- Public API and major declarations (73):
+  - L44: `pub fn blend(dst: u32, src: u32, extra: f32) -> u32 {`
+  - L63: `pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {`
+  - L69: `pub const fn rgb(hex: u32) -> u32 {`
+  - L75: `pub fn with_alpha(color: u32, alpha: f32) -> u32 {`
+  - L82: `pub struct Rect {`
+  - L96: `pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {`
+  - L101: `pub fn right(&self) -> f32 {`
+  - L106: `pub fn bottom(&self) -> f32 {`
+  - L111: `pub fn center(&self) -> (f32, f32) {`
+  - L117: `pub fn contains(&self, x: f32, y: f32) -> bool {`
+  - L123: `pub fn intersection(&self, other: &Self) -> Option<Self> {`
+  - L137: `pub fn inflate(&self, d: f32) -> Self {`
+  - L144: `pub enum Repaint {`
+  - L154: `const REGION_GROW: f32 = 2.0;`
+  - L159: `const REGION_NEAR: i64 = 16;`
+  - L163: `const REGION_MAX: usize = 6;`
+  - L167: `struct PixelBox {`
+  - L223: `pub fn plan(damage: &[Rect], width: u32, height: u32) -> Self {`
+  - L264: `pub fn rects(&self, width: u32, height: u32) -> Vec<Rect> {`
+  - L352: `pub struct Canvas {`
+  - L388: `pub struct TextRun {`
+  - L415: `pub fn band(&self) -> (f32, f32) {`
+  - L424: `pub fn span(&self) -> (f32, f32) {`
+  - L430: `pub fn has_ink(&self) -> bool {`
+  - L438: `pub const SAMPLE_STEP: i64 = 4;`
+  - L449: `pub enum Site {`
+  - L468: `pub const COUNT: usize = 7;`
+  - L471: `pub const ALL: [Self; Self::COUNT] = [`
+  - L483: `pub const fn index(self) -> usize {`
+  - L497: `pub const fn label(self) -> &'static str {`
+  - L518: `pub fn new(width: u32, height: u32, fill: u32) -> Self {`
+  - L539: `pub fn pixels_visited(&self) -> u64 {`
+  - L544: `pub fn reset_pixels_visited(&self) {`
+  - L552: `pub fn pixels_visited_by_site(&self) -> Vec<(Site, u64)> {`
+  - L569: `pub fn set_surface(&mut self, surface: u32) -> u32 {`
+  - L575: `pub const fn surface(&self) -> u32 {`
+  - L584: `pub fn record_text(&mut self, on: bool) {`
+  - L590: `pub fn text_runs(&self) -> &[TextRun] {`
+  - L596: `pub const fn is_recording_text(&self) -> bool {`
+  - L601: `pub fn record_run(&mut self, run: TextRun) {`
+  - L613: `pub fn set_clip(&mut self, r: Option<Rect>) -> Option<Rect> {`
+  - L619: `pub const fn clip(&self) -> Option<Rect> {`
+  - L624: `pub fn push_clip(&mut self, r: Rect) -> Option<Rect> {`
+  - L641: `pub fn set_backdrop(&mut self, backdrop: Option<Rc<Self>>) -> bool {`
+  - L653: `pub fn backdrop(&self) -> Option<&Self> {`
+  - L660: `pub fn backdrop_owned(&self) -> Option<Rc<Self>> {`
+  - L666: `pub const fn width(&self) -> u32 {`
+  - L671: `pub const fn height(&self) -> u32 {`
+  - L676: `pub fn pixels(&self) -> &[u32] {`
+  - L690: `pub fn get(&self, x: i64, y: i64) -> Option<u32> {`
+  - L703: `pub fn put(&mut self, x: i64, y: i64, color: u32) {`
+  - L710: `pub fn blend_px(&mut self, x: i64, y: i64, color: u32, cov: f32) {`
+  - L739: `pub fn clear(&mut self, color: u32) {`
+  - L749: `pub fn blit_from(&mut self, src: &Self, r: Rect) {`
+  - L806: `pub fn set_site(&self, site: Site) -> Site {`
+  - L863: `pub fn fill_round_rect(&mut self, r: Rect, radius: f32, color: u32) {`
+  - L874: `pub fn stroke_round_rect(&mut self, r: Rect, radius: f32, width: f32, color: u32) {`
+  - L886: `pub fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, color: u32) {`
+  - L892: `pub fn stroke_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: u32) {`
+  - L921: `pub fn fill_vertical_gradient(&mut self, r: Rect, top: u32, bottom: u32) {`
+  - L938: `pub fn radial_wash(&mut self, cx: f32, cy: f32, radius: f32, color: u32, peak: f32) {`
+  - L960: `pub fn average(&self, r: Rect) -> u32 {`
+  - L988: `pub fn brightest(&self, r: Rect) -> u32 {`
+  - L996: `pub fn backdrop_brightest(&self, r: Rect) -> u32 {`
+  - L1016: `pub fn blur_region(&mut self, r: Rect, radius: u32, passes: u32) {`
+  - L1061: `pub fn glass_source(&self, blur: u32, saturation: f32) -> Self {`
+  - L1106: `pub fn glass_backdrop(&mut self, r: Rect, radius: f32, blur: u32, saturation: f32) {`
+  - L1197: `pub fn soft_shadow(&mut self, r: Rect, radius: f32, spread: f32, dy: f32, alpha: f32) {`
+  - L1198: `const STEPS: u32 = 12;`
+  - L1226: `pub fn saturate_region(&mut self, r: Rect, amount: f32) {`
+  - L1357: `pub fn lerp_color(a: u32, b: u32, t: f32) -> u32 {`
+  - L1373: `pub fn luminance(px: u32) -> f32 {`
+  - L1392: `pub fn arc_points(`
+- Inline tests (40): `blending_at_the_extremes_is_exact` (L1417), `blending_halfway_lands_halfway` (L1426), `out_of_range_coverage_cannot_wrap_a_channel` (L1433), `writes_outside_the_canvas_are_dropped_not_wrapped` (L1444), `a_clip_stops_drawing_outside_it` (L1458), `a_fractional_clip_draws_exactly_the_pixels_whose_centres_it_contains` (L1468), `clips_nest_and_restore` (L1505), `two_clips_that_do_not_overlap_draw_nothing` (L1518), `blitting_restores_only_inside_the_clip` (L1530), `a_filled_rect_covers_its_interior_and_leaves_the_outside_alone` (L1545), `a_rounded_rect_actually_rounds_its_corners` (L1553), `edges_are_anti_aliased_rather_than_stepped` (L1566), `a_line_is_drawn_between_its_endpoints_and_not_beyond_them` (L1577), `a_zero_length_line_draws_a_dot_rather_than_dividing_by_zero` (L1595), `a_gradient_runs_from_top_to_bottom` (L1602), `blur_moves_a_hard_edge_into_a_ramp` (L1616), `blur_of_a_flat_region_changes_nothing` (L1630), `the_sliding_window_blur_matches_the_summing_blur_exactly` (L1696), `the_sliding_window_blur_matches_even_over_a_short_buffer` (L1723), `glass_with_a_backdrop_ignores_what_is_under_it` (L1741), `a_backdrop_of_the_wrong_size_is_refused` (L1775), `the_glass_source_is_the_live_glass_path_away_from_the_edges` (L1787), `brightest_finds_the_bright_corner_an_average_would_hide` (L1805), `brightest_does_not_change_with_the_clip` (L1817), `luminance_agrees_with_the_design_crate_at_the_anchors` (L1827), `an_arc_starts_and_ends_where_it_was_asked_to` (L1836), `an_arc_swept_backwards_takes_the_other_route` (L1851), `saturation_leaves_grey_grey` (L1860), `no_damage_plans_no_regions` (L1891), `the_two_cursor_rectangles_of_a_pointer_move_become_one_whole_pixel_region` (L1896), `distant_damage_stays_separate_and_nearby_damage_merges` (L1908), `regions_are_capped_and_still_cover_every_damaged_pixel` (L1924), `damage_off_the_screen_is_dropped_and_damage_across_its_edge_is_cut` (L1943), `a_partial_glass_blur_paints_what_the_full_one_painted` (L1969), `a_glass_panel_the_damage_region_misses_blurs_nothing` (L1998), `a_clipped_glass_blur_visits_about_the_damage_region_not_the_panel` (L2015), `a_sampled_search_bills_the_samples_it_takes` (L2037), `the_pixel_bill_names_the_loop_that_asked` (L2056), `a_soft_shadow_is_billed_to_the_shadow_not_to_plain_fills` (L2071), `damage_over_half_the_screen_plans_a_full_repaint` (L2081)
+
+### `src/litric-shell/src/desktop.rs`
+
+- Inventory `F0739`; project source/rust-source; 40116 bytes; `Rust`.
+- Verified source length: 1216 lines; SHA-256 `3a2a8bc0386b41fd900c06d42ff91c6fed4767773a8e4f66fa22719997ec2465`.
+- Module intent: The LitricOS desktop. This is the composition itself: wallpaper, menu bar, a window, the environment switcher and the dock. It is drawn from the tokens in `litric-design` and filled with numbers measured by `litric-sysd`, so the screen a user sees is the design system and the running system, not a picture of them. Every translucent surface here calls [`litric_design::Glass::adaptive_alpha_pct`] against the pixels actually behind it, and uses the most transparent tint that keeps both text roles at WCAG AA. Over the dark wallpaper below the panels settle around 18-40%, which is the transparency the design was aiming for; over a bright wallpaper the same code firms them up on its own. The alpha is reported in the status file so it can be checked from outside rather than admired from inside. [`Compositor::repaint`] is the frame path the display loop uses. Glass there samples a copy of the wa
+- Internal section markers: The hairline and the specular top edge are what stop a translucent; Title bar; Body; Saturated washes read through every glass surface as a coloured.
+- Public API and major declarations (19):
+  - L35: `const AA: f64 = 4.5;`
+  - L39: `pub struct DesktopState {`
+  - L80: `pub struct GlassPanel {`
+  - L96: `pub fn glass(canvas: &mut Canvas, theme: &Theme, r: Rect, radius: f32) -> GlassPanel {`
+  - L148: `pub fn glass_at(`
+  - L190: `pub struct Compositor {`
+  - L203: `pub fn new(width: u32, height: u32, theme: &Theme) -> Self {`
+  - L221: `pub fn retheme(&mut self, theme: &Theme) {`
+  - L242: `pub fn repaint(&mut self, shell: &mut Shell, full: bool, damage: &[Rect]) -> Repaint {`
+  - L274: `pub fn wallpaper(canvas: &mut Canvas, theme: &Theme) {`
+  - L312: `pub struct Report {`
+  - L323: `pub fn render(canvas: &mut Canvas, theme: &Theme, state: &DesktopState) -> Report {`
+  - L883: `pub fn format_uptime(secs: f64) -> String {`
+  - L903: `pub fn human_bytes(n: u64) -> String {`
+  - L904: `const KB: u64 = 1024;`
+  - L905: `const MB: u64 = 1024 * 1024;`
+  - L906: `const GB: u64 = 1024 * 1024 * 1024;`
+  - L924: `pub fn utc_clock(epoch_secs: u64) -> String {`
+  - L938: `pub fn mean_luminance(canvas: &Canvas) -> f32 {`
+- Inline tests (15): `a_rendered_desktop_is_not_a_blank_screen` (L998), `every_glass_surface_keeps_text_readable` (L1010), `glass_over_a_dark_wallpaper_stays_transparent` (L1025), `glass_over_a_white_backdrop_firms_up_on_its_own` (L1042), `the_light_theme_produces_a_light_desktop` (L1054), `the_wallpaper_is_not_one_flat_colour` (L1072), `rendering_survives_an_absurdly_small_screen` (L1086), `rendering_with_no_environments_still_draws` (L1094), `zero_total_memory_does_not_divide_by_zero` (L1103), `uptime_formats_at_every_scale` (L1112), `byte_sizes_read_the_way_a_person_expects` (L1121), `the_clock_is_utc_and_says_so` (L1130), `the_wallpaper_stays_a_backdrop_not_a_gradient_demo` (L1157), `glass_may_not_magnify_the_colours_behind_it` (L1181), `ui_text_never_renders_as_pencil_strokes` (L1195)
+
+### `src/litric-shell/src/domkey.rs`
+
+- Inventory `F0740`; project source/rust-source; 11598 bytes; `Rust`.
+- Verified source length: 332 lines; SHA-256 `6797bfc29eef5088e696dc49ef009b60d4a220da702361d8b3dde28f63fb2357`.
+- Module intent: Keyboard events as the web platform names them. Chromium's input API wants three names for every key event: the DOM `key` (what the key means: `"Enter"`, `"a"`, `"ArrowLeft"`), the DOM `code` (which physical key: `"KeyA"`, `"Enter"`) and the Windows virtual-key code, which Blink still consults to decide what Enter, Backspace and the arrows do inside a text field. The shell has a Linux scancode and a layout-resolved [`Key`]; this module turns them into those names. Written from the W3C *UI Events KeyboardEvent code Values* and *key Values* specifications, the Linux input-event-codes UAPI numbering, and Microsoft's published virtual-key code table. Positions follow the US layout, which is what `code` is defined against.
+- Public API and major declarations (4):
+  - L20: `pub const fn physical(scancode: u16) -> Option<(&'static str, u16)> {`
+  - L149: `pub fn dom_key(key: Key, text: Option<&str>) -> String {`
+  - L201: `pub fn event_text(key: Key, typed: Option<&str>) -> Option<String> {`
+  - L215: `pub const fn cdp_modifiers(mods: Modifiers) -> u8 {`
+- Inline tests (8): `letters_digits_and_arrows_have_their_specified_names` (L237), `every_letter_maps_to_its_uppercase_ascii_virtual_key` (L250), `function_keys_run_contiguously_including_f13_to_f24` (L263), `an_unknown_scancode_has_no_physical_name` (L273), `a_printing_key_is_named_by_what_it_typed` (L280), `named_keys_use_the_specification_values` (L289), `enter_carries_a_carriage_return_and_other_named_keys_carry_nothing` (L301), `modifiers_map_to_the_cdp_bits_and_altgr_is_not_alt` (L310)
+
+### `src/litric-shell/src/e2e.rs`
+
+- Inventory `F0741`; project source/rust-source; 59987 bytes; `Rust`.
+- Verified source length: 1657 lines; SHA-256 `82ba1fa3f3541781886312ce8edf6ee4a9884d57b458163fdf8544a6c2ae6921`.
+- Module intent: End-to-end journeys through the shell, driven by synthetic input exactly the way a user produces it: key presses, pointer clicks, right-clicks, typed text. Nothing reaches into private state that real input could not change, so a passing journey is evidence the feature works when the machine is actually driven.
+- Internal section markers: Journeys; The old flow left the engine disconnected until a second click on a; Aim at the second icon column — the point sits inside the icon grid; The dock is how a person sees what is running without leaving what they; Every menu row the desktop can draw must be an action the shell; Helpers; The lock screen; The dock that becomes the launcher.
+- Public API and major declarations (2):
+  - L26: `const FRAME_MS: u32 = 16;`
+  - L1306: `const EICAR: &[u8] = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";`
+- Inline tests (37): `journey_the_desktop_has_icons_and_one_opens_files` (L178), `journey_right_click_desktop_menu_creates_a_folder_via_dialog` (L198), `journey_files_window_is_drawn_with_places_rows_and_commands` (L261), `journey_files_selects_with_mouse_and_compresses_multiple_items` (L287), `journey_activity_environment_and_settings_controls_change_real_state` (L328), `journey_browser_history_and_bookmarks_are_clickable_and_keep_visits` (L374), `every_app_layout_is_audited_at_both_resolutions_and_all_built_in_themes` (L406), `journey_rename_via_f2_and_confirm_dialog` (L461), `journey_delete_asks_first_and_trash_only_after_confirm` (L484), `journey_defender_scans_and_reports_eicar_end_to_end` (L525), `journey_a_threat_notification_banners_through_notifications` (L602), `journey_browser_searches_google_and_picks_engines` (L622), `journey_browser_menu_starts_engine_session_and_reports_honestly` (L667), `journey_opening_the_browser_reaches_for_the_engine_itself` (L682), `journey_trash_window_restores_after_files_trash` (L707), `journey_the_omnibox_takes_keys_not_just_text` (L745), `journey_right_click_files_row_shows_row_menu` (L756), `journey_clicking_a_window_never_hits_the_desktop_icon_behind_it` (L792), `journey_dock_click_opens_focuses_then_minimizes` (L841), `journey_the_dock_is_present_at_rest_wherever_the_pointer_is` (L869), `journey_the_dock_marks_which_applications_are_running` (L900), `journey_browser_search_commits_to_the_engine_url` (L949), `journey_engine_chip_and_quick_link_navigate` (L973), `journey_terminal_runs_a_real_command` (L994), `journey_terminal_refuses_with_a_reason_on_the_host` (L1021), `every_control_state_renders_differently` (L1036), `journey_focus_elevation_glides_instead_of_snapping` (L1100), `journey_powering_off_asks_first_and_only_a_confirmation_acts` (L1131), `journey_viewer_opens_text_files_with_scrolling` (L1211), `journey_context_menu_rows_all_do_something` (L1243), `journey_a_machine_that_cannot_check_a_password_refuses_to_lock` (L1345), `journey_locking_hides_the_session_and_only_a_password_brings_it_back` (L1369), `lock_idle_shows_the_account_and_a_direct_unlock_path` (L1456), `journey_the_lock_does_not_collect_a_password_it_could_not_check` (L1475), `journey_the_lock_customize_sheet_changes_the_look_live` (L1498), `journey_the_dock_grows_into_the_launcher_and_a_tile_opens_the_app` (L1571), `journey_searching_in_the_launcher_filters_and_escape_collapses` (L1615)
+
+### `src/litric-shell/src/fb.rs`
+
+- Inventory `F0742`; project source/rust-source; 21438 bytes; `Rust`.
+- Verified source length: 582 lines; SHA-256 `e8034debda0522790a63ae82a391acc2d1c861d04bb988aa6b63ead37d075894`.
+- Module intent: The Linux framebuffer, reached without a single `ioctl`. The usual way to drive `/dev/fb0` is `FBIOGET_VSCREENINFO` for the geometry and `mmap` for the pixels. Both are `ioctl`/`mmap`, both need `unsafe`, and the workspace forbids `unsafe` outright. It turns out neither is necessary. The kernel already publishes the geometry as text under `/sys/class/graphics/fb0/`, and the fbdev character device implements `write()`, so a frame can be delivered with `seek` and `write_all`. The whole display path is therefore ordinary safe Rust over ordinary files: /sys/class/graphics/fb0/virtual_size     "1280,800" /sys/class/graphics/fb0/bits_per_pixel   "32" /sys/class/graphics/fb0/stride           "5120" /dev/fb0                                 the pixels `write()` costs one copy compared with `mmap`. At 1280x800 that is 4 MB per frame, which is nothing for a desktop that repaints when something chan
+- Public API and major declarations (16):
+  - L45: `pub enum PixelFormat {`
+  - L57: `pub const fn bytes(self) -> usize {`
+  - L66: `pub const fn for_depth(bits: u32) -> Option<Self> {`
+  - L76: `pub fn parse(name: &str) -> Option<Self> {`
+  - L88: `pub fn encode(self, px: u32, out: &mut [u8]) {`
+  - L117: `pub struct FbInfo {`
+  - L139: `pub fn parse(virtual_size: &str, bpp: &str, stride: &str, name: &str) -> Option<Self> {`
+  - L171: `pub const fn frame_bytes(&self) -> u64 {`
+  - L177: `pub fn summary(&self) -> String {`
+  - L191: `pub fn info_from_sysfs(dir: &Path) -> Option<FbInfo> {`
+  - L206: `pub fn discover(root: &Path) -> Option<(PathBuf, PathBuf, FbInfo)> {`
+  - L221: `pub struct Framebuffer {`
+  - L232: `pub fn open(dev: &Path, info: FbInfo) -> std::io::Result<Self> {`
+  - L240: `pub const fn info(&self) -> &FbInfo {`
+  - L252: `pub fn present(&mut self, canvas: &Canvas) -> std::io::Result<()> {`
+  - L294: `pub fn present_damage(&mut self, canvas: &Canvas, damage: &[Rect]) -> std::io::Result<u32> {`
+- Inline tests (16): `sysfs_geometry_parses` (L349), `a_padded_stride_is_believed_rather_than_recomputed` (L360), `a_missing_stride_falls_back_to_an_unpadded_row` (L370), `nonsense_geometry_is_refused_instead_of_defaulted` (L378), `xrgb_puts_blue_in_the_first_byte` (L394), `xbgr_is_the_other_order` (L404), `rgb565_packs_into_two_bytes` (L411), `encoding_into_a_short_slice_writes_nothing_rather_than_panicking` (L422), `format_names_round_trip` (L429), `discovery_of_a_fixture_root_finds_the_framebuffer` (L441), `discovery_of_a_root_without_a_framebuffer_is_none_not_a_guess` (L462), `presenting_writes_exactly_one_frame_of_the_declared_size` (L467), `presenting_damage_writes_only_the_rows_that_changed` (L500), `presenting_no_damage_writes_nothing` (L530), `damage_outside_the_screen_is_clipped_rather_than_refused` (L548), `a_canvas_smaller_than_the_screen_is_placed_not_stretched` (L564)
+
+### `src/litric-shell/src/font.rs`
+
+- Inventory `F0743`; project source/rust-source; 61459 bytes; `Rust`.
+- Verified source length: 2322 lines; SHA-256 `2a0a9bfc5b0258cafae00e18f4d581ea584c293f2669fe6afc5d93527afb1d31`.
+- Module intent: LitricOS text drawing: offline OpenType faces with a safe vector fallback. The shell has to put words on a screen at boot, before any font library, font file or font server exists, and this project ships no third-party crates. The two usual answers are both bad: a bitmap font is blocky at every size except the one it was drawn for, and embedding somebody else's TTF means shipping their file and writing a TrueType interpreter to read it. So the letters are described the way a signwriter describes them — as the path a pen takes — and rasterised with the same anti-aliased line drawer the rest of the interface uses. That makes the type resolution-independent, smooth at any size, cheap to render, and genuinely ours: every curve below was placed here, not copied from a font. It is a monoline geometric sans, which is a real design decision rather than a limitation: circles and straight lines, u
+- Internal section markers: OpenType antialiasing can make bold ink darker without changing.
+- Public API and major declarations (131):
+  - L40: `pub use litric_text::Face as FontFace;`
+  - L50: `pub fn initialize() -> bool {`
+  - L70: `pub fn initialize_from_dir<P: AsRef<std::path::Path>>(dir: P) -> bool {`
+  - L93: `pub fn cap_px(em: f32) -> f32 {`
+  - L102: `pub fn cap_em_ratio() -> f32 {`
+  - L113: `pub fn draws_thai() -> bool {`
+  - L119: `pub fn face_report() -> litric_text::Faces {`
+  - L125: `pub enum Stroke {`
+  - L160: `pub struct Glyph {`
+  - L170: `pub const CAP: f32 = 10.0;`
+  - L172: `pub const X_HEIGHT: f32 = 7.0;`
+  - L174: `pub const LINE: f32 = 15.0;`
+  - L181: `pub const WEIGHT_REGULAR: f32 = 0.135;`
+  - L183: `pub const WEIGHT_BOLD: f32 = 0.195;`
+  - L191: `pub struct Style {`
+  - L208: `pub const fn new(size: f32, color: u32) -> Self {`
+  - L220: `pub const fn bold(size: f32, color: u32) -> Self {`
+  - L232: `pub const fn tracked(mut self, tracking: f32) -> Self {`
+  - L239: `pub const fn colored(mut self, color: u32) -> Self {`
+  - L246: `pub const fn monospace(mut self) -> Self {`
+  - L258: `const G_A: &[Stroke] = &[`
+  - L262: `const G_B: &[Stroke] = &[`
+  - L285: `const G_C: &[Stroke] = &[Arc {`
+  - L293: `const G_D: &[Stroke] = &[`
+  - L306: `const G_E: &[Stroke] = &[`
+  - L310: `const G_F: &[Stroke] = &[`
+  - L314: `const G_G: &[Stroke] = &[`
+  - L325: `const G_H: &[Stroke] = &[`
+  - L330: `const G_I: &[Stroke] = &[Poly(&[(2.1, 0.0), (2.1, 10.0)])];`
+  - L331: `const G_J: &[Stroke] = &[`
+  - L342: `const G_K: &[Stroke] = &[`
+  - L347: `const G_L: &[Stroke] = &[Poly(&[(0.0, 10.0), (0.0, 0.0), (6.3, 0.0)])];`
+  - L348: `const G_M: &[Stroke] = &[Poly(&[`
+  - L355: `const G_N: &[Stroke] = &[Poly(&[(0.0, 0.0), (0.0, 10.0), (7.0, 0.0), (7.0, 10.0)])];`
+  - L356: `const G_O: &[Stroke] = &[Arc {`
+  - L364: `const G_P: &[Stroke] = &[`
+  - L377: `const G_Q: &[Stroke] = &[`
+  - L388: `const G_R: &[Stroke] = &[`
+  - L402: `const G_S: &[Stroke] = &[Poly(&[`
+  - L416: `const G_T: &[Stroke] = &[`
+  - L420: `const G_U: &[Stroke] = &[`
+  - L432: `const G_V: &[Stroke] = &[Poly(&[(0.0, 10.0), (3.5, 0.0), (7.0, 10.0)])];`
+  - L433: `const G_W: &[Stroke] = &[Poly(&[`
+  - L440: `const G_X: &[Stroke] = &[`
+  - L444: `const G_Y: &[Stroke] = &[`
+  - L448: `const G_Z: &[Stroke] = &[Poly(&[(0.0, 10.0), (7.0, 10.0), (0.0, 0.0), (7.0, 0.0)])];`
+  - L454: `const G_LOW_A: &[Stroke] = &[`
+  - L465: `const G_LOW_B: &[Stroke] = &[`
+  - L476: `const G_LOW_C: &[Stroke] = &[Arc {`
+  - L484: `const G_LOW_D: &[Stroke] = &[`
+  - L495: `const G_LOW_E: &[Stroke] = &[`
+  - L506: `const G_LOW_F: &[Stroke] = &[`
+  - L518: `const G_LOW_G: &[Stroke] = &[`
+  - L537: `const G_LOW_H: &[Stroke] = &[`
+  - L549: `const G_LOW_I: &[Stroke] = &[`
+  - L557: `const G_LOW_J: &[Stroke] = &[`
+  - L573: `const G_LOW_K: &[Stroke] = &[`
+  - L578: `const G_LOW_L: &[Stroke] = &[Poly(&[(1.6, 10.0), (1.6, 0.0)])];`
+  - L579: `const G_LOW_M: &[Stroke] = &[`
+  - L600: `const G_LOW_N: &[Stroke] = &[`
+  - L612: `const G_LOW_O: &[Stroke] = &[Arc {`
+  - L620: `const G_LOW_P: &[Stroke] = &[`
+  - L631: `const G_LOW_Q: &[Stroke] = &[`
+  - L642: `const G_LOW_R: &[Stroke] = &[`
+  - L653: `const G_LOW_S: &[Stroke] = &[Poly(&[`
+  - L667: `const G_LOW_T: &[Stroke] = &[`
+  - L679: `const G_LOW_U: &[Stroke] = &[`
+  - L691: `const G_LOW_V: &[Stroke] = &[Poly(&[(0.0, 7.0), (3.4, 0.0), (6.8, 7.0)])];`
+  - L692: `const G_LOW_W: &[Stroke] = &[Poly(&[`
+  - L699: `const G_LOW_X: &[Stroke] = &[`
+  - L703: `const G_LOW_Y: &[Stroke] = &[`
+  - L707: `const G_LOW_Z: &[Stroke] = &[Poly(&[(0.0, 7.0), (6.4, 7.0), (0.0, 0.0), (6.4, 0.0)])];`
+  - L713: `const G_0: &[Stroke] = &[Arc {`
+  - L721: `const G_1: &[Stroke] = &[Poly(&[(1.0, 8.2), (3.3, 10.0), (3.3, 0.0)])];`
+  - L722: `const G_2: &[Stroke] = &[`
+  - L734: `const G_3: &[Stroke] = &[`
+  - L752: `const G_4: &[Stroke] = &[`
+  - L757: `const G_5: &[Stroke] = &[`
+  - L768: `const G_6: &[Stroke] = &[`
+  - L786: `const G_7: &[Stroke] = &[Poly(&[(0.2, 10.0), (6.5, 10.0), (2.3, 0.0)])];`
+  - L787: `const G_8: &[Stroke] = &[`
+  - L805: `const G_9: &[Stroke] = &[`
+  - L828: `const G_DOT: &[Stroke] = &[Dot {`
+  - L833: `const G_COMMA: &[Stroke] = &[`
+  - L841: `const G_COLON: &[Stroke] = &[`
+  - L853: `const G_SEMI: &[Stroke] = &[`
+  - L866: `const G_BANG: &[Stroke] = &[`
+  - L874: `const G_QUERY: &[Stroke] = &[`
+  - L891: `const G_MINUS: &[Stroke] = &[Poly(&[(0.5, 4.3), (4.7, 4.3)])];`
+  - L892: `const G_PLUS: &[Stroke] = &[`
+  - L896: `const G_EQ: &[Stroke] = &[`
+  - L900: `const G_STAR: &[Stroke] = &[`
+  - L905: `const G_SLASH: &[Stroke] = &[Poly(&[(0.2, -1.2), (4.8, 10.8)])];`
+  - L906: `const G_BACKSLASH: &[Stroke] = &[Poly(&[(0.2, 10.8), (4.8, -1.2)])];`
+  - L907: `const G_PIPE: &[Stroke] = &[Poly(&[(1.5, -1.2), (1.5, 10.8)])];`
+  - L908: `const G_LPAREN: &[Stroke] = &[Arc {`
+  - L916: `const G_RPAREN: &[Stroke] = &[Arc {`
+  - L924: `const G_LBRACK: &[Stroke] = &[Poly(&[(3.4, -1.0), (1.0, -1.0), (1.0, 10.4), (3.4, 10.4)])];`
+  - L925: `const G_RBRACK: &[Stroke] = &[Poly(&[(1.0, -1.0), (3.4, -1.0), (3.4, 10.4), (1.0, 10.4)])];`
+  - L926: `const G_LBRACE: &[Stroke] = &[Poly(&[`
+  - L935: `const G_RBRACE: &[Stroke] = &[Poly(&[`
+  - L944: `const G_APOS: &[Stroke] = &[Poly(&[(1.2, 10.0), (1.2, 7.2)])];`
+  - L945: `const G_QUOTE: &[Stroke] = &[`
+  - L949: `const G_PERCENT: &[Stroke] = &[`
+  - L968: `const G_HASH: &[Stroke] = &[`
+  - L974: `const G_AMP: &[Stroke] = &[`
+  - L993: `const G_AT: &[Stroke] = &[`
+  - L1012: `const G_UNDER: &[Stroke] = &[Poly(&[(0.0, -1.8), (6.6, -1.8)])];`
+  - L1013: `const G_LT: &[Stroke] = &[Poly(&[(4.9, 7.3), (0.8, 4.3), (4.9, 1.3)])];`
+  - L1014: `const G_GT: &[Stroke] = &[Poly(&[(1.1, 7.3), (5.2, 4.3), (1.1, 1.3)])];`
+  - L1015: `const G_TILDE: &[Stroke] = &[Poly(&[(0.4, 4.2), (1.9, 5.5), (3.9, 3.5), (5.4, 4.8)])];`
+  - L1016: `const G_CARET: &[Stroke] = &[Poly(&[(0.6, 7.0), (3.2, 10.0), (5.8, 7.0)])];`
+  - L1017: `const G_DOLLAR: &[Stroke] = &[`
+  - L1034: `const G_GRAVE: &[Stroke] = &[Poly(&[(0.6, 10.4), (2.4, 8.6)])];`
+  - L1036: `const G_MIDDOT: &[Stroke] = &[Dot {`
+  - L1042: `const G_CHEVRON: &[Stroke] = &[Poly(&[(1.4, 7.6), (4.6, 4.4), (1.4, 1.2)])];`
+  - L1056: `const G_ARROW_UP: &[Stroke] = &[`
+  - L1061: `const G_ARROW_DOWN: &[Stroke] = &[`
+  - L1066: `const G_ARROW_LEFT: &[Stroke] = &[`
+  - L1071: `const G_ARROW_RIGHT: &[Stroke] = &[`
+  - L1076: `const G_EM_DASH: &[Stroke] = &[Poly(&[(0.4, 4.4), (7.6, 4.4)])];`
+  - L1078: `const G_ELLIPSIS: &[Stroke] = &[`
+  - L1096: `const G_TIMES: &[Stroke] = &[`
+  - L1102: `const G_CROSS: &[Stroke] = &[`
+  - L1108: `pub const GLYPHS: &[Glyph] = &[`
+  - L1638: `pub fn glyph(ch: char) -> Option<&'static Glyph> {`
+  - L1655: `pub const BEARING_GAP_PX: f32 = 0.25;`
+  - L1744: `pub fn measure(text: &str, style: &Style) -> f32 {`
+  - L1783: `pub fn ink_span(ch: char, style: &Style) -> Option<(f32, f32)> {`
+  - L1799: `pub fn pair_gap(a: char, b: char, style: &Style) -> f32 {`
+  - L1814: `pub fn draw(canvas: &mut Canvas, text: &str, x: f32, baseline: f32, style: &Style) -> f32 {`
+- Inline tests (14): `every_printable_ascii_character_has_a_glyph` (L2019), `no_character_is_defined_twice` (L2028), `every_glyph_has_a_positive_advance` (L2037), `every_glyph_except_space_actually_draws_something` (L2044), `glyphs_stay_inside_their_advance_and_their_vertical_bounds` (L2055), `measuring_matches_where_drawing_leaves_the_pen` (L2089), `a_capital_is_as_tall_as_the_tokens_say_it_is` (L2115), `tracking_is_applied_between_characters_and_not_after_the_last` (L2159), `drawing_puts_ink_on_the_canvas_within_the_measured_box` (L2175), `text_sits_on_its_baseline_rather_than_over_it` (L2197), `an_unknown_character_draws_a_box_rather_than_nothing` (L2230), `a_heavier_weight_puts_down_more_ink` (L2247), `drawing_nothing_costs_nothing_and_returns_the_pen_unmoved` (L2293), `text_is_clipped_by_the_canvas_rather_than_writing_out_of_bounds` (L2301)
+
+### `src/litric-shell/src/fsbridge.rs`
+
+- Inventory `F0744`; project source/rust-source; 49127 bytes; `Rust`.
+- Verified source length: 1235 lines; SHA-256 `3fb6bdf80d2057dd48969b640cb6eaab65af96e59d2cd064e125a48f525684b3`.
+- Module intent: One bridge between the shell and the filesystem. The shell must work in three places: on a booted LitricOS machine, where `litric_files::Root` resolves logical paths without ever following a symlink; on any Unix host, where the same confinement applies; and on the Windows development machine, where `cargo build` runs in CI and where the Unix-only crate is simply absent. Before this module existed, `views.rs` reached straight into `litric_files::ops` and the workspace stopped compiling on Windows — five errors on the main branch. That was the concrete failure this module exists to prevent: the shell's *behaviour* is tested on every host, so every filesystem call must compile on every host. The Unix side keeps the ADR-0019 guarantees: logical paths only, no symlink following, name validation on creation. The non-Unix side fails every operation with [`FsError::Unsupported`] and hides nothin
+- Public API and major declarations (31):
+  - L25: `pub struct Entry {`
+  - L38: `pub enum FsError {`
+  - L86: `pub fn valid_name(name: &str) -> bool {`
+  - L102: `pub struct FsBridge {`
+  - L125: `pub fn open(host: &std::path::Path, zone: litric_locale::TimeZone) -> Result<Self, FsError> {`
+  - L151: `pub fn host_path(&self, logical: &str) -> Result<std::path::PathBuf, FsError> {`
+  - L177: `pub fn list_dir(&self, logical: &str) -> Result<Vec<Entry>, FsError> {`
+  - L232: `pub fn exists(&self, logical: &str) -> Result<bool, FsError> {`
+  - L249: `pub fn mkdir(&self, parent: &str, name: &str) -> Result<(), FsError> {`
+  - L269: `pub fn new_file(&self, parent: &str, name: &str) -> Result<(), FsError> {`
+  - L294: `pub fn rename(&self, parent: &str, old: &str, new: &str) -> Result<(), FsError> {`
+  - L319: `pub fn copy(&self, from: &str, dest_dir: &str) -> Result<String, FsError> {`
+  - L345: `pub fn move_item(&self, from: &str, dest_dir: &str) -> Result<String, FsError> {`
+  - L384: `pub fn delete(&self, logical: &str) -> Result<(), FsError> {`
+  - L408: `pub fn trash(&self, logical: &str, now_secs: u64) -> Result<(), FsError> {`
+  - L467: `pub fn trash_list(&self) -> Result<Vec<TrashEntry>, FsError> {`
+  - L559: `pub fn trash_restore(&self, name: &str) -> Result<String, FsError> {`
+  - L591: `pub fn trash_purge(&self, name: &str) -> Result<(), FsError> {`
+  - L603: `pub fn trash_empty(&self) -> Result<usize, FsError> {`
+  - L618: `pub fn read_text(&self, logical: &str) -> Result<String, FsError> {`
+  - L626: `const MAX: u64 = 512 * 1024;`
+  - L642: `pub fn write_text(&self, parent: &str, name: &str, content: &str) -> Result<(), FsError> {`
+  - L670: `pub fn search(&self, from: &str, query: &str) -> Result<Vec<String>, FsError> {`
+  - L718: `pub fn compress(&self, dest: &str, sources: &[String]) -> Result<(), FsError> {`
+  - L803: `pub fn extract(&self, archive: &str) -> Result<String, FsError> {`
+  - L881: `pub fn host_root(&self) -> &std::path::Path {`
+  - L888: `pub struct TrashEntry {`
+  - L901: `pub fn copy_of_name(base: &str, occupied: &dyn Fn(&str) -> bool) -> String {`
+  - L932: `const DEPTH_CAP: usize = 16;`
+  - L933: `const ENTRIES_CAP: u64 = 10_000;`
+  - L934: `struct Budget(u64);`
+- Inline tests (10): `names_are_validated_before_any_touch_of_the_disk` (L1038), `list_read_create_rename_and_delete_round_trip` (L1051), `copy_keeps_both_and_numbers_the_next_clash` (L1080), `trash_write_list_restore_and_purge` (L1096), `the_trash_record_holds_the_absolute_location_not_a_uri` (L1117), `a_record_written_in_the_legacy_uri_form_still_lists_and_restores` (L1150), `search_finds_nested_names_case_insensitively` (L1178), `compress_then_extract_round_trips_a_tree` (L1192), `copy_of_name_follows_the_explorer_rule` (L1211), `a_non_unix_bridge_refuses_everything_by_name` (L1229)
+
+### `src/litric-shell/src/i18n.rs`
+
+- Inventory `F0745`; project source/rust-source; 19933 bytes; `Rust`.
+- Verified source length: 357 lines; SHA-256 `f998416f9ede5487e7dc1a5bba5eb75d8c6eb430eb1a00d556caa37f6dcc21be`.
+- Module intent: Small offline UI catalog for the built-in English and Thai interfaces.
+- Public API and major declarations (9):
+  - L8: `pub enum Language {`
+  - L19: `pub const fn token(self) -> &'static str {`
+  - L28: `pub fn parse(value: &str) -> Option<Self> {`
+  - L38: `pub const fn title(self) -> &'static str {`
+  - L52: `pub fn renderable(self) -> bool {`
+  - L67: `pub fn label(self) -> &'static str {`
+  - L86: `pub fn set_current(language: Language) {`
+  - L92: `pub fn current() -> Language {`
+  - L109: `pub fn text<'a>(english: &'a str) -> Cow<'a, str> {`
+- Inline tests (3): `english_and_thai_catalogs_are_selectable` (L309), `a_language_with_no_face_is_not_printed_as_boxes` (L323), `language_tokens_round_trip` (L352)
+
+### `src/litric-shell/src/icons.rs`
+
+- Inventory `F0746`; project source/rust-source; 22232 bytes; `Rust`.
+- Verified source length: 646 lines; SHA-256 `b35ba8e31710c6f7107f0166f0502052971e5de9c41f76823af28629b72c523d`.
+- Module intent: The LitricOS icon set. Icons are described the way the typeface is: as the path a pen takes over a normalised box, drawn at any size by the same anti-aliased line renderer. That is not a shortcut around not having images — it is what makes an icon set consistent. One stroke weight, one corner radius, one optical size, all enforced by the drawing code rather than by whoever exported the PNGs. (0,0) ┌─────────┐ │         │   Every icon is drawn in a unit box and scaled. │         │   y increases downward, as on the canvas. └─────────┘ (1,1) **No emoji.** An emoji is somebody else's typeface, rendered at whatever size and colour that font decided, and it changes between systems. An operating system's own iconography cannot be borrowed from a font it does not ship.
+- Internal section markers: An icon that overruns its box collides with its neighbour in the top.
+- Public API and major declarations (5):
+  - L26: `pub enum Icon {`
+  - L96: `pub const fn name(self) -> &'static str {`
+  - L134: `pub const ALL: [Self; 32] = [`
+  - L172: `pub const STROKE: f32 = 0.085;`
+  - L178: `pub fn draw(canvas: &mut Canvas, icon: Icon, box_: Rect, color: u32, weight: f32) {`
+- Inline tests (8): `every_icon_draws_something` (L524), `every_icon_stays_inside_its_box` (L532), `every_icon_fills_a_reasonable_share_of_its_box` (L547), `icons_are_legible_at_top_bar_size` (L575), `a_heavier_weight_puts_down_more_ink` (L585), `a_non_square_box_centres_the_icon_rather_than_stretching_it` (L604), `every_icon_has_a_distinct_name` (L629), `muted_audio_differs_from_audio` (L639)
+
+### `src/litric-shell/src/lib.rs`
+
+- Inventory `F0747`; project source/rust-source; 1812 bytes; `Rust`.
+- Verified source length: 57 lines; SHA-256 `6c2108660970041d5d91d4570b62d975c28f01cb2afef2ccdbe36c03e814595e`.
+- Module intent: LitricOS shell: the desktop that appears at boot. **Layer 5 (Native ecosystem).** It sits on `litric-sysd` for what is true about the machine and on `litric-design` for what the interface should look like, and it turns both into pixels. It **is** a real compositor output path: it discovers the framebuffer, renders the whole desktop in software with anti-aliased geometry and a real typeface, solves the glass alpha against the pixels actually behind each panel, and writes the frame to the display. Everything on screen is drawn by this code from numbers measured by the system. It is **not** yet a Wayland compositor. There is no input handling, no client applications and no window management, because those need a protocol implementation and clients to talk it. What is here is the half that has to exist first and the half that proves the design works on real hardware: a machine that boots to 
+- Public API and major declarations (22):
+  - L33: `pub mod activity;`
+  - L34: `pub mod anim;`
+  - L35: `pub mod apps;`
+  - L36: `pub mod canvas;`
+  - L37: `pub mod desktop;`
+  - L38: `pub mod domkey;`
+  - L39: `pub mod fb;`
+  - L40: `pub mod font;`
+  - L41: `pub mod fsbridge;`
+  - L42: `pub mod i18n;`
+  - L43: `pub mod icons;`
+  - L44: `pub mod link;`
+  - L45: `pub mod lock;`
+  - L46: `pub mod monitor;`
+  - L47: `pub mod settings;`
+  - L48: `pub mod shell;`
+  - L49: `pub mod shortcuts;`
+  - L50: `pub mod taskmgr;`
+  - L51: `pub mod textaudit;`
+  - L52: `pub mod textedit;`
+  - L53: `pub mod ui;`
+  - L54: `pub mod views;`
+
+### `src/litric-shell/src/link.rs`
+
+- Inventory `F0748`; project source/rust-source; 18761 bytes; `Rust`.
+- Verified source length: 543 lines; SHA-256 `ca64c1831b39261450975acccd4fc15e0fc93663e8cd224a84e7b2dac5cda206`.
+- Module intent: A background connection from the desktop to a socket-activated daemon. The desktop must never block on a daemon. A browser engine that takes a second to start, or a folder copy that takes a minute, would otherwise freeze every window on the screen. So each connection has a reader thread that turns the byte stream into messages, parks them in a queue, and wakes the desktop's loop; the loop drains the queue when it wakes. Commands are short lines and are written directly, with a timeout so a wedged daemon cannot hang the interface either. The link knows nothing about any protocol. A [`Framing`] supplied by the caller says how long a line may be, whether a header line announces a binary payload and how long it is, and which payloads replace each other. That last point is what bounds memory: a browser tab producing frames faster than the desktop draws them keeps one queued frame, not a backl
+- Public API and major declarations (14):
+  - L35: `pub enum Incoming {`
+  - L51: `pub struct Framing {`
+  - L68: `pub const fn lines(max_line: usize) -> Self {`
+  - L79: `struct Inbox {`
+  - L173: `pub struct Link {`
+  - L192: `pub fn connect(`
+  - L204: `pub fn connect(`
+  - L221: `pub fn over(`
+  - L248: `pub fn send_line(&mut self, line: &str) -> io::Result<()> {`
+  - L277: `pub fn drain(&self) -> Vec<Incoming> {`
+  - L284: `pub fn is_closed(&self) -> bool {`
+  - L291: `pub fn writer(&self) -> &UnixStream {`
+  - L298: `pub const fn writer(&self) -> &() {`
+  - L354: `const FRAMED: Framing = Framing {`
+- Inline tests (9): `lines_and_payloads_arrive_in_order_and_each_wakes_the_loop` (L390), `the_last_frame_for_a_key_is_the_one_that_survives` (L422), `coalescing_is_exact_when_nothing_is_drained_in_between` (L442), `eof_closes_the_link_after_delivering_what_came_before` (L474), `an_overlong_line_closes_the_link_instead_of_growing_memory` (L485), `a_rejected_payload_header_closes_the_link` (L497), `a_truncated_payload_closes_the_link` (L509), `commands_are_written_as_lines_and_embedded_newlines_are_refused` (L522), `dropping_the_link_ends_its_reader_thread` (L535)
+
+### `src/litric-shell/src/lock.rs`
+
+- Inventory `F0749`; project source/rust-source; 90940 bytes; `Rust`.
+- Verified source length: 2591 lines; SHA-256 `410862958a7671e74bc307d89113984e57f9e0328919d3e4b49edf9d6f8f5651`.
+- Module intent: The lock screen: Liquid Glass. The session's lock **surface**, the half `docs/design/wave1/04-authentication.md` §8 ticket 5 names as missing. The verifier has been real since 2026-10-12 (`litric-sysd` answers `AUTH VERIFY` through the distribution's own `unix_chkpwd`); what did not exist was a screen that hides a session and comes back. This module is that screen, and it changes nothing about how a password is checked: the shell hands the secret to the caller that owns the socket, the daemon runs the helper, and the answer decides whether this surface draws another frame. Ported from the prototype at `build/uiref/litricos-ui/screens/lock/liquid`: three colour fields drifting behind a glass clock whose digits carry a glow and a bloom, a breathing scale, liquid-glass widgets, and a customize sheet whose controls are **presets rather than numbers** — the user picks "ฟุ้งฝัน" or "ฝ้าเข้ม", 
+- Internal section markers: The secret; Presets; The state; A group or an index this build does not know leaves the look; Drawing; The account is named above the password line so the unlock action is; The customize sheet; The cache is only worth having if a frame usually has the one before.
+- Public API and major declarations (98):
+  - L63: `pub struct Secret(String);`
+  - L68: `pub fn new(text: &str) -> Self {`
+  - L75: `pub fn is_empty(&self) -> bool {`
+  - L81: `pub fn len(&self) -> usize {`
+  - L90: `pub fn hex(&self) -> String {`
+  - L112: `pub enum Wall {`
+  - L126: `pub const ALL: [Self; 4] = [Self::Aurora, Self::Sunset, Self::Ocean, Self::Mono];`
+  - L134: `pub const fn palette(self) -> (u32, u32, u32, u32) {`
+  - L145: `pub const fn label(self) -> &'static str {`
+  - L156: `pub const fn swatch(self) -> u32 {`
+  - L187: `pub enum Digits {`
+  - L199: `pub const ALL: [Self; 3] = [Self::Glass, Self::Solid, Self::Tint];`
+  - L203: `pub const fn label(self) -> &'static str {`
+  - L238: `pub struct Preset<const N: usize> {`
+  - L246: `pub const LIGHT: [Preset<2>; 4] = [`
+  - L266: `pub const MOTION: [Preset<2>; 4] = [`
+  - L286: `pub const GLASS: [Preset<4>; 3] = [`
+  - L302: `pub const CURVE: [Preset<1>; 3] = [`
+  - L318: `pub const SIZE: [Preset<1>; 3] = [`
+  - L340: `pub const WEIGHT_PRESETS: [Preset<1>; 3] = [`
+  - L356: `pub const ACCENTS: [u32; 5] = [`
+  - L365: `pub const WIDGETS: usize = 3;`
+  - L376: `pub const GROUP_WALL: u8 = 0;`
+  - L378: `pub const GROUP_DIGITS: u8 = 1;`
+  - L380: `pub const GROUP_ACCENT: u8 = 2;`
+  - L382: `pub const GROUP_SIZE: u8 = 3;`
+  - L384: `pub const GROUP_WEIGHT: u8 = 4;`
+  - L386: `pub const GROUP_LIGHT: u8 = 5;`
+  - L388: `pub const GROUP_MOTION: u8 = 6;`
+  - L390: `pub const GROUP_GLASS: u8 = 7;`
+  - L392: `pub const GROUP_CURVE: u8 = 8;`
+  - L395: `pub const SWITCH_BREATHE: u8 = 0;`
+  - L397: `pub const SWITCH_SYSTEM: u8 = 1;`
+  - L399: `pub const SWITCH_NETWORK: u8 = 2;`
+  - L401: `pub const SWITCH_BATTERY: u8 = 3;`
+  - L405: `pub struct Tweaks {`
+  - L454: `pub fn accent_color(self) -> u32 {`
+  - L463: `pub fn glow(self) -> f32 {`
+  - L469: `pub fn bloom(self) -> f32 {`
+  - L475: `pub fn animating(self) -> bool {`
+  - L481: `pub fn speed(self) -> f32 {`
+  - L487: `pub fn blur(self) -> u32 {`
+  - L496: `pub fn tint(self) -> f32 {`
+  - L502: `pub fn spec(self) -> f32 {`
+  - L508: `pub fn edge(self) -> f32 {`
+  - L514: `pub fn radius(self) -> f32 {`
+  - L520: `pub fn clock_px(self) -> f32 {`
+  - L526: `pub fn clock_weight(self) -> f32 {`
+  - L536: `pub fn clock_size(self, t: &Tokens, height: f32) -> f32 {`
+  - L542: `pub fn option(self, group: u8) -> u8 {`
+  - L560: `pub fn choose(&mut self, group: u8, option: u8) {`
+  - L583: `pub fn toggle(&mut self, index: u8) {`
+  - L607: `pub enum Stage {`
+  - L617: `pub enum Verdict {`
+  - L632: `pub enum Tab {`
+  - L646: `pub const ALL: [Self; 4] = [Self::Look, Self::Effects, Self::Glass, Self::Widgets];`
+  - L650: `pub const fn label(self) -> &'static str {`
+  - L661: `pub const fn index(self) -> u8 {`
+  - L672: `pub fn from_index(i: u8) -> Self {`
+  - L683: `pub struct LockState {`
+  - L727: `pub fn advance(&mut self, now_ms: u64) -> bool {`
+  - L739: `const FLOW_FRAME_MS: u64 = 33;`
+  - L745: `pub fn phase(&self, period_ms: u64) -> f32 {`
+  - L758: `pub fn flow(&self) -> [(f32, f32, f32); 3] {`
+  - L774: `pub fn wake(&mut self) {`
+  - L781: `pub fn back(&mut self) {`
+  - L787: `pub fn push(&mut self, text: &str) {`
+  - L794: `const MAX: usize = 128;`
+  - L804: `pub fn backspace(&mut self) {`
+  - L810: `pub fn typed(&self) -> usize {`
+  - L819: `pub fn take_secret(&mut self) -> Secret {`
+  - L827: `pub fn message(&self) -> Option<&str> {`
+  - L837: `const FLOW_A: [(f32, f32, f32, f32); 4] = [`
+  - L844: `const FLOW_B: [(f32, f32, f32, f32); 4] = [`
+  - L851: `const FLOW_C: [(f32, f32, f32, f32); 4] = [`
+  - L888: `pub struct View<'a> {`
+  - L916: `const GLASS_SATURATION: f32 = 1.05;`
+  - L932: `struct Key {`
+  - L993: `const FLOW_STEP: f32 = 4.0;`
+  - L995: `const SCALE_STEP: f32 = 128.0;`
+  - L1025: `pub struct Cache {`
+  - L1243: `pub fn draw(canvas: &mut Canvas, v: &View<'_>, cache: &mut Cache, hits: &mut Vec<(Rect, Hot)>) {`
+  - L1302: `const CLOCK_GLYPH: f32 = 0.70;`
+  - L1453: `const GLOW_ENERGY: f32 = 0.10 * 8.0 + 0.05 * 8.0;`
+  - L1486: `const BLUR: u32 = 2;`
+  - L1487: `const PASSES: u32 = 2;`
+  - L1963: `struct Card {`
+  - L1971: `enum CardKind {`
+  - L1987: `struct Choice {`
+  - L2011: `const WALL_CHOICES: [Choice; 4] = [`
+  - L2018: `const DIGIT_CHOICES: [Choice; 3] = [word("Glass"), word("Solid"), word("Tint")];`
+  - L2020: `const ACCENT_CHOICES: [Choice; 5] = [`
+  - L2028: `const SIZE_CHOICES: [Choice; 3] = [word("S"), word("M"), word("L")];`
+  - L2030: `const WEIGHT_CHOICES: [Choice; 3] = [word("Thin"), word("Normal"), word("Thick")];`
+  - L2032: `const LIGHT_CHOICES: [Choice; 4] = [word("Off"), word("Soft"), word("Standard"), word("Dreamy")];`
+  - L2034: `const MOTION_CHOICES: [Choice; 4] = [word("Still"), word("Slow"), word("Normal"), word("Fast")];`
+  - L2036: `const GLASS_CHOICES: [Choice; 3] = [word("Clear"), word("Frosted"), word("Heavy")];`
+  - L2038: `const CURVE_CHOICES: [Choice; 3] = [word("Soft"), word("Standard"), word("Round")];`
+- Inline tests (15): `a_secret_never_prints_itself` (L2295), `a_secret_is_hex_on_the_wire_and_lower_case` (L2303), `taking_the_secret_empties_the_buffer` (L2311), `nothing_is_typed_into_a_field_that_is_not_out` (L2322), `the_default_look_is_the_designed_one` (L2337), `still_lock_has_no_animation_frames_but_motion_is_bounded` (L2351), `every_preset_group_round_trips_through_choose` (L2363), `the_widget_switches_are_two_way` (L2391), `the_drift_stops_when_motion_is_still` (L2402), `the_drift_does_not_replay_a_pause_in_one_frame` (L2418), `the_keyframes_start_and_end_at_rest` (L2431), `a_frame_from_a_warm_cache_is_the_frame_from_a_cold_one` (L2463), `a_panel_is_the_same_whether_its_blur_is_reused_or_redone` (L2520), `a_drift_under_half_a_step_keeps_the_frame_it_had` (L2548), `the_drift_reaches_the_field_in_whole_pixels` (L2560)
+
+### `src/litric-shell/src/main.rs`
+
+- Inventory `F0750`; project source/rust-source; 87665 bytes; `Rust`.
+- Verified source length: 2278 lines; SHA-256 `fde8ea565f2e7ef82fe377d9cdb12b7388bae1d63066200ca192f3cc1cc562e0`.
+- Module intent: `litric-shell` — the LitricOS desktop. kernel → systemd → litric-sysd → input discovery → display discovery → renderer init → desktop state → shell ready → interactive Every step is optional except the last two. No display means headless mode; no input means a desktop you can look at but not use; no daemon means facts read straight from `/proc`. **Each fallback is reported, never silent** — the status file and the console say which path was taken and why, because "the desktop came up" and "the desktop came up without a keyboard" are different outcomes and must not look alike. poll(frame budget) ──► handle ──► damage ──► draw ──► present(damage rows) ▲                                                      │ └────────── blocks; input wakes it instantly ──────────┘ With nothing happening the loop draws nothing and presents nothing: it sits in `recv_timeout`. That is what Adaptive Idle actual
+- Internal section markers: Derive this from the whole reply rather than interpreting the literal.
+- Public API and major declarations (8):
+  - L52: `const VERSION: &str = env!("CARGO_PKG_VERSION");`
+  - L55: `const SYSD_SOCKET: &str = "/run/litric/sysd.sock";`
+  - L58: `const STATUS_PATH: &str = "/run/litric/shell.status";`
+  - L63: `const FACTS_INTERVAL_MS: u64 = 2_000;`
+  - L66: `const STATUS_INTERVAL_MS: u64 = 5_000;`
+  - L68: `struct Args {`
+  - L102: `const USAGE: &str = "\`
+  - L1201: `struct Session {`
+- Inline tests (21): `input_devices_are_parsed_with_their_names_intact` (L1730), `a_network_line_keeps_its_mac_and_its_state` (L1749), `a_sound_card_name_with_spaces_is_not_cut_at_the_first_word` (L1764), `a_bluetooth_adapter_line_carries_its_address` (L1770), `browser_history_and_bookmarks_round_trip_as_encoded_private_state` (L1776), `a_process_line_is_read_field_by_field_and_a_short_one_is_skipped` (L1891), `an_escape_that_is_not_hex_is_left_as_it_was_written` (L1925), `over_budget_logging_is_rate_limited_but_never_silent` (L1946), `a_partial_redraw_is_pixel_identical_to_a_full_redraw` (L1965), `defaults_are_the_production_paths` (L2107), `options_parse` (L2116), `bad_values_are_refused_rather_than_defaulted` (L2138), `a_facts_field_is_read_by_exact_key` (L2149), `the_root_filesystem_is_read_from_the_mount_table` (L2156), `an_unreadable_mount_table_is_none_rather_than_a_guess` (L2170), `network_state_is_read_from_sysfs_and_absent_when_there_is_none` (L2175), `a_machine_with_no_battery_reports_none_not_zero_percent` (L2191), `a_battery_is_read_when_there_is_one` (L2198), `a_png_is_written_and_is_a_png` (L2211), `rendering_on_a_machine_with_nothing_still_produces_a_desktop` (L2228), `a_new_desktop_starts_without_open_application_windows` (L2262)
+
+### `src/litric-shell/src/monitor.rs`
+
+- Inventory `F0751`; project source/rust-source; 37455 bytes; `Rust`.
+- Verified source length: 958 lines; SHA-256 `b23272078f0ae8ee43682c0a7f043f31a89884fbaaf802016cde5b938714d38f`.
+- Module intent: The system monitor: what the Activity window and Settings draw, and why. The window it replaces showed two meters and a short list. The machine was already reporting much more than that -- available memory, page cache, swap, load, the daemon's own footprint, the MGLRU state, the CPU model, tick counters per logical CPU and the mount table -- and none of it reached the screen. A monitor that shows two numbers while the machine reports a dozen is a monitor nobody can diagnose with. Two rules shape everything below, both inherited from the window it replaces: 1. **A row exists only where a value was measured.** Unmeasured quantities are absent, not zero, and not \"Unknown\" in three columns of grey. 2. **A number the interface cannot explain is not shown.** The storage section names the filesystem and, when it is read-only, says what that means in a sentence: the answer to \"what is EROFS, 
+- Internal section markers: The scale is installed memory -- the only ceiling that makes two; The window draws the explanation for the read-only volume and none.
+- Public API and major declarations (17):
+  - L43: `pub fn readonly_volume_note(fs: &str, read_only: bool) -> Option<&'static str> {`
+  - L68: `pub fn percent(v: Option<f32>) -> Option<String> {`
+  - L77: `pub fn core_fill(cores: &[f32], i: usize) -> Option<f32> {`
+  - L88: `pub fn is_storage_volume(fs: &str) -> bool {`
+  - L123: `pub fn system_rows(f: &SystemFacts) -> Vec<(String, String)> {`
+  - L162: `pub fn storage_rows(f: &SystemFacts) -> Vec<(String, String, Option<&'static str>)> {`
+  - L179: `pub fn human_size(bytes: u64) -> String {`
+  - L180: `const KB: u64 = 1024;`
+  - L181: `const MB: u64 = KB.saturating_mul(1024);`
+  - L182: `const GB: u64 = MB.saturating_mul(1024);`
+  - L206: `pub fn series_points(values: &VecDeque<f32>, r: Rect, top: f32) -> Vec<(f32, f32)> {`
+  - L230: `pub fn rate_text(bytes_per_s: f64) -> String {`
+  - L241: `pub const NO_HISTORY: &str = "No history yet: this machine has been sampled once.";`
+  - L243: `pub const NET_NOT_MEASURED: &str =`
+  - L246: `pub const DISK_NOT_MEASURED: &str = "Unavailable: nothing in this system reads block-device \`
+  - L530: `pub fn draw(canvas: &mut Canvas, t: &Tokens, f: &SystemFacts, m: &TaskManager, body: Rect) {`
+  - L660: `pub fn fit(text: &str, style: &Style, max: f32) -> String {`
+- Inline tests (13): `a_read_only_image_explains_itself_and_a_writable_volume_does_not` (L695), `the_memory_meter_says_used_of_total_and_lists_the_breakdown` (L708), `a_series_is_drawn_across_its_box_with_the_ceiling_it_was_given` (L717), `the_graphs_draw_what_was_measured_and_say_what_was_not` (L744), `a_machine_with_no_counters_gets_an_honest_unavailable_not_a_flat_line` (L795), `a_byte_rate_reads_at_the_scale_a_person_watches` (L821), `a_percentage_is_clamped_and_a_missing_measurement_is_absent` (L829), `no_second_sample_means_no_per_core_grid` (L836), `the_kernels_own_filesystems_are_not_shown_as_storage` (L843), `the_monitor_draws_rows_for_measured_facts_and_nothing_for_none` (L871), `a_read_only_system_image_is_explained_on_the_screen_it_appears_on` (L905), `the_storage_list_keeps_real_volumes_and_explains_the_read_only_ones` (L931), `sizes_are_reported_at_a_scale_a_person_reads` (L952)
+
+### `src/litric-shell/src/settings.rs`
+
+- Inventory `F0752`; project source/rust-source; 5694 bytes; `Rust`.
+- Verified source length: 195 lines; SHA-256 `a77419a7d7e45bfaa5f0c7b6b02d5d32ad4d9b41a085fd5c635a13102c2848c4`.
+- Module intent: Typed settings state owned by the shell.
+- Public API and major declarations (11):
+  - L9: `pub struct Preferences {`
+  - L21: `pub const fn new(theme: ThemeKind, language: Language) -> Self {`
+  - L32: `pub enum Page {`
+  - L65: `pub const ALL: [Self; 13] = [`
+  - L83: `pub const fn title(self) -> &'static str {`
+  - L103: `pub fn from_index(index: u8) -> Option<Self> {`
+  - L110: `pub enum SaveState {`
+  - L124: `pub struct Model {`
+  - L143: `pub fn new(preferences: Preferences) -> Self {`
+  - L154: `pub fn begin(&mut self, next: Preferences) -> Option<Preferences> {`
+  - L165: `pub fn finish(&mut self, result: Result<(), String>) {`
+- Inline tests (1): `failed_persistence_restores_the_previous_values` (L184)
+
+### `src/litric-shell/src/shell.rs`
+
+- Inventory `F0753`; project source/rust-source; 220142 bytes; `Rust`.
+- Verified source length: 5749 lines; SHA-256 `58d79c5157bdb6a4e19f2452ace2382a58f489b38632889257a7f4832d22eb0b`.
+- Module intent: The desktop's state and what input does to it. Deliberately free of drawing. Everything here is a decision — which window has focus, which overlay is open, whether the machine is idle, what a click at (412, 88) means — and [`crate::views`] turns those decisions into pixels. Splitting them is what makes a desktop testable: every behaviour below is exercised by feeding synthetic input to a shell with no display attached. InputEvent ──► Shell::handle ──► Effect        (things main must do) │ ├──► WindowManager         (focus, move, snap) ├──► Overlay               (launcher, switcher, ...) └──► damage()              (what to repaint)
+- Internal section markers: Motion that outlives the idle timer still runs at the active; Scrolling and every event this build does not know are nothing; The launcher and the switcher eat navigation keys before the global; An unhandled key in an app window falls through to the; Otherwise a focused app text field eats characters before overlays do —; A right-click opens the context menu for whatever surface the; A click on the wallpaper clears selections everywhere the; Network reachability probe.
+- Public API and major declarations (117):
+  - L45: `pub enum DesktopMode {`
+  - L70: `pub const fn is_interactive(&self) -> bool {`
+  - L76: `pub fn token(&self) -> String {`
+  - L90: `pub enum LifeState {`
+  - L107: `pub const fn token(self) -> &'static str {`
+  - L125: `pub const fn frame_interval_ms(self) -> u64 {`
+  - L148: `pub const fn animates(self) -> bool {`
+  - L155: `pub struct IdlePolicy {`
+  - L179: `pub const fn state_after(self, since_input_ms: u64) -> LifeState {`
+  - L193: `pub enum Overlay {`
+  - L217: `pub const fn is_open(&self) -> bool {`
+  - L223: `pub const fn token(&self) -> &'static str {`
+  - L237: `pub enum Hot {`
+  - L396: `pub const fn keyboard_focusable(self) -> bool {`
+  - L403: `pub enum Priority {`
+  - L416: `pub struct Notification {`
+  - L435: `pub struct Notifications {`
+  - L446: `pub const CAPACITY: usize = 64;`
+  - L449: `pub fn post(`
+  - L490: `pub fn expire(&mut self, now_ms: u64) -> usize {`
+  - L499: `pub fn next_expiry(&self) -> Option<u64> {`
+  - L504: `pub fn dismiss(&mut self, id: u32) -> bool {`
+  - L511: `pub fn clear(&mut self) -> usize {`
+  - L519: `pub fn items(&self) -> Vec<&Notification> {`
+  - L525: `pub fn len(&self) -> usize {`
+  - L531: `pub fn is_empty(&self) -> bool {`
+  - L537: `pub fn peak_priority(&self) -> Option<Priority> {`
+  - L547: `pub const fn should_banner(&self, priority: Priority) -> bool {`
+  - L555: `pub enum PowerProfile {`
+  - L568: `pub const ALL: [Self; 4] = [Self::Eco, Self::Balanced, Self::Performance, Self::Maximum];`
+  - L572: `pub const fn title(self) -> &'static str {`
+  - L592: `pub enum PowerCommand {`
+  - L604: `pub const ALL: [Self; 3] = [Self::Suspend, Self::Restart, Self::PowerOff];`
+  - L608: `pub const fn title(self) -> &'static str {`
+  - L623: `pub const fn token(self) -> &'static str {`
+  - L633: `pub const fn question(self) -> &'static str {`
+  - L643: `pub const fn consequence(self) -> &'static str {`
+  - L658: `pub fn request_line(self) -> String {`
+  - L669: `pub struct QuickSettings {`
+  - L709: `pub fn is_applied(&self, key: &str) -> bool {`
+  - L716: `pub struct EnvRow {`
+  - L734: `pub struct SystemFacts {`
+  - L876: `pub struct InputDevice {`
+  - L887: `pub struct NetIface {`
+  - L906: `pub struct ProcRow {`
+  - L933: `pub fn cpu_pct(&self) -> String {`
+  - L940: `pub fn rss_text(&self) -> String {`
+  - L958: `pub fn observe(&mut self, mut fresh: Self) {`
+  - L1013: `pub fn tick_fraction(then: Option<(u64, u64)>, now: Option<(u64, u64)>) -> Option<f32> {`
+  - L1042: `pub fn or_unknown<T: std::fmt::Display>(v: Option<T>) -> String {`
+  - L1053: `pub fn sample(&mut self, fresh: SystemFacts) {`
+  - L1069: `pub enum Effect {`
+  - L1115: `pub struct DefenderState {`
+  - L1128: `pub struct ScanResult {`
+  - L1137: `pub struct ScanShared {`
+  - L1147: `pub fn start_scan(&mut self) -> Vec<Effect> {`
+  - L1202: `pub fn scan_step(&mut self, budget: usize) {`
+  - L1273: `pub fn pump_browser(&mut self) {`
+  - L1346: `pub fn browser_start_session(&mut self) -> Vec<Effect> {`
+  - L1400: `pub fn browser_navigate(&mut self, url: &str) {`
+  - L1433: `pub fn terminal_run(&mut self) {`
+  - L1665: `pub fn perform_menu(&mut self, action: crate::apps::MenuAction) -> Vec<Effect> {`
+  - L1841: `pub fn open_desktop_icon(&mut self, i: usize) -> Vec<Effect> {`
+  - L1856: `pub fn open_files_entry(&mut self, path: &str) -> Vec<Effect> {`
+  - L1901: `pub fn refresh_trash(&mut self) {`
+  - L1973: `pub struct Shell {`
+  - L2089: `pub fn load_preferences(&mut self, preferences: crate::settings::Preferences) {`
+  - L2109: `pub fn finish_preferences_save(&mut self, result: Result<(), String>) {`
+  - L2150: `pub fn new(tokens: Tokens, width: f32, height: f32, regional: Regional) -> Self {`
+  - L2214: `pub const TOP_BAR_LOGICAL: f32 = 28.0;`
+  - L2218: `pub fn top_bar(&self) -> Rect {`
+  - L2225: `pub const fn pointer(&self) -> Point {`
+  - L2231: `pub const fn hovered(&self) -> Option<Hot> {`
+  - L2237: `pub fn is_highlighted(&self, hot: Hot) -> bool {`
+  - L2244: `pub const fn keyboard_focus(&self) -> Option<Hot> {`
+  - L2288: `pub const fn pressed(&self) -> Option<Hot> {`
+  - L2294: `pub fn hotspots_mut(&mut self) -> &mut Hotspots<Hot> {`
+  - L2300: `pub const fn hotspots(&self) -> &Hotspots<Hot> {`
+  - L2306: `pub const fn frames(&self) -> u64 {`
+  - L2312: `pub const fn anims(&self) -> &crate::anim::ShellAnims {`
+  - L2318: `pub fn anims_mut(&mut self) -> &mut crate::anim::ShellAnims {`
+  - L2323: `pub fn counted_frame(&mut self) {`
+  - L2329: `pub fn life(&self) -> LifeState {`
+  - L2354: `pub fn frame_interval_ms(&self) -> u64 {`
+  - L2361: `pub fn animating(&self) -> bool {`
+  - L2371: `pub const IDLE_SLEEP_CAP_MS: u64 = 1_000;`
+  - L2394: `pub fn wake_after_ms(&self, now_ms: u64) -> u64 {`
+  - L2458: `pub fn verifier(&self) -> Option<litric_sysd::platform::session::Verifier> {`
+  - L2473: `pub fn can_lock(&self) -> bool {`
+  - L2481: `pub fn lock_refusal(&self) -> String {`
+  - L2500: `pub fn lock_now(&mut self) -> bool {`
+  - L2525: `pub fn unlock(&mut self) {`
+  - L2534: `pub fn lock_failed(&mut self, reason: &str) {`
+  - L2542: `pub fn take_unlock(&mut self) -> Option<(String, crate::lock::Secret)> {`
+  - L2557: `pub fn lock_no_verifier(&mut self, reason: &str) {`
+  - L2689: `pub fn tick(&mut self, now_ms: u64) {`
+  - L2760: `pub fn tick_after(&mut self, dt_ms: u32) {`
+  - L2785: `pub fn next_clock_change_ms(&self) -> u64 {`
+  - L2792: `pub fn set_display(&mut self, width: f32, height: f32, scale: f32) {`
+  - L2804: `pub fn request_full_redraw(&mut self) {`
+  - L2809: `pub fn damage(&mut self, r: Rect) {`
+  - L2819: `pub fn needs_full_redraw(&self) -> bool {`
+  - L2825: `pub fn is_dirty(&self) -> bool {`
+  - L2850: `pub fn take_damage(&mut self) -> Vec<Rect> {`
+  - L2879: `pub fn set_facts(&mut self, facts: SystemFacts) {`
+  - L2911: `pub fn handle(&mut self, ev: &InputEvent, now_ms: u64) -> Vec<Effect> {`
+  - L4064: `pub fn perform(&mut self, action: Action) -> Vec<Effect> {`
+  - L4295: `pub fn open_app(&mut self, app: App) -> Vec<Effect> {`
+  - L4319: `pub fn notify(`
+  - L4338: `pub fn clock_seconds(&self) -> i64 {`
+  - L4344: `pub fn visible_windows(&self) -> Vec<(WindowId, Rect, String, bool, WindowState)> {`
+  - L4363: `pub fn diagnostic_lines(&self) -> Vec<String> {`
+  - L4401: `pub fn to_rect(r: WmRect) -> Rect {`
+  - L4463: `pub fn eicar_denylist() -> litric_defender::denylist::Denylist {`
+  - L4561: `const NET_PROBE_MAX_ATTEMPTS: u32 = 30;`
+  - L4563: `const NET_PROBE_INTERVAL: Duration = Duration::from_secs(6);`
+  - L4565: `const NET_PROBE_TIMEOUT: Duration = Duration::from_secs(4);`
+- Inline tests (51): `probe_reports_a_definite_answer` (L4653), `every_power_command_names_itself_for_the_user_and_for_the_daemon` (L4677), `a_power_request_carries_the_confirmation_word` (L4700), `a_process_share_is_of_the_whole_machine_and_absent_until_two_samples_exist` (L4732), `a_process_whose_pid_was_reused_does_not_report_a_spike` (L4791), `a_machine_with_no_processes_says_unavailable_rather_than_empty` (L4815), `win_1_asks_for_an_environment_switch` (L4866), `ctrl_alt_home_always_returns_to_the_host` (L4877), `tapping_meta_opens_the_launcher_and_a_combination_does_not` (L4891), `typing_in_the_launcher_filters_and_enter_opens_the_match` (L4912), `backspace_in_the_launcher_deletes_rather_than_closing_it` (L4934), `escape_closes_the_launcher_and_leaves_the_desktop_alone` (L4951), `the_launcher_does_not_type_into_the_desktop_when_it_is_closed` (L4959), `alt_tab_opens_the_switcher_and_releasing_alt_commits` (L4971), `alt_tab_with_nothing_open_does_nothing` (L4993), `window_shortcuts_act_on_the_focused_window` (L5000), `opening_an_application_twice_focuses_the_first_window` (L5028), `workspaces_switch_and_windows_move_between_them` (L5046), `show_desktop_minimizes_everything` (L5060), `clicking_a_hotspot_activates_it_only_if_the_release_lands_there_too` (L5069), `clicking_a_title_bar_starts_a_drag_and_a_double_click_maximizes` (L5109), `the_close_button_closes_the_window_it_is_on` (L5166), `clicking_outside_an_overlay_dismisses_it` (L5189), `a_quick_settings_toggle_changes_real_state` (L5206), `choosing_a_power_profile_emits_an_effect_rather_than_only_a_label` (L5220), `adaptive_idle_lowers_the_frame_rate_and_input_brings_it_straight_back` (L5231), `dragging_a_window_gets_the_fastest_frame_budget` (L5261), `an_idle_desktop_sleeps_instead_of_polling_its_own_frame_rate` (L5275), `motion_that_outlives_the_idle_timer_still_runs_at_the_active_pace` (L5304), `a_spring_settles_within_its_token_budget_at_every_frame_pace` (L5319), `turning_adaptive_idle_off_keeps_the_compositor_active` (L5358), `a_network_rate_is_a_difference_and_nothing_is_invented_without_one` (L5366), `an_idle_desktop_asks_for_no_repaint_at_all` (L5412), `moving_the_pointer_damages_only_the_cursor_and_what_it_crossed` (L5420), `closing_a_window_damages_all_of_its_shadow` (L5440), `a_focus_change_damages_both_windows_and_the_top_bar` (L5459), `crossing_into_a_window_button_repaints_the_whole_button` (L5492), `opening_a_window_repaints_the_window_and_an_overlay_repaints_everything` (L5526), `facts_damage_only_what_displays_them` (L5540), `the_clock_repaints_the_top_bar_only_when_its_text_changes` (L5583), `the_next_expiry_is_the_earliest_one` (L5597), `notifications_expire_but_critical_ones_never_do` (L5607), `clearing_notifications_leaves_the_critical_ones` (L5635), `the_notification_queue_is_bounded_and_drops_the_oldest_ordinary_one` (L5644), `do_not_disturb_silences_everything_except_critical` (L5658), `a_non_interactive_desktop_ignores_input` (L5672), `degraded_mode_still_works_and_names_what_is_missing` (L5683), `unknown_facts_are_reported_as_unavailable_rather_than_zero` (L5697), `scrolling_the_top_bar_changes_workspace` (L5705), `scrolling_the_desktop_does_not_change_workspace` (L5721), `diagnostics_report_the_state_that_matters` (L5736)
+
+### `src/litric-shell/src/shortcuts.rs`
+
+- Inventory `F0754`; project source/rust-source; 34232 bytes; `Rust`.
+- Verified source length: 1066 lines; SHA-256 `abcd71937384e8825e59b4d66b94dd265029a00e6373f2bb2dc0dad8fc4628b0`.
+- Module intent: Global shortcuts: from a key press to a thing that happens. A shortcut table is a policy, so it is data rather than a chain of `if` statements in the key handler. That makes three things possible that matter: the launcher can show the real binding beside every action, the settings application can rebind one without touching the shell, and the whole table can be tested without a keyboard. Every LitricOS shortcut is on Meta (the Windows key) or on a combination no application uses. That is deliberate: a system shortcut an application can swallow is a system shortcut that stops working exactly when the machine is misbehaving and you most need it. `Ctrl+Alt+Home` is reserved and unrebindable for the same reason — it is the way back when everything else is wedged.
+- Public API and major declarations (36):
+  - L23: `pub enum Action {`
+  - L117: `pub enum App {`
+  - L138: `pub const ALL: [Self; 8] = [`
+  - L151: `pub const fn title(self) -> &'static str {`
+  - L166: `pub const fn app_id(self) -> &'static str {`
+  - L187: `pub fn from_app_id(id: &str) -> Option<Self> {`
+  - L193: `pub const fn subtitle(self) -> &'static str {`
+  - L208: `pub const fn category(self) -> &'static str {`
+  - L219: `pub const fn default_size(self) -> (f32, f32) {`
+  - L241: `pub fn matches(self, query: &str) -> bool {`
+  - L252: `pub fn score(self, query: &str) -> Option<u32> {`
+  - L291: `pub const fn keywords(self) -> &'static [&'static str] {`
+  - L306: `pub fn search(query: &str) -> Vec<Self> {`
+  - L320: `pub fn describe(self) -> String {`
+  - L374: `pub struct Binding {`
+  - L384: `pub const fn new(mods: Modifiers, key: Key) -> Self {`
+  - L390: `pub const fn meta(key: Key) -> Self {`
+  - L402: `pub const fn meta_shift(key: Key) -> Self {`
+  - L415: `pub const fn ctrl(key: Key) -> Self {`
+  - L427: `pub const fn alt(key: Key) -> Self {`
+  - L439: `pub const fn alt_shift(key: Key) -> Self {`
+  - L452: `pub const fn bare(key: Key) -> Self {`
+  - L458: `pub fn label(&self) -> String {`
+  - L465: `pub struct Shortcut {`
+  - L476: `pub struct Shortcuts {`
+  - L489: `pub fn system_defaults() -> Self {`
+  - L671: `pub fn all(&self) -> &[Shortcut] {`
+  - L677: `pub fn label_for(&self, action: Action) -> Option<String> {`
+  - L691: `pub fn resolve(&self, key: Key, mods: Modifiers) -> Option<Action> {`
+  - L710: `pub fn rebind(&mut self, action: Action, binding: Binding) -> Result<(), RebindError> {`
+  - L737: `pub enum RebindError {`
+  - L753: `pub struct MetaTap {`
+  - L760: `pub fn press(&mut self) {`
+  - L766: `pub fn interfere(&mut self) {`
+  - L773: `pub fn release(&mut self) -> bool {`
+  - L781: `pub fn reset(&mut self) {`
+- Inline tests (21): `the_environment_shortcuts_resolve` (L801), `lock_state_does_not_change_a_shortcut` (L818), `an_extra_modifier_is_a_different_shortcut` (L834), `alt_tab_and_alt_shift_tab_go_opposite_ways` (L849), `a_plain_key_is_not_a_shortcut` (L865), `escape_dismisses_and_is_reserved` (L872), `a_modifier_alone_never_resolves_on_press` (L885), `a_clean_meta_tap_opens_the_launcher_and_a_dirty_one_does_not` (L893), `resetting_a_meta_tap_forgets_it` (L906), `every_shortcut_has_a_readable_label` (L914), `no_two_shortcuts_share_a_binding` (L932), `rebinding_works_and_refuses_a_collision` (L949), `a_reserved_shortcut_cannot_be_rebound` (L971), `rebinding_something_that_is_not_in_the_table_is_refused` (L990), `search_ranks_a_name_match_above_a_description_match` (L999), `the_defender_is_findable_and_bound` (L1011), `an_empty_search_lists_everything_in_a_stable_order` (L1025), `a_search_that_matches_nothing_returns_nothing` (L1032), `an_exact_name_beats_everything` (L1037), `launcher_search_finds_applications_by_more_than_their_name` (L1046), `every_application_has_a_distinct_identity_and_a_usable_window_size` (L1055)
+
+### `src/litric-shell/src/taskmgr.rs`
+
+- Inventory `F0755`; project source/rust-source; 126538 bytes; `Rust`.
+- Verified source length: 3547 lines; SHA-256 `615a7aae8e048161b208755873e17067f1dd3cb8d958f3fa3fa1ea785e259eda`.
+- Module intent: The Task Manager: the system monitor's process table, as a model. A process table is the one surface where every column, every sort order and every threshold is something a person sets once and then relies on for years, and where getting the setting wrong means diagnosing the wrong process. That makes it exactly the wrong place to bury choices in drawing code: the table is drawn *from* a [`TaskManager`], so a column that is not in the model cannot be drawn, and a preference that is not applied here cannot appear to work in a screenshot. * [`Prefs`] -- everything the user can change about the table: which columns, in what order, at what width, sorted by what, grouped how, formatted as what, with which thresholds. * [`TaskManager`] -- the same, plus the rows and the interaction state (selection, filter text, which group is open). The rows come from [`crate::shell::SystemFacts::processes`],
+- Internal section markers: Every setting must move at least one preference away from the default; The settings that change how the window behaves rather than what the.
+- Public API and major declarations (95):
+  - L44: `pub enum Column {`
+  - L71: `pub const ALL: [Self; 11] = [`
+  - L87: `pub const fn label(self) -> &'static str {`
+  - L105: `pub const fn help(self) -> &'static str {`
+  - L132: `pub const fn sort_key(self) -> SortKey {`
+  - L149: `pub const fn width(self) -> f32 {`
+  - L165: `pub fn cell(self, p: &ProcRow, prefs: &Prefs, total_mb: Option<u64>) -> String {`
+  - L173: `pub enum SortKey {`
+  - L198: `pub const ALL: [Self; 10] = [`
+  - L213: `pub const fn label(self) -> &'static str {`
+  - L249: `pub fn share_pct(p: &ProcRow, total_mb: Option<u64>) -> f64 {`
+  - L258: `pub enum GroupKey {`
+  - L271: `pub const ALL: [Self; 4] = [Self::None, Self::Name, Self::User, Self::State];`
+  - L275: `pub const fn label(self) -> &'static str {`
+  - L286: `pub fn of(self, p: &ProcRow) -> Option<String> {`
+  - L301: `pub enum Density {`
+  - L312: `pub const ALL: [Self; 3] = [Self::Compact, Self::Cozy, Self::Comfortable];`
+  - L316: `pub const fn row_h(self) -> f32 {`
+  - L326: `pub const fn label(self) -> &'static str {`
+  - L337: `pub enum CpuFormat {`
+  - L348: `pub enum MemFormat {`
+  - L359: `pub enum TimeFormat {`
+  - L370: `pub enum Align {`
+  - L380: `pub enum WidthStep {`
+  - L391: `pub const ALL: [Self; 3] = [Self::Narrow, Self::Natural, Self::Wide];`
+  - L395: `pub const fn factor(self) -> f32 {`
+  - L405: `pub const fn label(self) -> &'static str {`
+  - L416: `pub enum Metric {`
+  - L437: `pub const ALL: [Self; 8] = [`
+  - L450: `pub const fn label(self) -> &'static str {`
+  - L465: `pub const fn help(self) -> &'static str {`
+  - L488: `pub fn band(self, level: Level) -> Threshold {`
+  - L513: `pub enum Level {`
+  - L522: `pub struct Threshold {`
+  - L534: `pub const fn off() -> Self {`
+  - L544: `pub const fn new(value: f32, unit: &'static str) -> Self {`
+  - L554: `pub fn crossed(&self, v: f32) -> bool {`
+  - L561: `pub enum UserScope {`
+  - L572: `pub const ALL: [Self; 3] = [Self::All, Self::Own, Self::System];`
+  - L576: `pub const fn label(self) -> &'static str {`
+  - L587: `pub enum Delivery {`
+  - L598: `pub const ALL: [Self; 3] = [Self::Silent, Self::Status, Self::Notify];`
+  - L602: `pub const fn label(self) -> &'static str {`
+  - L613: `pub enum Export {`
+  - L624: `pub const ALL: [Self; 3] = [Self::Tsv, Self::Csv, Self::Json];`
+  - L628: `pub const fn label(self) -> &'static str {`
+  - L642: `pub const TONES: [Tone; 4] = [Tone::Neutral, Tone::Warning, Tone::Bad, Tone::Good];`
+  - L646: `pub const fn tone_label(t: Tone) -> &'static str {`
+  - L658: `pub struct Prefs {`
+  - L811: `pub fn width_of(&self, c: Column) -> WidthStep {`
+  - L820: `pub fn align_of(&self, c: Column) -> Align {`
+  - L829: `pub fn warn_of(&self, m: Metric) -> Threshold {`
+  - L838: `pub fn critical_of(&self, m: Metric) -> Threshold {`
+  - L847: `pub fn tone_of(&self, m: Metric, level: Level) -> Tone {`
+  - L860: `pub fn delivery_of(&self, level: Level) -> Delivery {`
+  - L869: `pub fn short_header(&self, c: Column) -> bool {`
+  - L878: `pub fn first_click_desc(&self, c: Column) -> bool {`
+  - L887: `pub fn table_width(&self, scale: f32) -> f32 {`
+  - L895: `pub fn toggle_column(&mut self, c: Column) {`
+  - L911: `pub fn sort_by(&mut self, key: SortKey, ascending: bool) {`
+  - L922: `pub struct Feature {`
+  - L937: `pub enum Category {`
+  - L958: `pub const ALL: [Self; 8] = [`
+  - L971: `pub const fn label(self) -> &'static str {`
+  - L987: `pub enum Change {`
+  - L1072: `pub fn features() -> Vec<Feature> {`
+  - L1604: `pub const fn short_label(c: Column) -> &'static str {`
+  - L1622: `pub fn heading(c: Column, prefs: &Prefs) -> &'static str {`
+  - L1649: `pub fn apply(prefs: &mut Prefs, change: &Change) -> bool {`
+  - L1730: `pub fn reset_category(prefs: &mut Prefs, category: Category) -> bool {`
+  - L1802: `pub enum Row {`
+  - L1826: `pub struct Machine {`
+  - L1860: `pub struct Meter {`
+  - L1889: `pub const HISTORY_SAMPLES: usize = 120;`
+  - L1900: `pub struct History {`
+  - L1917: `pub fn push(&mut self, f: &SystemFacts) {`
+  - L1943: `pub fn len(&self) -> usize {`
+  - L1949: `pub fn is_empty(&self) -> bool {`
+  - L2023: `pub struct TaskManager {`
+  - L2047: `pub fn new() -> Self {`
+  - L2055: `pub fn observe(&mut self, facts: &SystemFacts) {`
+  - L2091: `pub fn set_frame_ms(&mut self, ms: f32) {`
+  - L2101: `pub fn meters(&self) -> Vec<Meter> {`
+  - L2203: `pub fn selected_pid(&self) -> Option<u32> {`
+  - L2209: `pub fn filtered(&self) -> Vec<&ProcRow> {`
+  - L2277: `pub fn rows_to_draw(&self) -> Vec<Row> {`
+  - L2321: `pub fn crossing(&self, p: &ProcRow) -> Option<(Level, Metric)> {`
+  - L2367: `pub fn row_tone(&self, p: &ProcRow) -> Option<Tone> {`
+  - L2377: `pub fn scope_admits(&self, p: &ProcRow) -> bool {`
+  - L2387: `pub fn column_text(&self, c: Column, all_rows: bool) -> Option<String> {`
+  - L2407: `pub fn export(&self, format: Export) -> String {`
+  - L2471: `pub fn row_text(&self) -> Option<String> {`
+  - L2486: `pub fn table_text(&self) -> String {`
+  - L2516: `pub fn act(&mut self, change: &Change) -> Option<String> {`
+  - L2609: `pub fn format_time(ticks: u64, format: TimeFormat) -> String {`
+- Inline tests (25): `a_sample_extends_every_series_it_measured` (L1974), `the_history_is_bounded_and_drops_the_oldest_sample` (L1986), `a_measurement_that_was_never_taken_is_absent_rather_than_zero` (L1998), `the_table_sorts_by_the_key_it_was_given_in_both_directions` (L2669), `a_process_with_no_rate_sorts_below_every_measured_one` (L2683), `every_filter_hides_what_it_says_it_hides` (L2698), `grouping_puts_the_heaviest_group_first_and_respects_a_closed_one` (L2743), `a_closed_group_still_counts_the_rows_it_hides` (L2774), `the_selection_follows_its_process_across_a_resort` (L2786), `the_same_machine_data_renders_differently_under_different_preferences` (L2813), `an_unmeasured_field_prints_a_dash_in_every_format` (L2843), `a_threshold_marks_a_process_by_the_setting_not_by_a_constant` (L2863), `a_process_burning_a_quarter_of_the_machine_reads_twenty_five_percent` (L2932), `a_share_of_the_machine_is_never_more_than_the_machine` (L2976), `every_feature_changes_something_the_table_reads` (L2990), `every_dimension_is_read_by_the_table_or_its_behaviour` (L3072), `an_action_with_nothing_selected_does_nothing` (L3381), `an_export_is_something_another_program_can_read` (L3407), `a_category_reset_leaves_the_other_categories_alone` (L3430), `the_registry_covers_every_column_key_metric_and_group` (L3446), `copying_a_row_and_the_table_produces_text_a_person_can_paste` (L3480), `a_column_toggled_off_comes_back_where_it_belongs` (L3497), `a_short_header_is_shorter_but_still_names_the_column` (L3511), `the_table_width_is_the_sum_of_the_columns_it_shows` (L3526), `time_reads_as_a_duration_at_every_scale_a_process_can_reach` (L3539)
+
+### `src/litric-shell/src/textaudit.rs`
+
+- Inventory `F0756`; project source/rust-source; 10421 bytes; `Rust`.
+- Verified source length: 297 lines; SHA-256 `0b5c283707f3f91ca9e74573ec6b5db8a941d846edfbb9c4dbec2ba673fd0ec1`.
+- Module intent: Finding text drawn over other text. The complaint this answers was concrete: "ตัวอักษรทับกัน" -- letters on top of letters. A layout that is reviewed by looking at a picture catches that only when someone happens to look at the window where it happens, and a window is a different size for every user. The mechanical version is to record every text run a frame draws ([`Canvas::record_text`]) and check the geometry afterwards, which is what this module does. Two kinds of collision are distinguished, because they are fixed in different places: * [`Kind::SameLine`] -- two runs on the same baseline whose horizontal extents overlap. A label and a right-aligned value in a window too narrow for both. The fix is a width or an elision, not a line height. * [`Kind::LinesCollide`] -- two runs on different baselines whose bands overlap. Text set closer than its own height: the descenders of one line m
+- Public API and major declarations (8):
+  - L28: `pub const MIN_OVERLAP_X: f32 = 0.5;`
+  - L32: `pub const MIN_OVERLAP_Y: f32 = 1.0;`
+  - L36: `pub enum Kind {`
+  - L46: `pub const fn as_str(self) -> &'static str {`
+  - L56: `pub struct Collision {`
+  - L95: `pub fn collisions(runs: &[TextRun]) -> Vec<Collision> {`
+  - L141: `pub fn report(runs: &[TextRun], limit: usize) -> String {`
+  - L189: `pub fn audit(canvas: &Canvas) -> Vec<Collision> {`
+- Inline tests (7): `a_label_over_a_right_aligned_value_is_a_same_line_collision` (L209), `rows_set_closer_than_their_own_height_are_reported_even_without_x_overlap` (L223), `properly_spaced_rows_do_not_collide` (L237), `text_in_two_stacked_windows_is_reported_as_cross_surface` (L247), `adjacent_columns_are_not_a_collision` (L258), `a_space_cannot_collide_with_anything` (L270), `the_report_names_the_worst_case_first` (L286)
+
+### `src/litric-shell/src/textedit.rs`
+
+- Inventory `F0757`; project source/rust-source; 17915 bytes; `Rust`.
+- Verified source length: 559 lines; SHA-256 `f3bc331d4b539a4e48704658ba8f1d3edb5929b8b083b83710195702839f5a89`.
+- Module intent: Single-line text editing for the shell's own fields: the browser address bar, and the file manager's rename, path and search fields. A model only. Drawing is the renderer's job; this decides what a key does to the text, which is the part that has to be right. Positions are byte offsets that always sit on a `char` boundary. Scripts with combining marks (Thai vowel and tone marks, for instance) are edited per `char`, not per grapheme cluster, so the caret can stop between a base character and its mark. That is a known limitation of this model, not a crash: every offset stays valid.
+- Public API and major declarations (25):
+  - L18: `pub enum EditOutcome {`
+  - L33: `pub struct TextEdit {`
+  - L53: `pub const DEFAULT_MAX_CHARS: usize = 8192;`
+  - L57: `pub fn new() -> Self {`
+  - L63: `pub fn with_limit(max_chars: usize) -> Self {`
+  - L74: `pub fn text(&self) -> &str {`
+  - L80: `pub fn is_empty(&self) -> bool {`
+  - L86: `pub const fn caret(&self) -> usize {`
+  - L92: `pub fn before_caret(&self) -> &str {`
+  - L98: `pub fn set_text(&mut self, text: &str) {`
+  - L109: `pub fn clear(&mut self) {`
+  - L114: `pub fn select_all(&mut self) {`
+  - L122: `pub fn select_range(&mut self, start: usize, end: usize) {`
+  - L132: `pub fn selection(&self) -> Option<(usize, usize)> {`
+  - L142: `pub fn selected_text(&self) -> Option<&str> {`
+  - L148: `pub fn take_selection(&mut self) -> Option<String> {`
+  - L211: `pub fn insert(&mut self, s: &str) -> bool {`
+  - L227: `pub fn backspace(&mut self, word: bool) -> bool {`
+  - L246: `pub fn delete_forward(&mut self, word: bool) -> bool {`
+  - L278: `pub fn move_left(&mut self, select: bool, word: bool) -> bool {`
+  - L293: `pub fn move_right(&mut self, select: bool, word: bool) -> bool {`
+  - L308: `pub fn home(&mut self, select: bool) -> bool {`
+  - L313: `pub fn end(&mut self, select: bool) -> bool {`
+  - L320: `pub fn handle_key(&mut self, key: Key, mods: Modifiers) -> EditOutcome {`
+  - L366: `pub fn handle_text(&mut self, text: &str, mods: Modifiers) -> EditOutcome {`
+- Inline tests (13): `typing_inserts_at_the_caret_and_moves_it` (L407), `backspace_and_delete_remove_one_character_each_side` (L418), `multibyte_text_is_edited_by_character_without_ever_splitting_utf8` (L436), `shift_arrows_select_and_typing_replaces_the_selection` (L453), `an_arrow_without_shift_collapses_the_selection_to_the_right_end` (L466), `ctrl_a_selects_everything_and_backspace_clears_it` (L477), `ctrl_arrows_and_ctrl_backspace_work_by_word` (L486), `control_characters_never_enter_the_field` (L501), `the_character_limit_is_enforced_on_typing_and_on_set_text` (L511), `enter_submits_escape_cancels_and_unrelated_keys_are_ignored` (L526), `chord_text_is_not_typed` (L536), `select_range_snaps_inside_multibyte_characters_and_clamps` (L543), `cut_removes_the_selection_and_returns_it` (L551)
+
+### `src/litric-shell/src/ui.rs`
+
+- Inventory `F0758`; project source/rust-source; 42113 bytes; `Rust`.
+- Verified source length: 1291 lines; SHA-256 `aa80076fe759a923ff43f007523e3c4432d54d76b8e211967dbcb2c3b6f85af1`.
+- Module intent: The component layer: one place where a button decides what a button is. Every surface, control and label in the shell is drawn through here, from the same tokens. That is the difference between a desktop and a collection of screens that happen to use similar colours: the top bar, the launcher, a dialog and the settings application share a spacing scale, a type scale, a corner radius and a set of interaction states, and none of them contains a pixel coordinate that was chosen on its own. Glass is one material among several and it is used where depth means something: surfaces that float over content the user still needs to see. A dialog is opaque, a sidebar is flat, a toolbar is a solid tint. Applying the most expensive material uniformly makes an interface that is both slower and harder to read, and it stops depth from carrying any information at all. Every interaction state changes more 
+- Internal section markers: The first character of a line is taken even when it is wider than.
+- Public API and major declarations (50):
+  - L35: `pub enum Material {`
+  - L56: `pub enum State {`
+  - L81: `pub const fn is_enabled(self) -> bool {`
+  - L89: `pub enum Tone {`
+  - L108: `pub struct Tokens {`
+  - L118: `pub const fn new(theme: Theme, scale: f32) -> Self {`
+  - L124: `pub fn sp(&self, step: Space) -> f32 {`
+  - L130: `pub fn radius(&self, r: Radius) -> f32 {`
+  - L136: `pub fn text_px(&self, step: TypeStep) -> f32 {`
+  - L142: `pub fn line_px(&self, step: TypeStep) -> f32 {`
+  - L148: `pub fn px(&self, logical: f32) -> f32 {`
+  - L154: `pub fn tone(&self, tone: Tone) -> u32 {`
+  - L167: `pub fn text(&self) -> u32 {`
+  - L173: `pub fn text_dim(&self) -> u32 {`
+  - L179: `pub fn accent(&self) -> u32 {`
+  - L185: `pub fn border(&self) -> u32 {`
+  - L191: `pub fn style(&self, step: TypeStep) -> Style {`
+  - L197: `pub fn style_bold(&self, step: TypeStep) -> Style {`
+  - L203: `pub fn style_label(&self) -> Style {`
+  - L217: `pub fn surface(canvas: &mut Canvas, t: &Tokens, r: Rect, radius: f32, material: Material) {`
+  - L260: `pub fn focus_ring(canvas: &mut Canvas, t: &Tokens, r: Rect, radius: f32) {`
+  - L273: `pub fn button(`
+  - L351: `pub fn icon_button(`
+  - L379: `pub fn list_item(`
+  - L509: `pub fn badge(canvas: &mut Canvas, t: &Tokens, at: (f32, f32), text: &str, tone: Tone) -> Rect {`
+  - L530: `pub fn progress(canvas: &mut Canvas, t: &Tokens, r: Rect, fraction: f32, tone: Tone) {`
+  - L545: `pub fn toggle(canvas: &mut Canvas, t: &Tokens, r: Rect, on: bool, state: State) -> Rect {`
+  - L585: `pub fn slider(canvas: &mut Canvas, t: &Tokens, r: Rect, value: f32, state: State) -> Rect {`
+  - L599: `pub fn text_field(`
+  - L674: `pub fn section_label(canvas: &mut Canvas, t: &Tokens, at: (f32, f32), text: &str) {`
+  - L679: `pub fn separator(canvas: &mut Canvas, t: &Tokens, r: Rect) {`
+  - L693: `pub struct Column {`
+  - L707: `pub fn new(area: Rect, pad: f32, gap: f32) -> Self {`
+  - L717: `pub fn row(&mut self, height: f32) -> Rect {`
+  - L724: `pub fn space(&mut self, amount: f32) {`
+  - L730: `pub const fn bottom(&self) -> f32 {`
+  - L741: `pub struct Hotspots<T> {`
+  - L753: `pub fn clear(&mut self) {`
+  - L758: `pub fn push(&mut self, r: Rect, id: T) {`
+  - L764: `pub fn hit(&self, x: f32, y: f32) -> Option<T> {`
+  - L774: `pub fn len(&self) -> usize {`
+  - L780: `pub fn is_empty(&self) -> bool {`
+  - L787: `pub fn ids(&self) -> impl Iterator<Item = T> + '_`
+  - L804: `pub fn rects(&self) -> Vec<Rect> {`
+  - L812: `pub fn rect_of(&self, id: T) -> Option<Rect> {`
+  - L820: `pub fn resolve_state(hovered: bool, pressed: bool, focused: bool, enabled: bool) -> State {`
+  - L838: `pub fn cursor(canvas: &mut Canvas, x: f32, y: f32, scale: f32) {`
+  - L868: `pub fn cursor_bounds(x: f32, y: f32, scale: f32) -> Rect {`
+  - L887: `pub fn wrap(text: &str, style: &Style, max_width: f32, max_lines: usize) -> Vec<String> {`
+  - L970: `pub fn elide(text: &str, style: &Style, max_width: f32) -> String {`
+- Inline tests (16): `spacing_and_radius_scale_together` (L1008), `the_full_radius_does_not_overflow_when_scaled` (L1017), `every_state_looks_different_from_normal` (L1026), `a_selected_row_is_marked_as_well_as_tinted` (L1054), `a_toggle_shows_its_state_by_position_and_by_a_tick` (L1085), `progress_never_overflows_its_track` (L1113), `hotspots_hit_the_topmost_and_forget_on_clear` (L1137), `state_resolution_has_a_fixed_precedence` (L1151), `the_cursor_draws_inside_the_bounds_it_reports` (L1160), `the_cursor_is_visible_on_both_black_and_white` (L1179), `eliding_keeps_text_within_the_width_it_was_given` (L1192), `a_long_file_name_wraps_instead_of_eliding_to_five_letters` (L1202), `a_name_too_long_for_two_lines_is_elided_where_it_stops_fitting` (L1222), `a_short_name_is_one_line_and_an_empty_one_is_none` (L1241), `a_column_hands_out_rows_that_do_not_overlap` (L1248), `every_material_except_flat_paints_something` (L1259)
+
+### `src/litric-shell/src/views.rs`
+
+- Inventory `F0759`; project source/rust-source; 177218 bytes; `Rust`.
+- Verified source length: 4890 lines; SHA-256 `546c4453f53c089b32d4037a197d42189423f07f7dae68e859b43013b2bcbee2`.
+- Module intent: Drawing the desktop from the shell's state. Every function here reads [`crate::shell::Shell`] and writes pixels. None of them decides anything: if a panel is open, the shell decided that, and if a row is highlighted the shell decided that too. The one thing this layer does own is **where** things are, and it registers every interactive rectangle in the shell's hotspot table as it draws — so what you can click is by construction what you can see.
+- Internal section markers: An icon beneath a window is invisible — the window paints over it; Ending the session is the only thing in this shell that gets; Top bar; How much room the menus have is decided by the status cluster on the; Windows; Search stays above the clipped process table so it remains visible when; Overlays; Diagnostics; A status item whose clickable area hangs below the bar steals clicks; A dock that only appears when the pointer comes near it cannot show.
+- Public API and major declarations (7):
+  - L27: `pub fn draw(canvas: &mut Canvas, shell: &mut Shell) {`
+  - L1320: `const DIALOG_SURFACE: u32 = u32::MAX - 1;`
+  - L1519: `const KB: u64 = 1_024;`
+  - L1520: `const MB: u64 = KB * KB;`
+  - L1521: `const GB: u64 = MB * KB;`
+  - L2993: `const DOCK_PINNED: [usize; 4] = [3, 4, 5, 2];`
+  - L3648: `pub const fn icon_for(app: App) -> Icon {`
+- Inline tests (18): `the_top_bar_draws_and_registers_its_hotspots` (L4482), `every_top_bar_hotspot_lies_inside_the_top_bar` (L4504), `the_dock_is_drawn_at_rest_with_every_control_it_offers` (L4535), `the_system_bars_centre_names_the_focused_application` (L4567), `a_desktop_label_shows_a_real_file_name_not_five_letters` (L4610), `a_window_draws_its_chrome_where_the_hit_test_expects_it` (L4630), `the_activity_window_shows_unavailable_rather_than_zero` (L4653), `the_launcher_is_the_dock_expanded_and_registers_a_tile_for_each_app` (L4686), `a_launcher_search_with_no_matches_says_so_and_keeps_the_field` (L4705), `quick_settings_registers_every_control_it_draws` (L4723), `the_notification_list_draws_when_empty_and_when_full` (L4747), `the_switcher_lists_one_row_per_window` (L4769), `the_diagnostic_overlay_only_appears_when_asked_for` (L4782), `drawing_an_unimplemented_application_says_so` (L4796), `the_input_page_names_the_keyboard_that_is_attached` (L4813), `the_bluetooth_page_says_no_radio_rather_than_unavailable` (L4848), `drawing_is_stable_across_frames_when_nothing_changes` (L4869), `drawing_survives_a_tiny_display` (L4880)
+
+### `src/litric-shell/tests/design_lint.rs`
+
+- Inventory `F0760`; tests/rust-test; 10487 bytes; `Rust`.
+- Verified source length: 270 lines; SHA-256 `150d4d8146835bc93b65cb803ed122baf6d3a54b4294558e9db8cc270d492bdb`.
+- Module intent: Design lint: the design system's rules, checked mechanically. A style guide that lives in a document is a suggestion. These tests turn the four rules the audit called load-bearing into build failures, so the discipline survives contact with deadlines. Each rule scans the shell's own source, the same way `overflow_audit` hooks the drawing path — the check is a *library consumer* of the code, not a hope. Rules (docs/DESIGN-SYSTEM-v3/04-QA-LINT-GOVERNANCE.md §1): 1. Colour outside the token system (`Rgb::hex` / raw `0x` fills in views) 2. Radius values that bypass the `Radius` family 3. Bold starvation: a view that never emphasises anything 4. Motion outside the token family: springs with magic numbers
+- Internal section markers: A call is sanctioned when the radius argument uses the.
+- Public API and major declarations (1):
+  - L40: `const VIEW_FILES: [&str; 3] = ["views.rs", "ui.rs", "apps.rs"];`
+- Inline tests (4): `rule_no_raw_colour_literals_in_views` (L48), `rule_no_float_radius_outside_the_family` (L163), `rule_views_are_not_bold_starved` (L224), `rule_motion_uses_tokens_only` (L244)
+
+### `src/litric-shell/tests/font_standards.rs`
+
+- Inventory `F0761`; tests/rust-test; 12144 bytes; `Rust`.
+- Verified source length: 309 lines; SHA-256 `6d89711c3b275d01efb816cc19b9aa8a0ebd6007af32d6185e8c0a1bf904233b`.
+- Module intent: Typographic standards for LitricOS Sans, as assertions. "The font is not pretty and not standard" is a complaint that cannot be argued with, only measured. Three things about a typeface are checkable without an opinion about taste, and all three are things a drawn typeface gets wrong in ways that are obvious in a paragraph and invisible in a specimen: 1. **Letters never touch.** Two adjacent glyphs whose ink overlaps collide, and with a constant advance running out of a monoline design that means a broken pair rather than a tight one. 2. **Figures are tabular and lining by default.** Every digit the same width and the same height, so a column of numbers lines up and `1` is not a lopsided cell in a table of twenty of them. 3. **The proportions are the ones sans-serif UI faces use.** x-height, cap height, line spacing and stem weight live in known bands; a face outside them reads as a diff
+- Internal section markers: The quarter pixel of paper this asserts is the same floor the face is.
+- Public API and major declarations (1):
+  - L34: `const PRINTABLE: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ\`
+- Inline tests (10): `no_two_letters_touch_at_ui_sizes` (L97), `letters_keep_a_side_bearing_rather_than_only_not_colliding` (L115), `the_side_bearing_holds_at_every_size_the_shell_sets` (L137), `figures_are_tabular` (L160), `figures_are_lining` (L184), `the_face_uses_standard_sans_proportions` (L216), `the_space_is_a_space` (L245), `punctuation_is_set_closer_than_letters_and_never_wider` (L257), `every_glyph_the_interface_can_draw_exists` (L273), `a_sentence_of_mixed_content_stays_on_one_line` (L291)
+
+### `src/litric-shell/tests/overflow_audit.rs`
+
+- Inventory `F0762`; tests/rust-test; 6391 bytes; `Rust`.
+- Verified source length: 168 lines; SHA-256 `3b717cb574ddbf23508eabbe7880870c79e0bf5acad49b68fe61d9db421e0772`.
+- Module intent: Text overflow auditing: proof that no drawn string exceeds its box. The user's complaint was concrete — "ตัวอักษรหลุดกรอบข้อความ", letters escaping their text boxes. A fix that is only a careful rewrite is a fix nobody can verify, so the check is mechanical: an [`OverflowAudit`] counts strings drawn wider than the region that drew them, and the test suite asserts the count is zero for a full frame at every scale. The audit does not hook the renderer. Hooks in the renderer would tax every frame a user ever draws for a property only tests need. Instead the audit is a library: a view that wants proof draws through [`clipped_text`], which measures first and elides or clamps, and records an overflow when even the clamped string would not fit.
+- Public API and major declarations (10):
+  - L24: `pub struct OverflowAudit {`
+  - L32: `pub const fn new() -> Self {`
+  - L45: `pub fn clipped_text(&self, text: &str, style: &Style, max_width: f32) -> String {`
+  - L61: `pub fn record_overflow(&self) {`
+  - L68: `pub fn overflow_count(&self) -> usize {`
+  - L73: `pub fn reset(&self) {`
+  - L79: `pub fn global_overflow_count() -> usize {`
+  - L85: `pub fn reset_global() {`
+  - L93: `pub fn clipped_text(text: &str, style: &Style, max_width: f32) -> String {`
+  - L107: `pub fn global_overflow_count() -> usize {`
+- Inline tests (3): `clipping_elides_and_never_exceeds_the_box` (L117), `an_impossible_box_records_an_overflow_rather_than_lying` (L133), `drawing_through_the_helper_stays_inside_a_clip` (L143)
+
+### `src/litric-shell/tests/text_layout_audit.rs`
+
+- Inventory `F0763`; tests/rust-test; 13954 bytes; `Rust`.
+- Verified source length: 364 lines; SHA-256 `83acc9eace88282fe65e7a8c77295a551eb45a87a0f623e41b8ff9f9e8b445f3`.
+- Module intent: A gate against text drawn over other text. The complaint was literal -- "ตัวอักษรทับกัน", letters on top of letters -- and the five defects it named were all geometry that nothing was checking: a right-aligned CPU value over the core count, a locale value over the label that introduced it, a subtitle inside its own title's band, a filter readout under a button, and four command-row buttons under the Details toggle in a narrow window. Each of those is one assertion away from being caught automatically, so this file is that assertion: render a frame, ask [`litric_shell::textaudit`] for the colliding pairs, and fail unless every one of them is between two *different* surfaces -- two windows that overlap on the screen, whose text is expected to overlap because the upper window's own background covers the lower one's letters. It is deliberately blind to anything else: it does not know whether
+- Public API and major declarations (3):
+  - L30: `const W: u32 = 1280;`
+  - L31: `const H: u32 = 800;`
+  - L186: `const SIZES: [(u32, u32); 4] = [(480, 360), (560, 420), (900, 640), (1264, 784)];`
+- Inline tests (9): `the_desktop_chrome_does_not_draw_text_over_text` (L133), `every_window_does_not_draw_text_over_text` (L140), `a_narrow_window_does_not_draw_text_over_text` (L150), `the_system_monitor_does_not_draw_text_over_text` (L160), `settings_does_not_draw_text_over_text` (L171), `every_window_is_clean_at_every_size_it_can_have` (L198), `every_window_is_clean_in_the_light_theme` (L205), `the_activity_window_shows_a_process_table_without_drawing_text_over_text` (L264), `a_full_interface_is_clean` (L299)
+

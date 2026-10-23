@@ -3,6 +3,7 @@ src/target/
 
 # Generated tool and gate output: logs, dumped frames, page dumps, screenshots.
 build/
+tools/logs/
 __pycache__/
 *.pyc
 

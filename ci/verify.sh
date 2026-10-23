@@ -53,6 +53,23 @@ skip() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# The interpreter the python checks run under, chosen by asking it to run.
+#
+# On Windows, `python3` on PATH can be the Microsoft Store's App Execution Alias:
+# a stub that prints "Python was not found" and exits non-zero. The old
+# `command -v python3 || command -v python` took that stub at its word, so every
+# python row in this script reported a failure of the *check* when the truth was
+# that no interpreter had been found at all -- the exact confusion this script
+# exists to prevent. `python -c` is the smallest thing that only a real
+# interpreter can answer.
+PY=""
+for candidate in python3 python; do
+    if have "$candidate" && "$candidate" -c 'import sys' >/dev/null 2>&1; then
+        PY="$(command -v "$candidate")"
+        break
+    fi
+done
+
 echo
 echo "LitricOS verification -- $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "host: $(uname -s) $(uname -m)"
@@ -74,8 +91,7 @@ check "all shell scripts parse" shell_syntax
 echo
 echo "[1b] Line endings"
 # ---------------------------------------------------------------------------
-if have python || have python3; then
-    PY=$(command -v python3 || command -v python)
+if [[ -n "$PY" ]]; then
     check "no CRLF in files a Linux shell, kernel or systemd will read"         "$PY" ci/lint-line-endings.py
 else
     skip "line endings" "no python interpreter on PATH"
@@ -89,8 +105,7 @@ echo "[2] Python harness syntax"
 # checking (tests/__pycache__/smoke_boot.cpython-314.pyc is that residue), and
 # the old inline loop covered ci/ and tests/ but not tools/ -- 18 scripts that
 # drive real runs and were never parsed by anything.
-if have python || have python3; then
-    PY=$(command -v python3 || command -v python)
+if [[ -n "$PY" ]]; then
     check "all python files parse, without writing bytecode" \
         "$PY" ci/check-python-syntax.py
     check "python syntax checker detects a truncated file" \
@@ -103,8 +118,7 @@ fi
 echo
 echo "[3] Image configuration schema (BUG-0001 regression)"
 # ---------------------------------------------------------------------------
-if have python || have python3; then
-    PY=$(command -v python3 || command -v python)
+if [[ -n "$PY" ]]; then
     check "mkosi config uses only real sections and key placements" "$PY" ci/lint-mkosi.py
     # The regression property: the linter MUST reject the pre-v2 file. A test
     # that cannot fail proves nothing.
@@ -127,8 +141,7 @@ fi
 echo
 echo "[3b] Kernel configuration (Layer 1)"
 # ---------------------------------------------------------------------------
-if have python || have python3; then
-    PY=$(command -v python3 || command -v python)
+if [[ -n "$PY" ]]; then
     check "kernel fragment: no duplicate/removed/bool-as-module symbols, LSM stack coherent"         "$PY" ci/lint-kconfig.py
     check "kconfig linter detects the defects it was written for"         "$PY" ci/lint-kconfig.py --self-test
 else
@@ -139,8 +152,7 @@ fi
 echo
 echo "[3c] Scope ledger"
 # ---------------------------------------------------------------------------
-if have python || have python3; then
-    PY=$(command -v python3 || command -v python)
+if [[ -n "$PY" ]]; then
     check "SYSTEM-SCOPE tally matches its rows, numbering is contiguous"         "$PY" ci/count-scope.py
 else
     skip "scope ledger" "no python interpreter on PATH"
@@ -153,8 +165,7 @@ echo "[3d] Documentation citations"
 # GATE 01 condition 7 was recorded VERIFIED against a file that has never
 # existed. The same shape recurs four times in docs/bugs. A citation is evidence
 # only if it can be opened, so it is checked like everything else.
-if have python || have python3; then
-    PY=$(command -v python3 || command -v python)
+if [[ -n "$PY" ]]; then
     check "every file cited in docs exists" "$PY" ci/lint-doc-refs.py
     check "citation linter detects a fabricated citation" \
         "$PY" ci/lint-doc-refs.py --self-test
@@ -169,8 +180,7 @@ echo "[3e] Memory budget (static policy presence)"
 # Checks the ledger against the units in image/mkosi.extra. It cannot measure
 # anything: a PASS here means the configuration policy is coherent, never that
 # a component stays inside its limit at runtime.
-if have python || have python3; then
-    PY=$(command -v python3 || command -v python)
+if [[ -n "$PY" ]]; then
     check "memory ledger claims match the shipped units" \
         "$PY" ci/check-memory-budget.py
     check "memory checker detects an ungrounded claim" \
@@ -187,8 +197,7 @@ echo "[3f] File-safety review record (deletion sites)"
 # names with a reason. This is a source-level guard for the layer that has no
 # runnable test in this mode -- it cannot prove a deletion is correct, only that
 # a new one cannot appear without a decision. Nothing here is executed.
-if have python || have python3; then
-    PY=$(command -v python3 || command -v python)
+if [[ -n "$PY" ]]; then
     check "every deletion site in src/ is inside a reviewed function" \
         "$PY" ci/lint-file-safety.py
     check "file-safety checker detects an unreviewed deletion" \
@@ -206,8 +215,7 @@ echo "[3g] systemd units reference binaries that exist"
 # green and the failure arrived at first use instead of at boot. The units are
 # parked in image/units-pending/ until the binary exists; this check is why they
 # cannot drift back into system/.
-if have python || have python3; then
-    PY=$(command -v python3 || command -v python)
+if [[ -n "$PY" ]]; then
     check "every installed unit starts a binary the workspace builds" \
         "$PY" ci/lint-unit-binaries.py
     check "unit-binary linter detects a dead unit" \
@@ -225,8 +233,7 @@ echo "[3h] Dependency policy"
 # derived from the manifest's own group comments, so a new crate cannot arrive
 # outside the policy; a group the linter has no decision for fails closed.
 # Recorded exceptions live in ci/dep-policy-allow.txt.
-if have python || have python3; then
-    PY=$(command -v python3 || command -v python)
+if [[ -n "$PY" ]]; then
     check "core crates take no third-party dependencies" \
         "$PY" ci/lint-deps.py
     check "dependency linter detects a planted dependency" \
@@ -321,6 +328,50 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
+echo "[5b] Golden desktop frames"
+# ---------------------------------------------------------------------------
+# 04-QA-LINT-GOVERNANCE §2 requires ten golden screens and says they must come
+# from the machine rather than from a mock renderer. `frame_dump` is the half of
+# that pipeline that runs on any host: it composes the *shipping* interface --
+# `views::draw` and `desktop::wallpaper`, the same functions main.rs calls on a
+# booted machine -- with fixed facts, so a dumped frame differs from a machine's
+# frame only by the facts that were fed in. The gate then fails when a frame
+# moves by more than 2% of its cells without the golden set being re-recorded.
+# It cannot say the machine boots; the boot rows in [6] are what says that.
+if have cargo; then
+    if [[ -n "$PY" ]]; then
+        frames_dump() {
+            local fonts=()
+            # The image installs six faces. They are read from the system font
+            # directories when this host has them and from build/fonts otherwise
+            # -- a frame set in a different typeface has different word widths
+            # and is not evidence about the machine, so the dump refuses rather
+            # than substituting, and that refusal is reported as a SKIP below.
+            [[ -d build/fonts ]] && fonts=(--fonts ../build/fonts)
+            ( cd src && cargo ${TC:+$TC} run --offline -q -p litric-shell \
+                --example frame_dump -- "${fonts[@]}" ../build/frames )
+        }
+        if frames_dump >/dev/null 2>&1; then
+            check "golden frames: ten required screens dumped, within threshold" \
+                "$PY" ci/check-golden-frames.py --frames build/frames
+        else
+            skip "golden frames" \
+                "frame_dump could not run: no Latin face installed (build/fonts or system fonts)"
+        fi
+        # LAW 6: verify the verification. A threshold that never fires and one
+        # that fires on a single antialiased pixel are both useless, and only a
+        # planted change tells the difference.
+        check "frame gate fails on a planted change and passes on one pixel" \
+            "$PY" ci/check-golden-frames.py --self-test
+    else
+        skip "golden frames" "no python interpreter on PATH"
+    fi
+else
+    skip "golden frames" "cargo not on PATH"
+fi
+
+# ---------------------------------------------------------------------------
+echo
 echo "[6] Image build and boot"
 # ---------------------------------------------------------------------------
 # These are the checks that decide whether LitricOS is an operating system.
@@ -359,14 +410,50 @@ if have mkosi; then
 else
     skip "image build" "mkosi not installed (needs a Linux host: run tools/bootstrap-windows.ps1)"
 fi
-if have qemu-system-x86_64; then
-    skip "boot smoke test" "qemu present but no image has been built yet"
-else
+# The boot smoke test. This used to be an unconditional SKIP with the reason
+# "qemu present but no image has been built yet" -- printed whether or not an
+# image had been built, which made a runnable check look like an absent one.
+# It runs whenever the three things it needs exist: qemu, a built disk, and
+# pytest. Acceleration is detected rather than assumed: the harness defaults to
+# TCG (the mode that exists everywhere) and that is 20-40x slower than KVM, so
+# the deadline is chosen with the accel, not left at the real-machine default.
+if ! have qemu-system-x86_64; then
     skip "boot smoke test" "qemu-system-x86_64 not installed"
+else
+    boot_image=""
+    for candidate in build/out/litricos.raw build/litricos.raw; do
+        [[ -f "$candidate" ]] && { boot_image="$candidate"; break; }
+    done
+    if [[ -z "$boot_image" ]]; then
+        skip "boot smoke test" "no built disk image (build/out/litricos.raw); run tools/build.sh"
+    elif ! python3 -c 'import pytest' >/dev/null 2>&1; then
+        skip "boot smoke test" "pytest not installed (pacman -S python-pytest)"
+    else
+        boot_accel=tcg
+        boot_deadline=420
+        if [[ -r /dev/kvm ]]; then
+            boot_accel=kvm
+            boot_deadline=240
+        fi
+        check "boot smoke test (UEFI -> login prompt, $boot_accel)" \
+            env "LITRIC_ACCEL=$boot_accel" "LITRIC_BOOT_TIMEOUT=$boot_deadline" \
+            python3 -m pytest tests/smoke_boot.py -q -k boot_to_shell
+    fi
 fi
-skip "idle RAM measurement"  "requires a booted image"
-skip "idle CPU measurement"  "requires a booted image"
-skip "boot time measurement" "requires a booted image"
+# Measure the booted machine, when one can be booted here. The numbers are the
+# guest's own (/proc/meminfo, /proc/stat, /proc/uptime read over ttyS1), not the
+# host's view of the emulator: vmmem on the Windows side is a different question
+# from what the shell's slice limit has to fit inside.
+if [[ -x tools/measure-idle.py ]] && python3 -c 'import pytest' >/dev/null 2>&1 && have qemu-system-x86_64; then
+    if [[ -n "${boot_image:-}" ]]; then
+        check "idle RAM, CPU and boot time (measured in the guest)" \
+            python3 tools/measure-idle.py --json
+    else
+        skip "idle RAM, CPU and boot time" "no built disk image"
+    fi
+else
+    skip "idle RAM, CPU and boot time" "needs tools/measure-idle.py, pytest and qemu-system-x86_64"
+fi
 
 # ---------------------------------------------------------------------------
 echo

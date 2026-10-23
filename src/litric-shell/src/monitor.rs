@@ -1,4 +1,4 @@
-//! The system monitor: what the Activity window draws, and why.
+//! The system monitor: what the Activity window and Settings draw, and why.
 //!
 //! The window it replaces showed two meters and a short list. The machine was
 //! already reporting much more than that -- available memory, page cache, swap,
@@ -22,12 +22,14 @@
 //! canvas, which is the only reason a test can assert that a machine with one
 //! sample does not report a per-core grid.
 
+use std::collections::VecDeque;
+
 use litric_design::{Space, TypeStep};
 
 use crate::canvas::{with_alpha, Canvas, Rect};
 use crate::font::{self, Style};
 use crate::shell::SystemFacts;
-use crate::taskmgr::TaskManager;
+use crate::taskmgr::{History, TaskManager};
 use crate::ui::{self, Tokens};
 
 /// What a read-only volume means, in one sentence, or `None` when the volume is
@@ -189,20 +191,348 @@ pub fn human_size(bytes: u64) -> String {
     }
 }
 
-/// Draw the monitor: the machine's own numbers, then the meters a person set
-/// bands on.
+/// A series' points across a rectangle, oldest sample at the left edge.
+///
+/// The vertical scale is `top`, the value that reaches the top of the box. A
+/// graph whose own maximum decides its scale looks identical at idle and at
+/// full load, which is the one thing a monitor must not do, so the caller
+/// passes the ceiling it wants the reading judged against -- 1.0 for a CPU,
+/// installed memory for RAM -- and a series that exceeds it is clamped to the
+/// box rather than allowed to draw outside it.
+///
+/// No measurement, no points: an empty series draws nothing rather than a flat
+/// line along the bottom, which would read as a machine at rest.
+#[must_use]
+pub fn series_points(values: &VecDeque<f32>, r: Rect, top: f32) -> Vec<(f32, f32)> {
+    let n = values.len();
+    if n == 0 || top <= 0.0 || r.w <= 0.0 || r.h <= 0.0 {
+        return Vec::new();
+    }
+    let step = if n <= 1 {
+        0.0
+    } else {
+        r.w / (n.saturating_sub(1)) as f32
+    };
+    values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let x = r.x + (i as f32) * step;
+            let frac = (v / top).clamp(0.0, 1.0);
+            (x, r.bottom() - frac * r.h)
+        })
+        .collect()
+}
+
+/// A byte rate as a person reads it, per second.
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn rate_text(bytes_per_s: f64) -> String {
+    let whole = bytes_per_s.max(0.0) as u64;
+    format!("{}/s", human_size(whole))
+}
+
+/// Why a graph has nothing to draw, in the machine's own terms.
+///
+/// The alternative -- an empty box, or a box of zeroes -- is a claim the
+/// machine never made. Each of these sentences names what is missing, so the
+/// window says which of "nothing is happening" and "nothing is measured" the
+/// user is looking at.
+pub const NO_HISTORY: &str = "No history yet: this machine has been sampled once.";
+/// No interface counters reached the shell.
+pub const NET_NOT_MEASURED: &str =
+    "Unavailable: no interface counters reached the shell, so no rate can be differenced.";
+/// No block-device counters exist anywhere in this system.
+pub const DISK_NOT_MEASURED: &str = "Unavailable: nothing in this system reads block-device \
+                                     counters, so no disk rate can be reported. Capacity and \
+                                     mounts are in Settings, where they are measured.";
+
+/// The activity graphs: the same machine the meters read, over time.
+///
+/// Four sections, each one a question a monitor exists to answer: what has each
+/// CPU been doing, how has memory been divided between what is in use and what
+/// is cached, what has the network been carrying, and what has the disk been
+/// doing. The first three are drawn from [`History`], which is fed by the same
+/// facts the table below is fed by. The fourth says it is unavailable, because
+/// it is: see [`DISK_NOT_MEASURED`].
+fn draw_history(canvas: &mut Canvas, t: &Tokens, f: &SystemFacts, h: &History, body: Rect) {
+    let caption = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    let mut y = body.y;
+    let head = |canvas: &mut Canvas, y: f32, text: &str| {
+        ui::section_label(canvas, t, (body.x, y + t.px(10.0)), text);
+    };
+
+    // ---- per-core CPU --------------------------------------------------
+    let cores = h.cores.len();
+    if cores > 0 {
+        head(canvas, y, "CPU, per core");
+        y += t.px(18.0);
+        // Two columns until the panel is wide enough for four: a graph 70
+        // pixels wide shows the shape of a minute and nothing else.
+        let cols: usize = if body.w >= t.px(340.0) { 4 } else { 2 };
+        let gap = t.sp(Space::Sm);
+        let cell_w = (body.w - gap * (cols.saturating_sub(1)) as f32) / cols as f32;
+        let cell_h = t.px(30.0);
+        for i in 0..cores {
+            let col = i.checked_rem(cols).unwrap_or(0);
+            let row = i.checked_div(cols).unwrap_or(0);
+            let cell = Rect::new(
+                body.x + (col as f32) * (cell_w + gap),
+                y + (row as f32) * (cell_h + t.px(6.0)),
+                cell_w,
+                cell_h,
+            );
+            if cell.bottom() > body.bottom() {
+                break;
+            }
+            canvas.fill_round_rect(
+                cell,
+                t.radius(litric_design::Radius::Sm),
+                with_alpha(t.text(), 0.05),
+            );
+            let Some(series) = h.cores.get(i) else {
+                continue;
+            };
+            area(canvas, t, series, cell.inflate(-t.px(2.0)), 1.0, t.accent());
+            let now = series.back().copied().unwrap_or(0.0);
+            let text = format!("{i}  {}%", (now * 100.0).round() as i64);
+            font::draw(
+                canvas,
+                &fit(&text, &caption, cell.w - t.px(8.0)),
+                cell.x + t.px(4.0),
+                cell.y + t.px(11.0),
+                &caption,
+            );
+        }
+        let rows = cores
+            .saturating_add(cols.saturating_sub(1))
+            .checked_div(cols)
+            .unwrap_or(1);
+        y += (rows as f32) * (cell_h + t.px(6.0)) + t.sp(Space::Xs);
+    }
+
+    // ---- memory composition over time ----------------------------------
+    if y + t.px(60.0) <= body.bottom() {
+        head(canvas, y, "Memory");
+        y += t.px(18.0);
+        let panel = Rect::new(body.x, y, body.w, t.px(40.0));
+        canvas.fill_round_rect(
+            panel,
+            t.radius(litric_design::Radius::Sm),
+            with_alpha(t.text(), 0.05),
+        );
+        if h.mem_used_mb.is_empty() {
+            font::draw(
+                canvas,
+                NO_HISTORY,
+                panel.x + t.px(4.0),
+                panel.y + t.px(16.0),
+                &caption,
+            );
+        } else {
+            // The scale is installed memory -- the only ceiling that makes two
+            // samples comparable -- and the total when it is unknown is the
+            // largest thing seen, named as such in the caption so a graph with
+            // its own maximum cannot be read as a full machine.
+            let total = f
+                .mem_total_mb
+                .map(|v| v as f32)
+                .or_else(|| {
+                    h.mem_used_mb
+                        .iter()
+                        .zip(h.mem_cached_mb.iter())
+                        .map(|(u, c)| u + c)
+                        .fold(None, |acc: Option<f32>, v| {
+                            Some(acc.map_or(v, |a| a.max(v)))
+                        })
+                })
+                .filter(|v| *v > 0.0);
+            if let Some(total) = total {
+                let inner = panel.inflate(-t.px(2.0));
+                // Cache first, then use: the two together are what the machine
+                // holds, and drawing them apart is what makes the cache visible
+                // as the thing that moves without the machine getting busier.
+                let stacked: VecDeque<f32> = h
+                    .mem_cached_mb
+                    .iter()
+                    .zip(h.mem_used_mb.iter())
+                    .map(|(c, u)| c + u)
+                    .collect();
+                area(
+                    canvas,
+                    t,
+                    &stacked,
+                    inner,
+                    total,
+                    with_alpha(t.accent(), 0.35),
+                );
+                area(canvas, t, &h.mem_used_mb, inner, total, t.accent());
+                let now = h.mem_used_mb.back().copied().unwrap_or(0.0);
+                let cached = h.mem_cached_mb.back().copied().unwrap_or(0.0);
+                let text = format!(
+                    "{} in use · {} cache · {} installed",
+                    human_size((now as u64).saturating_mul(1024 * 1024)),
+                    human_size((cached as u64).saturating_mul(1024 * 1024)),
+                    human_size((total as u64).saturating_mul(1024 * 1024)),
+                );
+                font::draw(
+                    canvas,
+                    &fit(&text, &caption, panel.w - t.px(8.0)),
+                    panel.x + t.px(4.0),
+                    panel.y + t.px(14.0),
+                    &caption,
+                );
+            } else {
+                font::draw(
+                    canvas,
+                    "Unavailable: no memory total or measurement reached the shell.",
+                    panel.x + t.px(4.0),
+                    panel.y + t.px(16.0),
+                    &caption,
+                );
+            }
+        }
+        y = panel.bottom() + t.sp(Space::Xs);
+    }
+
+    // ---- network -------------------------------------------------------
+    if y + t.px(60.0) <= body.bottom() {
+        head(canvas, y, "Network");
+        y += t.px(18.0);
+        let panel = Rect::new(body.x, y, body.w, t.px(40.0));
+        canvas.fill_round_rect(
+            panel,
+            t.radius(litric_design::Radius::Sm),
+            with_alpha(t.text(), 0.05),
+        );
+        match (h.net_rx_per_s.is_empty(), f.net_rx_per_s, f.net_tx_per_s) {
+            (false, _, _) => {
+                // One scale for both directions: two graphs with two scales can
+                // be read as a busy line and a quiet one when the truth is that
+                // the same bytes are on both.
+                let top = h
+                    .net_rx_per_s
+                    .iter()
+                    .chain(h.net_tx_per_s.iter())
+                    .fold(0.0_f32, |a, v| a.max(*v))
+                    .max(1.0);
+                let inner = panel.inflate(-t.px(2.0));
+                area(
+                    canvas,
+                    t,
+                    &h.net_rx_per_s,
+                    inner,
+                    top,
+                    with_alpha(t.accent(), 0.55),
+                );
+                area(
+                    canvas,
+                    t,
+                    &h.net_tx_per_s,
+                    inner,
+                    top,
+                    with_alpha(t.text(), 0.75),
+                );
+                let rx = f.net_rx_per_s.unwrap_or(0.0);
+                let tx = f.net_tx_per_s.unwrap_or(0.0);
+                let text = format!("received {} · sent {}", rate_text(rx), rate_text(tx));
+                font::draw(
+                    canvas,
+                    &fit(&text, &caption, panel.w - t.px(8.0)),
+                    panel.x + t.px(4.0),
+                    panel.y + t.px(14.0),
+                    &caption,
+                );
+            }
+            _ => {
+                font::draw(
+                    canvas,
+                    &fit(NET_NOT_MEASURED, &caption, panel.w - t.px(8.0)),
+                    panel.x + t.px(4.0),
+                    panel.y + t.px(16.0),
+                    &caption,
+                );
+            }
+        }
+        y = panel.bottom() + t.sp(Space::Xs);
+    }
+
+    // ---- disk ----------------------------------------------------------
+    if y + t.px(18.0) <= body.bottom() {
+        head(canvas, y, "Disk");
+        y += t.px(16.0);
+        let note = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        // Lines on the type scale's own caption lead (`TypeStep::line_height_px`),
+        // not on a number chosen to look right: a 12-pixel caption has a 16-pixel
+        // line box, and setting this note tighter put each line's band inside the
+        // one above it -- text drawn over text, however quiet the overlap looks.
+        let line_h = t.line_px(TypeStep::Caption);
+        for (i, line) in ui::wrap(DISK_NOT_MEASURED, &note, body.w, 4)
+            .into_iter()
+            .enumerate()
+        {
+            let baseline = y + t.px(10.0) + (i as f32) * line_h;
+            if baseline - note.size > body.bottom() {
+                break;
+            }
+            font::draw(canvas, &line, body.x, baseline, &note);
+        }
+    }
+}
+
+/// One series drawn as an area: a filled column per pixel column, from the
+/// series down to the baseline.
+///
+/// An area rather than a line because the panels are small: a one-pixel line at
+/// this size is a dashed line, and the shape of a minute is easier to read than
+/// any individual sample is.
+fn area(canvas: &mut Canvas, t: &Tokens, values: &VecDeque<f32>, r: Rect, top: f32, colour: u32) {
+    let points = series_points(values, r, top);
+    if points.len() < 2 {
+        return;
+    }
+    let step = t.px(1.0).max(1.0);
+    let mut x = r.x;
+    // Walk the pixel columns and take the sample that owns each: the series is
+    // longer than the panel is wide in every real case, so this samples the
+    // noise out instead of aliasing it into a sawtooth.
+    let width = r.w;
+    let mut i = 0usize;
+    while x < r.x + width && i < points.len() {
+        let Some(&(_, y)) = points.get(i) else {
+            break;
+        };
+        // The next point that falls in this column sets the fill's top edge.
+        let mut top_y = y;
+        while let Some(&(px, py)) = points.get(i) {
+            if px > x + step {
+                break;
+            }
+            top_y = top_y.min(py);
+            i = i.saturating_add(1);
+        }
+        let h = (r.bottom() - top_y).max(1.0);
+        canvas.fill_round_rect(Rect::new(x, r.bottom() - h, step, h), 0.0, colour);
+        x += step;
+    }
+}
+
+/// Draw the Activity overview: CPU identity, resource meters, per-core
+/// activity, and the machine's recent history. Storage and detailed system
+/// facts live in Settings, where they can use the full page instead of
+/// competing with the process table.
 ///
 /// The meters come from [`crate::activity::meters`], which reads them from the
 /// same model the process table is drawn from: a band that marks a meter on this
 /// screen is a band the model applied, and a band nothing reads cannot get this
-/// far.
+/// far. The graphs come from the same model's history, so a number and the line
+/// under it can never describe different machines.
 pub fn draw(canvas: &mut Canvas, t: &Tokens, f: &SystemFacts, m: &TaskManager, body: Rect) {
     let pad = t.sp(Space::Lg);
     let content = body.inflate(-pad);
     let mut y = content.y + t.px(6.0);
     let caption = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
     let body_style = Style::new(t.text_px(TypeStep::Body), t.text());
-    let dim_bold = Style::bold(t.text_px(TypeStep::Footnote), t.text_dim());
 
     // ---- header: whose CPU is this -------------------------------------
     // One row, two strings, each laid out against the other rather than against
@@ -231,20 +561,65 @@ pub fn draw(canvas: &mut Canvas, t: &Tokens, f: &SystemFacts, m: &TaskManager, b
         y += t.px(34.0);
     }
 
-    // ---- the meters ----------------------------------------------------
+    // ---- the readings and the graphs -----------------------------------
+    // Two columns when the window is wide enough for them: what the machine is
+    // doing now on the left, what it has been doing on the right. Stacked
+    // instead, one of the two is always the section that gets clipped -- and a
+    // monitor whose trends are below the fold is a monitor read as a snapshot.
+    // Under that width the readings keep the whole panel, and the graphs follow
+    // them in whatever room is left.
+    let graphs_w = if content.w >= t.px(560.0) {
+        (content.w * 0.46).clamp(t.px(220.0), t.px(420.0))
+    } else {
+        0.0
+    };
+    let readouts = Rect::new(content.x, y, content.w - graphs_w, content.bottom() - y);
+    if graphs_w > 0.0 {
+        let graphs = Rect::new(
+            content.x + content.w - graphs_w,
+            y,
+            graphs_w,
+            content.bottom() - y,
+        );
+        // A hairline between the two, so the numbers on the left are not read
+        // as belonging to the line they happen to sit beside.
+        canvas.fill_round_rect(
+            Rect::new(graphs.x - t.sp(Space::Lg) / 2.0, y, 1.0, graphs.h),
+            0.0,
+            with_alpha(t.text(), 0.10),
+        );
+        draw_history(canvas, t, f, &m.history, graphs);
+    } else if y + t.px(150.0) <= content.bottom() {
+        // Not enough width to put them side by side: the graphs go under the
+        // readings, at the size the panel actually has.
+        draw_history(
+            canvas,
+            t,
+            f,
+            &m.history,
+            Rect::new(
+                content.x,
+                content.bottom() - t.px(120.0),
+                content.w,
+                t.px(120.0),
+            ),
+        );
+    }
+
     // CPU, memory, swap, load, frame time and the daemon's own footprint, each
     // with the band it crossed. Drawn here rather than in this file so the
     // numbers and the table below them come from one model.
-    if y < content.bottom() {
-        y = crate::activity::meters(canvas, t, m, &content, y);
+    if y < readouts.bottom() {
+        y = crate::activity::meters(canvas, t, m, &readouts, y);
         // Per logical CPU: one thin bar each, wrapped at 16 per row. Drawn only
         // when a second sample exists, because a grid of zeroes would claim
-        // sixteen idle CPUs the machine never reported.
+        // sixteen idle CPUs the machine never reported. The bars are the instant
+        // the machine is in; the graph on the right is how it got there.
         if !f.cpu_cores.is_empty() {
             let bar_w = t.px(9.0);
             let gap = t.px(3.0);
             let row_h = t.px(12.0);
-            let mut x = content.x;
+            let mut x = readouts.x;
             for i in 0..f.cpu_cores.len() {
                 let Some(fill) = core_fill(&f.cpu_cores, i) else {
                     continue;
@@ -262,135 +637,18 @@ pub fn draw(canvas: &mut Canvas, t: &Tokens, f: &SystemFacts, m: &TaskManager, b
                     },
                 );
                 x += bar_w + gap;
-                if x + bar_w > content.right() {
-                    x = content.x;
+                if x + bar_w > readouts.right() {
+                    x = readouts.x;
                     y += row_h;
                 }
             }
-            y += row_h + t.px(6.0);
         }
-    }
-
-    // ---- Memory --------------------------------------------------------
-    // The used-of-total reading is a meter above, with its band; what is left
-    // here is the breakdown, which no meter shows.
-    if y < content.bottom() {
-        section(canvas, t, &content, &mut y, "Memory");
-        let mut rows: Vec<(String, String)> = Vec::new();
-        if let (Some(used), Some(total)) = (f.mem_used_mb, f.mem_total_mb) {
-            rows.push(("Used".to_owned(), format!("{used} of {total} MB")));
-        }
-        if let Some(a) = f.mem_available_mb {
-            rows.push(("Available".to_owned(), format!("{a} MB")));
-        }
-        if let Some(c) = f.mem_cached_mb {
-            rows.push(("Cache".to_owned(), format!("{c} MB")));
-        }
-        if let Some(s) = f.swap_used_mb {
-            rows.push(("Swap in use".to_owned(), format!("{s} MB")));
-        }
-        y = rows_drawn(canvas, t, &content, y, &rows, &caption, &body_style);
-    }
-
-    // ---- Storage -------------------------------------------------------
-    if y < content.bottom() {
-        section(canvas, t, &content, &mut y, "Storage");
-        let volumes: Vec<(String, String, bool)> = f
-            .volumes
-            .iter()
-            .filter(|(_, fs, _)| is_storage_volume(fs))
-            .cloned()
-            .collect();
-        if volumes.is_empty() {
-            let s = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
-            font::draw(
-                canvas,
-                "Unavailable - the kernel reported no mounted volumes",
-                content.x,
-                y + t.px(11.0),
-                &s,
-            );
-            y += t.px(20.0);
-        }
-        for (mount, fs, ro) in &volumes {
-            if y > content.bottom() {
-                break;
-            }
-            let shown = fit(mount, &body_style, content.w * 0.62);
-            font::draw(canvas, &shown, content.x, y + t.px(11.0), &body_style);
-            let tag = if *ro {
-                format!("{fs} · read-only")
-            } else {
-                fs.clone()
-            };
-            let w = font::measure(&tag, &caption);
-            font::draw(canvas, &tag, content.right() - w, y + t.px(11.0), &caption);
-            // 21 pixels of pitch for a 13-pixel row, not 17: the note that may
-            // follow is type of its own, and at 16 the two rows overlapped by
-            // three pixels -- the exact "letters touching letters" complaint.
-            y += t.px(21.0);
-            if let Some(note) = readonly_volume_note(fs, *ro) {
-                let line = fit(note, &dim_bold, content.w);
-                font::draw(canvas, &line, content.x, y + t.px(11.0), &dim_bold);
-                y += t.px(20.0);
-            }
-        }
-        y += t.px(4.0);
-    }
-
-    // ---- System --------------------------------------------------------
-    if y < content.bottom() {
-        section(canvas, t, &content, &mut y, "System");
-        let rows = system_rows(f);
-        rows_drawn(canvas, t, &content, y, &rows, &caption, &body_style);
     }
 }
 
 /// The height of a per-core bar.
 fn bar_h(t: &crate::ui::Tokens) -> f32 {
     t.px(22.0)
-}
-
-/// A section heading with a rule under it.
-fn section(canvas: &mut Canvas, t: &crate::ui::Tokens, content: &Rect, y: &mut f32, name: &str) {
-    let s = Style::bold(t.text_px(TypeStep::Footnote), t.text_dim());
-    font::draw(canvas, name, content.x, *y + t.px(10.0), &s);
-    *y += t.px(14.0);
-    ui::separator(canvas, t, Rect::new(content.x, *y, content.w, 1.0));
-    *y += t.px(8.0);
-}
-
-/// Draw label/value rows and return the new cursor.
-fn rows_drawn(
-    canvas: &mut Canvas,
-    t: &crate::ui::Tokens,
-    content: &Rect,
-    mut y: f32,
-    rows: &[(String, String)],
-    label_style: &Style,
-    value_style: &Style,
-) -> f32 {
-    for (k, v) in rows {
-        if y > content.bottom() {
-            break;
-        }
-        font::draw(canvas, k, content.x, y + t.px(11.0), label_style);
-        // The value keeps the space the label is not using: a right-aligned
-        // value elided only against the window width still runs into a long
-        // label, and two strings in one band is text over text.
-        let room = (content.w - font::measure(k, label_style) - t.px(12.0)).max(t.px(24.0));
-        let shown = fit(v, value_style, room);
-        let w = font::measure(&shown, value_style);
-        font::draw(
-            canvas,
-            &shown,
-            content.right() - w,
-            y + t.px(11.0),
-            value_style,
-        );
-        y += t.px(21.0);
-    }
-    y
 }
 
 /// `text`, elided to `max` when it does not fit.
@@ -453,6 +711,118 @@ mod tests {
         // A fact that was never measured produces no row at all.
         let empty = system_rows(&SystemFacts::default());
         assert!(empty.is_empty(), "nothing measured, nothing claimed");
+    }
+
+    #[test]
+    fn a_series_is_drawn_across_its_box_with_the_ceiling_it_was_given() {
+        let mut values = VecDeque::new();
+        values.push_back(0.0);
+        values.push_back(0.5);
+        values.push_back(1.0);
+        let r = Rect::new(10.0, 20.0, 100.0, 40.0);
+        let points = series_points(&values, r, 1.0);
+        assert_eq!(points.len(), 3);
+        assert_eq!(points.first().map(|(x, _)| *x), Some(10.0));
+        assert_eq!(points.last().map(|(x, _)| *x), Some(110.0));
+        // 0 at the baseline, 1.0 at the top, and half of it halfway up.
+        assert_eq!(points.first().map(|(_, y)| *y), Some(60.0));
+        assert_eq!(points.get(1).map(|(_, y)| *y), Some(40.0));
+        assert_eq!(points.last().map(|(_, y)| *y), Some(20.0));
+        // A measurement above the ceiling is clamped to the box, not drawn
+        // outside it, and no measurement draws nothing at all.
+        let mut over = VecDeque::new();
+        over.push_back(9.0);
+        over.push_back(9.0);
+        assert_eq!(
+            series_points(&over, r, 1.0).first().map(|(_, y)| *y),
+            Some(20.0)
+        );
+        assert!(series_points(&VecDeque::new(), r, 1.0).is_empty());
+    }
+
+    #[test]
+    fn the_graphs_draw_what_was_measured_and_say_what_was_not() {
+        let background = crate::canvas::rgb(0x000000);
+        // Two samples of the same machine, a second apart, with the network
+        // moving 1 MiB in it. The rate is not in either sample: it is what
+        // `observe` makes of the pair, which is why the graph needs history.
+        let mut first = facts();
+        first.sampled_ms = Some(0);
+        first.net_rx_bytes = Some(1_000);
+        first.net_tx_bytes = Some(500);
+        let mut second = first.clone();
+        second.sampled_ms = Some(1_000);
+        second.net_rx_bytes = Some(1_000 + 1_048_576);
+        second.net_tx_bytes = Some(500 + 1_024);
+        assert_eq!(second.net_rx_per_s, None, "no sample carries a rate");
+        let mut observed = first;
+        observed.observe(second);
+        assert_eq!(observed.net_rx_per_s, Some(1_048_576.0));
+        let f = observed;
+        let mut m = model(f.clone());
+        m.observe(&f);
+
+        let mut canvas = Canvas::new(700, 600, background);
+        canvas.record_text(true);
+        draw(
+            &mut canvas,
+            &tokens(),
+            &f,
+            &m,
+            Rect::new(0.0, 0.0, 700.0, 600.0),
+        );
+        let runs: Vec<String> = canvas.text_runs().iter().map(|r| r.text.clone()).collect();
+        assert!(
+            runs.iter().any(|r| r.contains("in use")),
+            "the memory graph has no caption: {runs:?}"
+        );
+        assert!(
+            runs.iter().any(|r| r.contains("received")),
+            "the network graph has no rate: {runs:?}"
+        );
+        assert!(
+            runs.iter().any(|r| r.starts_with("Disk")),
+            "the disk section is missing: {runs:?}"
+        );
+        assert!(
+            runs.iter()
+                .any(|r| r.contains("nothing in this system reads")),
+            "the disk section does not say why it is empty: {runs:?}"
+        );
+    }
+
+    #[test]
+    fn a_machine_with_no_counters_gets_an_honest_unavailable_not_a_flat_line() {
+        let background = crate::canvas::rgb(0x000000);
+        let f = facts();
+        let mut m = model(f.clone());
+        m.observe(&f);
+        let mut canvas = Canvas::new(700, 600, background);
+        canvas.record_text(true);
+        draw(
+            &mut canvas,
+            &tokens(),
+            &f,
+            &m,
+            Rect::new(0.0, 0.0, 700.0, 600.0),
+        );
+        let runs: Vec<String> = canvas.text_runs().iter().map(|r| r.text.clone()).collect();
+        assert!(
+            runs.iter().any(|r| r.contains("no interface counters")),
+            "a machine that reported no counters claimed a network rate: {runs:?}"
+        );
+        assert!(
+            !runs.iter().any(|r| r.contains("received")),
+            "a rate was printed for a machine that measured none: {runs:?}"
+        );
+    }
+
+    #[test]
+    fn a_byte_rate_reads_at_the_scale_a_person_watches() {
+        assert_eq!(rate_text(0.0), "0 B/s");
+        assert_eq!(rate_text(2048.0), "2 KB/s");
+        assert_eq!(rate_text(1_048_576.0), "1.0 MB/s");
+        assert_eq!(rate_text(-5.0), "0 B/s", "a negative rate is not a rate");
     }
 
     #[test]

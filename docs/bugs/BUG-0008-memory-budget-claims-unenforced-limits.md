@@ -36,6 +36,13 @@ the table states.
 
 ## Actual — fourteen divergences, in four groups
 
+**Shell-slice divergence resolved 2026-10-16.** QEMU at 1920×1080 showed
+97,920 KiB anonymous RSS at startup before the old 96M service cap killed the
+compositor. The service now joins `litric-shell.slice`, inherits its 110M
+reclaim threshold and 140M ceiling, and no longer has the conflicting 96M
+override. The other budget gaps below remain acknowledged and are not implied
+to be fixed by this change.
+
 ### 1. Nine rows claimed limits the image never configures (6 claims + 1 slice claim)
 
 | Row | Claimed | Reality |
@@ -60,10 +67,11 @@ tree — on `litric-capd.service`, which has nothing to do with pipewire.
 design: "the gap between them is deliberate: a shell that briefly spikes should
 be reclaimed, not killed".
 
-`litric-shell.service` **does not set `Slice=`**, so it defaults to `system.slice`
-and joins none of that. The slice governs nothing.
+At the time this defect was recorded, `litric-shell.service` **did not set
+`Slice=`**, so it defaulted to `system.slice` and joined none of that. The slice
+governed nothing.
 
-What actually applies to the shell today:
+What applied before the resolution:
 
 | Property | Documented | Effective |
 |---|---|---|
@@ -78,22 +86,12 @@ lower than every documented number, and the shell does not have the highest CPU
 weight on the system — which the slice's own comment says is deliberate so "the
 thing drawing the frame the user is looking at" wins contention.
 
-This is not a one-line fix. Adding `Slice=litric-shell.slice` restores
-`CPUWeight`, `IOWeight`, `MemorySwapMax` and `TasksMax`, but it does **not**
-restore the documented reclaim behaviour: `MemoryMax=96M` on the service is
-tighter than the slice's 140M, and systemd's effective value is the most
-stringent along the chain, so a `MemoryHigh` of 110M sitting above an effective
-hard maximum of 96M can never fire. **Which number wins is a product decision,
-not a mechanical one**, and it is the reason this bug is recorded rather than
-patched:
-
-* Option A — 96M is the real cap: keep the service directive, and either set the
-  slice's `MemoryHigh` below it (so reclaim happens before the kill) or remove the
-  slice's memory lines and correct the ledger to 96M.
-* Option B — 110/140 is the real budget: remove or raise the service's
-  `MemoryMax` and put the service in the slice, accepting a 140M kill threshold.
-* Option C — split the difference with a new pair of numbers, which requires its
-  own evidence, because no measurement supports it today.
+QEMU at the target 1920×1080 resolution provided the missing evidence: the
+shell reached 97,920 KiB anonymous RSS during startup and was OOM-killed at the
+96M service cap. The 110/140M slice allowance was selected. The service now
+joins `litric-shell.slice` and inherits its reclaim-before-kill limits and
+CPU/I/O weights; the service-local 96M override is removed. The cap is still
+bounded and remains below the desktop profile's 320M total target.
 
 ### 3. Two slices carry limits that nothing joins
 

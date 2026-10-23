@@ -654,6 +654,13 @@ impl Canvas {
         self.backdrop.as_deref()
     }
 
+    /// The attached backdrop as an owned handle, so a surface that swaps it for
+    /// one of its own can put the previous one back.
+    #[must_use]
+    pub fn backdrop_owned(&self) -> Option<Rc<Self>> {
+        self.backdrop.clone()
+    }
+
     /// Width in pixels.
     #[must_use]
     pub const fn width(&self) -> u32 {
@@ -763,6 +770,57 @@ impl Canvas {
                 if let Some(p) = src.get(x, y) {
                     self.put_in(x, y, p);
                 }
+            }
+        }
+    }
+
+    /// Copy the pixels inside `r` out of the canvas, ignoring the clip.
+    ///
+    /// A software cursor is drawn into the frame itself, so moving it has to put
+    /// back exactly the pixels it covered. Keeping those pixels is what turns a
+    /// pointer move from a whole composition into a restore and a small draw.
+    /// `None` when the rectangle misses the canvas entirely.
+    #[must_use]
+    pub fn snapshot(&self, r: Rect) -> Option<(Rect, Vec<u32>)> {
+        let (x0, y0, x1, y1) = self.bounds_of(&r);
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let w = self.width as usize;
+        let cols = usize::try_from(x1.saturating_sub(x0)).ok()?;
+        let mut px = Vec::with_capacity(cols.saturating_mul(usize::try_from(y1.saturating_sub(y0)).ok()?));
+        for y in y0..y1 {
+            let row = (y as usize).saturating_mul(w);
+            let range = row.saturating_add(x0 as usize)..row.saturating_add(x1 as usize);
+            px.extend_from_slice(self.px.get(range)?);
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let rect = Rect::new(
+            x0 as f32,
+            y0 as f32,
+            x1.saturating_sub(x0) as f32,
+            y1.saturating_sub(y0) as f32,
+        );
+        Some((rect, px))
+    }
+
+    /// Put back pixels saved by [`Canvas::snapshot`], ignoring the clip.
+    pub fn restore(&mut self, r: Rect, pixels: &[u32]) {
+        let (x0, y0, x1, y1) = self.bounds_of(&r);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let w = self.width as usize;
+        let cols = usize::try_from(x1.saturating_sub(x0)).unwrap_or(0);
+        for (i, y) in (y0..y1).enumerate() {
+            let row = (y as usize).saturating_mul(w);
+            let range = row.saturating_add(x0 as usize)..row.saturating_add(x1 as usize);
+            let from = i.saturating_mul(cols);
+            let Some(src) = pixels.get(from..from.saturating_add(cols)) else {
+                return;
+            };
+            if let Some(dst) = self.px.get_mut(range) {
+                dst.copy_from_slice(src);
             }
         }
     }

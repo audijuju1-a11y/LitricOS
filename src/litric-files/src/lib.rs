@@ -12,6 +12,7 @@
 //! ```text
 //!   path      logical paths ("/Documents/a.txt"), name-collision rules    any host
 //!   proto     LFP/1 request parsing and reply encoding                     any host
+//!   trashinfo the `.trashinfo` Path= format, shared by both writers       any host
 //!   crc32 inflate deflate gzip zip tar   codecs written from the specs     any host
 //!   ops       Root: resolution without following symlinks, file ops       Unix only
 //!   trash     the freedesktop.org home trash on disk                      Unix only
@@ -37,6 +38,7 @@ pub mod inflate;
 pub mod path;
 pub mod proto;
 pub mod tar;
+pub mod trashinfo;
 pub mod zip;
 
 #[cfg(unix)]

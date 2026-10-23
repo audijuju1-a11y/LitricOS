@@ -26,14 +26,19 @@ pub const TRASH_DIR_NAME: &str = ".local/share/Trash";
 pub struct OnDiskItem {
     /// The name inside `Trash/files/`.
     pub name: String,
-    /// The original location, decoded from the entry's `Path=` line. Today
-    /// that value is `file://<logical path>`, which round-trips through
-    /// [`unpct_path`] but is **not** what the trash specification asks for:
-    /// `Path=` must carry the original *location* (an absolute pathname, or
-    /// a relative one measured from the trash directory's parent). Recorded
-    /// as BUG-0009; the format is shared with the shell's own trash writer,
-    /// so it changes in both places or not at all.
+    /// Where the item came from, as a logical path inside the daemon root
+    /// (`/Documents/x`). It is mapped back from the entry's `Path=` line by
+    /// [`crate::trashinfo::logical_location`], which understands both the
+    /// current form — the original location as an absolute host pathname — and
+    /// the legacy `file://<logical>` form a build before BUG-0009 wrote. An
+    /// entry in either form restores to the same place.
     pub original_path: String,
+    /// True when `original_path` is a recorded location this root does not own
+    /// (see [`crate::trashinfo::maps_into_root`]). It is kept and listed — the
+    /// record is the truth about where the item came from — but it cannot be
+    /// restored: the path looks like a logical path, so resolving it here would
+    /// write the item to a location the entry never named.
+    pub outside_root: bool,
     /// The deletion date, ISO 8601 `YYYY-MM-DDThh:mm:ss` as recorded.
     pub deleted_iso: String,
     /// Whether the `files/` entry is a directory.
@@ -48,6 +53,10 @@ pub struct OnDiskItem {
 pub struct DiskTrash {
     files_dir: PathBuf,
     info_dir: PathBuf,
+    /// The host directory logical paths are relative to. Kept because the
+    /// reader has to turn the absolute location recorded in `Path=` back into a
+    /// logical path, and only the root knows where the absolute form begins.
+    host_root: PathBuf,
 }
 
 impl DiskTrash {
@@ -78,6 +87,7 @@ impl DiskTrash {
         Ok(Self {
             files_dir,
             info_dir,
+            host_root: root.host_root().to_path_buf(),
         })
     }
 
@@ -112,7 +122,6 @@ impl DiskTrash {
         let host = root.resolve(logical)?;
         let meta = fs::symlink_metadata(&host).map_err(|e| Error::from_io("trash", &e))?;
         let is_dir = meta.is_dir() && !meta.file_type().is_symlink();
-        let original_uri = format!("file://{}", logical.as_str());
         let size = if is_dir {
             let (bytes, _f, _d, _p) = root.measure(logical)?;
             bytes
@@ -120,11 +129,13 @@ impl DiskTrash {
             meta.len()
         };
         let deleted_iso = iso_local(root, now);
-        let record = format!(
-            "[Trash Info]\nPath={}\nDeletionDate={}\n",
-            pct_path(&original_uri),
-            deleted_iso
-        );
+        // `Path=` is the original *location*: the absolute host pathname, which
+        // is what the Freedesktop specification asks for and what every other
+        // tool reads back. It used to be `file://<logical>`, which a conforming
+        // reader takes for a *relative* path and restores to the wrong place
+        // (BUG-0009). The formatting itself lives in one place now —
+        // [`crate::trashinfo`] — so this writer and the shell's cannot drift.
+        let record = crate::trashinfo::record(&host, &deleted_iso);
         let name = self.reserve_info(logical.file_name(), &record)?;
         if let Err(e) = fs::rename(&host, self.files_dir.join(&name)) {
             // Nothing left its place, so the reservation has to go too: an
@@ -135,7 +146,13 @@ impl DiskTrash {
         }
         Ok(OnDiskItem {
             name,
-            original_path: original_uri,
+            // The logical path, not the absolute location that was written:
+            // every caller of this field wants something it can hand back to
+            // `Root::resolve`, and the mapping is lossless (the record holds the
+            // absolute form, and `logical_location` inverts it).
+            original_path: logical.as_str().to_owned(),
+            // An item we just trashed came out of this root by construction.
+            outside_root: false,
             deleted_iso,
             is_dir,
             size,
@@ -226,10 +243,20 @@ impl DiskTrash {
     fn read_one(&self, name: &str) -> Option<OnDiskItem> {
         let raw = fs::read_to_string(self.info_dir.join(format!("{name}.trashinfo"))).ok()?;
         let mut original = String::new();
+        let mut outside_root = false;
         let mut deleted = String::new();
         for line in raw.lines() {
             if let Some(v) = line.strip_prefix("Path=") {
-                original = unpct_path(v);
+                // Decode, then map back to a logical path. The current absolute
+                // form and the legacy `file://` form both resolve here; anything
+                // else is kept verbatim AND flagged, because a recorded location
+                // from another root is often a syntactically valid logical path
+                // (`/somewhere/else/stray.txt`) and syntax alone cannot refuse
+                // it. The flag is what stops a restore from landing somewhere
+                // guessed.
+                let decoded = crate::trashinfo::pct_decode(v);
+                outside_root = !crate::trashinfo::maps_into_root(&self.host_root, &decoded);
+                original = crate::trashinfo::logical_location(&self.host_root, &decoded);
             } else if let Some(v) = line.strip_prefix("DeletionDate=") {
                 deleted = v.to_owned();
             }
@@ -242,6 +269,7 @@ impl DiskTrash {
         Some(OnDiskItem {
             name: name.to_owned(),
             original_path: original,
+            outside_root,
             deleted_iso: deleted,
             is_dir: meta.is_dir() && !meta.file_type().is_symlink(),
             size: meta.len(),
@@ -330,49 +358,10 @@ impl DiskTrash {
     }
 }
 
-/// `file:///Documents/a%20b.txt` — the spec wants `Path=` percent-encoded.
-/// The logical path's segments are already legal names, so encoding the
-/// whole string is safe: only reserved characters change.
-fn pct_path(uri: &str) -> String {
-    uri.bytes()
-        .map(|b| {
-            if b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'.' | b'_' | b'~') {
-                String::from(b as char)
-            } else {
-                format!("%{b:02X}")
-            }
-        })
-        .collect()
-}
-
-/// The inverse of [`pct_path`], applied when reading back.
-///
-/// Index invariants: `i` only ever advances by 1 or 3 and never exceeds
-/// `bytes.len()`, so every `get` below either succeeds or falls through to
-/// the literal-byte path; the arithmetic is bounded by the input length.
-#[must_use]
-#[allow(clippy::arithmetic_side_effects)]
-pub fn unpct_path(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes.get(i) == Some(&b'%') {
-            if let Some(hex) = s.get(i + 1..i + 3) {
-                if let Ok(b) = u8::from_str_radix(hex, 16) {
-                    out.push(b);
-                    i += 3;
-                    continue;
-                }
-            }
-        }
-        if let Some(b) = bytes.get(i) {
-            out.push(*b);
-        }
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
+// Percent-encoding for the `Path=` field lives in [`crate::trashinfo`], with the
+// rest of the record's format. It used to be duplicated here and in
+// `litric-shell`'s bridge, which is how one defect came to be fixed twice
+// (BUG-0011) and why the format itself had two chances to be wrong (BUG-0009).
 
 /// Directory size by walking; used where a `.trashinfo`-recorded size is
 /// absent and the ledger needs a number.
@@ -438,4 +427,148 @@ pub fn entry_size(meta: &fs::Metadata) -> u64 {
 #[must_use]
 pub fn entry_mtime(meta: &fs::Metadata) -> u64 {
     unix_time_of(meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::path::LogicalPath;
+    use litric_locale::TimeZone;
+
+    fn open_root(tag: &str) -> (PathBuf, crate::ops::Root) {
+        let dir = std::env::temp_dir().join(format!("litric-files-trash-{tag}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("fixture root");
+        let root = crate::ops::Root::open(&dir, TimeZone::utc("test")).expect("root opens");
+        (dir, root)
+    }
+
+    fn logical(path: &str) -> LogicalPath {
+        LogicalPath::parse(path).expect("valid logical path")
+    }
+
+    /// The `Path=` value of a record as it sits on disk, decoded.
+    fn recorded_path(dir: &std::path::Path, name: &str) -> String {
+        let raw = fs::read_to_string(
+            dir.join(TRASH_DIR_NAME)
+                .join("info")
+                .join(format!("{name}.trashinfo")),
+        )
+        .expect("the record was written");
+        let value = raw
+            .lines()
+            .find_map(|l| l.strip_prefix("Path="))
+            .expect("a Path= line");
+        crate::trashinfo::pct_decode(value)
+    }
+
+    #[test]
+    fn the_recorded_path_is_the_absolute_location_not_a_uri() {
+        // BUG-0009 regression. The reader must be handed the item's real host
+        // location, and no `file://` may appear anywhere in the stored value:
+        // a conforming tool would take that for a relative path and restore the
+        // item under `<trash parent>/file:/...`.
+        let (dir, root) = open_root("path-format");
+        fs::create_dir_all(dir.join("Documents")).expect("Documents");
+        fs::write(dir.join("Documents/memo.txt"), "x").expect("write");
+        let disk = DiskTrash::open(&root).expect("trash");
+
+        let item = disk
+            .put(&root, &logical("/Documents/memo.txt"), 1_900_000_000)
+            .expect("trash");
+
+        let absolute = dir.join("Documents/memo.txt");
+        assert_eq!(recorded_path(&dir, &item.name), absolute.to_string_lossy());
+        assert!(
+            crate::trashinfo::is_not_a_uri(&recorded_path(&dir, &item.name)),
+            "Path= must be a location: {:?}",
+            recorded_path(&dir, &item.name)
+        );
+        // The struct reports the logical path, and the reader agrees with it.
+        assert_eq!(item.original_path, "/Documents/memo.txt");
+        assert_eq!(
+            disk.get(&item.name).expect("listed").original_path,
+            "/Documents/memo.txt"
+        );
+    }
+
+    #[test]
+    fn an_entry_written_in_the_legacy_uri_form_still_lists_and_restores() {
+        // A `.trashinfo` as an older LitricOS build wrote it: the whole
+        // `file://<logical>` URI, percent-encoded. The change of format must not
+        // strand the user's existing trash.
+        let (dir, root) = open_root("legacy-uri");
+        let base = dir.join(TRASH_DIR_NAME);
+        fs::create_dir_all(base.join("files")).expect("files");
+        fs::create_dir_all(base.join("info")).expect("info");
+        fs::write(base.join("files/note.txt"), "old").expect("item");
+        let legacy = crate::trashinfo::pct_encode("file:///Documents/note.txt");
+        fs::write(
+            base.join("info/note.txt.trashinfo"),
+            format!("[Trash Info]\nPath={legacy}\nDeletionDate=2026-01-01T00:00:00\n"),
+        )
+        .expect("record");
+
+        let disk = DiskTrash::open(&root).expect("trash");
+        let item = disk
+            .get("note.txt")
+            .expect("the legacy entry is still listed");
+        assert_eq!(item.original_path, "/Documents/note.txt");
+
+        fs::create_dir_all(dir.join("Documents")).expect("Documents");
+        let dest = dir.join("Documents/note.txt");
+        disk.restore("note.txt", &dest).expect("restores");
+        assert!(dest.exists(), "back where it came from");
+        assert!(
+            !base.join("files/note.txt").exists(),
+            "and gone from the trash"
+        );
+    }
+
+    #[test]
+    fn an_entry_whose_path_names_nothing_inside_the_root_is_refused_not_guessed() {
+        // A `Path=` outside the root cannot be mapped to a logical path, so the
+        // reader keeps it verbatim and FLAGS it. The flag is the part that
+        // matters: this recorded location is a syntactically valid logical path
+        // (`/somewhere/else/stray.txt` parses fine), so a caller that trusted the
+        // parse alone would restore the item into this root, at a location the
+        // entry never named. This test originally asserted that parsing fails,
+        // which cannot be true for a rooted path and so never exercised the
+        // refusal at all -- see the RESTORE and PARSE-not-flag coverage in
+        // server.rs and in the `outside_root` assertion below.
+        let (dir, root) = open_root("outside-root");
+        let base = dir.join(TRASH_DIR_NAME);
+        fs::create_dir_all(base.join("files")).expect("files");
+        fs::create_dir_all(base.join("info")).expect("info");
+        fs::write(base.join("files/stray.txt"), "x").expect("item");
+        fs::write(
+            base.join("info/stray.txt.trashinfo"),
+            "[Trash Info]\nPath=/somewhere/else/stray.txt\n\
+             DeletionDate=2026-01-01T00:00:00\n",
+        )
+        .expect("record");
+
+        let disk = DiskTrash::open(&root).expect("trash");
+        let item = disk.get("stray.txt").expect("listed");
+        assert_eq!(item.original_path, "/somewhere/else/stray.txt");
+        assert!(item.outside_root, "the recorded location is not ours");
+        // And the listing still parses as a logical path, which is exactly why
+        // the flag has to exist.
+        assert!(LogicalPath::parse(&item.original_path).is_ok());
+        // The flag has to mean something, so the honest case is asserted next
+        // to the dishonest one: an item this root trashed itself is NOT flagged.
+        let (dir2, root2) = open_root("inside-root");
+        fs::create_dir_all(dir2.join("Documents")).expect("Documents");
+        fs::write(dir2.join("Documents/kept.txt"), "x").expect("file");
+        let disk2 = DiskTrash::open(&root2).expect("trash");
+        disk2
+            .put(&root2, &logical("/Documents/kept.txt"), 0)
+            .expect("trashed");
+        let kept = disk2.get("kept.txt").expect("listed");
+        assert_eq!(kept.original_path, "/Documents/kept.txt");
+        assert!(
+            !kept.outside_root,
+            "an entry from this root stays restorable"
+        );
+    }
 }

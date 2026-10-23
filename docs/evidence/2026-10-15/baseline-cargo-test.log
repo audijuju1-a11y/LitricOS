@@ -1,0 +1,35 @@
+   Compiling litric-core v0.2.0 (D:\LitricOS-151569\src\litric-core)
+   Compiling litric-defender v0.2.0 (D:\LitricOS-151569\src\litric-defender)
+   Compiling litric-locale v0.2.0 (D:\LitricOS-151569\src\litric-locale)
+   Compiling litric-design v0.2.0 (D:\LitricOS-151569\src\litric-design)
+   Compiling litric-input v0.2.0 (D:\LitricOS-151569\src\litric-input)
+   Compiling litric-wm v0.2.0 (D:\LitricOS-151569\src\litric-wm)
+   Compiling litric-caps v0.2.0 (D:\LitricOS-151569\src\litric-caps)
+   Compiling litric-storage v0.2.0 (D:\LitricOS-151569\src\litric-storage)
+   Compiling litric-env v0.2.0 (D:\LitricOS-151569\src\litric-env)
+   Compiling litric-trash v0.2.0 (D:\LitricOS-151569\src\litric-trash)
+   Compiling litric-envd v0.2.0 (D:\LitricOS-151569\src\litric-envd)
+   Compiling litric-sysd v0.2.0 (D:\LitricOS-151569\src\litric-sysd)
+error: linking with `link.exe` failed: exit code: 1
+  |
+  = note: "link.exe" "/NOLOGO" "D:\\LitricOS-151569\\src\\target\\debug\\deps\\rustc3Qenqf\\symbols.o" "<106 object files omitted>" "<sysroot>\\lib\\rustlib\\x86_64-pc-windows-msvc\\lib/{libtest-*,libgetopts-*,librustc_std_workspace_std-*,libstd-*,libpanic_unwind-*,libcfg_if-*,libwindows_link-*,librustc_demangle-*,libstd_detect-*,libhashbrown-*,librustc_std_workspace_alloc-*,libunwind-*,librustc_std_workspace_core-*,liballoc-*,libcore-*,libcompiler_builtins-*}.rlib" "kernel32.lib" "kernel32.lib" "kernel32.lib" "kernel32.lib" "ntdll.lib" "userenv.lib" "ws2_32.lib" "dbghelp.lib" "/defaultlib:msvcrt" "/NXCOMPAT" "/OUT:D:\\LitricOS-151569\\src\\target\\debug\\deps\\litric_locale-71a3161abf53c865.exe" "/OPT:REF,NOICF" "/DEBUG" "/PDBALTPATH:%_PDB%" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\intrinsic.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\liballoc.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\libcore.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\libstd.natvis"
+  = note: some arguments are omitted. use `--verbose` to show all linker arguments
+  = note: link: missing operand after '\377\376'
+          Try 'link --help' for more information.
+          
+
+note: `link.exe` returned an unexpected error
+
+note: you may need to install Visual Studio build tools with the "C++ build tools" workload
+
+error: could not compile `litric-locale` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: linking with `link.exe` failed: exit code: 1
+  |
+  = note: "link.exe" "/NOLOGO" "D:\\LitricOS-151569\\src\\target\\debug\\deps\\rustcaVJNNU\\symbols.o" "<174 object files omitted>" "<sysroot>\\lib\\rustlib\\x86_64-pc-windows-msvc\\lib/{libtest-*,libgetopts-*,librustc_std_workspace_std-*,libstd-*,libpanic_unwind-*,libcfg_if-*,libwindows_link-*,librustc_demangle-*,libstd_detect-*,libhashbrown-*,librustc_std_workspace_alloc-*,libunwind-*,librustc_std_workspace_core-*,liballoc-*,libcore-*,libcompiler_builtins-*}.rlib" "kernel32.lib" "kernel32.lib" "kernel32.lib" "kernel32.lib" "ntdll.lib" "userenv.lib" "ws2_32.lib" "dbghelp.lib" "/defaultlib:msvcrt" "/NXCOMPAT" "/OUT:D:\\LitricOS-151569\\src\\target\\debug\\deps\\litric_input-f96689a34c2f9996.exe" "/OPT:REF,NOICF" "/DEBUG" "/PDBALTPATH:%_PDB%" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\intrinsic.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\liballoc.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\libcore.natvis" "/NATVIS:<sysroot>\\lib\\rustlib\\etc\\libstd.natvis"
+  = note: some arguments are omitted. use `--verbose` to show all linker arguments
+  = note: link: missing operand after '\377\376'
+          Try 'link --help' for more information.
+          
+
+error: could not compile `litric-input` (lib test) due to 1 previous error

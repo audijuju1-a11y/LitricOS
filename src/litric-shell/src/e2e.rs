@@ -160,28 +160,53 @@ fn draw_frame(s: &mut Shell) -> Canvas {
     c
 }
 
+fn draw_frame_at(s: &mut Shell, width: u32, height: u32) -> Canvas {
+    s.tick_after(FRAME_MS);
+    let theme = s.tokens.theme;
+    let mut c = Canvas::new(width, height, rgb(0x000000));
+    c.record_text(true);
+    desktop::wallpaper(&mut c, &theme);
+    crate::views::draw(&mut c, s);
+    c
+}
+
 // ---------------------------------------------------------------------------
 // Journeys
 // ---------------------------------------------------------------------------
 
 #[test]
-fn journey_the_desktop_has_icons_and_one_opens_files() {
+fn journey_the_desktop_is_bare_and_applications_open_from_the_launcher() {
+    // The desktop is a place, not a shelf: no icon grid, no bar along the
+    // bottom edge. Applications are one gesture away through the launcher,
+    // which is where the pointer journey goes now.
     let mut s = shell();
     let _canvas = draw_frame(&mut s);
-    // Icons exist and are hittable.
-    let files_icon = s
+    assert!(
+        s.hotspots().rect_of(Hot::DesktopIcon(0)).is_none(),
+        "the desktop still draws an icon grid"
+    );
+    // The bar is on screen at rest, with every pinned application on it.
+    for i in [3u8, 4, 5, 2] {
+        assert!(
+            s.hotspots().rect_of(Hot::DockItem(i)).is_some(),
+            "the resting bar is missing pinned item {i}"
+        );
+    }
+    // Clicking the bare wallpaper does nothing rather than selecting a ghost.
+    click(&mut s, 900.0, 700.0);
+    assert!(s.desktop_icons.selected.is_none());
+    assert!(s.wm.all().is_empty(), "a click on the wallpaper opened something");
+
+    // The bar's own icons open applications without opening the launcher first.
+    let tile = s
         .hotspots()
-        .rect_of(Hot::DesktopIcon(0))
-        .expect("Files icon is on the desktop");
-    // Clicking it opens the Files window.
-    click(&mut s, files_icon.center().0, files_icon.center().1);
+        .rect_of(Hot::DockItem(3))
+        .expect("the bar's Files icon is drawn");
+    click(&mut s, tile.center().0, tile.center().1);
     assert!(
         s.wm.all().iter().any(|w| w.app_id == "com.litric.files"),
-        "the Files window opened from the desktop icon"
+        "the Files window opened from the launcher"
     );
-    // Clicking empty wallpaper clears the selection.
-    click(&mut s, 900.0, 700.0);
-    assert_eq!(s.desktop_icons.selected, None);
 }
 
 #[test]
@@ -270,6 +295,181 @@ fn journey_files_window_is_drawn_with_places_rows_and_commands() {
             .is_some(),
         "the New folder command is drawn"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn journey_files_selects_with_mouse_and_compresses_multiple_items() {
+    let mut s = shell();
+    let root = e2e_root("multi-archive");
+    let documents = root.join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    std::fs::write(documents.join("alpha.txt"), "alpha contents").unwrap();
+    std::fs::write(documents.join("beta.txt"), "beta contents").unwrap();
+    s.files_root = root.clone();
+    s.open_app(App::Files);
+    let _ = draw_frame(&mut s);
+
+    for index in 0..2 {
+        let checkbox = s
+            .hotspots()
+            .rect_of(Hot::Files(FilesHot::ToggleRow(index)))
+            .expect("each Files row has a multi-select checkbox");
+        click(&mut s, checkbox.center().0, checkbox.center().1);
+    }
+    assert_eq!(s.files.selected_paths().len(), 2);
+    let compress = s
+        .hotspots()
+        .rect_of(Hot::Files(FilesHot::Compress))
+        .expect("Compress is available in the Files command row");
+    click(&mut s, compress.center().0, compress.center().1);
+    assert!(matches!(
+        s.files.dialog,
+        Some(DialogKind::Confirm {
+            action: crate::apps::FilesOp::CompressMany { .. },
+            ..
+        })
+    ));
+
+    let _ = draw_frame(&mut s);
+    let confirm = s.hotspots().rect_of(Hot::DialogConfirm).unwrap();
+    click(&mut s, confirm.center().0, confirm.center().1);
+    let bridge = crate::fsbridge::FsBridge::open(&root, s.regional.zone.clone()).unwrap();
+    assert!(bridge.exists("/Documents/Archive.zip").unwrap());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn journey_activity_environment_and_settings_controls_change_real_state() {
+    let mut s = shell();
+    s.open_app(App::Activity);
+    let _ = draw_frame(&mut s);
+    let filter = s.hotspots().rect_of(Hot::ActivityFilter).unwrap();
+    click(&mut s, filter.center().0, filter.center().1);
+    type_text(&mut s, "qemu");
+    assert_eq!(s.activity.prefs.filter_text, "qemu");
+    let cpu = s
+        .hotspots()
+        .rect_of(Hot::ActivitySort(crate::taskmgr::Column::Cpu))
+        .expect("CPU heading is a sortable control");
+    click(&mut s, cpu.center().0, cpu.center().1);
+    assert_eq!(
+        s.activity.prefs.sort.0,
+        crate::taskmgr::Column::Cpu.sort_key()
+    );
+
+    s.environments = vec![crate::shell::EnvRow {
+        token: "linux".to_owned(),
+        title: "Linux".to_owned(),
+        state: "running".to_owned(),
+        active: false,
+        hotkey: "Win+3".to_owned(),
+    }];
+    s.open_app(App::Environments);
+    let _ = draw_frame(&mut s);
+    let env = s.hotspots().rect_of(Hot::QuickEnvironment(0)).unwrap();
+    assert!(click(&mut s, env.center().0, env.center().1).contains(&Effect::SwitchEnvironment(1)));
+
+    s.open_app(App::Settings);
+    s.settings.page = crate::settings::Page::Appearance;
+    let _ = draw_frame(&mut s);
+    let theme = s.hotspots().rect_of(Hot::SettingsTheme).unwrap();
+    let effects = click(&mut s, theme.center().0, theme.center().1);
+    assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));
+    s.finish_preferences_save(Ok(()));
+    let _ = draw_frame(&mut s);
+    let language = s.hotspots().rect_of(Hot::SettingsLanguage).unwrap();
+    let effects = click(&mut s, language.center().0, language.center().1);
+    assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));
+    s.finish_preferences_save(Ok(()));
+    assert_ne!(s.settings.preferences.language, crate::i18n::Language::Thai);
+}
+
+#[test]
+fn journey_browser_history_and_bookmarks_are_clickable_and_keep_visits() {
+    let mut s = shell();
+    s.open_app(App::Browser);
+    let _ = draw_frame(&mut s);
+    let field = s.hotspots().rect_of(Hot::BrowserOmnibox).unwrap();
+    click(&mut s, field.center().0, field.center().1);
+    type_text(&mut s, "litricos.example");
+    let effects = key_press(&mut s, Key::Enter, Modifiers::NONE);
+    assert!(effects.contains(&Effect::PersistBrowserData));
+    assert_eq!(
+        s.browser.tab().map(|tab| tab.url.as_str()),
+        Some("https://litricos.example")
+    );
+
+    let _ = draw_frame(&mut s);
+    let save = s.hotspots().rect_of(Hot::BrowserBookmark).unwrap();
+    assert!(click(&mut s, save.center().0, save.center().1).contains(&Effect::PersistBrowserData));
+    assert!(s.browser.is_bookmarked());
+
+    let history = s.hotspots().rect_of(Hot::BrowserHistory).unwrap();
+    click(&mut s, history.center().0, history.center().1);
+    let _ = draw_frame(&mut s);
+    let first_visit = s.hotspots().rect_of(Hot::BrowserHistoryItem(0)).unwrap();
+    click(&mut s, first_visit.center().0, first_visit.center().1);
+    assert_eq!(
+        s.browser.tab().map(|tab| tab.url.as_str()),
+        Some("https://litricos.example")
+    );
+    assert!(s.browser.is_bookmarked());
+}
+
+#[test]
+fn every_app_layout_is_audited_at_both_resolutions_and_all_built_in_themes() {
+    use crate::settings::Preferences;
+    let apps = [
+        App::Activity,
+        App::Environments,
+        App::Settings,
+        App::Files,
+        App::Browser,
+        App::Terminal,
+        App::Trash,
+        App::Defender,
+    ];
+    for (width, height) in [(1280, 800), (1920, 1080)] {
+        for language in [crate::i18n::Language::Thai, crate::i18n::Language::English] {
+            for theme in ThemeKind::all() {
+                let mut s = Shell::new(
+                    Tokens::new(Theme::of(*theme), 1.0),
+                    width as f32,
+                    height as f32,
+                    Regional::fallback("test"),
+                );
+                s.mode = DesktopMode::Ready;
+                s.load_preferences(Preferences::new(*theme, language));
+                for app in apps {
+                    s.open_app(app);
+                }
+                let c = draw_frame_at(&mut s, width, height);
+                let collisions = crate::textaudit::audit(&c);
+                let within_surface: Vec<_> = collisions
+                    .into_iter()
+                    .filter(|collision| !collision.cross_surface)
+                    .collect();
+                assert!(
+                    within_surface.is_empty(),
+                    "{width}x{height}, {}, {:?}: {}",
+                    language.title(),
+                    theme,
+                    crate::textaudit::report(c.text_runs(), 8)
+                );
+                for run in c.text_runs() {
+                    assert!(
+                        run.x >= 0.0 && run.end_x <= width as f32,
+                        "text leaves the framebuffer at {width}x{height}: {run:?}"
+                    );
+                    assert!(
+                        run.baseline >= 0.0 && run.baseline <= height as f32,
+                        "text leaves the framebuffer at {width}x{height}: {run:?}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -653,24 +853,16 @@ fn journey_clicking_a_window_never_hits_the_desktop_icon_behind_it() {
 }
 
 #[test]
-fn journey_dock_click_opens_focuses_then_minimizes() {
+fn journey_launcher_click_opens_focuses_then_minimizes() {
+    // The desktop has no resting bar, so the launcher is where an application
+    // is reached from the pointer. The click rules are unchanged.
     let mut s = shell();
-    // The dock is an auto-hide surface: reveal it by parking the pointer at
-    // the bottom edge, exactly as a user summons it.
-    move_pointer(&mut s, 640.0, 795.0);
-    // The dock's reveal is a spring the user waits out for a fraction of a
-    // second; tick until it has arrived, then draw.
-    for _ in 0..40 {
-        s.tick_after(FRAME_MS);
-        if s.anims().dock.value() >= 0.95 {
-            break;
-        }
-    }
+    open_launcher(&mut s);
     let _ = draw_frame(&mut s);
     let dock_hot = s
         .hotspots()
         .rect_of(Hot::DockItem(3))
-        .expect("dock revealed at the bottom edge");
+        .expect("the launcher draws its pinned icons");
     // First click opens the app.
     click(&mut s, dock_hot.center().0, dock_hot.center().1);
     let files =
@@ -680,7 +872,9 @@ fn journey_dock_click_opens_focuses_then_minimizes() {
             .map(|w| w.id)
             .expect("dock click opened Files");
     assert_eq!(s.wm.focused(), Some(files));
-    // Second click on the focused app minimizes it.
+    // Second click on the focused app minimizes it. Opening an app closes the
+    // launcher, so the journey reopens it the way a person would.
+    open_launcher(&mut s);
     let _ = draw_frame(&mut s);
     let dock_hot = s.hotspots().rect_of(Hot::DockItem(3)).unwrap();
     click(&mut s, dock_hot.center().0, dock_hot.center().1);
@@ -692,46 +886,167 @@ fn journey_dock_click_opens_focuses_then_minimizes() {
 }
 
 #[test]
-fn journey_hidden_dock_is_not_clickable() {
+fn journey_the_bars_height_is_a_strip_and_its_width_is_wider_than_a_shelf() {
+    // The bar stays on the resting desktop, but it is a strip: 48 logical
+    // pixels tall rather than 76, and it stretches wider than it was so the
+    // icons and the search bubble are not pressed together.
     let mut s = shell();
-    move_pointer(&mut s, 640.0, 300.0); // far from the bottom edge
-    s.tick_after(FRAME_MS);
+    move_pointer(&mut s, 640.0, 300.0); // nowhere near the bottom edge
+    let _frame = draw_frame(&mut s);
+    let mut top = f32::MAX;
+    let mut bottom = 0.0_f32;
+    for i in [3u8, 4, 5, 2] {
+        let r = s
+            .hotspots()
+            .rect_of(Hot::DockItem(i))
+            .unwrap_or_else(|| panic!("bar item {i} is missing with nothing open"));
+        top = top.min(r.y);
+        bottom = bottom.max(r.bottom());
+    }
+    // The icons are 22 pixels tall inside a 30-pixel bar: the 48-pixel strip
+    // was still a shelf, and this is 1.6 times shorter than it.
+    assert!(
+        (bottom - top) < 32.0,
+        "the bar's icons are {} px tall, so the bar is not a 30-px strip",
+        bottom - top
+    );
+    // The row is centred, 24 px above the edge, so its bottom is near 800-24.
+    assert!(
+        bottom <= 800.0 - 20.0 && bottom >= 800.0 - 60.0,
+        "the bar sits {} px above the bottom edge",
+        800.0 - bottom
+    );
+    // Stretched, not merely measured: the strip is a large share of the width
+    // rather than a pill sized by its contents.
+    let toggle = s.hotspots().rect_of(Hot::DockToggle).unwrap();
+    let field = s.hotspots().rect_of(Hot::DockSearch).unwrap();
+    let span = field.right() - toggle.x;
+    assert!(
+        span > 0.5 * 1280.0,
+        "the bar spans {span} px of a 1280-px screen"
+    );
+    assert!(matches!(s.overlay, Overlay::None));
+}
+
+#[test]
+fn the_launcher_morph_repaints_the_dock_and_not_the_screen() {
+    // The launcher used to compose the whole desktop on every frame of its
+    // spring -- wallpaper, every window, the top bar's glass -- which in the
+    // guest was a fifth of a second a frame. It grows out of the dock, whose
+    // rectangle the draw side publishes, so its frames damage that rectangle.
+    let mut s = shell();
     let _ = draw_frame(&mut s);
-    // Every dock spring must have settled closed; nothing registers.
-    for i in 0..8u8 {
-        assert!(s.hotspots().rect_of(Hot::DockItem(i)).is_none());
+    // The first frame of a session is a full redraw by definition; take it, the
+    // way the frame loop does, so what is left is the launcher's own damage.
+    let _ = s.take_damage();
+    let settled = s
+        .dock_settled()
+        .expect("the drawn dock publishes the rectangle it grows into");
+    let screen = s.wm.screen();
+    assert!(
+        settled.w * settled.h < screen.w * screen.h * 0.75,
+        "the settled dock covers {}x{} of {}x{}",
+        settled.w,
+        settled.h,
+        screen.w,
+        screen.h
+    );
+
+    let _ = s.perform(Action::ToggleLauncher);
+    assert!(
+        !s.needs_full_redraw(),
+        "opening the launcher repaints the whole screen"
+    );
+    let damage = s.take_damage();
+    assert!(!damage.is_empty(), "the morph is on screen with no damage");
+    for r in &damage {
+        assert!(
+            r.x <= settled.x && r.y <= settled.y && r.right() >= settled.right(),
+            "a morph frame damages {r:?}, which does not cover the dock {settled:?}"
+        );
+    }
+
+    // And the frames after it: the spring is moving, so there is damage on
+    // every tick, and none of them is a full redraw.
+    for _ in 0..10 {
+        s.tick_after(FRAME_MS);
+        assert!(
+            !s.needs_full_redraw(),
+            "a moving morph frame falls back to a full redraw"
+        );
+        let _ = s.take_damage();
+        let _ = draw_frame(&mut s);
     }
 }
 
 #[test]
-fn journey_dock_is_clickable_while_still_sliding_up() {
-    // A user aims at the dock the moment it appears; the dock must accept
-    // the click mid-slide, not silently swallow it until fully settled.
+fn merged_pointer_moves_are_one_cursor_step_from_where_the_arrow_was_left() {
+    // A frame at 125 Hz sees eight moves from a 1 kHz pointer. Those are merged
+    // into one step -- and the step has to start where the *drawn* arrow is,
+    // not where the pointer was one event ago, or the compositor refuses to
+    // move it and the frame becomes a full composition.
     let mut s = shell();
-    move_pointer(&mut s, 640.0, 780.0); // rest on the bottom edge
-    let mut caught = false;
-    for _ in 0..60 {
-        s.tick_after(FRAME_MS);
-        let _ = draw_frame(&mut s);
-        let reveal = s.anims().dock.value();
-        if (0.6..0.95).contains(&reveal) {
-            caught = true;
-            break;
-        }
-    }
-    assert!(caught, "the spring passes through the clickable band");
-    let dock_hot = s
+    move_pointer(&mut s, 640.0, 300.0);
+    let _ = draw_frame(&mut s);
+    let _ = s.take_damage();
+    let drawn_at = s.pointer();
+
+    move_pointer(&mut s, 700.0, 320.0);
+    move_pointer(&mut s, 720.0, 340.0);
+    move_pointer(&mut s, 760.0, 360.0);
+    let step = s
+        .take_cursor_step()
+        .expect("three moves over bare wallpaper are not one cursor step");
+    assert_eq!(
+        step.0, drawn_at,
+        "the step starts at {:?}, not where the arrow was left ({drawn_at:?})",
+        step.0
+    );
+    assert_eq!(step.1, Point::new(760.0, 360.0));
+    assert!(
+        s.take_damage().is_empty(),
+        "a cursor step left damage behind for the compositor to compose"
+    );
+}
+
+#[test]
+fn journey_the_launcher_marks_which_applications_are_running() {
+    // The running indicator is still drawn under a launcher icon: a dot under
+    // the app that has a window, taken from the window list, so it cannot
+    // disagree with what is actually open. The surface moved; the promise did
+    // not.
+    let mut s = shell();
+    let _ = s.open_app(App::Files);
+    open_launcher(&mut s);
+    let frame = draw_frame(&mut s);
+    // The launcher draws the dot two logical pixels under the icon's tile: a
+    // 30-pixel strip has no room for the six the shelf used.
+    let bright_at = |c: &crate::canvas::Canvas, x: f32, y: f32| {
+        (0..9i64)
+            .flat_map(|dy| (0..9i64).map(move |dx| (dx, dy)))
+            .map(|(dx, dy)| {
+                crate::canvas::luminance(
+                    c.get((x - 4.0) as i64 + dx, (y - 4.0) as i64 + dy)
+                        .unwrap_or(0),
+                )
+            })
+            .fold(0.0_f32, f32::max)
+    };
+    let files_icon = s
         .hotspots()
         .rect_of(Hot::DockItem(3))
-        .expect("a mid-slide dock is already a click target");
-    click(&mut s, dock_hot.center().0, dock_hot.center().1);
-    let files =
-        s.wm.all()
-            .iter()
-            .find(|w| w.app_id == "com.litric.files")
-            .map(|w| w.id)
-            .expect("mid-slide click opened Files");
-    assert_eq!(s.wm.focused(), Some(files));
+        .expect("the Files icon is in the launcher");
+    let running = bright_at(&frame, files_icon.center().0, files_icon.bottom() + 2.0);
+    // An application with no window has no dot in the same place.
+    let browser_icon = s
+        .hotspots()
+        .rect_of(Hot::DockItem(4))
+        .expect("the Browser icon is in the launcher");
+    let idle = bright_at(&frame, browser_icon.center().0, browser_icon.bottom() + 2.0);
+    assert!(
+        running > idle + 0.1,
+        "the running application has no indicator under its icon: {running} vs {idle}"
+    );
 }
 
 #[test]
@@ -935,8 +1250,8 @@ fn journey_powering_off_asks_first_and_only_a_confirmation_acts() {
 
     let row = s
         .hotspots()
-        .rect_of(Hot::QuickPowerAction(2))
-        .expect("the Power off row is drawn");
+        .rect_of(Hot::PowerItem(2))
+        .expect("the Shut down row is drawn");
     let asked = click(&mut s, row.center().0, row.center().1);
     assert!(
         asked.is_empty(),
@@ -979,8 +1294,8 @@ fn journey_powering_off_asks_first_and_only_a_confirmation_acts() {
     let _ = draw_frame(&mut s);
     let row = s
         .hotspots()
-        .rect_of(Hot::QuickPowerAction(2))
-        .expect("the Power off row is drawn again");
+        .rect_of(Hot::PowerItem(2))
+        .expect("the Shut down row is drawn again");
     let _ = click(&mut s, row.center().0, row.center().1);
     let _ = draw_frame(&mut s);
     let ok = s
@@ -1184,16 +1499,11 @@ fn journey_locking_hides_the_session_and_only_a_password_brings_it_back() {
         assert!(s.hotspots().rect_of(Hot::DockItem(i)).is_none());
     }
     assert!(s.hotspots().rect_of(Hot::DesktopIcon(0)).is_none());
-    assert!(s.hotspots().rect_of(Hot::LockWake).is_some());
-
-    // The wake hint: Space brings the password field out.
-    let _ = key_press(&mut s, Key::Char(' '), Modifiers::NONE);
-    let _ = draw_frame(&mut s);
+    assert!(s.hotspots().rect_of(Hot::LockWake).is_none());
     assert!(
         s.hotspots().rect_of(Hot::LockSubmit).is_some(),
-        "the password field and its submit came out"
+        "the password field is available as soon as the lock appears"
     );
-    assert!(s.hotspots().rect_of(Hot::LockWake).is_none());
 
     // Typing does not reach the application behind the lock: the Files window
     // has a filter field, and it is not what the keyboard is talking to.
@@ -1247,13 +1557,31 @@ fn journey_locking_hides_the_session_and_only_a_password_brings_it_back() {
 }
 
 #[test]
+fn lock_idle_shows_the_account_and_a_direct_unlock_path() {
+    let mut s = lockable_shell();
+    assert!(s.lock_now());
+    s.lock.back();
+    let mut c = Canvas::new(1280, 800, rgb(0x000000));
+    c.record_text(true);
+    crate::views::draw(&mut c, &mut s);
+    assert!(
+        c.text_runs()
+            .iter()
+            .any(|run| run.text == "Click or press Enter to unlock"),
+        "the lock explains the next action before a keypress"
+    );
+    assert!(s.hotspots().rect_of(Hot::LockSubmit).is_none());
+    click(&mut s, 640.0, 560.0);
+    assert_eq!(s.lock.stage, crate::lock::Stage::Entry);
+}
+
+#[test]
 fn journey_the_lock_does_not_collect_a_password_it_could_not_check() {
     let mut s = lockable_shell();
     assert!(s.lock_now());
     // The daemon goes away while the session is locked.
     s.facts.auth_available = None;
     s.facts.auth_lock = None;
-    let _ = key_press(&mut s, Key::Char(' '), Modifiers::NONE);
     type_text(&mut s, "hunter2");
     let _ = draw_frame(&mut s);
     assert!(
@@ -1311,35 +1639,32 @@ fn journey_the_lock_customize_sheet_changes_the_look_live() {
         .rect_of(Hot::LockSwitch(crate::lock::SWITCH_BREATHE))
         .expect("the breathing switch is drawn");
     click(&mut s, breathe.center().0, breathe.center().1);
-    assert!(!s.lock.tweaks.breathe);
+    assert!(s.lock.tweaks.breathe);
 
     let _ = draw_frame(&mut s);
     let done = s.hotspots().rect_of(Hot::LockDone).expect("Done");
     click(&mut s, done.center().0, done.center().1);
     assert!(!s.lock.edit);
     let _ = draw_frame(&mut s);
-    assert!(s.hotspots().rect_of(Hot::LockWake).is_some());
+    assert!(s.hotspots().rect_of(Hot::LockEntry).is_some());
 }
 
 // ---------------------------------------------------------------------------
 // The dock that becomes the launcher
 // ---------------------------------------------------------------------------
 
-/// Reveal the dock and let its spring arrive, the way a user summons it.
-fn reveal_dock(s: &mut Shell) {
-    move_pointer(s, 640.0, 795.0);
-    for _ in 0..60 {
-        s.tick_after(FRAME_MS);
-        if s.anims().dock.value() >= 0.95 {
-            break;
-        }
-    }
+/// Put the dock on screen the way the shell has it: present, at rest.
+///
+/// The dock is not an auto-hide surface, so this is the pointer-free case --
+/// no reveal to wait for, and test intent stays honest about that.
+fn show_dock(s: &mut Shell) {
+    s.tick_after(FRAME_MS);
 }
 
-/// Open the launcher the way a user does: summon the dock, press the button,
-/// and wait for the morph spring to arrive.
+/// Open the launcher the way a user does: press the dock's button and wait for
+/// the morph spring to arrive.
 fn open_launcher(s: &mut Shell) {
-    reveal_dock(s);
+    show_dock(s);
     s.perform(Action::ToggleLauncher);
     for _ in 0..60 {
         s.tick_after(FRAME_MS);
@@ -1347,22 +1672,23 @@ fn open_launcher(s: &mut Shell) {
 }
 
 #[test]
-fn journey_the_dock_grows_into_the_launcher_and_a_tile_opens_the_app() {
+fn journey_the_launcher_opens_on_the_apps_menu_and_a_tile_opens_the_app() {
     let mut s = shell();
-    reveal_dock(&mut s);
+    show_dock(&mut s);
     let _ = draw_frame(&mut s);
-    // At rest it is the pill: pinned icons, a search bubble, no tiles.
+    // At rest the bar is on screen -- its button, its pinned icons and its
+    // field -- and the panel's own contents are not.
     assert!(s.hotspots().rect_of(Hot::DockItem(3)).is_some());
     assert!(s.hotspots().rect_of(Hot::DockSearch).is_some());
+    assert!(s.hotspots().rect_of(Hot::DockToggle).is_some());
     assert!(s.hotspots().rect_of(Hot::LauncherItem(3)).is_none());
-    assert!(s.hotspots().rect_of(Hot::LauncherShortcut(0)).is_none());
 
-    // The launcher button expands the same surface.
-    let toggle = s
+    // The Apps menu opens the surface the bar grows into.
+    let apps = s
         .hotspots()
-        .rect_of(Hot::DockToggle)
-        .expect("launcher button");
-    click(&mut s, toggle.center().0, toggle.center().1);
+        .rect_of(Hot::MenuApps)
+        .expect("the Apps menu is on the bar");
+    click(&mut s, apps.center().0, apps.center().1);
     for _ in 0..60 {
         s.tick_after(FRAME_MS);
     }
@@ -1389,28 +1715,6 @@ fn journey_the_dock_grows_into_the_launcher_and_a_tile_opens_the_app() {
         s.tick_after(FRAME_MS);
     }
     assert!(s.anims().launcher_morph.value() < 0.05);
-}
-
-#[test]
-fn journey_the_shortcut_row_performs_what_it_says() {
-    let mut s = shell();
-    open_launcher(&mut s);
-    let _ = draw_frame(&mut s);
-    // Chip 0 is the terminal, and the list the shell performs from is the list
-    // the view labelled.
-    assert_eq!(
-        crate::shell::chip_label(crate::shell::SHORTCUT_CHIPS[0]),
-        App::Terminal.title()
-    );
-    let chip = s
-        .hotspots()
-        .rect_of(Hot::LauncherShortcut(0))
-        .expect("the shortcut row is drawn");
-    click(&mut s, chip.center().0, chip.center().1);
-    assert!(
-        s.wm.all().iter().any(|w| w.app_id == "com.litric.terminal"),
-        "the terminal chip opened the terminal"
-    );
 }
 
 #[test]
@@ -1456,4 +1760,111 @@ fn journey_searching_in_the_launcher_filters_and_escape_collapses() {
         s.tick_after(FRAME_MS);
     }
     assert!(s.anims().launcher_morph.value() < 0.05);
+}
+
+#[test]
+fn journey_mission_control_shows_windows_from_every_workspace_and_opens_one() {
+    let mut s = shell();
+    s.open_app(App::Files);
+    s.perform(Action::Workspace(1));
+    s.open_app(App::Terminal);
+    let _ = draw_frame(&mut s);
+
+    let meta = Modifiers {
+        meta: true,
+        ..Modifiers::NONE
+    };
+    let _ = key_press(&mut s, Key::Tab, meta);
+    assert!(
+        matches!(s.overlay, Overlay::Overview { .. }),
+        "Win+Tab did not open Mission Control"
+    );
+    let _ = draw_frame(&mut s);
+
+    // Both windows are cards, even though only one is on the active workspace.
+    let first = s
+        .hotspots()
+        .rect_of(Hot::OverviewItem(0))
+        .expect("the first card is drawn");
+    assert!(
+        s.hotspots().rect_of(Hot::OverviewItem(1)).is_some(),
+        "a window on another workspace has no card"
+    );
+    click(&mut s, first.center().0, first.center().1);
+    assert!(matches!(s.overlay, Overlay::None));
+    assert_eq!(
+        s.wm.active_workspace(),
+        0,
+        "the card did not switch workspace"
+    );
+    assert_eq!(
+        s.wm.focused()
+            .and_then(|id| s.wm.window(id))
+            .map(|w| w.app_id.as_str()),
+        Some("com.litric.files")
+    );
+}
+
+#[test]
+fn journey_mission_control_is_keyboard_only() {
+    let mut s = shell();
+    s.wm.open("com.litric.files", "Documents", (400.0, 300.0));
+    s.perform(Action::Workspace(1));
+    s.wm.open("com.litric.terminal", "Terminal", (400.0, 300.0));
+    let meta = Modifiers {
+        meta: true,
+        ..Modifiers::NONE
+    };
+    let _ = key_press(&mut s, Key::Tab, meta);
+    // The overview starts on the focused window (the Terminal, card 1);
+    // Left moves to the Files window on workspace 1.
+    let _ = key_press(&mut s, Key::Left, Modifiers::NONE);
+    let _ = key_press(&mut s, Key::Enter, Modifiers::NONE);
+    assert!(matches!(s.overlay, Overlay::None));
+    assert_eq!(s.wm.active_workspace(), 0);
+    assert!(s
+        .wm
+        .focused()
+        .and_then(|id| s.wm.window(id))
+        .is_some_and(|w| w.app_id == "com.litric.files"));
+}
+
+#[test]
+fn journey_the_search_field_finds_an_action_and_runs_it() {
+    let mut s = shell();
+    s.open_app(App::Files);
+    let _ = draw_frame(&mut s);
+    open_launcher(&mut s);
+    type_text(&mut s, "show desktop");
+    let _ = draw_frame(&mut s);
+    let _ = key_press(&mut s, Key::Enter, Modifiers::NONE);
+    assert!(matches!(s.overlay, Overlay::None));
+    assert_eq!(
+        s.wm.all().first().map(|w| w.state),
+        Some(litric_wm::WindowState::Minimized),
+        "the action result did not run"
+    );
+}
+
+#[test]
+fn journey_the_search_field_finds_a_window_on_another_workspace() {
+    let mut s = shell();
+    let id =
+        s.wm.open("com.litric.files", "Quarterly budget", (400.0, 300.0));
+    s.perform(Action::MoveToWorkspace(3));
+    s.perform(Action::Workspace(0));
+    open_launcher(&mut s);
+    type_text(&mut s, "quarterly");
+    let _ = draw_frame(&mut s);
+    let row = s
+        .hotspots()
+        .rect_of(Hot::LauncherItem(0))
+        .expect("the window is a search result");
+    click(&mut s, row.center().0, row.center().1);
+    assert_eq!(s.wm.focused(), Some(id));
+    assert_eq!(s.wm.active_workspace(), 3);
+    assert_eq!(
+        s.wm.window(id).map(|w| w.state),
+        Some(litric_wm::WindowState::Normal)
+    );
 }

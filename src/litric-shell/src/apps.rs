@@ -215,14 +215,25 @@ pub enum DesktopDialog {
 pub enum FilesOp {
     /// Move to trash.
     Trash(String),
+    /// Move several selected entries to trash.
+    TrashMany(Vec<String>),
     /// Delete for ever.
     Delete(String),
+    /// Permanently delete several selected entries.
+    DeleteMany(Vec<String>),
     /// Copy from the clipboard into the shown folder.
     PasteCopy,
     /// Move from the clipboard into the shown folder.
     PasteCut,
     /// Compress the clipboard selection into `name`.
     Compress(String),
+    /// Compress several selected entries into one archive.
+    CompressMany {
+        /// The archive file's name.
+        name: String,
+        /// The selected logical file paths to add.
+        sources: Vec<String>,
+    },
     /// Extract an archive into a folder beside it.
     Extract(String),
 }
@@ -240,6 +251,10 @@ pub struct FilesApp {
     pub rows: Vec<FileRow>,
     /// Selected row index.
     pub selected: Option<usize>,
+    /// Selected row names, stable when the user changes sort order.
+    pub selected_rows: std::collections::BTreeSet<String>,
+    /// The primary selected row's name, stable across sorting and filtering.
+    pub selected_name: Option<String>,
     /// Current sort.
     pub sort: (SortKey, bool),
     /// Search filter; empty means no filter.
@@ -284,6 +299,8 @@ impl Default for FilesApp {
             path: "/Documents".to_owned(),
             rows: Vec::new(),
             selected: None,
+            selected_rows: std::collections::BTreeSet::new(),
+            selected_name: None,
             sort: (SortKey::Name, true),
             filter: String::new(),
             details: true,
@@ -407,6 +424,8 @@ impl FilesApp {
         self.forward.clear();
         self.path = path.to_owned();
         self.selected = None;
+        self.selected_rows.clear();
+        self.selected_name = None;
         self.filter.clear();
         self.place_index = self.places.iter().position(|(p, _)| p == &self.path);
     }
@@ -419,6 +438,8 @@ impl FilesApp {
         let cur = std::mem::replace(&mut self.path, prev);
         self.forward.push(cur);
         self.selected = None;
+        self.selected_rows.clear();
+        self.selected_name = None;
         true
     }
 
@@ -430,6 +451,8 @@ impl FilesApp {
         let cur = std::mem::replace(&mut self.path, next);
         self.back.push(cur);
         self.selected = None;
+        self.selected_rows.clear();
+        self.selected_name = None;
         true
     }
 
@@ -491,6 +514,8 @@ impl FilesApp {
         }
         self.rows = rows;
         self.selected = None;
+        self.selected_rows.clear();
+        self.selected_name = None;
     }
 
     /// Replace the listing from a fresh directory read. Sorting, filter and
@@ -498,6 +523,8 @@ impl FilesApp {
     pub fn apply_entries(&mut self, rows: Vec<FileRow>) {
         self.rows = rows;
         self.selected = None;
+        self.selected_rows.clear();
+        self.selected_name = None;
         self.error = None;
     }
 
@@ -505,7 +532,11 @@ impl FilesApp {
     #[must_use]
     pub fn selection(&self) -> Option<&FileRow> {
         let vis = self.visible();
-        vis.into_iter().nth(self.selected?)
+        if let Some(name) = &self.selected_name {
+            vis.into_iter().find(|row| &row.name == name)
+        } else {
+            vis.into_iter().nth(self.selected?)
+        }
     }
 
     /// The logical path of the selected row.
@@ -519,6 +550,103 @@ impl FilesApp {
                 format!("{base}/{}", r.name)
             }
         })
+    }
+
+    /// Visible logical paths in the current selection, in table order.
+    #[must_use]
+    pub fn selected_paths(&self) -> Vec<String> {
+        let rows = self.visible();
+        let selected = if self.selected_rows.is_empty() {
+            self.selected_name
+                .clone()
+                .or_else(|| {
+                    self.selected
+                        .and_then(|index| rows.get(index).map(|row| row.name.clone()))
+                })
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        } else {
+            self.selected_rows.clone()
+        };
+        let base = self.path.trim_end_matches('/');
+        rows.into_iter()
+            .enumerate()
+            .filter(|(_, row)| selected.contains(&row.name))
+            .map(|(_, row)| {
+                if base.is_empty() {
+                    format!("/{}", row.name)
+                } else {
+                    format!("{base}/{}", row.name)
+                }
+            })
+            .collect()
+    }
+
+    /// Whether a visible row is part of the multi-selection.
+    #[must_use]
+    pub fn row_is_selected(&self, index: usize) -> bool {
+        self.visible().get(index).is_some_and(|row| {
+            self.selected_rows.contains(&row.name)
+                || (self.selected_rows.is_empty()
+                    && (self.selected_name.as_deref() == Some(row.name.as_str())
+                        || (self.selected_name.is_none() && self.selected == Some(index))))
+        })
+    }
+
+    /// Replace the selection with one visible row.
+    pub fn select_row(&mut self, index: usize) {
+        if let Some(name) = self.visible().get(index).map(|row| row.name.clone()) {
+            self.selected = Some(index);
+            self.selected_name = Some(name.clone());
+            self.selected_rows.clear();
+            self.selected_rows.insert(name);
+        }
+    }
+
+    /// Toggle one visible row without disturbing other selected rows.
+    pub fn toggle_row(&mut self, index: usize) {
+        if index >= self.visible().len() {
+            return;
+        }
+        let Some(name) = self.visible().get(index).map(|row| row.name.clone()) else {
+            return;
+        };
+        if self.selected_rows.is_empty() {
+            if let Some(current) = self.selected_name.clone().or_else(|| {
+                self.selected
+                    .and_then(|current| self.visible().get(current).map(|row| row.name.clone()))
+            }) {
+                self.selected_rows.insert(current);
+            }
+        }
+        if !self.selected_rows.remove(&name) {
+            self.selected_rows.insert(name.clone());
+            self.selected = Some(index);
+            self.selected_name = Some(name);
+        } else if self.selected_name.as_deref() == Some(name.as_str()) {
+            let next = self.selected_rows.iter().next_back().cloned();
+            self.selected_name = next.clone();
+            self.selected =
+                next.and_then(|name| self.visible().iter().position(|row| row.name == name));
+        }
+        if self.selected_rows.is_empty() {
+            self.selected = None;
+            self.selected_name = None;
+        }
+    }
+
+    /// Select every currently visible row.
+    pub fn select_all_visible(&mut self) {
+        let (names, first) = {
+            let visible = self.visible();
+            (
+                visible.iter().map(|row| row.name.clone()).collect(),
+                visible.first().map(|row| row.name.clone()),
+            )
+        };
+        self.selected_rows = names;
+        self.selected_name = first;
+        self.selected = self.selected_name.as_ref().map(|_| 0);
     }
 
     /// Copy the selection to the clipboard.
@@ -623,6 +751,35 @@ pub struct BrowserTab {
     pub title: String,
     /// Whether the tab's last load failed.
     pub error: bool,
+    /// Per-tab navigation stack, oldest first.
+    pub history: Vec<String>,
+    /// Current address inside `history`.
+    pub history_index: usize,
+}
+
+/// Which browser utility panel is visible below the toolbar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrowserPanel {
+    /// The current page or new-tab surface.
+    #[default]
+    Page,
+    /// Recent navigation history.
+    History,
+    /// Saved addresses.
+    Bookmarks,
+    /// Files reported by the browser broker's download directory.
+    Downloads,
+    /// Honest state of site permission requests exposed by the engine.
+    SitePermissions,
+}
+
+/// A file the broker reports in its download directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserDownload {
+    /// Final filename inside the broker's private downloads directory.
+    pub name: String,
+    /// File size in bytes as reported by the filesystem.
+    pub size: u64,
 }
 
 /// A web search engine the omnibox can use.
@@ -695,6 +852,16 @@ pub struct BrowserApp {
     /// "pre-selected": the next typed character replaces it, exactly the
     /// browser convention of focus-selects-all.
     pub omnibox_fresh: bool,
+    /// Recent visited URLs, newest first.
+    pub history: VecDeque<String>,
+    /// Saved addresses, in the order the user added them.
+    pub bookmarks: Vec<String>,
+    /// Utility panel below the browser toolbar.
+    pub panel: BrowserPanel,
+    /// Files the browser broker found in its download folder.
+    pub downloads: Vec<BrowserDownload>,
+    /// Current download-list request status.
+    pub downloads_status: Option<String>,
 }
 
 impl Default for BrowserApp {
@@ -704,6 +871,8 @@ impl Default for BrowserApp {
                 url: "litric://about".to_owned(),
                 title: "New Tab".to_owned(),
                 error: false,
+                history: vec!["litric://about".to_owned()],
+                history_index: 0,
             }],
             active: 0,
             omnibox: String::new(),
@@ -713,6 +882,11 @@ impl Default for BrowserApp {
             last_frame: None,
             wants_engine: false,
             omnibox_fresh: false,
+            history: VecDeque::new(),
+            bookmarks: Vec::new(),
+            panel: BrowserPanel::Page,
+            downloads: Vec::new(),
+            downloads_status: None,
         }
     }
 }
@@ -730,6 +904,7 @@ impl BrowserApp {
             self.active = i;
             self.omnibox = t.url.clone();
             self.omnibox_focus = true;
+            self.panel = BrowserPanel::Page;
         }
     }
 
@@ -741,7 +916,17 @@ impl BrowserApp {
         }
         self.tabs.remove(i);
         if self.tabs.is_empty() {
-            *self = Self::default();
+            self.tabs.push(BrowserTab {
+                url: "litric://about".to_owned(),
+                title: "New Tab".to_owned(),
+                error: false,
+                history: vec!["litric://about".to_owned()],
+                history_index: 0,
+            });
+            self.active = 0;
+            self.omnibox.clear();
+            self.omnibox_focus = false;
+            self.panel = BrowserPanel::Page;
             return;
         }
         if self.active >= self.tabs.len() {
@@ -755,7 +940,10 @@ impl BrowserApp {
             url: "litric://about".to_owned(),
             title: "New Tab".to_owned(),
             error: false,
+            history: vec!["litric://about".to_owned()],
+            history_index: 0,
         });
+        self.panel = BrowserPanel::Page;
         self.select(self.tabs.len().saturating_sub(1));
     }
 
@@ -778,12 +966,107 @@ impl BrowserApp {
         } else {
             self.engine.search_url(&raw)
         };
-        if let Some(t) = self.tabs.get_mut(self.active) {
-            t.url.clone_from(&url);
-            t.error = false;
-        }
-        self.omnibox_focus = false;
+        self.navigate_active_to(&url);
         Some(url)
+    }
+
+    /// Navigate the selected tab and append a real history entry.
+    pub fn navigate_active_to(&mut self, url: &str) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            if tab
+                .history
+                .get(tab.history_index)
+                .is_none_or(|current| current != url)
+            {
+                tab.history.truncate(tab.history_index.saturating_add(1));
+                tab.history.push(url.to_owned());
+                if tab.history.len() > 100 {
+                    tab.history.remove(0);
+                }
+                tab.history_index = tab.history.len().saturating_sub(1);
+            }
+            tab.url = url.to_owned();
+            tab.error = false;
+            tab.title = url.to_owned();
+        }
+        self.record_visit(url);
+        self.omnibox_focus = false;
+        self.panel = BrowserPanel::Page;
+    }
+
+    /// Record a URL in the bounded, cross-tab recent list.
+    pub fn record_visit(&mut self, url: &str) {
+        if url == "litric://about" {
+            return;
+        }
+        self.history.retain(|entry| entry != url);
+        self.history.push_front(url.to_owned());
+        while self.history.len() > 200 {
+            self.history.pop_back();
+        }
+    }
+
+    /// Move the active tab back one address and return the URL for the engine.
+    pub fn back(&mut self) -> Option<String> {
+        let tab = self.tabs.get_mut(self.active)?;
+        if tab.history_index == 0 {
+            return None;
+        }
+        tab.history_index = tab.history_index.saturating_sub(1);
+        tab.url = tab.history.get(tab.history_index)?.clone();
+        tab.error = false;
+        self.omnibox = tab.url.clone();
+        self.panel = BrowserPanel::Page;
+        Some(tab.url.clone())
+    }
+
+    /// Move the active tab forward one address and return the URL for the engine.
+    pub fn forward(&mut self) -> Option<String> {
+        let tab = self.tabs.get_mut(self.active)?;
+        let next = tab.history_index.saturating_add(1);
+        if next >= tab.history.len() {
+            return None;
+        }
+        tab.history_index = next;
+        tab.url = tab.history.get(next)?.clone();
+        tab.error = false;
+        self.omnibox = tab.url.clone();
+        self.panel = BrowserPanel::Page;
+        Some(tab.url.clone())
+    }
+
+    /// Whether the active tab can go back.
+    #[must_use]
+    pub fn can_go_back(&self) -> bool {
+        self.tab().is_some_and(|tab| tab.history_index > 0)
+    }
+
+    /// Whether the active tab can go forward.
+    #[must_use]
+    pub fn can_go_forward(&self) -> bool {
+        self.tab()
+            .is_some_and(|tab| tab.history_index.saturating_add(1) < tab.history.len())
+    }
+
+    /// Toggle the active address in the bookmarks list.
+    pub fn toggle_bookmark(&mut self) -> bool {
+        let Some(url) = self.tab().map(|tab| tab.url.clone()) else {
+            return false;
+        };
+        if let Some(index) = self.bookmarks.iter().position(|saved| saved == &url) {
+            self.bookmarks.remove(index);
+            false
+        } else {
+            self.bookmarks.push(url);
+            true
+        }
+    }
+
+    /// Whether the current URL is saved.
+    #[must_use]
+    pub fn is_bookmarked(&self) -> bool {
+        self.tab()
+            .is_some_and(|tab| self.bookmarks.iter().any(|saved| saved == &tab.url))
     }
 
     /// Navigate the focused tab to its own URL (the reload / engine-start
@@ -940,6 +1223,34 @@ pub struct DesktopIcons {
 }
 
 impl DesktopIcons {
+    /// The clean first-boot desktop: four useful destinations, not a copy of
+    /// every application that is already available from the dock and launcher.
+    #[must_use]
+    pub fn minimal() -> Self {
+        use crate::shortcuts::App;
+        Self {
+            items: vec![
+                DesktopIcon {
+                    label: "Files".to_owned(),
+                    target: IconTarget::App(App::Files),
+                },
+                DesktopIcon {
+                    label: "Browser".to_owned(),
+                    target: IconTarget::App(App::Browser),
+                },
+                DesktopIcon {
+                    label: "Documents".to_owned(),
+                    target: IconTarget::Folder("/Documents".to_owned()),
+                },
+                DesktopIcon {
+                    label: "Downloads".to_owned(),
+                    target: IconTarget::Folder("/Downloads".to_owned()),
+                },
+            ],
+            selected: None,
+        }
+    }
+
     /// The desktop every machine starts with: the working apps and shortcuts
     /// to the folders a file manager would show.
     #[must_use]
@@ -1021,6 +1332,8 @@ pub enum FilesHot {
     Header(SortKey),
     /// A row in the table.
     Row(usize),
+    /// Toggle a row in the multi-selection.
+    ToggleRow(usize),
     /// The Back button.
     Back,
     /// The Forward button.
@@ -1068,10 +1381,11 @@ pub fn files_action(app: &mut FilesApp, hot: FilesHot) -> Option<String> {
             None
         }
         FilesHot::Row(i) => {
-            let vis = app.visible().len();
-            if i < vis {
-                app.selected = Some(i);
-            }
+            app.select_row(i);
+            None
+        }
+        FilesHot::ToggleRow(i) => {
+            app.toggle_row(i);
             None
         }
         FilesHot::Back => {
@@ -1107,12 +1421,24 @@ pub fn files_action(app: &mut FilesApp, hot: FilesHot) -> Option<String> {
             None
         }
         FilesHot::Compress => {
-            if let Some(p) = app.selected_path() {
-                let name = format!("{}.zip", p.rsplit('/').next().unwrap_or("archive"));
+            let paths = app.selected_paths();
+            if let Some(p) = paths.first() {
+                let name = if paths.len() == 1 {
+                    format!("{}.zip", p.rsplit('/').next().unwrap_or("archive"))
+                } else {
+                    "Archive.zip".to_owned()
+                };
                 app.ask_confirm(
                     "Compress",
-                    &format!("Archive {p} as {name}?"),
-                    FilesOp::Compress(name),
+                    &format!("Archive {} selected items as {name}?", paths.len()),
+                    if paths.len() == 1 {
+                        FilesOp::Compress(name)
+                    } else {
+                        FilesOp::CompressMany {
+                            name,
+                            sources: paths,
+                        }
+                    },
                 );
             }
             None
@@ -1223,6 +1549,8 @@ pub enum MenuAction {
     EmptyTrash,
     /// Restore a trash entry (Trash window).
     Restore,
+    /// Permanently delete the selected Trash entry after confirmation.
+    PurgeTrashItem,
     /// Open the selected desktop icon.
     OpenSelection,
     /// Change the wallpaper (desktop). Cycles themes.
@@ -1315,6 +1643,7 @@ impl ContextMenu {
             ],
             MenuSurface::Trash => vec![
                 MenuItem::Item("Restore", MenuAction::Restore),
+                MenuItem::Item("Delete permanently", MenuAction::PurgeTrashItem),
                 MenuItem::Item("Empty trash", MenuAction::EmptyTrash),
             ],
         };
@@ -1345,6 +1674,19 @@ pub struct TrashApp {
     pub error: Option<String>,
     /// Whether the listing is stale against the disk.
     pub listed: bool,
+    /// Case-insensitive search within the live trash listing.
+    pub filter: String,
+    /// A destructive action that still needs an explicit second confirmation.
+    pub confirm: Option<TrashConfirmation>,
+}
+
+/// The pending destructive Trash action shown in the confirmation row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrashConfirmation {
+    /// Permanently remove every item currently in Trash.
+    Empty,
+    /// Permanently remove one named item.
+    Purge(String),
 }
 
 impl TrashApp {
@@ -1359,6 +1701,29 @@ impl TrashApp {
     #[must_use]
     pub fn count(&self) -> usize {
         self.entries.len()
+    }
+
+    /// Indices into `entries` that match the current search, in listing order.
+    #[must_use]
+    pub fn visible_indices(&self) -> Vec<usize> {
+        let needle = self.filter.trim().to_lowercase();
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, (name, _, origin, _))| {
+                needle.is_empty()
+                    || name.to_lowercase().contains(&needle)
+                    || origin.to_lowercase().contains(&needle)
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Whether the selected item is among the visible results.
+    #[must_use]
+    pub fn has_visible_selection(&self) -> bool {
+        self.selected
+            .is_some_and(|selected| self.visible_indices().contains(&selected))
     }
 }
 
@@ -1411,6 +1776,13 @@ pub struct TerminalApp {
     pub note: Option<String>,
     /// A command is running and its output is still arriving.
     pub busy: bool,
+    /// Most recent distinct commands, oldest first, bounded for the life of
+    /// this shell session.
+    pub history: VecDeque<String>,
+    /// The current history navigation position, if Up has been pressed.
+    pub history_cursor: Option<usize>,
+    /// The in-progress input saved when the user first navigates backward.
+    pub history_draft: String,
 }
 
 impl TerminalApp {
@@ -1418,6 +1790,8 @@ impl TerminalApp {
     /// then simply pushes the old lines out — the terminal never grows
     /// without bound because a process misbehaved.
     pub const MAX_LINES: usize = 400;
+    /// Maximum command history kept in memory.
+    pub const MAX_HISTORY: usize = 100;
 
     /// A fresh terminal with a greeting.
     #[must_use]
@@ -1431,6 +1805,9 @@ impl TerminalApp {
             focused: false,
             note: None,
             busy: false,
+            history: VecDeque::new(),
+            history_cursor: None,
+            history_draft: String::new(),
         }
     }
 
@@ -1445,6 +1822,76 @@ impl TerminalApp {
     /// Echo the command the user is about to run.
     pub fn echo_command(&mut self, cmd: &str) {
         self.push_line(format!("$ {cmd}"));
+    }
+
+    /// Add a successfully-started command to history, avoiding adjacent
+    /// duplicates like interactive shells do.
+    pub fn remember_command(&mut self, cmd: &str) {
+        if !cmd.is_empty() && self.history.back().is_none_or(|last| last != cmd) {
+            self.history.push_back(cmd.to_owned());
+            while self.history.len() > Self::MAX_HISTORY {
+                self.history.pop_front();
+            }
+        }
+        self.history_cursor = None;
+        self.history_draft.clear();
+    }
+
+    /// Move to an older command, preserving the current input as a draft.
+    pub fn history_up(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        let cursor = match self.history_cursor {
+            Some(0) => return,
+            Some(index) => index.saturating_sub(1),
+            None => {
+                self.history_draft.clone_from(&self.input);
+                self.history.len().saturating_sub(1)
+            }
+        };
+        self.history_cursor = Some(cursor);
+        if let Some(command) = self.history.get(cursor) {
+            self.input.clone_from(command);
+        }
+    }
+
+    /// Move toward newer commands and restore the in-progress draft at the
+    /// newest edge.
+    pub fn history_down(&mut self) {
+        let Some(cursor) = self.history_cursor else {
+            return;
+        };
+        if cursor.saturating_add(1) >= self.history.len() {
+            self.history_cursor = None;
+            self.input.clone_from(&self.history_draft);
+            self.history_draft.clear();
+        } else {
+            let next = cursor.saturating_add(1);
+            self.history_cursor = Some(next);
+            if let Some(command) = self.history.get(next) {
+                self.input.clone_from(command);
+            }
+        }
+    }
+
+    /// Clear visible output and the old input draft while retaining history.
+    pub fn clear_screen(&mut self) {
+        self.lines.clear();
+        self.input.clear();
+        self.push_line("LitricOS Terminal · session ready");
+        self.history_cursor = None;
+        self.history_draft.clear();
+    }
+
+    /// Start a fresh in-app command session. A command already running must be
+    /// allowed to finish before its output is discarded.
+    pub fn new_session(&mut self) -> bool {
+        if self.busy {
+            return false;
+        }
+        *self = Self::new();
+        true
     }
 }
 
@@ -1551,6 +1998,54 @@ mod tests {
     }
 
     #[test]
+    fn multiple_selection_tracks_names_when_sorted_and_compresses_together() {
+        let mut f = listing();
+        f.select_row(0);
+        f.toggle_row(2);
+        assert_eq!(
+            f.selected_paths(),
+            ["/Documents/Album", "/Documents/doc.txt"]
+        );
+        assert!(f.row_is_selected(0));
+        assert!(f.row_is_selected(2));
+        f.toggle_sort(SortKey::Size);
+        let sorted = f.visible();
+        let album = sorted.iter().position(|row| row.name == "Album").unwrap();
+        assert!(
+            f.row_is_selected(album),
+            "selection follows Album after resort"
+        );
+        assert!(
+            f.row_is_selected(2),
+            "selection follows doc.txt after resort"
+        );
+        let _ = files_action(&mut f, FilesHot::Compress);
+        assert!(matches!(
+            f.dialog,
+            Some(DialogKind::Confirm {
+                action: FilesOp::CompressMany { ref sources, .. },
+                ..
+            }) if sources.len() == 2
+        ));
+    }
+
+    #[test]
+    fn select_all_uses_the_visible_rows_and_filter_is_respected() {
+        let mut f = listing();
+        f.filter = "work".to_owned();
+        f.select_all_visible();
+        assert_eq!(f.selected_paths(), ["/Documents/Work"]);
+        f.filter.clear();
+        f.select_all_visible();
+        assert_eq!(f.selected_paths().len(), 3);
+        f.apply_entries(f.rows.clone());
+        assert!(
+            f.selected_paths().is_empty(),
+            "a fresh listing clears stale selection"
+        );
+    }
+
+    #[test]
     fn a_files_place_click_navigates_and_pins() {
         let mut f = FilesApp::default();
         let path = files_action(&mut f, FilesHot::Place(1)).expect("navigates");
@@ -1618,6 +2113,36 @@ mod tests {
         assert_eq!(b.tab().map(|t| t.url.as_str()), Some("litric://about"));
         b.close(0);
         assert_eq!(b.tabs.len(), 1, "fresh tab replaces the last close");
+    }
+
+    #[test]
+    fn browser_history_back_forward_and_new_navigation_trim_forward() {
+        let mut b = BrowserApp::default();
+        b.navigate_active_to("https://one.example");
+        b.navigate_active_to("https://two.example");
+        assert_eq!(b.back().as_deref(), Some("https://one.example"));
+        assert_eq!(b.forward().as_deref(), Some("https://two.example"));
+        assert_eq!(b.back().as_deref(), Some("https://one.example"));
+        b.navigate_active_to("https://three.example");
+        assert!(
+            !b.can_go_forward(),
+            "a new route drops the old forward branch"
+        );
+        assert_eq!(
+            b.history.front().map(String::as_str),
+            Some("https://three.example")
+        );
+    }
+
+    #[test]
+    fn browser_bookmarks_toggle_and_remain_unique() {
+        let mut b = BrowserApp::default();
+        b.navigate_active_to("https://litricos.example");
+        assert!(b.toggle_bookmark());
+        assert!(b.is_bookmarked());
+        assert!(!b.toggle_bookmark());
+        assert!(!b.is_bookmarked());
+        assert!(b.bookmarks.is_empty());
     }
 
     #[test]
@@ -1747,5 +2272,25 @@ mod tests {
         assert_eq!(g2.selected, None, "an out-of-range click selects nothing");
         g2.select(None);
         assert_eq!(g2.selected, None);
+    }
+
+    #[test]
+    fn first_boot_desktop_keeps_only_frequent_destinations() {
+        let grid = DesktopIcons::minimal();
+        assert_eq!(grid.items.len(), 4);
+        // `get` rather than indexing: the assertion is about *which* entries
+        // exist, so "there is no fourth entry" has to be a failure with a
+        // message rather than a panic behind it.
+        let target = |n: usize| grid.items.get(n).map(|item| &item.target);
+        assert!(matches!(
+            target(0),
+            Some(IconTarget::App(crate::shortcuts::App::Files))
+        ));
+        assert!(matches!(
+            target(1),
+            Some(IconTarget::App(crate::shortcuts::App::Browser))
+        ));
+        assert!(matches!(target(2), Some(IconTarget::Folder(path)) if path == "/Documents"));
+        assert!(matches!(target(3), Some(IconTarget::Folder(path)) if path == "/Downloads"));
     }
 }

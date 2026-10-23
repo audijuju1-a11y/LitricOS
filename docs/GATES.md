@@ -802,3 +802,79 @@ they are fixed.
   a framebuffer; the counter and its rate-limit policy are unit-tested, and the
   end-to-end path is **NOT RUN**.
 * Nothing about the target hardware. Every number above is a container's.
+
+---
+
+## 2026-10-23 — the wizard could not set a password, and the fix was a mount namespace
+
+Host: Windows 11 + WSL2 (Arch), KVM inside WSL, `qemu-system-x86_64` with
+`bochs-display` 1920x1080. Image: `build/out/litricos.raw.zst` (desktop
+profile), decompressed and booted through OVMF via `tools/photo_tour_lib.py`
+(headless, QMP screendumps) and once through `tools/desktop-app.sh` (GTK
+window). Every claim below is a screenshot or a probe transcript under
+`build/e2e/`.
+
+### The defect this session found
+
+The first-run wizard answered a new password with a raw
+`ERR action-failed /usr/sbin/chpasswd exited 1` and would go no further, so the
+desktop was unreachable by the path a person uses
+(`build/e2e/qdrive-wizard4/11-desktop.png` is the error on screen). The
+in-guest probe isolated it in four steps, each one boot:
+
+| Probe | Result |
+|---|---|
+| `echo root:litric123 \| chpasswd` on a plain root shell | **succeeds**, silent |
+| the same inside `litric-sysd`'s own mount namespace (`nsenter -t $(systemctl show --value -p MainPID litric-sysd) -m`) | `Authentication token lock busy` — PAM could not create `/etc/.pwd.lock` |
+| inside the namespace with file-level rw binds on `/etc/.pwd.lock` and `/etc/shadow` | `Authentication token manipulation error` — the lock now worked, the update did not |
+| inside the namespace with `/etc` bind-remounted read-write | **password changes**; `/etc/shadow` 593 B -> 665 B, no `/etc/shadow+` left behind |
+
+The reason is shadow's update protocol: PAM creates `/etc/.pwd.lock` and the
+update writes `/etc/shadow+` then `rename(2)`s it over `/etc/shadow`. A
+file-level bind is not merely insufficient, it makes the rename fail with
+EBUSY; the grant has to be the *directory*. `/etc` is an overlay whose upperdir
+lives on the read-only `/var`, but an overlay writes through its own upper
+mount, which the unit's namespace does not touch: a direct write to
+`/var/lib/litric/etc-overlay/upper` inside the same namespace still fails with
+EROFS (measured), so `/var` stays read-only and only the `/etc` view opens.
+
+**Fix:** `ReadWritePaths=/var/lib/iwd /etc` in
+`image/mkosi.extra/usr/lib/systemd/system/litric-sysd.service`, with the
+reason, the measurements and the EBUSY trap recorded in the unit the way
+PHASE-02 requires. No capability changed; the bounding set is still exactly
+`CAP_NET_ADMIN`.
+
+### The fix, verified by clicking
+
+`./tools/build.sh --profile desktop` (exit 0), decompress, boot, and drive the
+real UI with QMP input events (usb-tablet absolute pointer + usb-kbd, screen
+pixels mapped through the measured 0..0x7FFF client range):
+
+| Step | Evidence |
+|---|---|
+| Welcome -> Get started -> language (ไทย) -> Next | `build/e2e/qdrive-wizard/02-after-get-started.png` |
+| password, confirm, Set password | completes with no error; `build/e2e/qverify/10-after-wizard.png` is the desktop after it |
+| click the dock's Files icon | **Files window opens** — sidebar, toolbar, `build/e2e/qverify/20-files.png` |
+| click Terminal and Settings | both open; `build/e2e/qverify/40-settings.png` shows Settings with 203 settings and the panes |
+| `litric-shell` frames actually reach the scanout | `rows_presented=170640` in `/tmp/litricos-app-serial.log` (the `litric-fbpresent` helper from the interrupted session; before it, the QMP screendump was the frozen firmware screen — `build/e2e/first-run-audit/first-boot-after-verity.ppm`) |
+
+`tools/desktop-app.sh` was then started for the user (GTK window, 1.5 GiB,
+2 vCPU) and its serial shows `litric.shell.mode=ready` with 158 frames drawn.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the wizard's result survives a reboot | it does not: the wizard returns on every boot of the same disk file, [BUG-0023](bugs/BUG-0023-the-first-run-wizard-came-back-after-every-reboot.md). `/var` and the `/etc` overlay persist (measured), so the completion marker is the suspect |
+| that the `litric` account password persists | the set succeeds now, but every boot re-runs the wizard, so no hash has been observed across a reboot |
+| a keyboard-driven app launch | `ctrl-spc` produced no launcher in the harness; the dock icons respond to clicks. Not investigated |
+| an empty folder is error-free | Files shows a red `no such item` for an empty Documents (`build/e2e/qverify/20-files.png`). Cosmetic, untriaged |
+| a frame budget | the GUI session logged `frames_over_budget=154` of 159 on 2 vCPU under WSLg; recorded, not analysed |
+| anything about Wi-Fi, Bluetooth or audio | the VM still has no radio and no sound device |
+
+### Rollback
+
+The unit change is one line plus its comment; reverting
+`image/mkosi.extra/usr/lib/systemd/system/litric-sysd.service` and rebuilding
+restores the previous (broken wizard) behaviour. The previous image is kept by
+`tools/build.sh` as `litric.last-good`.

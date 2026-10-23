@@ -124,6 +124,20 @@ case "$PROJECT_ROOT" in
 esac
 
 # =============================================================================
+step "Signing keys"
+# The mkosi linter validates that every signing key referenced by the image
+# configuration exists. Generate the local development keys before linting so a
+# clean checkout can pass the same preflight as a previously-built checkout.
+# These keys are generated locally and are never used for release artifacts.
+# =============================================================================
+if [[ ! -s "${PROJECT_ROOT}/keys/dev/secureboot.key" ]]; then
+    log "generating development signing keys"
+    bash "${PROJECT_ROOT}/tools/gen-dev-keys.sh"
+else
+    log "development keys present"
+fi
+
+# =============================================================================
 step "Configuration checks"
 # =============================================================================
 # The two linters that exist because both of these files have already shipped
@@ -133,16 +147,6 @@ if command -v python3 >/dev/null 2>&1; then
     python3 "${PROJECT_ROOT}/ci/lint-kconfig.py" || die "kernel configuration is invalid"
 else
     warn "python3 unavailable; skipping configuration lint"
-fi
-
-# =============================================================================
-step "Signing keys"
-# =============================================================================
-if [[ ! -s "${PROJECT_ROOT}/keys/dev/secureboot.key" ]]; then
-    log "generating development signing keys"
-    bash "${PROJECT_ROOT}/tools/gen-dev-keys.sh"
-else
-    log "development keys present"
 fi
 
 # Private keys must be 0600. mkosi refuses to sign with a world-readable key and
@@ -180,8 +184,14 @@ if command -v cargo >/dev/null 2>&1; then
     # that from becoming an image that boots to an empty screen.
     STAGE="${IMAGE_DIR}/mkosi.extra/usr/bin"
     staged=0
+    # Where cargo actually put the binaries. The build cache may live off the
+    # Windows-mounted filesystem (tools/cargo-target-ext4.sh, installed to
+    # /etc/profile.d on the build host), and a staging step that looked only in
+    # src/target would silently stage nothing. Unset, both cargo and this line
+    # fall back to src/target, so they can never disagree.
+    TARGET_DIR="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/src/target}"
     for bin in litric-sysd litric-envd litric-shell litric-browserd litric-filesd litric-capd litric-defender litricctl; do
-        src="${PROJECT_ROOT}/src/target/release/${bin}"
+        src="${TARGET_DIR}/release/${bin}"
         if [[ -x "$src" ]]; then
             mkdir -p "$STAGE"
             install -Dm0755 "$src" "${STAGE}/${bin}"
@@ -189,6 +199,18 @@ if command -v cargo >/dev/null 2>&1; then
             staged=$((staged + 1))
         fi
     done
+    # QEMU's DRM fbdev bridge can accept write(2) without publishing those
+    # pixels to the visible scanout. Keep the one necessary mmap boundary in a
+    # standalone helper; the Rust shell sends it fixed-size frames through stdin
+    # and retains all desktop policy in safe Rust.
+    PRESENTER_SOURCE="${PROJECT_ROOT}/src/litric-shell/src/fbpresent.c"
+    if [[ -f "$PRESENTER_SOURCE" ]]; then
+        command -v cc >/dev/null 2>&1 || die "C compiler required for litric-fbpresent"
+        mkdir -p "$STAGE"
+        cc -std=c17 -O2 -Wall -Wextra -Werror "$PRESENTER_SOURCE" -o "${STAGE}/litric-fbpresent"
+        chmod 0755 "${STAGE}/litric-fbpresent"
+        log "staged litric-fbpresent"
+    fi
     if (( staged == 0 )); then
         warn "no LitricOS system binaries were staged."
     fi
@@ -286,6 +308,30 @@ if grep -q "exists already" "$MKOSI_LOG"; then
   Nothing was rebuilt, so any configuration change you just made is NOT in the
   image. This should be impossible now that --force is passed; if you are seeing
   it, tools/build.sh has regressed."
+fi
+
+# --- the artifact can mount its own root (BUG-0020) --------------------------
+#
+# mkosi reporting success is not the same as the image being bootable. The
+# system partition is erofs behind dm-verity and both drivers are modules, so an
+# initrd without them boots to an emergency shell with "Failed to mount
+# /sysroot" -- a failure that looks like storage and is a packaging mistake in
+# one config key. This reads the built UKI and refuses to call the image
+# buildable when its initrd cannot mount the root.
+UKI="$(ls "${OUT_DIR}"/*.efi 2>/dev/null | head -1)"
+if [[ -n "$UKI" ]]; then
+    if command -v python3 >/dev/null 2>&1; then
+        # dm-verity may be its own module or part of dm-mod depending on the
+        # kernel; either one creates the device, so either one passes.
+        python3 "${PROJECT_ROOT}/tools/probe-initrd.py" --uki "$UKI" \
+            --require erofs "dm-verity|dm-mod" \
+            || die "the built UKI cannot mount its own root filesystem.
+  The initrd is missing a driver the boot needs; the image would reach an
+  emergency shell instead of a desktop. See docs/bugs/BUG-0020 and
+  image/mkosi.conf (KernelInitrdModules=)."
+    else
+        warn "python3 unavailable; skipped the initrd driver probe (BUG-0020 check)"
+    fi
 fi
 
 # --- Initrd trimming (nano profile only) ---

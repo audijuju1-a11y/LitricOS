@@ -453,6 +453,59 @@ impl WindowManager {
         Some(id)
     }
 
+    /// Focus the next window that belongs to the same application as the
+    /// focused window, wrapping. This is the window-level "cycle" shortcut
+    /// (`Meta+\``): the desktop-level cycle walks every window, this one stays
+    /// inside the application the user is already working in.
+    ///
+    /// Minimized windows are included and are brought back, because a cycle
+    /// that silently skips the window the user minimized is a cycle that
+    /// cannot reach half of their work.
+    pub fn cycle_app(&mut self, forward: bool) -> Option<WindowId> {
+        let focused = self.focus?;
+        let app_id = self.window(focused)?.app_id.clone();
+        let order: Vec<WindowId> = self
+            .windows
+            .iter()
+            .filter(|w| w.app_id == app_id)
+            .map(|w| w.id)
+            .collect();
+        if order.len() < 2 {
+            // Nothing to cycle: one window is already the one the user sees.
+            return None;
+        }
+        let current = order.iter().position(|id| *id == focused);
+        let n = order.len();
+        let next = match current {
+            Some(i) if forward => i.saturating_add(1).checked_rem(n).unwrap_or(0),
+            Some(i) => i.checked_sub(1).unwrap_or(n.saturating_sub(1)),
+            None => 0,
+        };
+        let id = order.get(next).copied()?;
+        self.reveal(id);
+        Some(id)
+    }
+
+    /// Bring a window to the user: switch to its workspace, undo a minimize,
+    /// and focus it. This is what a click in Mission Control or a window result
+    /// in the search field means, and it is one operation so no caller can
+    /// forget one of the three.
+    pub fn reveal(&mut self, id: WindowId) -> bool {
+        let Some(w) = self.window(id) else {
+            return false;
+        };
+        let workspace = w.workspace;
+        let minimized = w.state == WindowState::Minimized;
+        if workspace != self.active_workspace {
+            self.set_workspace(workspace);
+        }
+        if minimized {
+            self.unminimize(id);
+        }
+        self.focus_window(id);
+        true
+    }
+
     // ---- placement --------------------------------------------------------
 
     fn set_frame(&mut self, id: WindowId, frame: Rect) {
@@ -1297,6 +1350,50 @@ mod tests {
             fb.right() <= 800.0 + 1e-3 && fb.bottom() <= 600.0 + 1e-3,
             "window left off screen: {fb:?}"
         );
+    }
+
+    #[test]
+    fn cycling_an_application_stays_inside_it_and_wraps() {
+        let mut m = wm();
+        let a1 = m.open("app.files", "Documents", (300.0, 200.0));
+        let a2 = m.open("app.files", "Pictures", (300.0, 200.0));
+        let other = m.open("app.browser", "Browser", (300.0, 200.0));
+        assert_eq!(m.focused(), Some(other));
+        // Cycling from another application does nothing: there is nothing to
+        // cycle inside Browser, and silence is better than stealing a window
+        // from Files.
+        assert_eq!(m.cycle_app(true), None);
+        m.focus_window(a2);
+        assert_eq!(m.cycle_app(true), Some(a1));
+        assert_eq!(m.cycle_app(true), Some(a2), "the cycle did not wrap");
+        assert_eq!(m.cycle_app(false), Some(a1));
+    }
+
+    #[test]
+    fn cycling_brings_back_a_minimized_window_of_the_same_application() {
+        let mut m = wm();
+        let a = m.open("app.files", "Documents", (300.0, 200.0));
+        let b = m.open("app.files", "Pictures", (300.0, 200.0));
+        m.minimize(a);
+        m.focus_window(b);
+        assert_eq!(m.cycle_app(true), Some(a));
+        assert_eq!(m.focused(), Some(a));
+        assert_eq!(m.window(a).map(|w| w.state), Some(WindowState::Normal));
+    }
+
+    #[test]
+    fn revealing_a_window_switches_to_its_workspace_and_undoes_a_minimize() {
+        let mut m = wm();
+        let a = m.open("app.files", "Documents", (300.0, 200.0));
+        assert!(m.move_to_workspace(a, 2));
+        assert_eq!(m.active_workspace(), 0);
+        m.minimize(a);
+        assert!(m.reveal(a));
+        assert_eq!(m.active_workspace(), 2);
+        assert_eq!(m.focused(), Some(a));
+        let w = m.window(a).expect("revealed window still exists");
+        assert_eq!(w.state, WindowState::Normal);
+        assert!(w.is_visible());
     }
 
     #[test]

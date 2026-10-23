@@ -42,7 +42,9 @@ use litric_locale::Regional;
 use litric_shell::canvas::{Canvas, Rect, Repaint};
 use litric_shell::desktop;
 use litric_shell::fb::{self, PixelFormat};
-use litric_shell::shell::{DesktopMode, Effect, EnvRow, Priority, ProcRow, Shell, SystemFacts};
+use litric_shell::shell::{
+    DesktopMode, Effect, EnvRow, InputDevice, NetIface, Priority, ProcRow, Shell, SystemFacts,
+};
 use litric_shell::shortcuts::App;
 use litric_shell::ui::Tokens;
 
@@ -63,6 +65,16 @@ const FACTS_INTERVAL_MS: u64 = 2_000;
 /// How often the status file is rewritten.
 const STATUS_INTERVAL_MS: u64 = 5_000;
 
+/// How often a pointer move that changes nothing but the arrow is presented,
+/// in milliseconds.
+///
+/// A cursor-only step is two small rectangles, but each one is still a blit and
+/// still dirties the framebuffer, and a tablet device under QEMU reports far
+/// more moves than any display shows. Eight milliseconds is 125 steps a second:
+/// the arrow never trails the hand by a frame the eye can see, and the work per
+/// second has a ceiling instead of following the event rate.
+const CURSOR_INTERVAL_MS: u64 = 8;
+
 struct Args {
     root: PathBuf,
     socket: PathBuf,
@@ -70,6 +82,7 @@ struct Args {
     png: Option<PathBuf>,
     format: Option<PixelFormat>,
     theme: ThemeKind,
+    theme_explicit: bool,
     size: Option<(u32, u32)>,
     scale: Option<f32>,
     once: bool,
@@ -86,6 +99,7 @@ impl Default for Args {
             png: None,
             format: None,
             theme: ThemeKind::Dark,
+            theme_explicit: false,
             size: None,
             scale: None,
             once: false,
@@ -155,6 +169,7 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
                     .copied()
                     .find(|t| t.token() == v)
                     .ok_or_else(|| format!("no such theme: {v}"))?;
+                a.theme_explicit = true;
             }
             "--format" => {
                 let v = need("--format")?;
@@ -239,18 +254,39 @@ fn gather_facts(args: &Args) -> SystemFacts {
         f.volumes = parse_volumes(&lines);
         f.processes = parse_processes(&lines);
         f.processes_truncated = field(&lines, "litric.proc.truncated") == Some("1");
+        // Interface counters, which have been on the wire since the daemon was
+        // written and had no reader: `net.iface eth0 state=up ... rx= tx=`. They
+        // are cumulative, so a rate is the difference between two samples, and
+        // the shell is the one holding the clock that can divide them.
+        let (rx, tx) = parse_net_bytes(&lines);
+        f.net_rx_bytes = rx;
+        f.net_tx_bytes = tx;
+        // The devices themselves. The shell draws input and network panels
+        // from these, and the difference between "the machine has none" and
+        // "the daemon did not say" is carried by an empty vector against a
+        // missing reply, which the panels distinguish.
+        f.input_devices = parse_input_devices(&lines);
+        f.net_ifaces = parse_net_ifaces(&lines, &args.root);
+        f.bt_state = field(&lines, "bt.state").map(str::to_owned);
+        f.bt_daemon = field(&lines, "bt.daemon").map(|v| v == "present");
+        f.bt_adapters = parse_bt_adapters(&lines);
+        f.audio_cards = parse_audio_cards(&lines);
+        f.audio_server = lines.iter().find_map(|l| {
+            l.strip_prefix("audio.state server=")
+                .and_then(|rest| rest.split_whitespace().next())
+                .map(str::to_owned)
+        });
         // Authentication, and who is logged in. Three facts from the platform
         // half of the reply that the lock screen cannot do without: what can
         // check a password, whether the daemon refuses the lock, and the account
         // a password would be checked against. `auth.lock=refused` is only
-        // present while locking is refused, so its absence is the claim that the
-        // lock can be unlocked again -- which is why the boolean is derived from
-        // the whole reply rather than from one line.
+        // present while locking is refused, so its presence must map to true.
+        // Derive this from the whole reply rather than interpreting the literal
+        // word `refused` as a successful lock.
         f.auth_available = field(&lines, "auth.available").map(str::to_owned);
         // The line is written only while locking is refused, so its presence is
-        // the refusal — the shell reads whether the daemon said anything, not
-        // the word it said.
-        f.auth_lock = Some(field(&lines, "auth.lock").is_none());
+        // the refusal — the shell reads whether the daemon said anything.
+        f.auth_lock = Some(field(&lines, "auth.lock").is_some());
         f.session_user = lines
             .iter()
             .find_map(|l| l.strip_prefix("session.id "))
@@ -315,6 +351,63 @@ fn gather_facts(args: &Args) -> SystemFacts {
             .collect();
         f.processes_truncated = raw.processes.len() >= litric_sysd::facts::MAX_PROCESSES;
         f.source = "direct /proc read".to_owned();
+        // The network counters come from the daemon's own reader. The direct
+        // path has no reader for them, so they stay `None` and the graph says
+        // so, rather than reporting a machine that transfers nothing.
+        let net_lines = raw.platform.net.to_lines();
+        let net_refs: Vec<&str> = net_lines.iter().map(String::as_str).collect();
+        let (rx, tx) = parse_net_bytes(&net_refs);
+        f.net_rx_bytes = rx;
+        f.net_tx_bytes = tx;
+        // The same facts, taken from the same reader the daemon uses. Without
+        // this branch a machine whose daemon is down would show an empty
+        // Network page and claim it has no interfaces, which is exactly the
+        // lie the platform module's `unreadable` flag exists to prevent.
+        f.input_devices = raw
+            .platform
+            .input
+            .devices
+            .iter()
+            .map(|d| InputDevice {
+                node: d.node.clone(),
+                name: d.name.clone().unwrap_or_else(|| "-".to_owned()),
+                kind: d.kind.as_str().to_owned(),
+            })
+            .collect();
+        f.net_ifaces = raw
+            .platform
+            .net
+            .ifaces
+            .iter()
+            .map(|i| NetIface {
+                wireless: is_wireless(&args.root, &i.name),
+                name: i.name.clone(),
+                state: i.operstate.clone(),
+                mac: i.mac.clone().unwrap_or_else(|| "-".to_owned()),
+            })
+            .collect();
+        f.bt_state = Some(raw.platform.bluetooth.state().to_owned());
+        f.bt_daemon = Some(raw.platform.bluetooth.daemon);
+        f.bt_adapters = raw
+            .platform
+            .bluetooth
+            .adapters
+            .iter()
+            .map(|a| format!("{} {}", a.name, a.address.as_deref().unwrap_or("-")))
+            .collect();
+        f.audio_cards = raw
+            .platform
+            .audio
+            .cards
+            .iter()
+            .map(|c| format!("card{} {}", c.index, c.name))
+            .collect();
+        f.audio_server = raw
+            .platform
+            .audio
+            .server
+            .as_ref()
+            .map(|s| s.state.to_owned());
     }
 
     if let Some(reply) = ask(&args.socket, "TRASH LIST") {
@@ -341,6 +434,166 @@ fn gather_facts(args: &Args) -> SystemFacts {
 /// differenced into a rate, and pairing it with a zero would report a busy CPU.
 fn some_ticks(busy: Option<u64>, total: Option<u64>) -> Option<(u64, u64)> {
     Some((busy?, total?))
+}
+
+/// Total bytes received and sent, from the daemon's `net.iface` lines.
+///
+/// Summed across the machine's interfaces, loopback excepted: `lo` carries the
+/// shell's own conversation with the daemon, which is not what a person
+/// watching a network rate is watching for. A line whose counters did not parse
+/// is skipped rather than counted as zero, and the total is `None` when no line
+/// carried a counter at all -- a machine with no measurable interface is not a
+/// machine with no traffic.
+fn parse_net_bytes(lines: &[&str]) -> (Option<u64>, Option<u64>) {
+    let mut rx: Option<u64> = None;
+    let mut tx: Option<u64> = None;
+    for line in lines {
+        let Some(rest) = line.strip_prefix("net.iface ") else {
+            continue;
+        };
+        let mut parts = rest.split_whitespace();
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        if name == "lo" {
+            continue;
+        }
+        for kv in parts {
+            if let Some(v) = kv.strip_prefix("rx=") {
+                if let Ok(n) = v.parse::<u64>() {
+                    rx = Some(rx.unwrap_or(0).saturating_add(n));
+                }
+            } else if let Some(v) = kv.strip_prefix("tx=") {
+                if let Ok(n) = v.parse::<u64>() {
+                    tx = Some(tx.unwrap_or(0).saturating_add(n));
+                }
+            }
+        }
+    }
+    (rx, tx)
+}
+
+/// Input devices, from the platform's `input.device` lines.
+///
+/// One line is `input.device event3 kind=keyboard name=QEMU USB Keyboard`. The
+/// name is last and may contain spaces, so it is taken as the remainder rather
+/// than as another token. A line whose name is missing still yields a device:
+/// an event node the platform could not name is a node that exists.
+fn parse_input_devices(lines: &[&str]) -> Vec<InputDevice> {
+    let mut out = Vec::new();
+    for line in lines {
+        let Some(rest) = line.strip_prefix("input.device ") else {
+            continue;
+        };
+        let (head, name) = match rest.split_once(" name=") {
+            Some((h, n)) => (h, n),
+            None => (rest, "-"),
+        };
+        let mut parts = head.split_whitespace();
+        let Some(node) = parts.next() else {
+            continue;
+        };
+        let kind = parts
+            .find_map(|p| p.strip_prefix("kind="))
+            .unwrap_or("other");
+        out.push(InputDevice {
+            node: node.to_owned(),
+            name: name.trim().to_owned(),
+            kind: kind.to_owned(),
+        });
+    }
+    out
+}
+
+/// Network interfaces, from the platform's `net.iface` lines.
+///
+/// The platform reports state, carrier, MAC, MTU and byte counters in one line.
+/// The shell only needs the identity and the state here -- the counters are
+/// summed elsewhere -- but it asks sysfs whether the driver is wireless,
+/// because the platform reader does not publish that and guessing from the
+/// interface name (`wlan*`) would call a USB dongle named `eth1` a cable.
+fn parse_net_ifaces(lines: &[&str], root: &Path) -> Vec<NetIface> {
+    let mut out = Vec::new();
+    for line in lines {
+        let Some(rest) = line.strip_prefix("net.iface ") else {
+            continue;
+        };
+        let mut parts = rest.split_whitespace();
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        let mut state = "unknown".to_owned();
+        let mut mac = "-".to_owned();
+        for kv in parts {
+            if let Some(v) = kv.strip_prefix("state=") {
+                state = v.to_owned();
+            } else if let Some(v) = kv.strip_prefix("mac=") {
+                mac = v.to_owned();
+            }
+        }
+        out.push(NetIface {
+            wireless: is_wireless(root, name),
+            name: name.to_owned(),
+            state,
+            mac,
+        });
+    }
+    out
+}
+
+/// Whether the driver for `name` published a wireless directory.
+fn is_wireless(root: &Path, name: &str) -> bool {
+    root.join(format!("sys/class/net/{name}/wireless")).is_dir()
+}
+
+/// Bluetooth adapters, as `hci0 00:1a:7d:da:71:13`.
+fn parse_bt_adapters(lines: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in lines {
+        let Some(rest) = line.strip_prefix("bt.adapter ") else {
+            continue;
+        };
+        let mut name = "-";
+        let mut address = "-";
+        for kv in rest.split_whitespace() {
+            if let Some(v) = kv.strip_prefix("name=") {
+                name = v;
+            } else if let Some(v) = kv.strip_prefix("address=") {
+                address = v;
+            }
+        }
+        out.push(format!("{name} {address}"));
+    }
+    out
+}
+
+/// Sound cards, as `card0 HDA Intel PCH`.
+fn parse_audio_cards(lines: &[&str]) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in lines {
+        let Some(rest) = line.strip_prefix("audio.card ") else {
+            continue;
+        };
+        // The card name contains spaces (`HDA Intel PCH`), so it runs to the
+        // next key rather than to the next space: the daemon writes
+        // `name=<card name> driver=<driver>`, and the driver is not part of the
+        // name.
+        let (head, name) = match rest.split_once(" name=") {
+            Some((h, n)) => (h, n.split_once(" driver=").map_or(n, |(name, _)| name)),
+            None => (rest, "-"),
+        };
+        let mut index = "-";
+        let mut id = "-";
+        for kv in head.split_whitespace() {
+            if let Some(v) = kv.strip_prefix("index=") {
+                index = v;
+            } else if let Some(v) = kv.strip_prefix("id=") {
+                id = v;
+            }
+        }
+        out.push(format!("card{index} {id} {name}"));
+    }
+    out
 }
 
 /// Per-core counters from `litric.cpu.coreN.*` lines, in kernel order.
@@ -671,6 +924,31 @@ fn report(path: &Path, lines: &[String]) {
 fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
     for e in effects {
         match e {
+            Effect::PersistPreferences(preferences) => {
+                let result = store_preferences(args, *preferences);
+                if let Err(error) = &result {
+                    shell.notify(
+                        "Settings",
+                        "Could not save preferences",
+                        error,
+                        Priority::High,
+                        Some(8_000),
+                    );
+                }
+                shell.finish_preferences_save(result);
+            }
+            Effect::PersistBrowserData => {
+                let history = shell.browser.history.iter().cloned().collect::<Vec<_>>();
+                if let Err(error) = store_browser_data(args, &history, &shell.browser.bookmarks) {
+                    shell.notify(
+                        "Browser",
+                        "Could not save history or bookmarks",
+                        &error,
+                        Priority::High,
+                        Some(8_000),
+                    );
+                }
+            }
             Effect::SwitchEnvironment(n) => {
                 let token = match n {
                     1 => "windows",
@@ -931,11 +1209,218 @@ struct Session {
     lines: Vec<String>,
 }
 
+fn preference_path(args: &Args) -> PathBuf {
+    args.root.join("var/lib/litric-shell/settings.conf")
+}
+
+fn browser_data_path(args: &Args) -> PathBuf {
+    args.root.join("var/lib/litric-browser/browser-data.conf")
+}
+
+fn load_browser_data(args: &Args) -> (Vec<String>, Vec<String>) {
+    let mut history = Vec::new();
+    let mut bookmarks = Vec::new();
+    let Ok(content) = fs::read_to_string(browser_data_path(args)) else {
+        return (history, bookmarks);
+    };
+    for line in content.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let Ok(value) = litric_core::pct::decode(value) else {
+            continue;
+        };
+        if value.len() > 4096 || value.is_empty() || value == "litric://about" {
+            continue;
+        }
+        let values = match key {
+            "history" => &mut history,
+            "bookmark" => &mut bookmarks,
+            _ => continue,
+        };
+        if !values.contains(&value) {
+            values.push(value);
+        }
+    }
+    history.truncate(200);
+    bookmarks.truncate(200);
+    (history, bookmarks)
+}
+
+fn store_browser_data(args: &Args, history: &[String], bookmarks: &[String]) -> Result<(), String> {
+    use std::fs::OpenOptions;
+
+    let path = browser_data_path(args);
+    let parent = path
+        .parent()
+        .ok_or_else(|| "browser data path has no parent directory".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("cannot create browser data directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("cannot secure browser data directory: {error}"))?;
+    }
+
+    let temp = parent.join(format!("browser-data.conf.tmp.{}", std::process::id()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| -> Result<(), String> {
+        let mut file = options
+            .open(&temp)
+            .map_err(|error| format!("cannot create temporary browser data: {error}"))?;
+        for url in history.iter().take(200) {
+            writeln!(file, "history={}", litric_core::pct::encode(url))
+                .map_err(|error| format!("cannot write browser history: {error}"))?;
+        }
+        for url in bookmarks.iter().take(200) {
+            writeln!(file, "bookmark={}", litric_core::pct::encode(url))
+                .map_err(|error| format!("cannot write browser bookmarks: {error}"))?;
+        }
+        file.sync_all()
+            .map_err(|error| format!("cannot sync browser data: {error}"))?;
+        fs::rename(&temp, &path).map_err(|error| format!("cannot commit browser data: {error}"))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+fn load_preferences(args: &Args, regional: &Regional) -> litric_shell::settings::Preferences {
+    use litric_shell::i18n::Language;
+    use litric_shell::settings::Preferences;
+
+    let detected_language = if regional.locale.tag.starts_with("en") {
+        Language::English
+    } else {
+        // The product default is Thai when no supported UI locale was detected.
+        Language::Thai
+    };
+    let mut preferences = Preferences::new(args.theme, detected_language);
+    // No file means this account has never finished setup. A file written before
+    // the flag existed came from a setup that finished, so it keeps the desktop.
+    let stored = fs::read_to_string(preference_path(args)).ok();
+    preferences.onboarded = stored.is_some();
+    if let Some(content) = stored {
+        for line in content.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            match key.trim() {
+                "theme" => {
+                    if let Some(theme) = ThemeKind::all()
+                        .iter()
+                        .copied()
+                        .find(|theme| theme.token() == value.trim())
+                    {
+                        preferences.theme = theme;
+                    }
+                }
+                "language" => {
+                    if let Some(language) = Language::parse(value) {
+                        preferences.language = language;
+                    }
+                }
+                "reduce_motion" => {
+                    if let Some(enabled) = parse_bool(value) {
+                        preferences.reduce_motion = enabled;
+                    }
+                }
+                "onboarded" => {
+                    if let Some(done) = parse_bool(value) {
+                        preferences.onboarded = done;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if args.theme_explicit {
+        preferences.theme = args.theme;
+    }
+    preferences
+}
+
+fn parse_bool(raw: &str) -> Option<bool> {
+    match raw.trim() {
+        "1" | "true" | "yes" => Some(true),
+        "0" | "false" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+fn store_preferences(
+    args: &Args,
+    preferences: litric_shell::settings::Preferences,
+) -> Result<(), String> {
+    use std::fs::OpenOptions;
+
+    let path = preference_path(args);
+    let parent = path
+        .parent()
+        .ok_or_else(|| "settings path has no parent directory".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("cannot create settings directory: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("cannot secure settings directory: {error}"))?;
+    }
+
+    let temp = parent.join(format!("settings.conf.tmp.{}", std::process::id()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| -> Result<(), String> {
+        let mut file = options
+            .open(&temp)
+            .map_err(|error| format!("cannot create temporary settings file: {error}"))?;
+        writeln!(file, "theme={}", preferences.theme.token())
+            .and_then(|()| writeln!(file, "language={}", preferences.language.token()))
+            .and_then(|()| {
+                writeln!(
+                    file,
+                    "reduce_motion={}",
+                    u8::from(preferences.reduce_motion)
+                )
+            })
+            .and_then(|()| writeln!(file, "onboarded={}", u8::from(preferences.onboarded)))
+            .map_err(|error| format!("cannot write settings: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("cannot sync settings: {error}"))?;
+        fs::rename(&temp, &path).map_err(|error| format!("cannot commit settings: {error}"))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
 fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
-    let theme = Theme::of(args.theme);
+    let _ = litric_shell::font::initialize();
     let regional = Regional::detect(&args.root, |k| std::env::var(k).ok());
+    let preferences = load_preferences(args, &regional);
+    let theme = Theme::of(preferences.theme);
     let tokens = Tokens::new(theme, scale);
     let mut shell = Shell::new(tokens, width as f32, height as f32, regional);
+    shell.load_preferences(preferences);
+    let (history, bookmarks) = load_browser_data(args);
+    shell.browser.history = history.into();
+    shell.browser.bookmarks = bookmarks;
     // The same root the facts, the framebuffer and the input devices are read
     // through, so a shell started against a fixture tree reads its files
     // there too instead of reaching into the machine's real root.
@@ -944,48 +1429,13 @@ fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
     shell.sample(gather_facts(args));
     shell.environments = gather_environments(args);
 
-    // A first run opens the two panels that say what this machine is. An empty
-    // desktop is not a neutral starting point: it gives a user nothing to act
-    // on and hides the fact that anything is running at all.
-    {
-        use litric_shell::shortcuts::App;
-        let work = shell.wm.work_area();
-        let pad = 64.0 * scale;
-        let panel_w = (work.w * 0.34).clamp(320.0 * scale, 520.0 * scale);
-        // Placed rather than cascaded: the cascade offset is smaller than the
-        // narrower window, so two cascaded panels leave the second entirely
-        // hidden behind the first.
-        let activity = litric_wm::Rect::new(
-            work.x + pad,
-            work.y + pad,
-            panel_w,
-            (work.h * 0.46).max(260.0 * scale),
-        );
-        let environments = litric_wm::Rect::new(
-            work.right() - pad - panel_w,
-            work.y + pad,
-            panel_w,
-            (work.h * 0.34).max(220.0 * scale),
-        );
-        let env_id = shell.wm.open_at(
-            App::Environments.app_id(),
-            App::Environments.title(),
-            environments,
-        );
-        let act_id = shell
-            .wm
-            .open_at(App::Activity.app_id(), App::Activity.title(), activity);
-        let _ = env_id;
-        shell.wm.focus_window(act_id);
-    }
-
     let compositor = desktop::Compositor::new(width, height, &theme);
 
     let mut lines = vec![
         format!("version={VERSION}"),
         format!("canvas={width}x{height}"),
         format!("scale={scale:.2}"),
-        format!("theme={}", args.theme.token()),
+        format!("theme={}", preferences.theme.token()),
         format!("facts.source={}", shell.facts.source),
         format!("environments={}", shell.environments.len()),
     ];
@@ -1112,6 +1562,9 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
         );
     }
 
+    // The boot intro starts with the first frame, so the machine never shows
+    // a black screen while the desktop is being made ready.
+    session.shell.start_boot_intro(now_ms());
     // The first frame, immediately: a machine that boots to a black screen for
     // a second looks broken even when it is not.
     session.shell.tick(now_ms());
@@ -1140,6 +1593,22 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
     // which is where the regression CI reads it.
     let mut frames_drawn: u64 = 0;
     let mut over_budget: u64 = 0;
+    // Frame clock. Input is not a frame: a 1 kHz pointer delivers a hundred
+    // damage rectangles between two presents, and painting each one composed
+    // the whole desktop once per event batch. That is what made the frame rate
+    // fall as the mouse moved -- the work grew with the *event* rate while the
+    // display still only showed 60 frames a second. Now an event is merged into
+    // the damage and the next frame is drawn on the frame clock.
+    let mut last_frame = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(Instant::now);
+    // The pointer's own clock, separate from the frame clock: the arrow is not
+    // a frame of the desktop, and holding it to 16 ms (or to 33 when idle) is
+    // what made it feel stuck to the hand.
+    let cursor_gap = Duration::from_millis(CURSOR_INTERVAL_MS);
+    let mut last_cursor = Instant::now()
+        .checked_sub(cursor_gap)
+        .unwrap_or_else(Instant::now);
 
     loop {
         if let Some(limit) = args.seconds {
@@ -1155,9 +1624,15 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
         // the facts are re-sampled every FACTS_INTERVAL_MS whatever the shell
         // is doing. Input does not wait on this: `poll` returns the instant a
         // key or pointer event arrives.
+        let frame_gap = Duration::from_millis(session.shell.frame_interval_ms());
         let before = now_ms();
-        let budget =
+        let mut budget =
             Duration::from_millis(session.shell.wake_after_ms(before).min(FACTS_INTERVAL_MS));
+        if session.shell.is_dirty() && last_frame.elapsed() < frame_gap {
+            // Wait out the rest of the frame rather than drawing again. What
+            // arrives while waiting is damage, and damage is merged.
+            budget = budget.max(frame_gap.saturating_sub(last_frame.elapsed()));
+        }
         let events = input.poll(budget);
         let t = now_ms();
 
@@ -1165,6 +1640,12 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
             let effects = session.shell.handle(ev, t);
             if !effects.is_empty() {
                 apply(args, &mut session.shell, &effects);
+                if effects
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::PersistPreferences(_)))
+                {
+                    session.compositor.retheme(&session.shell.tokens.theme);
+                }
             }
         }
         session.shell.tick(t);
@@ -1194,7 +1675,38 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
             }
         }
 
-        if session.shell.is_dirty() {
+        // A move that changed nothing but the arrow: restore the pixels under
+        // the old one, draw the new one and present two small rectangles. No
+        // composition, and no frame clock -- the pointer follows the mouse,
+        // which is the one thing a desktop must never make a person wait for.
+        if session.shell.cursor_step_pending() {
+            let waited = last_cursor.elapsed();
+            if waited < cursor_gap {
+                std::thread::sleep(cursor_gap.saturating_sub(waited));
+            }
+            last_cursor = Instant::now();
+        }
+        if let Some((from, to)) = session.shell.take_cursor_step() {
+            if let Some(plan) = session.compositor.move_cursor(&session.shell, from, to) {
+                let scene = &session.compositor.scene;
+                let rows = match &plan {
+                    Repaint::Full => display.present(scene).map(|()| display.info().height),
+                    Repaint::Regions(regions) => display.present_damage(scene, regions),
+                }
+                .map_err(|e| format!("present failed: {e}"))?;
+                rows_written = rows_written.saturating_add(u64::from(rows));
+                frames_drawn = frames_drawn.saturating_add(1);
+                last_frame = Instant::now();
+            } else {
+                // The frame was not where the arrow was left -- a retheme, a
+                // resize -- so compose instead of guessing, or the old arrow
+                // would be left behind.
+                session.shell.request_full_redraw();
+            }
+        }
+
+        if session.shell.is_dirty() && last_frame.elapsed() >= frame_gap {
+            last_frame = Instant::now();
             let full = session.shell.needs_full_redraw();
             let damage = session.shell.take_damage();
             // The budget is the life state's own interval -- 8 ms under a
@@ -1285,6 +1797,120 @@ mod tests {
     use litric_shell::canvas::rgb;
     use litric_shell::shell::Hot;
 
+    #[test]
+    fn first_run_stays_pending_until_setup_is_recorded() {
+        let root = std::env::temp_dir().join(format!("litric-onboarding-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("fixture root");
+        let args = Args {
+            root: root.clone(),
+            ..Args::default()
+        };
+        let regional = Regional::fallback("test");
+
+        // No settings file: the account has never finished setup.
+        assert!(!load_preferences(&args, &regional).onboarded);
+
+        // A setup choice made before finishing keeps the setup screen up.
+        let mut pending = load_preferences(&args, &regional);
+        pending.onboarded = false;
+        pending.language = litric_shell::i18n::Language::English;
+        store_preferences(&args, pending).expect("pending choice is stored");
+        assert!(!load_preferences(&args, &regional).onboarded);
+
+        // Finishing setup is recorded and kept across restarts.
+        let mut done = load_preferences(&args, &regional);
+        done.onboarded = true;
+        store_preferences(&args, done).expect("finished setup is stored");
+        assert!(load_preferences(&args, &regional).onboarded);
+
+        // A file written before the flag existed came from a finished setup.
+        fs::write(preference_path(&args), "theme=dark\nlanguage=en\n").expect("legacy file");
+        assert!(load_preferences(&args, &regional).onboarded);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn input_devices_are_parsed_with_their_names_intact() {
+        let lines = [
+            "input.device.count=2",
+            "input.kbd.count=1",
+            "input.device event0 kind=keyboard name=QEMU USB Keyboard",
+            "input.device event2 kind=tablet name=QEMU USB Tablet",
+        ];
+        let devices = parse_input_devices(&lines);
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].node, "event0");
+        assert_eq!(devices[0].kind, "keyboard");
+        // A name with spaces is the rest of the line, not one token.
+        assert_eq!(devices[0].name, "QEMU USB Keyboard");
+        assert_eq!(devices[1].kind, "tablet");
+        // The counts are not devices.
+        assert!(devices.iter().all(|d| d.node.starts_with("event")));
+    }
+
+    #[test]
+    fn a_network_line_keeps_its_mac_and_its_state() {
+        let lines = [
+            "net.iface eth0 state=up carrier=1 mac=52:54:00:12:34:56 mtu=1500 rx=1 tx=2",
+            "net.iface lo state=unknown carrier=- mac=00:00:00:00:00:00 mtu=65536 rx=0 tx=0",
+        ];
+        let ifaces = parse_net_ifaces(&lines, Path::new("no-such-root"));
+        assert_eq!(ifaces.len(), 2);
+        assert_eq!(ifaces[0].name, "eth0");
+        assert_eq!(ifaces[0].state, "up");
+        assert_eq!(ifaces[0].mac, "52:54:00:12:34:56");
+        // No sysfs behind the fixture root, so neither claims to be wireless.
+        assert!(!ifaces[0].wireless);
+    }
+
+    #[test]
+    fn a_sound_card_name_with_spaces_is_not_cut_at_the_first_word() {
+        let lines = ["audio.card index=0 id=PCH name=HDA Intel PCH driver=HDA-Intel"];
+        assert_eq!(parse_audio_cards(&lines), vec!["card0 PCH HDA Intel PCH"]);
+    }
+
+    #[test]
+    fn a_bluetooth_adapter_line_carries_its_address() {
+        let lines = ["bt.adapter name=hci0 address=00:1a:7d:da:71:13 device_name=-"];
+        assert_eq!(parse_bt_adapters(&lines), vec!["hci0 00:1a:7d:da:71:13"]);
+    }
+
+    #[test]
+    fn browser_history_and_bookmarks_round_trip_as_encoded_private_state() {
+        let root = std::env::temp_dir().join(format!("litric-browser-data-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let args = Args {
+            root: root.clone(),
+            socket: root.join("missing.sock"),
+            ..Args::default()
+        };
+        let history = vec![
+            "https://example.test/search?q=one two&lang=th".to_owned(),
+            "https://litricos.example/".to_owned(),
+        ];
+        let bookmarks = vec!["https://docs.example/ไทย?a=1&b=2".to_owned()];
+        store_browser_data(&args, &history, &bookmarks).expect("browser data saves");
+        assert_eq!(load_browser_data(&args), (history, bookmarks));
+        let contents = fs::read_to_string(browser_data_path(&args)).expect("saved data");
+        assert!(
+            !contents.contains("ไทย"),
+            "non-ASCII text is encoded on disk"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(browser_data_path(&args))
+                .expect("saved file metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
     // ---- partial-redraw idempotence oracle -------------------------------
 
     /// The first-run desktop `start()` builds, with fixed facts, drawn once in
@@ -1298,6 +1924,8 @@ mod tests {
         };
         let mut s = start(&a, 960, 600, 0.75);
         s.shell.mode = DesktopMode::Ready;
+        // The oracle compares the desktop, so it starts with setup already done.
+        s.shell.settings.preferences.onboarded = true;
         s.shell.facts.mem_total_mb = Some(7867);
         s.shell.facts.mem_used_mb = Some(527);
         s.shell.facts.cpus = Some(8);
@@ -1486,6 +2114,16 @@ mod tests {
                 mv(logo.center().0, logo.center().1),
             ],
         );
+
+        // A calm first desktop deliberately has no windows.  Open the two
+        // windows exercised below as a person would, then use their damaged
+        // regions as the partial-redraw oracle.
+        let effects = s.shell.open_app(App::Environments);
+        apply(&args, &mut s.shell, &effects);
+        let effects = s.shell.open_app(App::Activity);
+        apply(&args, &mut s.shell, &effects);
+        loop_frame(&mut s);
+        assert_matches_full_redraw(&mut s, "explicitly opened application windows");
 
         let env = frame_of(&s, "com.litric.environments");
         let (bx, by) = s.shell.wm.chrome().button_rect(&env, 0).center();
@@ -1724,6 +2362,24 @@ mod tests {
             "{lines:?}"
         );
         assert!(png.is_file());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_new_desktop_starts_without_open_application_windows() {
+        let dir = std::env::temp_dir().join("litric-shell-first-desktop");
+        fs::create_dir_all(&dir).expect("temporary root");
+        let args = Args {
+            root: dir.join("empty-root"),
+            socket: dir.join("missing-socket"),
+            status: dir.join("status"),
+            ..Args::default()
+        };
+        let session = start(&args, 1280, 800, 1.0);
+        assert!(
+            session.shell.visible_windows().is_empty(),
+            "a new user should see the desktop and choose what to open"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 }

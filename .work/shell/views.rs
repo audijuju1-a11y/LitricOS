@@ -1,0 +1,4723 @@
+//! Drawing the desktop from the shell's state.
+//!
+//! Every function here reads [`crate::shell::Shell`] and writes pixels. None of
+//! them decides anything: if a panel is open, the shell decided that, and if a
+//! row is highlighted the shell decided that too. The one thing this layer does
+//! own is **where** things are, and it registers every interactive rectangle in
+//! the shell's hotspot table as it draws — so what you can click is by
+//! construction what you can see.
+
+use litric_design::{Radius, Space, TypeStep};
+use litric_wm::WindowState;
+
+use crate::apps::{FileKind, FilesHot, SortKey};
+use crate::canvas::{rgb, with_alpha, Canvas, Rect};
+use crate::font::{self, Style};
+use crate::icons::{self, Icon};
+use crate::shell::{Hot, Overlay, PowerCommand, PowerProfile, Priority, Shell};
+use crate::shortcuts::{Action, App};
+use crate::ui::{self, Material, State, Tone};
+
+/// Draw the whole desktop.
+///
+/// The caller has already restored the wallpaper into whatever regions are
+/// dirty; this repaints every element over it. Elements outside the damaged
+/// area are redrawn identically, which costs a little arithmetic and removes an
+/// entire class of bug where a partly-drawn frame is presented.
+pub fn draw(canvas: &mut Canvas, shell: &mut Shell) {
+    crate::i18n::set_current(shell.settings.language());
+    shell.hotspots_mut().clear();
+    // Locked: one surface, and nothing else runs. The lock surface starts by
+    // clearing the frame buffer, so what was on screen is gone from the pixels
+    // as well as from the input path -- the "clear, then draw" order
+    // docs/design/wave1/04-authentication.md U7 requires.
+    if shell.lock.locked {
+        draw_lock(canvas, shell);
+        let p = shell.pointer();
+        ui::cursor(canvas, p.x, p.y, shell.tokens.scale);
+        return;
+    }
+    // The boot flow is the same kind of surface: one screen that owns the
+    // pixels and the input until it is done. The desktop is not drawn behind
+    // it — a splash over a half-populated desktop would be a lie about how
+    // ready the system is.
+    if shell.first_run.is_some() {
+        let hits = crate::firstrun::draw(canvas, shell);
+        for (r, hot) in hits {
+            shell.hotspots_mut().push(r, hot);
+        }
+        let p = shell.pointer();
+        ui::cursor(canvas, p.x, p.y, shell.tokens.scale);
+        return;
+    }
+    // No desktop icons and no bottom bar. The desktop is the wallpaper, the
+    // one system bar and the windows on it; applications come from the
+    // launcher, which still morphs out of the bottom edge while it is open.
+    // At rest there is nothing down there, so a pointer moving across the
+    // screen has nothing to re-composite under it.
+    draw_windows(canvas, shell);
+    draw_top_bar(canvas, shell);
+    if matches!(shell.overlay, Overlay::Launcher { .. }) {
+        draw_dock(canvas, shell);
+    }
+    // Overlays (launcher, switcher, quick settings, notifications) draw their own
+    // opaque surfaces above everything else, so text under them is covered, not
+    // collided with. Tagging them as their own surface lets the layout audit say
+    // so instead of reporting a menu over a window as a defect.
+    let surface = canvas.set_surface(u32::MAX);
+    draw_overlay(canvas, shell);
+    canvas.set_surface(surface);
+    draw_banners(canvas, shell);
+    draw_context_menu(canvas, shell);
+    draw_desktop_dialog(canvas, shell);
+    if shell.diagnostics {
+        draw_diagnostics(canvas, shell);
+    }
+    let p = shell.pointer();
+    ui::cursor(canvas, p.x, p.y, shell.tokens.scale);
+}
+
+/// The lock screen: a surface that covers everything and answers to one thing.
+///
+/// The lock's drawing lives in [`crate::lock`] because it shares nothing with
+/// the desktop: no windows, no top bar, no damage-driven repaint. What this
+/// function does is hand it the measured facts it shows and register the
+/// rectangles it drew as hotspots, which is the same contract every other view
+/// here has.
+fn draw_lock(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    let screen = shell.wm.screen();
+    let seconds = shell.clock_seconds();
+    let mut hits: Vec<(Rect, Hot)> = Vec::new();
+    // The giant clock is the digits. Whatever follows them ("UTC" when the zone
+    // is not known, "AM"/"PM" on a 12-hour locale) is kept, as honest as ever,
+    // but moves to the date line instead of running the digits off the screen.
+    let clock_text = shell.regional.clock(seconds);
+    let (digits, suffix) = match clock_text.split_once(' ') {
+        Some((d, s)) => (d.to_owned(), Some(s.to_owned())),
+        None => (clock_text, None),
+    };
+    let date = match suffix {
+        Some(s) => format!("{} \u{b7} {s}", shell.regional.date(seconds)),
+        None => shell.regional.date(seconds),
+    };
+    {
+        let view = crate::lock::View {
+            t: &t,
+            state: &shell.lock,
+            clock: digits,
+            date,
+            w: screen.w,
+            h: screen.h,
+            battery: shell.facts.battery_percent,
+            network: shell.facts.network.clone(),
+            uptime: shell.facts.uptime_secs,
+            verifier: shell.facts.auth_available.clone(),
+            // The lock's own material and content, from the session page. A
+            // machine that asked for no blur gets a panel of tint: readable,
+            // and it costs nothing to composite.
+            blur: if shell.settings.values.on("session.lock-blur") {
+                shell.lock.tweaks.blur()
+            } else {
+                0
+            },
+            show_clock: shell.settings.values.on("session.lock-clock"),
+            show_user: shell.settings.values.on("session.lock-user"),
+        };
+        crate::lock::draw(canvas, &view, &mut shell.lock_cache, &mut hits);
+    }
+    for (r, hot) in hits {
+        shell.hotspots_mut().push(r, hot);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Context menu + desktop dialog
+// ---------------------------------------------------------------------------
+
+/// The desktop's icon grid: two columns, icons top-down from the top left,
+/// The open context menu, if any. Drawn above everything but the pointer.
+fn draw_context_menu(canvas: &mut Canvas, shell: &mut Shell) {
+    let Some(menu) = shell.context_menu.clone() else {
+        return;
+    };
+    let t = shell.tokens.clone();
+    let screen = shell.wm.screen();
+    let row_h = t.px(26.0);
+    let w = t.px(190.0);
+    let h = menu.height(row_h);
+    // Keep the menu on screen: a menu that opens off the edge is a bug.
+    let x = menu.at.0.min(screen.w - w - t.px(4.0));
+    let y = menu.at.1.min(screen.h - h - t.px(4.0));
+    let panel = Rect::new(x, y, w, h);
+    // Menus open fast rather than animated: a context menu is a request to
+    // act, not a surface to admire. The spring still exists so that a
+    // close can be observed and a re-open cannot pop mid-frame.
+    let reveal = shell.anims().context_menu.value();
+    if reveal <= 0.01 {
+        return;
+    }
+    let shown_h = h * reveal;
+    let saved = canvas.push_clip(Rect::new(x, y, w, shown_h));
+    ui::surface(canvas, &t, panel, t.radius(Radius::Md), Material::Popover);
+    let mut ry = y + t.px(4.0);
+    for item in &menu.items {
+        match item {
+            crate::apps::MenuItem::Section(label) => {
+                let s = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+                font::draw(canvas, label, x + t.px(12.0), ry + t.px(15.0), &s);
+                ry += row_h;
+            }
+            crate::apps::MenuItem::Separator => {
+                ui::separator(
+                    canvas,
+                    &t,
+                    Rect::new(x + t.px(8.0), ry + row_h * 0.25, w - t.px(16.0), 1.0),
+                );
+                ry += row_h * 0.5;
+            }
+            crate::apps::MenuItem::Item(label, action) => {
+                let hot = Hot::MenuRow(*action);
+                let row = Rect::new(x + t.px(4.0), ry, w - t.px(8.0), row_h);
+                let hovered = shell.is_highlighted(hot);
+                if hovered {
+                    canvas.fill_round_rect(
+                        row,
+                        t.radius(Radius::Sm),
+                        with_alpha(rgb(0xFFFFFF), 0.09),
+                    );
+                }
+                let s = Style::new(t.text_px(TypeStep::Footnote), t.text());
+                font::draw(
+                    canvas,
+                    label,
+                    row.x + t.px(8.0),
+                    row.y + row.h / 2.0 + s.size * 0.36,
+                    &s,
+                );
+                shell.hotspots_mut().push(row, hot);
+                ry += row_h;
+            }
+        }
+    }
+    canvas.set_clip(saved);
+    // Rows were registered above; a click on empty panel space dismisses the
+    // menu through the pointer's press-elsewhere path (Hot::Desktop on the
+    // wallpaper). No scrim hotspot here: pushing one after the rows would
+    // shadow them, because `hit` picks the last registration.
+}
+
+/// The desktop's own modal dialog: New folder from the wallpaper menu, the
+/// confirmation for a power transition, or an error to acknowledge.
+fn draw_desktop_dialog(canvas: &mut Canvas, shell: &mut Shell) {
+    use crate::apps::DesktopDialog;
+    let Some(dialog) = shell.desktop_dialog.clone() else {
+        return;
+    };
+    let t = shell.tokens.clone();
+    let screen = shell.wm.screen();
+    ui::surface(
+        canvas,
+        &t,
+        Rect::new(0.0, 0.0, screen.w, screen.h),
+        0.0,
+        Material::Scrim,
+    );
+    // The title, the detail line, whether there is a text field, the word on
+    // the affirmative button, and its tone. One table, so a dialog cannot be
+    // drawn with a button that has nothing behind it.
+    let (title, detail, field_hint, ok_label, tone) = match &dialog {
+        DesktopDialog::NewFolder => (
+            "New folder".to_owned(),
+            String::new(),
+            Some("Folder name"),
+            "Create",
+            Tone::Accent,
+        ),
+        DesktopDialog::PowerConfirm { command } => (
+            command.question().to_owned(),
+            command.consequence().to_owned(),
+            None,
+            command.title(),
+            if *command == PowerCommand::Suspend {
+                Tone::Accent
+            } else {
+                // Ending the session is the only thing in this shell that gets
+                // the failure tone, and it comes from a token, not a literal.
+                Tone::Bad
+            },
+        ),
+        DesktopDialog::Error(msg) => (
+            "Could not finish".to_owned(),
+            msg.clone(),
+            None,
+            "Close",
+            Tone::Bad,
+        ),
+    };
+
+    let w = t.px(360.0).min(screen.w * 0.9);
+    let h = if field_hint.is_some() {
+        t.px(150.0)
+    } else {
+        t.px(170.0)
+    };
+    let panel = Rect::new((screen.w - w) / 2.0, (screen.h - h) / 2.0, w, h);
+    ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
+    // The click-away hotspot goes in FIRST so the buttons, registered later,
+    // win the hit test (`hit` picks the last registration). Clicking away
+    // cancels: dismissing a confirmation must never be able to perform one.
+    shell.hotspots_mut().push(panel, Hot::DialogCancel);
+
+    let s_title = t.style_label();
+    font::draw(
+        canvas,
+        &title,
+        panel.x + t.sp(Space::Md),
+        panel.y + t.px(30.0),
+        &s_title,
+    );
+    if !detail.is_empty() {
+        let s_detail = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+        let shown = ui::elide(&detail, &s_detail, panel.w - t.sp(Space::Md) * 2.0);
+        font::draw(
+            canvas,
+            &shown,
+            panel.x + t.sp(Space::Md),
+            panel.y + t.px(54.0),
+            &s_detail,
+        );
+    }
+    if let Some(hint) = field_hint {
+        let field = Rect::new(
+            panel.x + t.sp(Space::Md),
+            panel.y + t.px(56.0),
+            panel.w - t.sp(Space::Md) * 2.0,
+            t.px(32.0),
+        );
+        ui::text_field(canvas, &t, field, &shell.desktop_dialog_field, hint, true);
+    }
+    let ok = Rect::new(
+        panel.right() - t.px(112.0),
+        panel.bottom() - t.px(40.0),
+        t.px(100.0),
+        t.px(28.0),
+    );
+    ui::button(canvas, &t, ok, ok_label, ui::State::Normal, tone);
+    shell.hotspots_mut().push(ok, Hot::DialogConfirm);
+    let no = Rect::new(ok.x - t.px(108.0), ok.y, t.px(100.0), t.px(28.0));
+    ui::button(canvas, &t, no, "Cancel", ui::State::Normal, Tone::Neutral);
+    shell.hotspots_mut().push(no, Hot::DialogCancel);
+}
+
+// ---------------------------------------------------------------------------
+// Top bar
+// ---------------------------------------------------------------------------
+
+/// The single system bar. There is no bottom dock: one bar carries the
+/// launcher, the workspace, the environment and every status item, which is
+/// what stops the two halves of a desktop from disagreeing about where things
+/// live.
+/// The clock as the top bar shows it.
+///
+/// The locale decides until a person overrides it: a machine set to a region
+/// should format its own time that region's way, and a clock that ignored that
+/// would be the one number on screen that lied about where the machine thinks
+/// it is.
+fn clock_text(shell: &Shell) -> String {
+    let now = shell.clock_seconds();
+    let format = shell.settings.values.pick("topbar.clock-24h");
+    let seconds = shell.settings.values.on("topbar.clock-seconds");
+    if format == "follow locale" && !seconds {
+        return shell.regional.clock(now);
+    }
+    let mut locale = shell.regional.locale.clone();
+    match format {
+        "24-hour" => locale.hour_cycle = litric_locale::HourCycle::H24,
+        "12-hour" => locale.hour_cycle = litric_locale::HourCycle::H12,
+        _ => {}
+    }
+    let dt = shell.regional.local(now);
+    if seconds {
+        locale.format_time_seconds(dt)
+    } else {
+        locale.format_time(dt)
+    }
+}
+
+fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    let bar = shell.top_bar();
+    if bar.h <= 0.0 || !shell.settings.values.on("topbar.enabled") {
+        return;
+    }
+    ui::surface(canvas, &t, bar, 0.0, Material::Glass);
+    if shell.settings.values.on("topbar.border") {
+        ui::separator(canvas, &t, Rect::new(bar.x, bar.bottom() - 1.0, bar.w, 1.0));
+    }
+
+    let h = bar.h;
+    let pad = t.px(14.0);
+    let mut x = pad;
+
+    // --- left: the wordmark, then the menus ---
+    // LitricOS has no logo glyph: the product's name is its mark, set in the
+    // same type as every other label. The hotspot is exactly the text as
+    // drawn, and keeps the bar's full height as its click strip — the same
+    // generous target the glyph had, without the picture.
+    let mut mark = t.style_bold(TypeStep::Body);
+    if shell.is_highlighted(Hot::Logo) {
+        mark.color = t.accent();
+    }
+    let mark_w = font::measure("LitricOS", &mark);
+    let logo_hit = Rect::new(x - t.px(6.0), 0.0, mark_w + t.px(12.0), h);
+    font::draw(canvas, "LitricOS", x, h / 2.0 + mark.size * 0.35, &mark);
+    shell.hotspots_mut().push(logo_hit, Hot::Logo);
+    x += mark_w + t.px(14.0);
+
+    // How much room the menus have is decided by the status cluster on the
+    // right, which is laid out from the bar's right edge inwards. That has to be
+    // known *before* the menus are drawn: a menu drawn past the clock is a menu
+    // drawn over the time, which is what "Environment" did at 480 pixels wide
+    // once the face's side bearings made the word its real width.
+    let menu_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    let clock_w = font::measure(&clock_text(shell), &menu_style);
+    // The icons the cluster draws: the bell and the shield always, the power
+    // button with the status icons, the battery when there is one, and the
+    // offline mark when the network is down. Counted from the same conditions
+    // the drawing code uses, so this measurement cannot drift from the layout
+    // it is reserving room for.
+    let status_icons = 2u32
+        .saturating_add(u32::from(shell.settings.values.on("topbar.status-icons")))
+        .saturating_add(u32::from(shell.facts.battery_percent.is_some()))
+        .saturating_add(u32::from(shell.facts.network.as_deref() == Some("offline")));
+    let battery_label_w = match shell.facts.battery_percent {
+        Some(p) if shell.settings.values.on("topbar.battery-percent") => {
+            let label = format!("{p}%");
+            font::measure(
+                &label,
+                &Style::new(t.text_px(TypeStep::Caption), t.text_dim()),
+            ) + t.px(6.0)
+        }
+        _ => 0.0,
+    };
+    // The right cluster is measured before the menus are drawn, which means
+    // every piece of it has to be measured there too. The date and the live
+    // CPU/memory reading were added to the cluster without being added to this
+    // sum, and the menus then ran into them: "Environment" was drawn over
+    // "CPU 18% · MEM 7%" by four pixels in a 480-pixel bar, found by the text
+    // layout audit.
+    let metrics_label = if shell.settings.values.on("topbar.metrics") {
+        let cpu = shell
+            .facts
+            .cpu_now
+            .or(shell.facts.cpu_fraction)
+            .map_or_else(|| "--".to_owned(), |f| format!("{:.0}%", f * 100.0));
+        let mem = match (shell.facts.mem_used_mb, shell.facts.mem_total_mb) {
+            (Some(used), Some(total)) if total > 0 => {
+                format!("{:.0}%", (used as f64 / total as f64) * 100.0)
+            }
+            _ => "--".to_owned(),
+        };
+        Some(format!("CPU {cpu} \u{b7} MEM {mem}"))
+    } else {
+        None
+    };
+    let metrics_style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    let metrics_w = metrics_label
+        .as_ref()
+        .map_or(0.0, |l| font::measure(l, &metrics_style) + t.px(10.0));
+    let date_label = if shell.settings.values.on("topbar.date") {
+        Some(shell.regional.date(shell.clock_seconds()))
+    } else {
+        None
+    };
+    let date_style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    let date_w = date_label
+        .as_ref()
+        .map_or(0.0, |d| font::measure(d, &date_style) + t.px(8.0));
+    let right_cluster = pad
+        + t.px(22.0)
+        + clock_w
+        + t.px(14.0)
+        + date_w
+        + t.px(8.0)
+        + t.px(24.0) * f32::from(u16::try_from(status_icons).unwrap_or(2))
+        + battery_label_w
+        + metrics_w;
+    let menus_end = (bar.w - pad - right_cluster - t.px(12.0)).max(x);
+    let mut dropped = 0usize;
+    for (label, hot) in [
+        ("Apps", Hot::MenuApps),
+        ("Workspace", Hot::MenuWorkspace),
+        ("Environment", Hot::MenuEnvironment),
+    ] {
+        let w = font::measure(label, &menu_style);
+        if x + w > menus_end {
+            dropped = dropped.saturating_add(1);
+            continue;
+        }
+        let r = Rect::new(x - t.px(6.0), t.px(4.0), w + t.px(12.0), h - t.px(8.0));
+        if shell.is_highlighted(hot) {
+            canvas.fill_round_rect(r, t.radius(Radius::Sm), with_alpha(rgb(0xFFFFFF), 0.09));
+        }
+        font::draw(
+            canvas,
+            label,
+            x,
+            h / 2.0 + menu_style.size * 0.36,
+            &menu_style,
+        );
+        shell.hotspots_mut().push(r, hot);
+        x += w + t.px(20.0);
+    }
+    // Anything that did not fit is reachable through the launcher, which is what
+    // these menus open anyway (Apps toggles it, Workspace opens the monitor,
+    // Environment opens quick settings). A chevron is drawn rather than a menu
+    // silently missing, so the bar never claims to have fewer choices than it
+    // has.
+    if dropped > 0 && x + t.px(24.0) <= menus_end {
+        let r = Rect::new(x - t.px(6.0), t.px(4.0), t.px(24.0), h - t.px(8.0));
+        if shell.is_highlighted(Hot::MenuApps) {
+            canvas.fill_round_rect(r, t.radius(Radius::Sm), with_alpha(rgb(0xFFFFFF), 0.09));
+        }
+        font::draw(
+            canvas,
+            "\u{203A}",
+            x,
+            h / 2.0 + menu_style.size * 0.36,
+            &menu_style,
+        );
+        shell.hotspots_mut().push(r, Hot::MenuApps);
+    }
+
+    // --- centre: workspace pips and the focused window ---
+    let ws_count = shell.wm.workspaces().len();
+    let active_ws = shell.wm.active_workspace();
+    let pip = t.px(7.0);
+    let gap = t.px(6.0);
+    let pips_w = (ws_count as f32) * pip + ((ws_count.saturating_sub(1)) as f32) * gap;
+    // The centre names the application that has focus, not the workspace it is
+    // on. The workspace is already on this bar -- the pips light the active one
+    // -- so a centre that repeated "Workspace 1" spent the most valuable text on
+    // the bar saying what the dots had just said, and never said the one thing
+    // the bar cannot show any other way: which application the next keystroke
+    // will reach. A window that is not one of our applications still gets named,
+    // by its own title. With nothing focused the centre names the desktop, which
+    // is what has focus then.
+    let title = shell
+        .wm
+        .focused()
+        .and_then(|id| shell.wm.window(id))
+        .map_or_else(
+            || crate::i18n::text("Desktop").into_owned(),
+            |w| {
+                crate::shortcuts::App::from_app_id(&w.app_id)
+                    .map_or_else(|| w.title.clone(), |a| a.title().to_owned())
+            },
+        );
+    let title_style = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    let left_end = x;
+    let title_w = font::measure(&title, &title_style);
+    let centre_w = pips_w + t.px(12.0) + title_w;
+    // Three clusters, and a bar too narrow for all three does not get a squeezed
+    // middle one: nothing in the middle is drawn at all. At 560 pixels the
+    // centred title was drawn over the menus (32x18px) and, once clamped inward,
+    // over the clock (39x18px) -- which is why clamping is not the fix. The
+    // focused application is named by its own title bar and by the switcher, so
+    // the middle cluster is the one that can go. The supported minimum is 960
+    // wide (a 0.75 scale of 1280), where all three fit.
+    let show_pips = shell.settings.values.on("topbar.workspace-pips");
+    let show_title = shell.settings.values.on("topbar.title");
+    let centre_w = if show_pips { centre_w } else { title_w };
+    // Whether the middle fits is decided by the room the two end clusters
+    // actually leave, not by a bar-width threshold: the right cluster gained
+    // the date and the CPU/memory reading, and a 300-pixel allowance then
+    // placed the focused window's name over them.
+    let right_start = bar.w - pad - right_cluster;
+    if right_start - left_end >= centre_w + t.px(16.0) {
+        // Centred in the gap the end clusters leave, not in the bar: centring
+        // on the bar is only the same thing when both clusters are the same
+        // width, and a bar with three menus on the left and a clock, a date,
+        // four icons and a CPU reading on the right is not that bar.
+        let mut cx = left_end + (right_start - left_end - centre_w) / 2.0;
+        for i in 0..(if show_pips { ws_count } else { 0 }) {
+            let r = Rect::new(cx, (h - pip) / 2.0, pip, pip);
+            let on = i == active_ws;
+            canvas.fill_round_rect(
+                r,
+                pip / 2.0,
+                if on {
+                    t.accent()
+                } else {
+                    with_alpha(rgb(0xFFFFFF), 0.25)
+                },
+            );
+            // The active workspace also gets a ring, so the state does not
+            // depend on telling the accent apart from grey.
+            if on {
+                canvas.stroke_round_rect(
+                    r.inflate(t.px(2.5)),
+                    pip,
+                    1.0,
+                    with_alpha(t.accent(), 0.55),
+                );
+            }
+            shell
+                .hotspots_mut()
+                .push(r.inflate(t.px(4.0)), Hot::Workspace(i as u8));
+            cx += pip + gap;
+        }
+        if show_pips {
+            cx += t.px(12.0);
+        }
+        if show_title {
+            font::draw(
+                canvas,
+                &title,
+                cx,
+                h / 2.0 + title_style.size * 0.36,
+                &title_style,
+            );
+        }
+    }
+
+    // --- right: status, laid out from the edge inwards ---
+    let mut rx = bar.w - pad;
+    let clock = clock_text(shell);
+    let clock_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    let clock_w = font::measure(&clock, &clock_style);
+
+    rx -= t.px(22.0);
+    let user_r = Rect::new(rx, (h - t.px(18.0)) / 2.0, t.px(18.0), t.px(18.0));
+    icons::draw(canvas, Icon::User, user_r, t.text_dim(), 1.0);
+    shell
+        .hotspots_mut()
+        .push(user_r.inflate(t.px(5.0)), Hot::StatusUser);
+
+    rx -= clock_w + t.px(14.0);
+    let mut clock_left = rx;
+    if let Some(date) = &date_label {
+        clock_left -= font::measure(date, &date_style) + t.px(8.0);
+        font::draw(
+            canvas,
+            date,
+            clock_left,
+            h / 2.0 + date_style.size * 0.36,
+            &date_style,
+        );
+    }
+    font::draw(
+        canvas,
+        &clock,
+        rx,
+        h / 2.0 + clock_style.size * 0.36,
+        &clock_style,
+    );
+    shell.hotspots_mut().push(
+        Rect::new(
+            clock_left - t.px(6.0),
+            0.0,
+            (rx - clock_left) + clock_w + t.px(12.0),
+            h,
+        ),
+        Hot::StatusClock,
+    );
+
+    // Status icons, right to left. Each is a hotspot that opens something.
+    //
+    // They start left of the date rather than at the clock's own cursor: that
+    // cursor is where the date begins, so a bell drawn from it sat inside the
+    // date and its unread badge was drawn over "1970 Jan 1". The cluster's
+    // left edge is the date's, and the icons hang off it.
+    rx = clock_left - t.px(8.0);
+    let icon_size = t.px(16.0);
+    let step = t.px(24.0);
+    let count = shell.notifications.len();
+    let bell_tone = match shell.notifications.peak_priority() {
+        Some(Priority::Critical) => Some(Tone::Bad),
+        Some(Priority::High) => Some(Tone::Warning),
+        Some(_) => Some(Tone::Accent),
+        None => None,
+    };
+
+    let status = |shell: &mut Shell,
+                  canvas: &mut Canvas,
+                  rx: &mut f32,
+                  icon: Icon,
+                  hot: Hot,
+                  tone: Option<Tone>| {
+        *rx -= step;
+        let r = Rect::new(*rx, (h - icon_size) / 2.0, icon_size, icon_size);
+        let color = tone.map_or_else(|| t.text_dim(), |x| t.tone(x));
+        if shell.is_highlighted(hot) {
+            canvas.fill_round_rect(
+                r.inflate(t.px(5.0)),
+                t.radius(Radius::Sm),
+                with_alpha(rgb(0xFFFFFF), 0.09),
+            );
+        }
+        icons::draw(canvas, icon, r, color, 1.0);
+        shell.hotspots_mut().push(r.inflate(t.px(5.0)), hot);
+        r
+    };
+
+    let bell = status(
+        shell,
+        canvas,
+        &mut rx,
+        Icon::Notifications,
+        Hot::StatusNotifications,
+        bell_tone,
+    );
+    if count > 0 {
+        // A count badge, not just a coloured bell: the number is the
+        // information and colour alone cannot carry it.
+        let label = if count > 9 {
+            "9+".to_owned()
+        } else {
+            count.to_string()
+        };
+        let s = Style::bold(t.text_px(TypeStep::Caption) * 0.85, rgb(0xFFFFFF));
+        let w = font::measure(&label, &s);
+        // The badge grows *leftwards* from the bell's right edge. Growing right
+        // from the icon meant a badge on the bell -- the last icon before the
+        // clock -- reached into the clock's text, and one notification was
+        // enough: the "1" was drawn over the last letter of "00:00 UTC" (1x11px
+        // measured). Nothing is drawn to the right of the bell, so the room a
+        // badge may use is the room the icon itself has.
+        let bw = w + t.px(8.0);
+        let br = Rect::new(bell.right() - bw, bell.y - t.px(3.0), bw, t.px(12.0));
+        canvas.fill_round_rect(br, br.h / 2.0, t.tone(bell_tone.unwrap_or(Tone::Accent)));
+        font::draw(canvas, &label, br.x + t.px(4.0), br.y + br.h * 0.76, &s);
+    }
+
+    if shell.settings.values.on("topbar.status-icons") {
+        status(shell, canvas, &mut rx, Icon::Power, Hot::StatusPower, None);
+    }
+
+    // The Defender's shield: coloured when the last scan says something.
+    let shield_tone = if shell.defender.running {
+        Some(Tone::Accent)
+    } else if shell.defender.app.last_had_threats {
+        Some(Tone::Bad)
+    } else if matches!(
+        shell.defender.app.state,
+        crate::apps::ScanState::Done { threats: 0, .. }
+    ) {
+        Some(Tone::Good)
+    } else {
+        None
+    };
+    status(
+        shell,
+        canvas,
+        &mut rx,
+        Icon::Shield,
+        Hot::MenuRow(crate::apps::MenuAction::ScanNow),
+        shield_tone,
+    );
+
+    // Battery, audio and network appear only when the machine actually has
+    // them — icons that mean "nothing was measured" are noise, and the quick
+    // settings panel is one click away for everything.
+    if shell.facts.battery_percent.is_some() {
+        let battery_tone = shell.facts.battery_percent.and_then(|p| {
+            if p <= 10 {
+                Some(Tone::Bad)
+            } else if p <= 25 {
+                Some(Tone::Warning)
+            } else {
+                None
+            }
+        });
+        let battery = status(
+            shell,
+            canvas,
+            &mut rx,
+            Icon::Battery,
+            Hot::StatusBattery,
+            battery_tone,
+        );
+        if shell.settings.values.on("topbar.battery-percent") {
+            if let Some(percent) = shell.facts.battery_percent {
+                let label = format!("{percent}%");
+                let style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+                let w = font::measure(&label, &style);
+                rx -= w + t.px(6.0);
+                font::draw(canvas, &label, rx, h / 2.0 + style.size * 0.36, &style);
+                let _ = battery;
+            }
+        }
+    }
+
+    // A live CPU and memory reading, quiet enough to ignore and precise enough
+    // to notice. It is the only number on the bar that moves every second.
+    if let Some(label) = &metrics_label {
+        let w = font::measure(label, &metrics_style);
+        rx -= w + t.px(10.0);
+        font::draw(
+            canvas,
+            label,
+            rx,
+            h / 2.0 + metrics_style.size * 0.36,
+            &metrics_style,
+        );
+        shell.hotspots_mut().push(
+            Rect::new(rx - t.px(4.0), 0.0, w + t.px(8.0), h),
+            Hot::StatusMetrics,
+        );
+    }
+
+    if shell.facts.network.as_deref() == Some("offline") {
+        // Only the exception is worth an icon: a machine that is online shows
+        // nothing, a machine that cannot reach the network shows why.
+        status(
+            shell,
+            canvas,
+            &mut rx,
+            Icon::Network,
+            Hot::StatusNetwork,
+            Some(Tone::Warning),
+        );
+    }
+    if shell.settings.values.on("topbar.status-icons") {
+        status(shell, canvas, &mut rx, Icon::Audio, Hot::StatusAudio, None);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Windows
+// ---------------------------------------------------------------------------
+
+fn draw_windows(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    let chrome = *shell.wm.chrome();
+    let windows = shell.visible_windows();
+
+    for (id, frame, title, focused, state) in windows {
+        // Everything this window draws carries its id, so the layout audit can
+        // tell two stacked windows' text (expected) from two labels colliding
+        // inside one window (a defect). Zero is reserved for the chrome.
+        let saved_surface = canvas.set_surface(id.saturating_add(1));
+        let radius = t.px(chrome.radius);
+        // An unfocused window gets a softer shadow and a dimmer frame, so the
+        // focused one is obvious without relying on the accent colour alone.
+        // The two weights are the endpoints of a spring: focus glides up,
+        // blur glides down, instead of snapping between the pair.
+        let elevation = shell.anims_mut().focus.elevation(id, focused);
+        let mix =
+            |focused_v: f32, unfocused_v: f32| unfocused_v + (focused_v - unfocused_v) * elevation;
+        canvas.soft_shadow(
+            frame,
+            radius,
+            t.px(mix(30.0, 18.0)),
+            t.px(mix(12.0, 7.0)),
+            mix(0.60, 0.40),
+        );
+        ui::surface(canvas, &t, frame, radius, Material::Glass);
+
+        // Title bar.
+        let title_r = Rect::new(frame.x, frame.y, frame.w, t.px(chrome.title_h));
+        canvas.fill_round_rect(
+            Rect::new(frame.x + 1.0, title_r.bottom(), frame.w - 2.0, 1.0),
+            0.0,
+            with_alpha(rgb(0xFFFFFF), 0.08),
+        );
+
+        for (n, icon, tone) in [
+            (0u32, Icon::Close, Tone::Bad),
+            (1, Icon::Minimize, Tone::Warning),
+            (2, Icon::Maximize, Tone::Good),
+        ] {
+            let b = chrome.button_rect(&to_wm(frame), n);
+            let br = Rect::new(b.x, b.y, b.w, b.h);
+            canvas.fill_circle(
+                br.x + br.w / 2.0,
+                br.y + br.h / 2.0,
+                br.w / 2.0,
+                if focused {
+                    t.tone(tone)
+                } else {
+                    with_alpha(rgb(0xFFFFFF), 0.20)
+                },
+            );
+            // The glyph appears on hover, the way every desktop that uses
+            // coloured dots does it: colour at rest, symbol when aimed at.
+            let p = shell.pointer();
+            if br.inflate(t.px(4.0)).contains(p.x, p.y) {
+                icons::draw(canvas, icon, br.inflate(-br.w * 0.22), rgb(0x101010), 1.4);
+            }
+        }
+
+        let ts = Style::new(
+            t.text_px(TypeStep::Footnote),
+            if focused { t.text() } else { t.text_dim() },
+        );
+        let max_w = frame.w - t.px(150.0);
+        let shown = ui::elide(&title, &ts, max_w.max(t.px(40.0)));
+        font::draw(
+            canvas,
+            &shown,
+            frame.x + t.px(74.0),
+            title_r.y + title_r.h / 2.0 + ts.size * 0.36,
+            &ts,
+        );
+        if state != WindowState::Normal {
+            let label = state_label(state);
+            let s = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            let w = font::measure(label, &s);
+            font::draw(
+                canvas,
+                label,
+                frame.right() - t.px(14.0) - w,
+                title_r.y + title_r.h / 2.0 + s.size * 0.36,
+                &s,
+            );
+        }
+
+        let body = Rect::new(
+            frame.x,
+            title_r.bottom(),
+            frame.w,
+            (frame.h - title_r.h).max(0.0),
+        );
+        // The body claims its own clicks BEFORE any control registers: bare
+        // window surface must never fall through `hot.hit` to whatever sits
+        // underneath — the bug where clicking a window opened the desktop
+        // icon hiding behind it. Controls register after, so they still win.
+        shell.hotspots_mut().push(body, Hot::Window(id));
+        // Clipped to the window. Without this a panel with more rows than fit
+        // draws them down the wallpaper below its own frame, which is what the
+        // first interactive build did and what a screenshot makes obvious.
+        let saved = canvas.push_clip(body);
+        draw_window_body(canvas, shell, id, body);
+        canvas.set_clip(saved);
+        canvas.set_surface(saved_surface);
+    }
+}
+
+const fn state_label(state: WindowState) -> &'static str {
+    match state {
+        WindowState::Maximized => "Maximized",
+        WindowState::Snapped(_) => "Snapped",
+        WindowState::Fullscreen => "Fullscreen",
+        _ => "",
+    }
+}
+
+fn to_wm(r: Rect) -> litric_wm::Rect {
+    litric_wm::Rect::new(r.x, r.y, r.w, r.h)
+}
+
+fn draw_window_body(canvas: &mut Canvas, shell: &mut Shell, id: u32, body: Rect) {
+    let app_id = shell
+        .wm
+        .window(id)
+        .map(|w| w.app_id.clone())
+        .unwrap_or_default();
+    match app_id.as_str() {
+        "com.litric.activity" => draw_activity(canvas, shell, body),
+        "com.litric.environments" => draw_environments(canvas, shell, body),
+        "com.litric.settings" => draw_settings(canvas, shell, body),
+        "com.litric.files" => draw_files(canvas, shell, body),
+        "com.litric.browser" => draw_browser(canvas, shell, body),
+        "com.litric.terminal" => draw_terminal(canvas, shell, body),
+        "com.litric.trash" => draw_trash(canvas, shell, body),
+        "com.litric.defender" => draw_defender(canvas, shell, body),
+        other => draw_not_implemented(canvas, shell, body, other),
+    }
+}
+
+/// Refresh the Files listing when the model's path has moved past what was
+/// last read. The call goes through [`crate::fsbridge`], which keeps the
+/// no-symlink-follow confinement on Unix and keeps the shell compiling on
+/// every host the tests run on.
+fn refresh_files(shell: &mut Shell) {
+    if shell.files.listed.as_deref() == Some(shell.files.path.as_str()) {
+        return;
+    }
+    let zone = shell.regional.zone.clone();
+    let root = shell.files_root.clone();
+    let bridge = match crate::fsbridge::FsBridge::open(&root, zone) {
+        Ok(b) => b,
+        Err(e) => {
+            shell.files.error = Some(e.to_string());
+            shell.files.listed = Some(shell.files.path.clone());
+            return;
+        }
+    };
+    match bridge.list_dir(&shell.files.path) {
+        Ok(entries) => {
+            let rows = entries
+                .into_iter()
+                .map(|e| crate::apps::FileRow {
+                    name: e.name,
+                    kind: e.kind,
+                    size: e.size,
+                    mtime: e.mtime,
+                })
+                .collect();
+            shell.files.apply_entries(rows);
+        }
+        Err(e) => shell.files.error = Some(e.to_string()),
+    }
+    shell.files.listed = Some(shell.files.path.clone());
+}
+
+/// The Files window: places pane, breadcrumb bar, command row, table,
+/// details pane.
+/// The Files table's columns, minus the ones a narrow window cannot fit.
+///
+/// Explorer's rule and the one the layout audit needs: a heading is drawn only
+/// if it fits inside its own column, so one heading can never run through the
+/// next. At 480 pixels wide the date column is 27 pixels and its heading is 65,
+/// which is what the audit found. Whatever width a dropped column had is given
+/// to the name column, which is the one a person is reading.
+fn files_columns(t: &ui::Tokens, table_w: f32, style: &Style) -> Vec<(f32, &'static str, SortKey)> {
+    let base = [
+        (0.52f32, "Name", SortKey::Name),
+        (0.16, "Size", SortKey::Size),
+        (0.32, "Modified", SortKey::Modified),
+    ];
+    let fitted =
+        |frac: f32, label: &str| table_w * frac >= font::measure(label, style) + t.px(12.0);
+    let dropped: Vec<f32> = base
+        .iter()
+        .filter(|(frac, label, _)| !fitted(*frac, label))
+        .map(|(frac, _, _)| *frac)
+        .collect();
+    // The name column never goes: with everything else dropped the table is
+    // still a list of names, which is what a file manager is for.
+    let spare = if fitted(base[0].0, base[0].1) {
+        dropped.iter().sum::<f32>()
+    } else {
+        0.0
+    };
+    base.into_iter()
+        .filter(|(frac, label, _)| fitted(*frac, label))
+        .map(|(frac, label, key)| {
+            let frac = if key == SortKey::Name {
+                frac + spare
+            } else {
+                frac
+            };
+            (frac.min(1.0), label, key)
+        })
+        .collect()
+}
+
+fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
+    refresh_files(shell);
+    let t = shell.tokens.clone();
+    let app = shell.files.clone();
+
+    // Layout: places | main column (crumbs, commands, table) | details.
+    let places_w = t.px(132.0);
+    let details_w = if app.details { t.px(180.0) } else { 0.0 };
+    let table_x = body.x + places_w;
+    let table_w = body.w - places_w - details_w;
+
+    // --- navigation pane (Quick access) ---
+    ui::surface(
+        canvas,
+        &t,
+        Rect::new(body.x, body.y, places_w, body.h),
+        0.0,
+        ui::Material::Elevated,
+    );
+    let mut py = body.y + t.sp(Space::Md);
+    let s_label = t.style_label();
+    font::draw(
+        canvas,
+        "Quick access",
+        body.x + t.sp(Space::Sm),
+        py + t.px(10.0),
+        &s_label,
+    );
+    py += t.px(22.0);
+    for (i, (place, label)) in app.places.iter().enumerate() {
+        let r = Rect::new(body.x + t.px(4.0), py, places_w - t.px(8.0), t.px(20.0));
+        let selected = app.place_index == Some(i) || place == &app.path;
+        if selected {
+            canvas.fill_round_rect(r, t.radius(Radius::Sm), with_alpha(t.text(), 0.08));
+        }
+        let s = Style::new(
+            t.text_px(TypeStep::Footnote),
+            if selected { t.text() } else { t.text_dim() },
+        );
+        font::draw(canvas, label, r.x + t.px(8.0), r.y + t.px(13.0), &s);
+        shell.hotspots_mut().push(r, Hot::Files(FilesHot::Place(i)));
+        py += t.px(22.0);
+    }
+
+    // --- breadcrumb bar + history buttons ---
+    let bar = Rect::new(table_x, body.y, table_w, t.px(30.0));
+    ui::surface(canvas, &t, bar, 0.0, ui::Material::Flat);
+    let mut bx = bar.x + t.px(6.0);
+    for (label, hot) in [
+        ("‹", FilesHot::Back),
+        ("›", FilesHot::Forward),
+        ("↑", FilesHot::Up),
+    ] {
+        let r = Rect::new(bx, bar.y + t.px(4.0), t.px(20.0), t.px(22.0));
+        ui::button(canvas, &t, r, label, ui::State::Normal, Tone::Neutral);
+        shell.hotspots_mut().push(r, Hot::Files(hot));
+        bx += t.px(24.0);
+    }
+    let mut cx = bx + t.px(6.0);
+    let crumbs = app.breadcrumbs();
+    let s_crumb = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    for (i, c) in crumbs.iter().enumerate() {
+        let w = font::measure(c, &s_crumb) + t.px(8.0);
+        let r = Rect::new(cx, bar.y + t.px(4.0), w, t.px(22.0));
+        font::draw(canvas, c, cx + t.px(4.0), r.y + t.px(14.0), &s_crumb);
+        shell.hotspots_mut().push(r, Hot::Files(FilesHot::Crumb(i)));
+        cx += w + t.px(2.0);
+        if i.checked_add(1).is_some_and(|n| n < crumbs.len()) {
+            let sep = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+            font::draw(canvas, "/", cx, r.y + t.px(14.0), &sep);
+            cx += t.px(8.0);
+        }
+    }
+    if crumbs.is_empty() {
+        let sep = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+        font::draw(canvas, "/ (root)", cx, bar.y + t.px(14.0), &sep);
+    }
+
+    // --- command row: New / Paste / Compress / Extract, filter readout,
+    // details toggle. The buttons drive the same model the context menu and
+    // the shortcuts do, so all three paths stay one behaviour.
+    let cmd = Rect::new(table_x, bar.bottom(), table_w, t.px(26.0));
+    let s_cmd = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    let filter_note = if app.filter.is_empty() {
+        format!(
+            "{} items · {} selected",
+            app.visible().len(),
+            app.selected_paths().len()
+        )
+    } else {
+        format!(
+            "filter: {} ({} items · {} selected)",
+            app.filter,
+            app.visible().len(),
+            app.selected_paths().len()
+        )
+    };
+    // Where the Details toggle will be, decided before the buttons are drawn:
+    // the closure below has to know its right-hand limit, and a closure captures
+    // only names declared before it.
+    let det_label = if app.details {
+        "Details ✕"
+    } else {
+        "Details"
+    };
+    let dw = font::measure(det_label, &s_cmd) + t.px(12.0);
+    let det_r = Rect::new(
+        cmd.right() - dw - t.px(6.0),
+        cmd.y + t.px(2.0),
+        dw,
+        t.px(22.0),
+    );
+    // The readout is drawn after the buttons, in the gap before the Details
+    // toggle, rather than at a fixed x. At x=150 the buttons grew into it and
+    // "0 items" was drawn over "Compress": 32x16 pixels of one string on top of
+    // another, found by the layout audit.
+    let btn = |canvas: &mut Canvas,
+               shell: &mut Shell,
+               x: f32,
+               label: &str,
+               hot: Hot,
+               tone: Tone|
+     -> f32 {
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.text());
+        let w = font::measure(label, &s) + t.px(12.0);
+        let r = Rect::new(x, cmd.y + t.px(2.0), w, t.px(22.0));
+        // A button that would reach the Details toggle is not drawn at all, and
+        // every button after it follows, because none of them advance `x`. In a
+        // 420-pixel window that is what kept "Paste" and "Compress" from being
+        // drawn over "Details ✕" (33x18 pixels of overlap). The same actions
+        // stay reachable from the context menu and the keyboard shortcuts, which
+        // drive one model with these buttons.
+        if r.right() > det_r.x - t.px(6.0) {
+            return 0.0;
+        }
+        ui::button(canvas, &t, r, label, ui::State::Normal, tone);
+        shell.hotspots_mut().push(r, hot);
+        w + t.px(4.0)
+    };
+    let mut bx = cmd.x + t.px(4.0);
+    bx += btn(
+        canvas,
+        shell,
+        bx,
+        "New folder",
+        Hot::MenuRow(crate::apps::MenuAction::NewFolder),
+        Tone::Neutral,
+    );
+    bx += btn(
+        canvas,
+        shell,
+        bx,
+        "Paste",
+        Hot::Files(FilesHot::Paste),
+        Tone::Neutral,
+    );
+    bx += btn(
+        canvas,
+        shell,
+        bx,
+        "Compress",
+        Hot::Files(FilesHot::Compress),
+        Tone::Neutral,
+    );
+    let _ = bx;
+    bx += btn(
+        canvas,
+        shell,
+        bx,
+        "Extract",
+        Hot::Files(FilesHot::Extract),
+        Tone::Neutral,
+    );
+    let _ = bx + 1.0;
+    ui::button(
+        canvas,
+        &t,
+        det_r,
+        det_label,
+        ui::State::Normal,
+        Tone::Neutral,
+    );
+    shell
+        .hotspots_mut()
+        .push(det_r, Hot::Files(FilesHot::Details));
+
+    let readout_x = bx + t.px(10.0);
+    let readout_room = (det_r.x - readout_x - t.px(10.0)).max(0.0);
+    if readout_room > t.px(30.0) {
+        let note = ui::elide(&filter_note, &s_cmd, readout_room);
+        font::draw(canvas, &note, readout_x, cmd.y + t.px(15.0), &s_cmd);
+    }
+
+    // --- table: no grid. Spacing and one hairline under the header carry the
+    // structure; vertical rules read as a form, not data.
+    let head_h = t.px(22.0);
+    // Geometry the person chose, read where it is used: the table's row height,
+    // the glyph beside each name and whether alternate rows are shaded. Reading
+    // them here rather than copying them into the window's model keeps one
+    // source of truth for what a row looks like.
+    let row_h = t.px(match shell.settings.values.pick("files.density") {
+        "compact rows" => 20.0,
+        "comfortable rows" => 30.0,
+        _ => 24.0,
+    });
+    let zebra = shell.settings.values.on("files.zebra");
+    let icon_px = t.px(shell
+        .settings
+        .values
+        .num("files.icon-size")
+        .clamp(10.0, 24.0));
+    let name_inset = t.px(28.0) + icon_px;
+    let table = Rect::new(table_x, cmd.bottom(), table_w, body.bottom() - cmd.bottom());
+    // (columns are chosen below, from the width the table actually got)
+    let s_head = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    let cols = files_columns(&t, table.w, &s_head);
+    let mut hx = table.x;
+    let mut hx_end = 0.0;
+    for (frac, label, key) in &cols {
+        let cw = table.w * *frac;
+        let r = Rect::new(hx, table.y, cw, head_h);
+        let active = app.sort.0 == *key;
+        let arrow = if active {
+            if app.sort.1 {
+                " ↑"
+            } else {
+                " ↓"
+            }
+        } else {
+            ""
+        };
+        let s = s_head.colored(if active { t.text() } else { t.text_dim() });
+        // Elided against its own column, the same way a row cell is: a heading
+        // that overflows its width is a heading drawn through the next one, and
+        // at 480 pixels wide the date column's heading does exactly that.
+        font::draw(
+            canvas,
+            &ui::elide(&format!("{label}{arrow}"), &s, cw - t.px(12.0)),
+            hx + t.px(if *key == SortKey::Name { 26.0 } else { 6.0 }),
+            r.y + t.px(13.0),
+            &s,
+        );
+        shell
+            .hotspots_mut()
+            .push(r, Hot::Files(FilesHot::Header(*key)));
+        hx += cw;
+        hx_end = hx;
+    }
+    canvas.stroke_line(
+        table.x,
+        table.y + head_h,
+        hx_end,
+        table.y + head_h,
+        1.0,
+        t.border(),
+    );
+
+    if let Some(err) = &app.error {
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.tone(Tone::Bad));
+        font::draw(
+            canvas,
+            err,
+            table.x + t.px(8.0),
+            table.y + head_h + t.px(18.0),
+            &s,
+        );
+        return;
+    }
+
+    let vis = app.visible();
+    for (i, row) in vis.iter().enumerate().take(24) {
+        let y = table.y + head_h + (i as f32) * row_h;
+        let selected = app.row_is_selected(i);
+        let row_rect = Rect::new(table.x, y, table.w, row_h);
+        if selected {
+            canvas.fill_round_rect(row_rect, t.radius(Radius::Sm), with_alpha(t.text(), 0.08));
+        } else if zebra && i % 2 == 1 {
+            canvas.fill_round_rect(row_rect, t.radius(Radius::Sm), with_alpha(t.text(), 0.03));
+        }
+        // The glyph says which rows are folders before the name is read, which
+        // is the job an icon does in a file list.
+        icons::draw(
+            canvas,
+            if row.kind == FileKind::Dir {
+                Icon::Files
+            } else {
+                Icon::Document
+            },
+            Rect::new(
+                table.x + t.px(24.0),
+                y + (row_h - icon_px) / 2.0,
+                icon_px,
+                icon_px,
+            ),
+            if selected { t.text() } else { t.text_dim() },
+            1.0,
+        );
+        let s = Style::new(
+            t.text_px(TypeStep::Footnote),
+            if selected { t.text() } else { t.text_dim() },
+        );
+        let size_text = match row.kind {
+            FileKind::Dir => "—".to_owned(),
+            _ => format_size(row.size),
+        };
+        let date = litric_locale::civil::from_unix(row.mtime as i64);
+        let date_text = shell.regional.locale.format_date(date);
+        // One cell per column the header kept, in the same order: a row drawn
+        // from its own column list would put the date under the sort heading.
+        let cells = [row.name.clone(), size_text, date_text];
+        let mut cx2 = table.x;
+        for (i, (frac, _, _)) in cols.iter().enumerate() {
+            let cw = table.w * *frac;
+            let text = cells.get(i).map_or("", String::as_str);
+            let inset = if i == 0 { name_inset } else { t.px(6.0) };
+            font::draw(
+                canvas,
+                &ui::elide(text, &s, cw - inset - t.px(6.0)),
+                cx2 + inset,
+                y + row_h / 2.0 + t.px(4.0),
+                &s,
+            );
+            cx2 += cw;
+        }
+        shell
+            .hotspots_mut()
+            .push(row_rect, Hot::Files(FilesHot::Row(i)));
+        let check = Rect::new(
+            table.x + t.px(8.0),
+            y + (row_h - t.px(12.0)) / 2.0,
+            t.px(12.0),
+            t.px(12.0),
+        );
+        if selected {
+            canvas.fill_round_rect(check, t.radius(Radius::Sm), t.accent());
+        }
+        canvas.stroke_round_rect(
+            check,
+            t.radius(Radius::Sm),
+            1.0,
+            if selected { t.accent() } else { t.text_dim() },
+        );
+        if selected {
+            let (cx, cy) = check.center();
+            canvas.stroke_line(
+                cx - t.px(3.0),
+                cy,
+                cx - t.px(1.0),
+                cy + t.px(2.0),
+                1.5,
+                t.text(),
+            );
+            canvas.stroke_line(
+                cx - t.px(1.0),
+                cy + t.px(2.0),
+                cx + t.px(3.0),
+                cy - t.px(3.0),
+                1.5,
+                t.text(),
+            );
+        }
+        let toggle = Hot::Files(FilesHot::ToggleRow(i));
+        if shell.is_highlighted(toggle) {
+            ui::focus_ring(canvas, &t, check, t.radius(Radius::Sm));
+        }
+        shell.hotspots_mut().push(check.inflate(t.px(3.0)), toggle);
+    }
+    if vis.is_empty() && app.error.is_none() {
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+        font::draw(
+            canvas,
+            "Empty folder",
+            table.x + t.px(8.0),
+            table.y + head_h + t.px(18.0),
+            &s,
+        );
+    }
+
+    // --- details pane ---
+    if app.details {
+        let dr = Rect::new(table.right(), body.y, details_w, body.h);
+        ui::surface(canvas, &t, dr, 0.0, ui::Material::Elevated);
+        let s_head = t.style_label();
+        font::draw(
+            canvas,
+            "Details",
+            dr.x + t.sp(Space::Sm),
+            dr.y + t.px(20.0),
+            &s_head,
+        );
+        let s_meta = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        let Some(sel) = app.selection() else {
+            font::draw(
+                canvas,
+                "Nothing selected",
+                dr.x + t.sp(Space::Sm),
+                dr.y + t.px(40.0),
+                &s_meta,
+            );
+            return;
+        };
+        let lines = [
+            sel.name.clone(),
+            match sel.kind {
+                FileKind::Dir => "Folder".to_owned(),
+                FileKind::File => "File".to_owned(),
+                FileKind::Link => "Shortcut".to_owned(),
+                FileKind::Other => "Other".to_owned(),
+            },
+            match sel.kind {
+                FileKind::Dir => String::new(),
+                _ => format_size(sel.size),
+            },
+        ];
+        let mut ly = dr.y + t.px(40.0);
+        for l in lines {
+            if !l.is_empty() {
+                font::draw(
+                    canvas,
+                    &ui::elide(&l, &s_meta, details_w - t.px(20.0)),
+                    dr.x + t.sp(Space::Sm),
+                    ly,
+                    &s_meta,
+                );
+            }
+            ly += t.px(16.0);
+        }
+    }
+
+    // --- modal dialog over the window ---
+    draw_files_dialog(canvas, shell, body);
+
+    // --- text viewer overlay ---
+    draw_viewer(canvas, shell, body);
+}
+
+/// The surface id a modal dialog's text carries.
+///
+/// A dialog is a scrim and a panel over the window it belongs to, so the list
+/// behind it is covered rather than read. Tagging the dialog's own text as a
+/// surface -- the same thing a window does over the desktop -- is what lets the
+/// layout audit tell "a dialog over a table" from "two labels in one row",
+/// instead of reporting every dialog as a collision.
+const DIALOG_SURFACE: u32 = u32::MAX - 1;
+
+/// The Files window's modal dialog: create, rename, confirm, error.
+fn draw_files_dialog(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
+    let Some(dialog) = shell.files.dialog.clone() else {
+        return;
+    };
+    let saved_surface = canvas.set_surface(DIALOG_SURFACE);
+    draw_files_dialog_body(canvas, shell, body, &dialog);
+    canvas.set_surface(saved_surface);
+}
+
+/// The dialog's contents, drawn on [`DIALOG_SURFACE`].
+fn draw_files_dialog_body(
+    canvas: &mut Canvas,
+    shell: &mut Shell,
+    body: Rect,
+    dialog: &crate::apps::DialogKind,
+) {
+    let t = shell.tokens.clone();
+    ui::surface(canvas, &t, body, 0.0, Material::Scrim);
+    let (title, detail, with_field, tone) = match &dialog {
+        crate::apps::DialogKind::NewFolder => {
+            ("New folder".to_owned(), String::new(), true, Tone::Accent)
+        }
+        crate::apps::DialogKind::NewFile => (
+            "New text file".to_owned(),
+            String::new(),
+            true,
+            Tone::Accent,
+        ),
+        crate::apps::DialogKind::Rename { current, .. } => (
+            "Rename".to_owned(),
+            format!("from {current}"),
+            true,
+            Tone::Accent,
+        ),
+        crate::apps::DialogKind::Confirm { title, detail, .. } => {
+            (title.clone(), detail.clone(), false, Tone::Warning)
+        }
+        crate::apps::DialogKind::Error(msg) => {
+            ("Could not finish".to_owned(), msg.clone(), false, Tone::Bad)
+        }
+    };
+    let w = t.px(360.0);
+    let h = if with_field { t.px(160.0) } else { t.px(150.0) };
+    let panel = Rect::new(
+        body.x + (body.w - w) / 2.0,
+        body.y + (body.h - h) / 2.0,
+        w.min(body.w - t.px(16.0)),
+        h.min(body.h - t.px(16.0)),
+    );
+    ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
+    let s_title = t.style_bold(TypeStep::Title3);
+    font::draw(
+        canvas,
+        &title,
+        panel.x + t.sp(Space::Md),
+        panel.y + t.px(28.0),
+        &s_title,
+    );
+    let s_detail = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    if !detail.is_empty() {
+        let shown = ui::elide(&detail, &s_detail, panel.w - t.sp(Space::Md) * 2.0);
+        font::draw(
+            canvas,
+            &shown,
+            panel.x + t.sp(Space::Md),
+            panel.y + t.px(50.0),
+            &s_detail,
+        );
+    }
+    let ok_label = match &dialog {
+        crate::apps::DialogKind::Confirm { .. } => "Confirm",
+        crate::apps::DialogKind::Error(_) => "OK",
+        _ => "Create",
+    };
+    let ok = Rect::new(
+        panel.right() - t.px(88.0),
+        panel.bottom() - t.px(38.0),
+        t.px(76.0),
+        t.px(26.0),
+    );
+    ui::button(canvas, &t, ok, ok_label, ui::State::Normal, tone);
+    shell.hotspots_mut().push(ok, Hot::DialogConfirm);
+    if !matches!(dialog, crate::apps::DialogKind::Error(_)) {
+        let no = Rect::new(ok.x - t.px(84.0), ok.y, t.px(76.0), t.px(26.0));
+        ui::button(canvas, &t, no, "Cancel", ui::State::Normal, Tone::Neutral);
+        shell.hotspots_mut().push(no, Hot::DialogCancel);
+    }
+    if with_field {
+        let field = Rect::new(
+            panel.x + t.sp(Space::Md),
+            panel.bottom() - t.px(74.0),
+            panel.w - t.sp(Space::Md) * 2.0,
+            t.px(30.0),
+        );
+        let placeholder = match &dialog {
+            crate::apps::DialogKind::Rename { current, .. } => current.clone(),
+            _ => "Name".to_owned(),
+        };
+        ui::text_field(
+            canvas,
+            &t,
+            field,
+            &shell.files.dialog_field,
+            &placeholder,
+            shell.files.dialog_focus,
+        );
+        shell
+            .hotspots_mut()
+            .push(field, Hot::Files(FilesHot::Filter));
+    }
+}
+
+/// The text viewer: a pane over the Files window with page scrolling.
+fn draw_viewer(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
+    let Some(viewer) = shell.files.viewer.clone() else {
+        return;
+    };
+    let t = shell.tokens.clone();
+    ui::surface(canvas, &t, body, 0.0, Material::Scrim);
+    let panel = body.inflate(-t.sp(Space::Lg));
+    ui::surface(canvas, &t, panel, t.radius(Radius::Md), Material::Popover);
+    let s_title = t.style_label();
+    let shown_title = ui::elide(&viewer.path, &s_title, panel.w - t.px(90.0));
+    font::draw(
+        canvas,
+        &shown_title,
+        panel.x + t.sp(Space::Sm),
+        panel.y + t.px(22.0),
+        &s_title,
+    );
+    let close_r = Rect::new(
+        panel.right() - t.px(28.0),
+        panel.y + t.px(8.0),
+        t.px(20.0),
+        t.px(20.0),
+    );
+    icons::draw(canvas, Icon::Close, close_r, t.text_dim(), 1.2);
+    shell
+        .hotspots_mut()
+        .push(close_r, Hot::Files(FilesHot::ViewerClose));
+
+    let text_area = Rect::new(
+        panel.x + t.sp(Space::Sm),
+        panel.y + t.px(32.0),
+        panel.w - t.sp(Space::Sm) * 2.0,
+        panel.h - t.px(70.0),
+    );
+    let line_h = t.px(16.0);
+    let rows = ((text_area.h / line_h) as usize).max(1);
+    let (lines, total) = viewer.window(rows);
+    let saved = canvas.push_clip(text_area);
+    let s = Style::new(t.text_px(TypeStep::Caption), t.text());
+    let mut ly = text_area.y + t.px(11.0);
+    for line in &lines {
+        font::draw(
+            canvas,
+            &ui::elide(line, &s, text_area.w),
+            text_area.x,
+            ly,
+            &s,
+        );
+        ly += line_h;
+    }
+    canvas.set_clip(saved);
+
+    // Pager.
+    let pager = Rect::new(
+        panel.x + t.sp(Space::Sm),
+        panel.bottom() - t.px(30.0),
+        panel.w - t.sp(Space::Sm) * 2.0,
+        t.px(20.0),
+    );
+    let up = Rect::new(pager.x, pager.y, t.px(56.0), t.px(20.0));
+    ui::button(canvas, &t, up, "▲ Up", ui::State::Normal, Tone::Neutral);
+    shell
+        .hotspots_mut()
+        .push(up, Hot::Files(FilesHot::ViewerUp));
+    let down = Rect::new(pager.right() - t.px(66.0), pager.y, t.px(66.0), t.px(20.0));
+    ui::button(canvas, &t, down, "▼ Down", ui::State::Normal, Tone::Neutral);
+    shell
+        .hotspots_mut()
+        .push(down, Hot::Files(FilesHot::ViewerDown));
+    let s_page = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    let page = format!("line {} of {total}", viewer.scroll.saturating_add(1));
+    let pw = font::measure(&page, &s_page);
+    font::draw(
+        canvas,
+        &page,
+        pager.center().0 - pw / 2.0,
+        pager.y + t.px(13.0),
+        &s_page,
+    );
+}
+
+/// Human sizes, the way file managers round them.
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1_024;
+    const MB: u64 = KB * KB;
+    const GB: u64 = MB * KB;
+    match bytes {
+        b if b >= GB => format!("{:.1} GB", b as f64 / GB as f64),
+        b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
+        b if b >= KB => format!("{:.0} KB", b as f64 / KB as f64),
+        b => format!("{b} B"),
+    }
+}
+
+/// The Browser window: tab strip, omnibox row, page area.
+fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
+    let t = shell.tokens.clone();
+    let app = shell.browser.clone();
+
+    // --- tab strip ---
+    let strip_h = t.px(30.0);
+    let mut tx = body.x + t.px(4.0);
+    let s_tab = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    for (i, tab) in app.tabs.iter().enumerate() {
+        let active_tab = i == app.active;
+        let w = t.px(150.0);
+        let r = Rect::new(tx, body.y + t.px(2.0), w, strip_h - t.px(4.0));
+        ui::surface(
+            canvas,
+            &t,
+            r,
+            t.radius(Radius::Sm),
+            if active_tab {
+                ui::Material::Elevated
+            } else {
+                ui::Material::Flat
+            },
+        );
+        let shown = if tab.url.len() > 20 {
+            format!("{}…", &tab.url[..17])
+        } else {
+            tab.url.clone()
+        };
+        font::draw(canvas, &shown, r.x + t.px(8.0), r.y + t.px(14.0), &s_tab);
+        shell.hotspots_mut().push(r, Hot::BrowserTab(i));
+        // Close ✕.
+        let cr = Rect::new(
+            r.right() - t.px(18.0),
+            r.y + t.px(3.0),
+            t.px(15.0),
+            t.px(15.0),
+        );
+        let s_x = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        font::draw(canvas, "✕", cr.x + t.px(3.0), cr.y + t.px(10.0), &s_x);
+        shell.hotspots_mut().push(cr, Hot::BrowserCloseTab(i));
+        tx += w + t.px(2.0);
+    }
+    let plus = Rect::new(tx, body.y + t.px(5.0), t.px(24.0), t.px(20.0));
+    let s_plus = Style::new(t.text_px(TypeStep::Body), t.text_dim());
+    font::draw(
+        canvas,
+        "+",
+        plus.x + t.px(7.0),
+        plus.y + t.px(14.0),
+        &s_plus,
+    );
+    shell.hotspots_mut().push(plus, Hot::BrowserNewTab);
+
+    // --- omnibox row ---
+    let bar = Rect::new(body.x, body.y + strip_h, body.w, t.px(30.0));
+    ui::surface(canvas, &t, bar, 0.0, ui::Material::Flat);
+    let focused_tab_url = app.tab().map(|tb| tb.url.clone()).unwrap_or_default();
+    let omni_text = if app.omnibox_focus {
+        app.omnibox.clone()
+    } else {
+        focused_tab_url
+    };
+    let field = Rect::new(
+        bar.x + t.px(8.0),
+        bar.y + t.px(4.0),
+        bar.w - t.px(16.0),
+        bar.h - t.px(8.0),
+    );
+    canvas.stroke_round_rect(field, t.radius(Radius::Sm), 1.0, t.border());
+    let s_omni = Style::new(
+        t.text_px(TypeStep::Footnote),
+        if app.omnibox_focus {
+            t.text()
+        } else {
+            t.text_dim()
+        },
+    );
+    font::draw(
+        canvas,
+        &omni_text,
+        field.x + t.px(8.0),
+        field.y + t.px(14.0),
+        &s_omni,
+    );
+    if app.omnibox_focus {
+        let caret_x = field.x + t.px(8.0) + font::measure(&omni_text, &s_omni);
+        canvas.stroke_line(
+            caret_x + 1.0,
+            field.y + 3.0,
+            caret_x + 1.0,
+            field.bottom() - 3.0,
+            1.0,
+            t.accent(),
+        );
+    }
+    shell.hotspots_mut().push(field, Hot::BrowserOmnibox);
+
+    let items = [
+        ("Back", Hot::BrowserBack),
+        ("Forward", Hot::BrowserForward),
+        (
+            if app.is_bookmarked() { "Saved" } else { "Save" },
+            Hot::BrowserBookmark,
+        ),
+        ("History", Hot::BrowserHistory),
+        ("Bookmarks", Hot::BrowserBookmarks),
+        ("Downloads", Hot::BrowserDownloads),
+        ("Site", Hot::BrowserSitePermissions),
+    ];
+    let button_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    let desired: Vec<f32> = items
+        .iter()
+        .map(|(label, _)| font::measure(label, &button_style) + t.px(18.0))
+        .collect();
+    let gap = t.px(4.0);
+    let available = (body.w - t.px(12.0)).max(t.px(120.0));
+    let gaps = items.len().saturating_sub(1);
+    let single_width: f32 = desired.iter().sum::<f32>() + gap * gaps as f32;
+    let groups: &[(usize, usize)] = if single_width <= available {
+        &[(0, 7)]
+    } else {
+        &[(0, 3), (3, 7)]
+    };
+    let controls = Rect::new(
+        body.x,
+        bar.bottom(),
+        body.w,
+        if groups.len() == 1 {
+            t.px(30.0)
+        } else {
+            t.px(56.0)
+        },
+    );
+    ui::surface(canvas, &t, controls, 0.0, ui::Material::Flat);
+    for (row_index, (start, end)) in groups.iter().copied().enumerate() {
+        let row: &[f32] = desired.get(start..end).unwrap_or_default();
+        let row_gaps = end.saturating_sub(start).saturating_sub(1);
+        let row_width: f32 = row.iter().sum::<f32>() + gap * row_gaps as f32;
+        let scale = (available / row_width.max(1.0)).min(1.0);
+        let mut bx = controls.x + t.px(6.0);
+        for index in start..end {
+            let Some((label, hot)) = items.get(index).copied() else {
+                continue;
+            };
+            let width = desired.get(index).copied().unwrap_or(0.0) * scale;
+            let rect = Rect::new(
+                bx,
+                controls.y + t.px(3.0) + row_index as f32 * t.px(26.0),
+                width,
+                t.px(24.0),
+            );
+            let disabled = (matches!(hot, Hot::BrowserBack) && !app.can_go_back())
+                || (matches!(hot, Hot::BrowserForward) && !app.can_go_forward());
+            let selected = (matches!(hot, Hot::BrowserHistory)
+                && app.panel == crate::apps::BrowserPanel::History)
+                || (matches!(hot, Hot::BrowserBookmarks)
+                    && app.panel == crate::apps::BrowserPanel::Bookmarks)
+                || (matches!(hot, Hot::BrowserDownloads)
+                    && app.panel == crate::apps::BrowserPanel::Downloads)
+                || (matches!(hot, Hot::BrowserSitePermissions)
+                    && app.panel == crate::apps::BrowserPanel::SitePermissions)
+                || (matches!(hot, Hot::BrowserBookmark) && app.is_bookmarked());
+            let state = if disabled {
+                State::Disabled
+            } else if selected {
+                State::Selected
+            } else if shell.is_highlighted(hot) {
+                State::Hover
+            } else {
+                State::Normal
+            };
+            let shown_label = ui::elide(label, &button_style, (width - t.px(12.0)).max(t.px(8.0)));
+            ui::button(canvas, &t, rect, &shown_label, state, Tone::Neutral);
+            if !disabled {
+                shell.hotspots_mut().push(rect, hot);
+            }
+            bx += width + gap;
+        }
+    }
+
+    // --- page area: engine frame when one arrives, honest state otherwise ---
+    let page = Rect::new(
+        body.x,
+        controls.bottom(),
+        body.w,
+        body.bottom() - controls.bottom(),
+    );
+    let Some(tab) = app.tab() else {
+        return;
+    };
+    let s_head = Style::new(t.text_px(TypeStep::Title3), t.text());
+    let s_body = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+
+    match app.panel {
+        crate::apps::BrowserPanel::History | crate::apps::BrowserPanel::Bookmarks => {
+            let history = app.panel == crate::apps::BrowserPanel::History;
+            let title = if history { "History" } else { "Bookmarks" };
+            font::draw(
+                canvas,
+                title,
+                page.x + t.sp(Space::Md),
+                page.y + t.px(28.0),
+                &s_head,
+            );
+            let rows: Vec<&String> = if history {
+                app.history.iter().take(12).collect()
+            } else {
+                app.bookmarks.iter().rev().take(12).collect()
+            };
+            if rows.is_empty() {
+                font::draw(
+                    canvas,
+                    if history {
+                        "No pages visited yet"
+                    } else {
+                        "No bookmarks saved yet"
+                    },
+                    page.x + t.sp(Space::Md),
+                    page.y + t.px(58.0),
+                    &s_body,
+                );
+            }
+            for (index, url) in rows.iter().enumerate() {
+                let row = Rect::new(
+                    page.x + t.sp(Space::Sm),
+                    page.y + t.px(42.0) + index as f32 * t.px(30.0),
+                    page.w - t.sp(Space::Sm) * 2.0,
+                    t.px(28.0),
+                );
+                let hot = if history {
+                    Hot::BrowserHistoryItem(index)
+                } else {
+                    Hot::BrowserBookmarkItem(index)
+                };
+                if shell.is_highlighted(hot) {
+                    canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.text(), 0.06));
+                }
+                font::draw(
+                    canvas,
+                    &ui::elide(url, &s_body, row.w - t.px(12.0)),
+                    row.x + t.px(8.0),
+                    row.y + t.px(18.0),
+                    &s_body,
+                );
+                shell.hotspots_mut().push(row, hot);
+            }
+            return;
+        }
+        crate::apps::BrowserPanel::Downloads => {
+            font::draw(
+                canvas,
+                "Downloads",
+                page.x + t.sp(Space::Md),
+                page.y + t.px(28.0),
+                &s_head,
+            );
+            if app.downloads.is_empty() {
+                let message = app
+                    .downloads_status
+                    .as_deref()
+                    .unwrap_or("No downloads reported by the browser engine yet");
+                font::draw(
+                    canvas,
+                    &ui::elide(message, &s_body, page.w - t.sp(Space::Md) * 2.0),
+                    page.x + t.sp(Space::Md),
+                    page.y + t.px(58.0),
+                    &s_body,
+                );
+            }
+            for (index, download) in app.downloads.iter().take(14).enumerate() {
+                let row_y = page.y + t.px(42.0) + index as f32 * t.px(28.0);
+                font::draw(
+                    canvas,
+                    &ui::elide(&download.name, &s_body, page.w * 0.62),
+                    page.x + t.sp(Space::Md),
+                    row_y + t.px(18.0),
+                    &s_body,
+                );
+                let size = format_size(download.size);
+                let width = font::measure(&size, &s_body);
+                font::draw(
+                    canvas,
+                    &size,
+                    page.right() - t.sp(Space::Md) - width,
+                    row_y + t.px(18.0),
+                    &s_body,
+                );
+            }
+            return;
+        }
+        crate::apps::BrowserPanel::SitePermissions => {
+            font::draw(
+                canvas,
+                "Site controls",
+                page.x + t.sp(Space::Md),
+                page.y + t.px(28.0),
+                &s_head,
+            );
+            let origin = tab.url.split('/').take(3).collect::<Vec<_>>().join("/");
+            font::draw(
+                canvas,
+                &ui::elide(&origin, &s_body, page.w - t.sp(Space::Md) * 2.0),
+                page.x + t.sp(Space::Md),
+                page.y + t.px(58.0),
+                &s_body,
+            );
+            let notice = "This engine does not surface site permission requests to LitricOS, so this page cannot grant device access.";
+            font::draw(
+                canvas,
+                &ui::elide(notice, &s_body, page.w - t.sp(Space::Md) * 2.0),
+                page.x + t.sp(Space::Md),
+                page.y + t.px(86.0),
+                &s_body,
+            );
+            return;
+        }
+        crate::apps::BrowserPanel::Page => {}
+    }
+
+    // A frame from the engine session replaces the placeholder entirely.
+    if let (Some(frame), Some((w, h))) = (shell.browser_frame.as_ref(), app.last_frame) {
+        blit_engine_frame(canvas, frame, w, h, page);
+        return;
+    }
+
+    let cy = page.center().1;
+    if tab.url == "litric://about" {
+        // The start page, in the shape users already know: a wordmark, one
+        // centered search box, engine chips, and a few quick links. One
+        // input path — the box drives the omnibox, so Enter searches with
+        // the chosen engine (Google by default).
+        let cx = page.center().0;
+        let s_word = Style::bold(t.text_px(TypeStep::Title1), t.text());
+        let word = "Litric Search";
+        let ww = font::measure(word, &s_word);
+        font::draw(canvas, word, cx - ww / 2.0, page.y + t.px(56.0), &s_word);
+
+        let fw = t.px(460.0).min(page.w - t.px(40.0));
+        let fr = Rect::new(cx - fw / 2.0, page.y + t.px(76.0), fw, t.px(40.0));
+        canvas.fill_round_rect(fr, t.radius(Radius::Lg), with_alpha(rgb(0xFFFFFF), 0.08));
+        canvas.stroke_round_rect(
+            fr,
+            t.radius(Radius::Lg),
+            1.0,
+            if app.omnibox_focus {
+                t.accent()
+            } else {
+                t.border()
+            },
+        );
+        let s_field = Style::new(t.text_px(TypeStep::Body), t.text());
+        let typed = if app.omnibox_focus {
+            app.omnibox.clone()
+        } else {
+            String::new()
+        };
+        if typed.is_empty() && !app.omnibox_focus {
+            font::draw(
+                canvas,
+                "Search the web with Google, or type a URL",
+                fr.x + t.px(14.0),
+                fr.y + t.px(25.0),
+                &s_body,
+            );
+        } else {
+            font::draw(
+                canvas,
+                &typed,
+                fr.x + t.px(14.0),
+                fr.y + t.px(25.0),
+                &s_field,
+            );
+        }
+        if app.omnibox_focus {
+            let caret_x = fr.x + t.px(14.0) + font::measure(&typed, &s_field);
+            canvas.stroke_line(
+                caret_x + 1.0,
+                fr.y + t.px(8.0),
+                caret_x + 1.0,
+                fr.bottom() - t.px(8.0),
+                1.0,
+                t.accent(),
+            );
+        }
+        shell.hotspots_mut().push(fr, Hot::BrowserOmnibox);
+
+        // Engine chips: the selected one carries the accent fill and the
+        // check is its own glyph — state never rests on colour alone.
+        let chips = crate::apps::SearchEngine::ALL;
+        let chip_w = t.px(96.0);
+        let total = chip_w * (chips.len() as f32) + t.px(8.0) * (chips.len() as f32 - 1.0);
+        let mut cx2 = cx - total / 2.0;
+        for (i, e) in chips.iter().enumerate() {
+            let r = Rect::new(cx2, fr.bottom() + t.px(16.0), chip_w, t.px(26.0));
+            let selected = app.engine == *e;
+            if selected {
+                canvas.fill_round_rect(r, t.radius(Radius::Md), with_alpha(t.accent(), 0.22));
+            }
+            canvas.stroke_round_rect(
+                r,
+                t.radius(Radius::Md),
+                1.0,
+                if selected { t.accent() } else { t.border() },
+            );
+            let s_chip = Style::bold(t.text_px(TypeStep::Footnote), t.text());
+            let lw = font::measure(e.label(), &s_chip);
+            font::draw(
+                canvas,
+                e.label(),
+                r.center().0 - lw / 2.0,
+                r.center().1 + s_chip.size * 0.36,
+                &s_chip,
+            );
+            shell.hotspots_mut().push(r, Hot::EngineChip(i as u8));
+            cx2 += chip_w + t.px(8.0);
+        }
+
+        // Quick links: one row of tiles that navigate for real.
+        let links = [("Google", 0u8), ("Wikipedia", 1), ("GitHub", 2)];
+        let tile_w = t.px(110.0);
+        let total = tile_w * (links.len() as f32) + t.px(12.0) * (links.len() as f32 - 1.0);
+        let mut lx = cx - total / 2.0;
+        for (label, i) in links {
+            let r = Rect::new(lx, fr.bottom() + t.px(64.0), tile_w, t.px(48.0));
+            let hot = Hot::QuickLink(i);
+            let hovered = shell.is_highlighted(hot);
+            if hovered {
+                canvas.fill_round_rect(r, t.radius(Radius::Md), with_alpha(rgb(0xFFFFFF), 0.09));
+            }
+            canvas.stroke_round_rect(r, t.radius(Radius::Md), 1.0, t.border());
+            let s_link = Style::new(t.text_px(TypeStep::Footnote), t.text());
+            let lw = font::measure(label, &s_link);
+            font::draw(
+                canvas,
+                label,
+                r.center().0 - lw / 2.0,
+                r.center().1 + s_link.size * 0.36,
+                &s_link,
+            );
+            shell.hotspots_mut().push(r, hot);
+            lx += tile_w + t.px(12.0);
+        }
+        return;
+    } else {
+        font::draw(
+            canvas,
+            &tab.url,
+            page.x + t.sp(Space::Lg),
+            cy - t.px(10.0),
+            &s_head,
+        );
+        let note = if app.status.is_empty() {
+            "No engine session yet: right-click the page → Start engine session, and litric-browserd renders this address.".to_owned()
+        } else {
+            app.status.clone()
+        };
+        font::draw(
+            canvas,
+            &ui::elide(&note, &s_body, page.w - t.sp(Space::Lg) * 2.0),
+            page.x + t.sp(Space::Lg),
+            cy + t.px(14.0),
+            &s_body,
+        );
+    }
+
+    // --- engine picker: Google is the default, the choice is real ---
+    let pick_h = t.px(24.0);
+    let pick = Rect::new(page.x, page.bottom() - pick_h, page.w, pick_h);
+    ui::surface(canvas, &t, pick, 0.0, Material::Flat);
+    let s_pick = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    font::draw(
+        canvas,
+        "Search engine:",
+        pick.x + t.px(8.0),
+        pick.y + t.px(15.0),
+        &s_pick,
+    );
+    let mut ex = pick.x + t.px(96.0);
+    for engine in crate::apps::SearchEngine::ALL {
+        let label = engine.title();
+        let w = font::measure(label, &s_pick) + t.px(14.0);
+        let r = Rect::new(ex, pick.y + t.px(3.0), w, pick_h - t.px(6.0));
+        let active = app.engine == engine;
+        if active {
+            canvas.fill_round_rect(r, t.radius(Radius::Sm), with_alpha(t.accent(), 0.18));
+        }
+        let s = Style::new(
+            t.text_px(TypeStep::Caption),
+            if active { t.accent() } else { t.text_dim() },
+        );
+        font::draw(
+            canvas,
+            label,
+            r.x + t.px(6.0),
+            r.y + r.h / 2.0 + s.size * 0.36,
+            &s,
+        );
+        shell.hotspots_mut().push(
+            r,
+            Hot::MenuRow(match engine {
+                crate::apps::SearchEngine::Google => crate::apps::MenuAction::EngineGoogle,
+                crate::apps::SearchEngine::DuckDuckGo => crate::apps::MenuAction::EngineDuckDuckGo,
+                crate::apps::SearchEngine::Bing => crate::apps::MenuAction::EngineBing,
+            }),
+        );
+        ex += w + t.px(6.0);
+    }
+}
+
+/// Draw an engine frame into the page area: row-by-row RGBA blit, centred,
+/// scaled down only when the page does not match the frame. Pixel work is
+/// bounded by the clip: a frame larger than the page never costs more than
+/// the page area.
+fn blit_engine_frame(canvas: &mut Canvas, frame: &[u8], w: u32, h: u32, page: Rect) {
+    let needed = u64::from(w)
+        .checked_mul(u64::from(h))
+        .and_then(|n| n.checked_mul(4))
+        .and_then(|n| usize::try_from(n).ok())
+        .unwrap_or(usize::MAX);
+    if frame.len() < needed || w == 0 || h == 0 {
+        return;
+    }
+    let saved = canvas.push_clip(page);
+    let fw = w as f32;
+    let fh = h as f32;
+    // Fit inside the page, preserving aspect.
+    let scale = (page.w / fw).min(page.h / fh).min(1.0);
+    let dw = fw * scale;
+    let dh = fh * scale;
+    let x0 = page.x + (page.w - dw) / 2.0;
+    let y0 = page.y + (page.h - dh) / 2.0;
+    let step_x = fw / dw;
+    let step_y = fh / dh;
+    let mut py = y0;
+    while py < y0 + dh {
+        let src_y = usize::try_from(((py - y0) * step_y) as i64)
+            .unwrap_or(0)
+            .min((h as usize).saturating_sub(1));
+        let mut px = x0;
+        while px < x0 + dw {
+            let src_x = usize::try_from(((px - x0) * step_x) as i64)
+                .unwrap_or(0)
+                .min((w as usize).saturating_sub(1));
+            let i = src_y
+                .checked_mul(w as usize)
+                .and_then(|r| r.checked_add(src_x))
+                .and_then(|p| p.checked_mul(4))
+                .unwrap_or(usize::MAX);
+            // A clamped source coordinate can touch the last row's tail;
+            // `get` keeps a rounded step from panicking on it.
+            let at = |off: usize| i.checked_add(off).and_then(|j| frame.get(j)).copied();
+            let (b, g, r, a) = match (at(0), at(1), at(2), at(3)) {
+                (Some(b), Some(g), Some(r), Some(a)) => {
+                    (u32::from(b), u32::from(g), u32::from(r), u32::from(a))
+                }
+                _ => {
+                    px += 1.0;
+                    continue;
+                }
+            };
+            let color = (a << 24) | (r << 16) | (g << 8) | b;
+            canvas.put(
+                (px as i64).max(0),
+                (py as i64).max(0),
+                if a == 0xFF {
+                    color
+                } else {
+                    crate::canvas::blend(
+                        canvas
+                            .get((px as i64).max(0), (py as i64).max(0))
+                            .unwrap_or(0),
+                        color,
+                        1.0,
+                    )
+                },
+            );
+            px += 1.0;
+        }
+        py += 1.0;
+    }
+    canvas.set_clip(saved);
+}
+
+/// The system monitor, filled from measured values only.
+///
+/// Minimal by rule, not by omission of work: a row exists only when its value
+/// was measured. An unmeasurable quantity is simply absent — the interface
+/// never shows a control that says it knows nothing.
+fn draw_activity(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
+    let t = shell.tokens.clone();
+    let facts = shell.facts.clone();
+    // The monitor has several measured sections; at the old 340px default the
+    // last of them painted through the process table. Keep the overview and
+    // table in separate clipped panes, and bias the dashboard toward enough
+    // vertical space for the CPU/memory cards and device summary.
+    let table_h = (body.h * 0.38)
+        .clamp(t.px(158.0), t.px(280.0))
+        .min(body.h * 0.55);
+    let top_h = (body.h - table_h).max(0.0);
+    let overview = Rect::new(body.x, body.y, body.w, top_h);
+    let saved = canvas.push_clip(overview);
+    crate::monitor::draw(canvas, &t, &facts, &shell.activity, overview);
+    canvas.set_clip(saved);
+    let table_rect = Rect::new(body.x, body.y + top_h, body.w, table_h);
+    crate::ui::separator(canvas, &t, Rect::new(body.x, table_rect.y, body.w, 1.0));
+
+    // Search stays above the clipped process table so it remains visible when
+    // the window is short. Typing filters the actual TaskManager rows.
+    let search = Rect::new(
+        table_rect.x + t.sp(Space::Sm),
+        table_rect.y + t.sp(Space::Xs),
+        (table_rect.w - t.sp(Space::Sm) * 2.0).min(t.px(300.0)),
+        t.px(28.0),
+    );
+    let search_hot = Hot::ActivityFilter;
+    ui::text_field(
+        canvas,
+        &t,
+        search,
+        &shell.activity.prefs.filter_text,
+        "Search processes",
+        shell.is_highlighted(search_hot),
+    );
+    shell.hotspots_mut().push(search, search_hot);
+
+    let table_body = Rect::new(
+        table_rect.x,
+        search.bottom() + t.sp(Space::Xxs),
+        table_rect.w,
+        (table_rect.bottom() - search.bottom() - t.sp(Space::Xxs)).max(0.0),
+    );
+    let saved = canvas.push_clip(table_body);
+    crate::activity::table(canvas, &t, &shell.activity, table_body);
+    canvas.set_clip(saved);
+
+    // Register exactly the visible heading widths used by the table renderer.
+    // Clicking a heading toggles its sort; the keyboard focus ring uses the
+    // same rectangle as pointer hit-testing.
+    let inner = Rect::new(
+        table_body.x + t.sp(Space::Sm),
+        table_body.y + t.sp(Space::Xs),
+        (table_body.w - t.sp(Space::Sm) * 2.0).max(0.0),
+        table_body.h,
+    );
+    let (columns, _) = crate::activity::column_widths(&shell.activity, t.scale, inner.w);
+    let header_style = Style::bold(t.text_px(TypeStep::Footnote), t.text_dim());
+    let header_h = header_style.size + t.sp(Space::Sm);
+    let mut x = inner.x;
+    for (column, width) in columns {
+        let rect = Rect::new(x, inner.y, width, header_h);
+        let hot = Hot::ActivitySort(column);
+        shell.hotspots_mut().push(rect, hot);
+        if shell.is_highlighted(hot) {
+            canvas.stroke_round_rect(rect, t.radius(Radius::Sm), 1.0, t.accent());
+        }
+        x += width;
+    }
+}
+
+/// The environment list: real states, from the daemon.
+fn draw_environments(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
+    let t = shell.tokens.clone();
+    let rows = shell.environments.clone();
+    let mut col = ui::Column::new(body, t.sp(Space::Md), t.sp(Space::Xs));
+
+    if rows.is_empty() {
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+        font::draw(
+            canvas,
+            "Unavailable - litric-sysd did not answer",
+            col.x,
+            col.cursor + t.px(20.0),
+            &s,
+        );
+        return;
+    }
+
+    // Calm list: dot + title + hotkey. State shows only where it varies from
+    // "not running" — a green dot for the active row, nothing for the rest —
+    // instead of a badge shouting every state in capitals.
+    for (i, e) in rows.iter().enumerate() {
+        let row = col.row(t.px(40.0));
+        let hot = Hot::QuickEnvironment(i as u8);
+        let hovered = shell.is_highlighted(hot);
+        if e.active || hovered {
+            canvas.fill_round_rect(
+                row,
+                t.radius(Radius::Sm),
+                with_alpha(t.text(), if e.active { 0.07 } else { 0.045 }),
+            );
+        }
+        let dot_y = row.y + row.h / 2.0;
+        let dot = t.px(6.0);
+        canvas.fill_circle(
+            row.x + dot,
+            dot_y,
+            dot / 2.0,
+            if e.active {
+                t.tone(Tone::Good)
+            } else {
+                with_alpha(t.text_dim(), 0.5)
+            },
+        );
+        let s = Style::new(
+            t.text_px(TypeStep::Footnote),
+            if e.active { t.text() } else { t.text_dim() },
+        );
+        font::draw(
+            canvas,
+            &e.title,
+            row.x + t.px(18.0),
+            dot_y + s.size * 0.36,
+            &s,
+        );
+        if !e.hotkey.is_empty() {
+            let s_key = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            let w = font::measure(&e.hotkey, &s_key);
+            font::draw(
+                canvas,
+                &e.hotkey,
+                row.right() - w,
+                dot_y + s_key.size * 0.36,
+                &s_key,
+            );
+        }
+        shell.hotspots_mut().push(row, hot);
+    }
+}
+
+/// Settings: real shell-owned preferences and measured system facts.
+fn draw_settings(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
+    crate::settings_view::draw(canvas, shell, body);
+}
+
+/// A window for an application id the shell has no view for.
+///
+/// It says exactly that. An empty panel looks like a bug; a panel that
+/// invented content would be worse. Every application this shell ships has a
+/// real view — `draw_window_body` routes each of them — so this is reachable
+/// only for a window whose id is not one of the shipped applications, and the
+/// words say precisely that. (This function used to carry a "Not implemented"
+/// sentence per shipped app, which stopped being true one app at a time as
+/// each gained its view; a window that lies about what works is worse than
+/// one that says nothing.)
+fn draw_not_implemented(canvas: &mut Canvas, shell: &mut Shell, body: Rect, app_id: &str) {
+    let t = shell.tokens.clone();
+    let title = "Unknown application";
+    let detail = format!(
+        "No view is registered for {app_id}. Every application this shell ships \
+         has a real window; this id is not one of them."
+    );
+
+    let mut col = ui::Column::new(body, t.sp(Space::Xl), t.sp(Space::Sm));
+    col.space(t.px(10.0));
+    icons::draw(
+        canvas,
+        Icon::Info,
+        Rect::new(col.x, col.cursor, t.px(28.0), t.px(28.0)),
+        t.text_dim(),
+        1.0,
+    );
+    col.space(t.px(40.0));
+    font::draw(
+        canvas,
+        title,
+        col.x,
+        col.cursor,
+        &t.style_bold(TypeStep::Title3),
+    );
+    col.space(t.px(26.0));
+
+    // Wrap the detail by measuring, so a narrow window does not lose the end
+    // of the sentence off its right edge.
+    let s = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    let mut line = String::new();
+    for word in detail.split_whitespace() {
+        let trial = if line.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{line} {word}")
+        };
+        if font::measure(&trial, &s) > col.width {
+            font::draw(canvas, &line, col.x, col.cursor, &s);
+            col.space(t.px(18.0));
+            line = word.to_owned();
+        } else {
+            line = trial;
+        }
+    }
+    if !line.is_empty() {
+        font::draw(canvas, &line, col.x, col.cursor, &s);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Overlays
+// ---------------------------------------------------------------------------
+
+fn draw_overlay(canvas: &mut Canvas, shell: &mut Shell) {
+    match shell.overlay.clone() {
+        Overlay::None => {}
+        // The launcher is not drawn here: it *is* the dock, expanded. One
+        // surface morphs from the pill at the bottom edge into the panel, so
+        // there is one thing on screen rather than two that cross-fade -- which
+        // is the whole point of the design (`screens/desktop/b-dock-morph`).
+        Overlay::Launcher { .. } => {}
+        Overlay::Switcher { selected } => draw_switcher(canvas, shell, selected),
+        Overlay::QuickSettings => draw_quick_settings(canvas, shell),
+        Overlay::Power => draw_power_menu(canvas, shell),
+        Overlay::Litro => draw_litro_menu(canvas, shell),
+        Overlay::Notifications => draw_notification_list(canvas, shell),
+    }
+}
+
+/// The applications pinned to the resting dock, as indices into [`App::ALL`]:
+/// Files, Browser, Terminal, Settings. The design pins four; the launcher
+/// next to them carries all eight. [`Hot::DockItem`] keeps meaning an index
+/// into `App::ALL`, so nothing that clicks a dock item changes.
+const DOCK_PINNED: [usize; 4] = [3, 4, 5, 2];
+
+/// The dock, and the launcher it becomes.
+///
+/// One surface, two states. At rest it is a glass pill at the bottom edge
+/// carrying the launcher button, the pinned applications and a search field.
+/// The system bar owns the clock, so it appears once. Click the button — or
+/// the field — and the same surface grows
+/// into the launcher: a title row and a grid of application tiles, with the
+/// dock's own row still across the bottom so the
+/// icons the user was aiming at have not moved.
+///
+/// Ported from `screens/desktop/b-dock-morph`, with two changes that are ours:
+/// the grid carries this system's eight applications rather than the
+/// prototype's eight mock ones, and the shortcut row is a real row of system
+/// actions rather than a link to a design page.
+///
+/// The dock is not an overlay: it is on screen whenever the desktop is, so its
+/// hotspots are registered on the same terms every other control's are. A dock
+/// that had to be summoned -- and whose clicks had to be withheld until it had
+/// finished sliding -- could not show which applications are running, because
+/// the indicator was the thing being hidden.
+fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    if !shell.settings.values.on("dock.enabled") {
+        return;
+    }
+    let dock_scale = (shell.settings.values.num("dock.size") / 100.0).clamp(0.6, 1.6);
+    let labels = shell.settings.values.on("dock.labels");
+    let running_dots = shell.settings.values.on("dock.running-indicator");
+    let magnify = shell.settings.values.on("dock.magnify");
+    let launcher_button = shell.settings.values.on("dock.launcher-button");
+    let screen = shell.wm.screen();
+    // The morph: 0 at rest, 1 fully expanded. Its spring has its own target so
+    // that closing the launcher animates back down instead of snapping.
+    let morph = shell.anims().launcher_morph.value().clamp(0.0, 1.0);
+    let (query, selected) = match &shell.overlay {
+        Overlay::Launcher { query, selected } => (query.clone(), *selected),
+        _ => (String::new(), 0usize),
+    };
+    let searching = !query.trim().is_empty();
+
+    let pad = t.px(12.0);
+    let item = t.px(52.0) * dock_scale;
+    let gap = t.px(shell.settings.values.num("dock.gap").clamp(2.0, 20.0));
+    let apps = &crate::shortcuts::App::ALL;
+    let pinned: Vec<(usize, App)> = DOCK_PINNED
+        .iter()
+        .filter_map(|i| apps.get(*i).map(|a| (*i, *a)))
+        .collect();
+
+    // The resting pill, measured from what it holds. Time already lives in
+    // the system bar, so the dock has more room for its useful search field.
+    let bubble_w = t.px(190.0);
+    let dock_w = pad * 2.0
+        + item
+        + t.px(10.0)
+        + item * pinned.len() as f32
+        + gap * (pinned.len().saturating_sub(1)) as f32
+        + t.px(10.0)
+        + bubble_w;
+    let dock_h = t.px(76.0) * dock_scale;
+
+    // The expanded panel.
+    let cols = 4usize;
+    let rows = apps
+        .len()
+        .max(1)
+        .saturating_add(cols.saturating_sub(1))
+        .checked_div(cols)
+        .unwrap_or(1);
+    let tile = t.px(176.0);
+    let tile_h = t.px(136.0);
+    let panel_w = t.px(760.0).min(screen.w - t.px(40.0));
+    let panel_h = t.px(72.0)          // title row
+        + tile_h * rows as f32
+        + dock_h
+        + t.px(24.0);
+
+    let w = dock_w + (panel_w - dock_w) * morph;
+    let h = dock_h + (panel_h - dock_h) * morph;
+    let radius = t.px(38.0) + (t.px(36.0) - t.px(38.0)) * morph;
+    let x = (screen.w - w) / 2.0;
+    // Bottom-anchored, 24 logical px above the edge. The panel is never scaled
+    // by a spring: that pushed titles and text below the framebuffer once, and
+    // the dock is a surface the user reads, not an animation.
+    let y = screen.h - t.px(24.0) - h;
+    let panel = Rect::new(x, y, w, h);
+
+    // The dim over the desktop, which deepens as the panel grows. A dock that
+    // is always on screen does not dim the desktop behind it: a permanent scrim
+    // over everything is a modal, and the desktop is not a modal. The dim
+    // arrives with the launcher, which is.
+    let dim = if morph <= 0.01 {
+        0.0
+    } else if searching {
+        0.45
+    } else {
+        0.26 * morph
+    };
+    canvas.fill_round_rect(
+        Rect::new(0.0, 0.0, screen.w, screen.h),
+        0.0,
+        with_alpha(rgb(0x000000), dim),
+    );
+
+    canvas.soft_shadow(panel, radius, t.px(40.0), t.px(14.0), 0.45);
+    ui::surface(canvas, &t, panel, radius, Material::Dialog);
+
+    let saved = canvas.push_clip(panel);
+    // The dock is not an overlay: nothing about it is waiting for a reveal, so
+    // every control it draws is a control the user can press.
+
+    // ---- the expanded layers, which fade in with the morph ----------------
+    if morph > 0.01 {
+        let lay = morph;
+        // While a query is typed the panel is only results and the field, as in
+        // the design's search state: no title, no lock pill, no shortcut row.
+        let browsing = !searching;
+        if browsing && panel.y + t.px(60.0) < screen.h {
+            // Title row: what this is, and the one shortcut that belongs at
+            // the top right of it.
+            let title = Style::new(t.text_px(TypeStep::Title3), with_alpha(t.text(), lay));
+            font::draw(
+                canvas,
+                "All applications",
+                panel.x + t.px(28.0),
+                panel.y + t.px(44.0),
+                &title,
+            );
+            let lock_style = Style::new(t.text_px(TypeStep::Footnote), with_alpha(t.text(), lay));
+            let lock_w = font::measure("Lock screen", &lock_style) + t.px(50.0);
+            let lock = Rect::new(
+                panel.right() - t.px(28.0) - lock_w,
+                panel.y + t.px(22.0),
+                lock_w,
+                t.px(36.0),
+            );
+            let lock_hover = shell.is_highlighted(Hot::DockLock);
+            canvas.fill_round_rect(
+                lock,
+                lock.h / 2.0,
+                with_alpha(rgb(0xFFFFFF), if lock_hover { 0.16 } else { 0.09 }),
+            );
+            icons::draw(
+                canvas,
+                Icon::Lock,
+                Rect::new(
+                    lock.x + t.px(14.0),
+                    lock.y + t.px(10.0),
+                    t.px(16.0),
+                    t.px(16.0),
+                ),
+                with_alpha(t.text(), 0.9 * lay),
+                1.0,
+            );
+            font::draw(
+                canvas,
+                "Lock screen",
+                lock.x + t.px(36.0),
+                lock.y + t.px(23.0),
+                &lock_style,
+            );
+            shell.hotspots_mut().push(lock, Hot::DockLock);
+        }
+
+        // The grid, or the results of what has been typed.
+        let body_top = if searching { t.px(20.0) } else { t.px(72.0) };
+        let body = Rect::new(
+            panel.x + t.px(28.0),
+            panel.y + body_top,
+            panel.w - t.px(56.0),
+            panel.bottom() - dock_h - body_top,
+        );
+        if body.y < screen.h - t.px(16.0) && searching {
+            launcher_rows(canvas, shell, &t, body, &query, selected, lay);
+        } else if body.y < screen.h - t.px(16.0) {
+            launcher_tiles(canvas, shell, &t, body, cols, tile, tile_h, lay);
+        }
+    }
+
+    // ---- the dock row, always at the bottom of the same surface ----------
+    let row_y = panel.bottom() - dock_h;
+    let button = Rect::new(panel.x + pad, row_y + (dock_h - item) / 2.0, item, item);
+    if launcher_button {
+        let button_state = if shell.is_highlighted(Hot::DockToggle) {
+            State::Hover
+        } else {
+            State::Normal
+        };
+        canvas.fill_circle(
+            button.center().0,
+            button.center().1,
+            button.w / 2.0,
+            with_alpha(
+                t.accent(),
+                if button_state == State::Hover {
+                    1.0
+                } else {
+                    0.92
+                },
+            ),
+        );
+        icons::draw(
+            canvas,
+            Icon::Grid,
+            button.inflate(-t.px(15.0)),
+            with_alpha(rgb(0x000000), 0.85),
+            1.0,
+        );
+        shell.hotspots_mut().push(button, Hot::DockToggle);
+    }
+
+    // Pinned icons: shown in both states — the icons the user was aiming at
+    // must not move when the pill grows — and folded away for a search, which is
+    // the one state that needs the row for the query. This is the prototype's
+    // `iconsW` collapse, and it is why the bubble can be handed the space.
+    let mut ix = if launcher_button {
+        button.right() + t.px(10.0)
+    } else {
+        panel.x + pad
+    };
+    for (i, app) in pinned.iter().map(|(i, a)| (*i, a)) {
+        if searching {
+            break;
+        }
+        let hot = Hot::DockItem(u8::try_from(i).unwrap_or(u8::MAX));
+        let r = Rect::new(ix, row_y + (dock_h - item) / 2.0, item, item);
+        let hovered = shell.is_highlighted(hot);
+        // Every pinned app sits on its own rounded tile, as in the design.
+        canvas.fill_round_rect(
+            r,
+            t.px(16.0),
+            with_alpha(rgb(0xFFFFFF), if hovered { 0.16 } else { 0.09 }),
+        );
+        if hovered && labels {
+            let s = Style::new(t.text_px(TypeStep::Caption), t.text());
+            let tw = font::measure(app.title(), &s);
+            let lr = Rect::new(
+                r.center().0 - tw / 2.0 - t.px(8.0),
+                panel.y - t.px(26.0),
+                tw + t.px(16.0),
+                t.px(20.0),
+            );
+            ui::surface(canvas, &t, lr, t.radius(Radius::Sm), Material::Elevated);
+            font::draw(canvas, app.title(), lr.x + t.px(8.0), lr.y + t.px(13.0), &s);
+        }
+        icons::draw(
+            canvas,
+            icon_for(*app),
+            r.inflate(-t.px(if hovered && magnify { 11.0 } else { 14.0 })),
+            t.accent(),
+            1.0,
+        );
+        // Running indicator: one dot under a running app, in the app's colour.
+        if running_dots && shell.wm.all().iter().any(|w| w.app_id == app.app_id()) {
+            canvas.fill_circle(
+                r.center().0,
+                row_y + dock_h - t.px(6.0),
+                t.px(2.0),
+                t.accent(),
+            );
+        }
+        shell.hotspots_mut().push(r.inflate(t.px(2.0)), hot);
+        ix += item + gap;
+    }
+
+    // The search bubble, and the clock beside it. With the icons folded away
+    // the bubble starts where they would have, which is the space the query
+    // needs.
+    let bubble_x = if searching {
+        button.right() + t.px(10.0)
+    } else {
+        ix
+    };
+    let bubble = Rect::new(
+        bubble_x,
+        row_y + (dock_h - item) / 2.0,
+        (panel.right() - pad - bubble_x).max(t.px(80.0)),
+        item,
+    );
+    let bubble_state = if shell.is_highlighted(Hot::DockSearch) {
+        State::Hover
+    } else {
+        State::Normal
+    };
+    canvas.fill_round_rect(
+        bubble,
+        t.px(26.0),
+        with_alpha(
+            rgb(0xFFFFFF),
+            if searching {
+                0.14
+            } else {
+                0.09 + 0.05 * f32::from(bubble_state == State::Hover)
+            },
+        ),
+    );
+    canvas.stroke_round_rect(
+        bubble,
+        t.px(26.0),
+        1.0,
+        if searching {
+            t.accent()
+        } else {
+            with_alpha(rgb(0xFFFFFF), 0.14)
+        },
+    );
+    let magnifier = Rect::new(
+        bubble.x + t.px(16.0),
+        bubble.center().1 - t.px(10.0),
+        t.px(20.0),
+        t.px(20.0),
+    );
+    icons::draw(
+        canvas,
+        Icon::Search,
+        magnifier,
+        if searching {
+            t.accent()
+        } else {
+            with_alpha(t.text(), 0.7)
+        },
+        1.0,
+    );
+    if searching {
+        // The query, with a caret: the launcher's search field is the shell's,
+        // not a text widget's, so it draws its own insertion point.
+        let style = Style::new(t.px(16.0), t.text());
+        let shown = ui::elide(&query, &style, bubble.w - t.px(80.0));
+        font::draw(
+            canvas,
+            &shown,
+            magnifier.right() + t.px(10.0),
+            bubble.center().1 + style.size * 0.36,
+            &style,
+        );
+        let caret = magnifier.right() + t.px(10.0) + font::measure(&shown, &style) + t.px(1.0);
+        canvas.fill_round_rect(
+            Rect::new(caret, bubble.center().1 - t.px(9.0), t.px(1.5), t.px(18.0)),
+            t.px(0.75),
+            t.accent(),
+        );
+        let close = Rect::new(
+            bubble.right() - t.px(44.0),
+            bubble.y + t.px(8.0),
+            t.px(36.0),
+            t.px(36.0),
+        );
+        canvas.fill_circle(
+            close.center().0,
+            close.center().1,
+            close.w / 2.0,
+            with_alpha(rgb(0xFFFFFF), 0.10),
+        );
+        icons::draw(
+            canvas,
+            Icon::Close,
+            close.inflate(-t.px(11.0)),
+            t.text(),
+            1.0,
+        );
+        shell.hotspots_mut().push(close, Hot::DockCollapse);
+    } else {
+        let style = Style::new(t.px(16.0), with_alpha(t.text(), 0.7));
+        font::draw(
+            canvas,
+            "Search",
+            magnifier.right() + t.px(10.0),
+            bubble.center().1 + style.size * 0.36,
+            &style,
+        );
+    }
+    if !searching {
+        shell.hotspots_mut().push(bubble, Hot::DockSearch);
+    }
+
+    canvas.set_clip(saved);
+}
+
+/// The grid of application tiles: a rounded square carrying the application's
+/// own colour, and its name under it, as in `screens/desktop/b-dock-morph`.
+#[allow(clippy::too_many_arguments)]
+fn launcher_tiles(
+    canvas: &mut Canvas,
+    shell: &mut Shell,
+    t: &crate::ui::Tokens,
+    body: Rect,
+    cols: usize,
+    tile: f32,
+    tile_h: f32,
+    opacity: f32,
+) {
+    let x0 = body.x + (body.w - tile * cols as f32) / 2.0;
+    for (i, app) in App::ALL.iter().enumerate() {
+        let col = i.checked_rem(cols).unwrap_or(0);
+        let row = i.checked_div(cols).unwrap_or(0);
+        let cell = Rect::new(
+            x0 + (col as f32) * tile,
+            body.y + (row as f32) * tile_h,
+            tile,
+            tile_h,
+        );
+        // During the opening spring, the last row may not have entered the
+        // panel yet. Wait until the full tile and its label fit before drawing
+        // them; clipping pixels while retaining out-of-frame text is not a
+        // usable transition.
+        if cell.bottom() > body.bottom() {
+            continue;
+        }
+        let hot = Hot::LauncherItem(i);
+        let hovered = shell.is_highlighted(hot);
+        let chip = Rect::new(
+            cell.center().0 - t.px(41.0),
+            cell.y + t.px(4.0),
+            t.px(82.0),
+            t.px(82.0),
+        );
+        canvas.fill_round_rect(
+            chip,
+            t.px(22.0),
+            with_alpha(rgb(0xFFFFFF), (if hovered { 0.16 } else { 0.08 }) * opacity),
+        );
+        canvas.stroke_round_rect(
+            chip,
+            t.px(22.0),
+            1.0,
+            with_alpha(rgb(0xFFFFFF), 0.10 * opacity),
+        );
+        icons::draw(
+            canvas,
+            icon_for(*app),
+            chip.inflate(-t.px(21.0)),
+            with_alpha(t.accent(), opacity),
+            1.2,
+        );
+        let style = Style::new(
+            t.text_px(TypeStep::Footnote),
+            with_alpha(t.text(), 0.9 * opacity),
+        );
+        let name = ui::elide(app.title(), &style, cell.w - t.px(12.0));
+        font::draw(
+            canvas,
+            &name,
+            cell.center().0 - font::measure(&name, &style) / 2.0,
+            chip.bottom() + t.px(24.0),
+            &style,
+        );
+        shell.hotspots_mut().push(cell, hot);
+    }
+}
+
+/// The launcher's results, when something has been typed: a small heading, then
+/// one row per match — the application's tile, its name, what it is, and on the
+/// selected row the key that opens it.
+#[allow(clippy::too_many_arguments)]
+fn launcher_rows(
+    canvas: &mut Canvas,
+    shell: &mut Shell,
+    t: &crate::ui::Tokens,
+    body: Rect,
+    query: &str,
+    selected: usize,
+    opacity: f32,
+) {
+    let heading = Style::new(
+        t.text_px(TypeStep::Caption),
+        with_alpha(t.text(), 0.6 * opacity),
+    );
+    font::draw(
+        canvas,
+        "Search results",
+        body.x + t.px(8.0),
+        body.y + t.px(14.0),
+        &heading,
+    );
+    let body = Rect::new(body.x, body.y + t.px(24.0), body.w, body.h - t.px(24.0));
+    let results = App::search(query);
+    if results.is_empty() {
+        let s = Style::new(t.text_px(TypeStep::Footnote), with_alpha(t.text(), 0.6));
+        font::draw(
+            canvas,
+            "No application matches that",
+            body.x + t.px(8.0),
+            body.y + t.px(32.0),
+            &s,
+        );
+        return;
+    }
+    let row_h = t.px(62.0);
+    let mut y = body.y;
+    for (i, app) in results.iter().enumerate() {
+        if y + row_h > body.bottom() + t.px(4.0) {
+            break;
+        }
+        let row = Rect::new(body.x, y, body.w, row_h);
+        let hot = Hot::LauncherItem(i);
+        let on = i == selected;
+        let hovered = shell.is_highlighted(hot);
+        if on || hovered {
+            canvas.fill_round_rect(
+                row,
+                t.px(16.0),
+                with_alpha(rgb(0xFFFFFF), if on { 0.08 } else { 0.05 }),
+            );
+        }
+        let tile = Rect::new(
+            row.x + t.px(14.0),
+            row.y + t.px(9.0),
+            t.px(44.0),
+            t.px(44.0),
+        );
+        canvas.fill_round_rect(tile, t.px(12.0), with_alpha(rgb(0xFFFFFF), 0.09));
+        icons::draw(
+            canvas,
+            icon_for(*app),
+            tile.inflate(-t.px(11.0)),
+            t.accent(),
+            1.0,
+        );
+        let name_style = Style::new(t.text_px(TypeStep::Body), t.text());
+        let name_x = tile.right() + t.px(14.0);
+        font::draw(
+            canvas,
+            app.title(),
+            name_x,
+            row.center().1 + t.px(6.0),
+            &name_style,
+        );
+        let sub = Style::new(t.text_px(TypeStep::Footnote), with_alpha(t.text(), 0.55));
+        font::draw(
+            canvas,
+            "Application",
+            name_x + font::measure(app.title(), &name_style) + t.px(14.0),
+            row.center().1 + t.px(6.0),
+            &sub,
+        );
+        // The key that opens the selected row. A row the pointer is on shows
+        // its own shortcut instead, when it has one.
+        let trailing = if on {
+            Some("Enter".to_owned())
+        } else {
+            shell.shortcuts.label_for(Action::Open(*app))
+        };
+        if let Some(label) = trailing {
+            let w = font::measure(&label, &sub);
+            font::draw(
+                canvas,
+                &label,
+                row.right() - t.px(16.0) - w,
+                row.center().1 + t.px(6.0),
+                &sub,
+            );
+        }
+        shell.hotspots_mut().push(row, hot);
+        y += row_h + t.px(4.0);
+    }
+}
+
+/// The Terminal: a real command line against the guest OS.
+fn draw_terminal(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
+    let t = shell.tokens.clone();
+    let term = shell.terminal.clone();
+    let term_scale = (shell.settings.values.num("terminal.text-scale") / 100.0).clamp(0.7, 2.0);
+    let prompt_mark = shell.settings.values.text("terminal.prompt");
+    canvas.fill_round_rect(body, 0.0, with_alpha(rgb(0x000000), 0.55));
+    let line_h = t.px(17.0) * term_scale;
+    let toolbar = Rect::new(body.x, body.y, body.w, t.px(32.0));
+    canvas.fill_round_rect(toolbar, 0.0, with_alpha(rgb(0xFFFFFF), 0.045));
+    let s_toolbar = Style::bold(t.text_px(TypeStep::Footnote), t.text());
+    let title_x = toolbar.x + t.px(10.0);
+    font::draw(
+        canvas,
+        "Command session",
+        title_x,
+        toolbar.y + t.px(20.0),
+        &s_toolbar,
+    );
+    let status = if term.busy {
+        "Process running"
+    } else {
+        "Ready"
+    };
+    let toolbar_button_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    let new_w = (font::measure("New session", &toolbar_button_style) + t.px(20.0)).max(t.px(86.0));
+    let clear_w = (font::measure("Clear", &toolbar_button_style) + t.px(20.0)).max(t.px(64.0));
+    let new_session = Rect::new(
+        toolbar.right() - new_w - t.px(8.0),
+        toolbar.y + t.px(4.0),
+        new_w,
+        t.px(24.0),
+    );
+    let clear = Rect::new(
+        new_session.x - clear_w - t.px(6.0),
+        toolbar.y + t.px(4.0),
+        clear_w,
+        t.px(24.0),
+    );
+    let s_status = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    let status_x = title_x + font::measure("Command session", &s_toolbar) + t.px(12.0);
+    let status_room = (clear.x - t.px(10.0) - status_x).max(0.0);
+    if status_room > t.px(12.0) {
+        font::draw(
+            canvas,
+            &ui::elide(status, &s_status, status_room),
+            status_x,
+            toolbar.y + t.px(19.0),
+            &s_status,
+        );
+    }
+    ui::button(canvas, &t, clear, "Clear", ui::State::Normal, Tone::Neutral);
+    shell.hotspots_mut().push(clear, Hot::TerminalClear);
+    ui::button(
+        canvas,
+        &t,
+        new_session,
+        "New session",
+        if term.busy {
+            ui::State::Disabled
+        } else {
+            ui::State::Normal
+        },
+        Tone::Accent,
+    );
+    if !term.busy {
+        shell
+            .hotspots_mut()
+            .push(new_session, Hot::TerminalNewSession);
+    }
+
+    let mut y = toolbar.bottom() + t.px(8.0);
+    if let Some(note) = &term.note {
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.tone(Tone::Warning));
+        font::draw(canvas, note, body.x + t.px(10.0), y + line_h, &s);
+        y += line_h * 1.6;
+    }
+    // Scrollback, newest at the bottom, only as many as fit.
+    let prompt_row = 1usize;
+    let visible = ((body.bottom() - y) / line_h) as usize;
+    let visible = visible.saturating_sub(prompt_row).max(1);
+    let start = term.lines.len().saturating_sub(visible);
+    let s_out = Style::new(t.text_px(TypeStep::Footnote) * term_scale, t.text_dim()).monospace();
+    for line in term.lines.iter().skip(start) {
+        font::draw(canvas, line, body.x + t.px(10.0), y + line_h, &s_out);
+        y += line_h;
+    }
+    // Prompt + input, with the caret when the field holds the keyboard.
+    let prompt = if term.busy {
+        "… ".to_owned()
+    } else {
+        format!("~ {prompt_mark} ")
+    };
+    let s_in = Style::new(t.text_px(TypeStep::Body) * term_scale, t.text()).monospace();
+    let in_x = body.x + t.px(10.0);
+    let in_y = body.bottom() - t.px(10.0);
+    font::draw(canvas, &prompt, in_x, in_y, &s_in);
+    let text_x = in_x + font::measure(&prompt, &s_in);
+    font::draw(canvas, &term.input, text_x, in_y, &s_in);
+    if term.focused {
+        let cx = text_x + font::measure(&term.input, &s_in);
+        // The caret's shape is `terminal.cursor-style`: the one glyph a person
+        // stares at while typing, so it is theirs to choose. The bar is what
+        // the desktop always drew, and stays the default.
+        match shell.settings.values.pick("terminal.cursor-style") {
+            "block" => canvas.fill_round_rect(
+                Rect::new(
+                    cx + 1.0,
+                    in_y - s_in.size,
+                    font::measure("M", &s_in).max(2.0),
+                    s_in.size + 3.0,
+                ),
+                0.0,
+                t.accent(),
+            ),
+            "underline" => canvas.stroke_line(
+                cx + 1.0,
+                in_y + 2.0,
+                cx + 1.0 + font::measure("M", &s_in).max(2.0),
+                in_y + 2.0,
+                2.0,
+                t.accent(),
+            ),
+            _ => canvas.stroke_line(
+                cx + 1.0,
+                in_y - s_in.size,
+                cx + 1.0,
+                in_y + 3.0,
+                1.0,
+                t.accent(),
+            ),
+        }
+    }
+    let row = Rect::new(body.x, in_y - t.px(20.0), body.w, t.px(26.0));
+    shell.hotspots_mut().push(row, Hot::TerminalInput);
+}
+
+/// The icon for an application.
+#[must_use]
+pub const fn icon_for(app: App) -> Icon {
+    match app {
+        App::Activity => Icon::Activity,
+        App::Environments => Icon::Environment,
+        App::Settings => Icon::Settings,
+        App::Files => Icon::Files,
+        App::Browser => Icon::Browser,
+        App::Terminal => Icon::Terminal,
+        App::Trash => Icon::Trash,
+        App::Defender => Icon::Shield,
+    }
+}
+
+/// The Litric Defender window: scan button, progress, verdict table.
+fn draw_defender(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
+    let t = shell.tokens.clone();
+    let d = shell.defender.app.clone();
+    let mut col = ui::Column::new(body, t.sp(Space::Lg), t.sp(Space::Sm));
+
+    // Header: shield + status sentence.
+    let head = col.row(t.px(40.0));
+    let (icon, tone) = match d.state {
+        crate::apps::ScanState::Done { threats, .. } if threats > 0 => (Icon::Warning, Tone::Bad),
+        crate::apps::ScanState::Scanning { .. } => (Icon::Shield, Tone::Accent),
+        crate::apps::ScanState::Done { .. } => (Icon::ShieldCheck, Tone::Good),
+        crate::apps::ScanState::Idle => (Icon::Shield, Tone::Neutral),
+    };
+    icons::draw(
+        canvas,
+        icon,
+        Rect::new(head.x, head.y + t.px(6.0), t.px(28.0), t.px(28.0)),
+        t.tone(tone),
+        1.1,
+    );
+    let s_head = t.style_bold(TypeStep::Title3);
+    // Title and status are 26 pixels apart, not 14. At 14 the status line sat
+    // inside the title's own band -- 196x7 pixels of "Definitions: ..." drawn
+    // over "Litric Defender" -- which reads as a rendering fault rather than as
+    // a layout mistake.
+    font::draw(
+        canvas,
+        "Litric Defender",
+        head.x + t.px(40.0),
+        head.y + t.px(18.0),
+        &s_head,
+    );
+    let s_status = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    let status = if d.message.is_empty() {
+        "On-demand scan · real-time protection unavailable".to_owned()
+    } else {
+        d.message.clone()
+    };
+    font::draw(
+        canvas,
+        &ui::elide(&status, &s_status, head.w - t.px(48.0)),
+        head.x + t.px(40.0),
+        head.y + t.px(44.0),
+        &s_status,
+    );
+
+    // Scan button. While a scan runs it is a Loading control: motion
+    // marker, no click that could double-start the engine.
+    let row = col.row(t.px(30.0));
+    let (scan_label, scan_state) = if shell.defender.running {
+        ("Scanning", ui::State::Loading)
+    } else {
+        ("Scan now", ui::State::Normal)
+    };
+    let bw = t.px(110.0);
+    let br = Rect::new(row.x, row.y, bw, row.h);
+    ui::button(canvas, &t, br, scan_label, scan_state, Tone::Accent);
+    if !shell.defender.running {
+        shell
+            .hotspots_mut()
+            .push(br, Hot::MenuRow(crate::apps::MenuAction::ScanNow));
+    }
+
+    // Progress bar while scanning.
+    if let crate::apps::ScanState::Scanning { done, total } = d.state {
+        let frac = if total == 0 {
+            0.0
+        } else {
+            done as f32 / total as f32
+        };
+        let bar = col.row(t.px(6.0));
+        ui::progress(
+            canvas,
+            &t,
+            Rect::new(bar.x, bar.y, bar.w, bar.h),
+            frac,
+            Tone::Accent,
+        );
+        let s = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        let row2 = col.row(t.px(16.0));
+        font::draw(
+            canvas,
+            &format!("{done} of {total}"),
+            row2.x,
+            row2.y + t.px(11.0),
+            &s,
+        );
+    }
+
+    // Results table: detections always; clean files as a bounded sample.
+    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "RESULTS");
+    col.space(t.px(16.0));
+    let saved = canvas.push_clip(Rect::new(
+        body.x,
+        col.cursor,
+        body.w,
+        body.bottom() - col.cursor,
+    ));
+    for (i, r) in d.rows.iter().enumerate().take(40) {
+        let row = col.row(t.px(24.0));
+        if col.cursor > body.bottom() {
+            break;
+        }
+        let (icon, tone) = if r.detected {
+            (Icon::Warning, Tone::Bad)
+        } else {
+            (Icon::Check, Tone::Good)
+        };
+        icons::draw(
+            canvas,
+            icon,
+            Rect::new(row.x, row.y + t.px(5.0), t.px(14.0), t.px(14.0)),
+            t.tone(tone),
+            1.0,
+        );
+        let s = Style::new(
+            t.text_px(TypeStep::Caption),
+            if r.detected { t.text() } else { t.text_dim() },
+        );
+        let name_w = row.w * 0.55;
+        font::draw(
+            canvas,
+            &ui::elide(&r.path, &s, name_w),
+            row.x + t.px(22.0),
+            row.y + t.px(15.0),
+            &s,
+        );
+        let vs = Style::new(t.text_px(TypeStep::Caption), t.tone(tone));
+        let vw = font::measure(&r.verdict, &vs);
+        font::draw(
+            canvas,
+            &r.verdict,
+            row.right() - vw,
+            row.y + t.px(15.0),
+            &vs,
+        );
+        let _ = i;
+    }
+    canvas.set_clip(saved);
+}
+
+/// The Trash window: entries, restore, empty.
+fn draw_trash(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
+    refresh_trash_view(shell);
+    let t = shell.tokens.clone();
+    let app = shell.trash.clone();
+    let mut col = ui::Column::new(body, t.sp(Space::Md), t.sp(Space::Xs));
+
+    let head = col.row(t.px(30.0));
+    let s_head = t.style_bold(TypeStep::Title3);
+    // The count is placed after the title, not at a guessed offset: the title is
+    // set in the face's own width, so a fixed 80 pixels put "0 item(s)" under
+    // the "h" of "Trash" as soon as the typeface's side bearings made the word
+    // wider than that guess. A gap belongs between the two, so the gap is what
+    // is asked for.
+    let title_end = font::draw(canvas, "Trash", head.x, head.y + t.px(18.0), &s_head);
+    let s_count = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    font::draw(
+        canvas,
+        &format!("{} / {} items", app.visible_indices().len(), app.count()),
+        title_end + t.px(10.0),
+        head.y + t.px(18.0),
+        &s_count,
+    );
+
+    let toolbar = col.row(t.px(30.0));
+    let has_sel = app.has_visible_selection();
+    let reserved = if app.confirm.is_some() {
+        t.px(188.0)
+    } else if has_sel {
+        t.px(252.0)
+    } else {
+        t.px(76.0)
+    };
+    let search_w = (toolbar.w - reserved - t.px(12.0))
+        .max(t.px(96.0))
+        .min(t.px(260.0));
+    let search = Rect::new(toolbar.x, toolbar.y, search_w, toolbar.h);
+    ui::text_field(
+        canvas,
+        &t,
+        search,
+        &app.filter,
+        "Search trash",
+        shell.is_highlighted(Hot::TrashFilter),
+    );
+    shell.hotspots_mut().push(search, Hot::TrashFilter);
+
+    if let Some(pending) = &app.confirm {
+        let label = match pending {
+            crate::apps::TrashConfirmation::Empty => "Empty permanently?",
+            crate::apps::TrashConfirmation::Purge(_) => "Delete forever?",
+        };
+        let confirm_w = t.px(112.0);
+        let cancel_w = t.px(70.0);
+        let cancel = Rect::new(toolbar.right() - cancel_w, toolbar.y, cancel_w, toolbar.h);
+        let confirm = Rect::new(
+            cancel.x - t.px(6.0) - confirm_w,
+            toolbar.y,
+            confirm_w,
+            toolbar.h,
+        );
+        ui::button(canvas, &t, confirm, label, ui::State::Normal, Tone::Bad);
+        ui::button(
+            canvas,
+            &t,
+            cancel,
+            "Cancel",
+            ui::State::Normal,
+            Tone::Neutral,
+        );
+        shell.hotspots_mut().push(confirm, Hot::TrashConfirm);
+        shell.hotspots_mut().push(cancel, Hot::TrashCancel);
+    } else {
+        let empty_w = t.px(76.0);
+        let empty = Rect::new(toolbar.right() - empty_w, toolbar.y, empty_w, toolbar.h);
+        ui::button(canvas, &t, empty, "Empty", ui::State::Normal, Tone::Bad);
+        shell.hotspots_mut().push(empty, Hot::TrashEmpty);
+        if has_sel {
+            let restore_w = t.px(76.0);
+            let purge_w = t.px(88.0);
+            let restore = Rect::new(
+                empty.x - t.px(6.0) - restore_w,
+                toolbar.y,
+                restore_w,
+                toolbar.h,
+            );
+            let purge = Rect::new(
+                restore.x - t.px(6.0) - purge_w,
+                toolbar.y,
+                purge_w,
+                toolbar.h,
+            );
+            ui::button(canvas, &t, purge, "Delete", ui::State::Normal, Tone::Bad);
+            ui::button(
+                canvas,
+                &t,
+                restore,
+                "Restore",
+                ui::State::Normal,
+                Tone::Neutral,
+            );
+            shell.hotspots_mut().push(purge, Hot::TrashPurge);
+            shell.hotspots_mut().push(restore, Hot::TrashRestore);
+        }
+    }
+
+    if let Some(err) = &app.error {
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.tone(Tone::Bad));
+        font::draw(canvas, err, col.x, col.cursor + t.px(14.0), &s);
+        return;
+    }
+    let visible = app.visible_indices();
+    if visible.is_empty() {
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+        let message = if app.entries.is_empty() {
+            "Trash is empty"
+        } else {
+            "No items match this search"
+        };
+        font::draw(canvas, message, col.x, col.cursor + t.px(14.0), &s);
+        return;
+    }
+    let saved = canvas.push_clip(Rect::new(
+        body.x,
+        col.cursor,
+        body.w,
+        body.bottom() - col.cursor,
+    ));
+    for i in visible {
+        let Some((name, deleted, origin, is_dir)) = app.entries.get(i) else {
+            continue;
+        };
+        if col.cursor + t.px(26.0) > body.bottom() {
+            break;
+        }
+        let row = col.row(t.px(26.0));
+        let hot = Hot::TrashRow(i);
+        let selected = app.selected == Some(i);
+        if selected {
+            canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.text(), 0.08));
+        }
+        let icon = if *is_dir { Icon::Files } else { Icon::Window };
+        icons::draw(
+            canvas,
+            icon,
+            Rect::new(row.x + t.px(2.0), row.y + t.px(6.0), t.px(14.0), t.px(14.0)),
+            t.text_dim(),
+            1.0,
+        );
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.text());
+        font::draw(
+            canvas,
+            &ui::elide(name, &s, row.w * 0.4),
+            row.x + t.px(24.0),
+            row.y + t.px(16.0),
+            &s,
+        );
+        let s_dim = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        let origin_x = row.x + row.w * 0.5;
+        font::draw(
+            canvas,
+            &ui::elide(&format!("from {origin}"), &s_dim, row.w * 0.3),
+            origin_x,
+            row.y + t.px(16.0),
+            &s_dim,
+        );
+        let dw = font::measure(deleted, &s_dim);
+        font::draw(
+            canvas,
+            deleted,
+            row.right() - dw,
+            row.y + t.px(16.0),
+            &s_dim,
+        );
+        shell.hotspots_mut().push(row, hot);
+    }
+    canvas.set_clip(saved);
+}
+
+/// Refresh the Trash listing when its window is drawn and the model is stale.
+fn refresh_trash_view(shell: &mut Shell) {
+    if !shell.trash.listed {
+        shell.refresh_trash();
+    }
+}
+
+fn draw_switcher(canvas: &mut Canvas, shell: &mut Shell, selected: usize) {
+    let t = shell.tokens.clone();
+    let screen = shell.wm.screen();
+    let windows: Vec<(u32, String, String, bool)> = shell
+        .wm
+        .switcher_order()
+        .iter()
+        .map(|w| {
+            (
+                w.id,
+                w.title.clone(),
+                w.app_id.clone(),
+                w.state == WindowState::Minimized,
+            )
+        })
+        .collect();
+    if windows.is_empty() {
+        return;
+    }
+
+    let row_h = t.px(40.0);
+    let w = t.px(420.0).min(screen.w * 0.7);
+    let h = (windows.len() as f32) * row_h + t.px(52.0);
+    let panel = Rect::new((screen.w - w) / 2.0, (screen.h - h) / 2.0, w, h);
+    ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
+
+    ui::section_label(
+        canvas,
+        &t,
+        (panel.x + t.sp(Space::Md), panel.y + t.px(24.0)),
+        "WINDOWS",
+    );
+
+    let mut col = ui::Column::new(
+        Rect::new(panel.x, panel.y + t.px(32.0), panel.w, panel.h),
+        t.sp(Space::Sm),
+        t.px(2.0),
+    );
+    for (i, (_, title, app_id, minimized)) in windows.iter().enumerate() {
+        let row = col.row(row_h);
+        let hot = Hot::SwitcherItem(i);
+        let state = if i == selected {
+            State::Selected
+        } else if shell.is_highlighted(hot) {
+            State::Hover
+        } else {
+            State::Normal
+        };
+        ui::list_item(
+            canvas,
+            &t,
+            row,
+            Some(icon_for_app_id(app_id)),
+            title,
+            None,
+            if *minimized { Some("Minimized") } else { None },
+            state,
+        );
+        shell.hotspots_mut().push(row, hot);
+    }
+}
+
+fn icon_for_app_id(app_id: &str) -> Icon {
+    App::ALL
+        .iter()
+        .find(|a| a.app_id() == app_id)
+        .map_or(Icon::Window, |a| icon_for(*a))
+}
+
+fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    let screen = shell.wm.screen();
+    let w = t.px(320.0).min(screen.w * 0.9);
+    // The height grew by the SESSION section. It is clamped to the screen
+    // rather than trusting the display to be tall enough: a panel whose last
+    // row is off the bottom is a panel whose last row cannot be clicked.
+    let panel = Rect::new(
+        screen.w - w - t.px(12.0),
+        shell.top_bar().h + t.px(8.0),
+        w,
+        t.px(530.0).min(screen.h - shell.top_bar().h - t.px(20.0)),
+    );
+    // The panel reveals downward under a clip that grows with its spring,
+    // and its rows only become clickable once the spring is far enough
+    // along that a click can only be aiming at the panel, not passing
+    // through the reveal.
+    let reveal = shell.anims().quick_settings.value();
+    if reveal <= 0.01 {
+        return;
+    }
+    let shown_h = panel.h * reveal;
+    let saved = canvas.push_clip(Rect::new(panel.x, panel.y, panel.w, shown_h));
+    ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
+
+    let mut col = ui::Column::new(panel, t.sp(Space::Md), t.sp(Space::Xs));
+    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "POWER");
+    col.space(t.px(18.0));
+
+    let row = col.row(t.px(34.0));
+    // Two rows of two rather than four across: at this panel's width a quarter
+    // column is narrower than "Maximum", and the last label ran under the
+    // panel edge. The same four profiles fit in a grid the panel can hold.
+    let seg_w = (row.w - t.px(4.0)) / 2.0;
+    for (i, p) in PowerProfile::ALL.iter().enumerate() {
+        let r = Rect::new(
+            row.x + (i % 2) as f32 * (seg_w + t.px(4.0)),
+            row.y + (i / 2) as f32 * (row.h + t.px(4.0)),
+            seg_w,
+            row.h,
+        );
+        let hot = Hot::QuickPower(i as u8);
+        let state = if *p == shell.quick.power {
+            State::Selected
+        } else if shell.is_highlighted(hot) {
+            State::Hover
+        } else {
+            State::Normal
+        };
+        ui::button(
+            canvas,
+            &t,
+            r,
+            p.title(),
+            state,
+            if *p == shell.quick.power {
+                Tone::Accent
+            } else {
+                Tone::Neutral
+            },
+        );
+        shell.hotspots_mut().push(r, hot);
+    }
+    col.space(row.h + t.px(4.0));
+    col.space(t.px(10.0));
+    ui::separator(canvas, &t, col.row(1.0));
+    col.space(t.px(8.0));
+
+    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "SYSTEM");
+    col.space(t.px(18.0));
+
+    let toggles: [(&str, bool, bool); 4] = [
+        (
+            "Do Not Disturb",
+            shell.quick.do_not_disturb,
+            shell.quick.is_applied("do_not_disturb"),
+        ),
+        (
+            "Adaptive Idle",
+            shell.quick.adaptive_idle,
+            shell.quick.is_applied("adaptive_idle"),
+        ),
+        (
+            "Reduce Transparency",
+            shell.quick.reduce_transparency,
+            shell.quick.is_applied("reduce_transparency"),
+        ),
+        (
+            "Reduce Motion",
+            shell.quick.reduce_motion,
+            shell.quick.is_applied("reduce_motion"),
+        ),
+    ];
+    for (i, (label, on, applied)) in toggles.iter().enumerate() {
+        let row = col.row(t.px(38.0));
+        let hot = Hot::QuickToggle(i as u8);
+        if shell.is_highlighted(hot) {
+            canvas.fill_round_rect(row, t.radius(Radius::Md), with_alpha(rgb(0xFFFFFF), 0.06));
+        }
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.text());
+        font::draw(
+            canvas,
+            label,
+            row.x + t.px(8.0),
+            row.y + row.h / 2.0 + s.size * 0.36,
+            &s,
+        );
+        if !applied {
+            // A control that only records a preference must say so.
+            let n = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            font::draw(
+                canvas,
+                "preference only",
+                row.x + t.px(8.0),
+                row.y + row.h - t.px(2.0),
+                &n,
+            );
+        }
+        let tr = Rect::new(
+            row.right() - t.px(48.0),
+            row.y + t.px(8.0),
+            t.px(40.0),
+            t.px(22.0),
+        );
+        ui::toggle(canvas, &t, tr, *on, State::Normal);
+        shell.hotspots_mut().push(row, hot);
+    }
+
+    col.space(t.px(8.0));
+    ui::separator(canvas, &t, col.row(1.0));
+    col.space(t.px(8.0));
+    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "ENVIRONMENT");
+    col.space(t.px(16.0));
+
+    let envs = shell.environments.clone();
+    for (i, e) in envs.iter().enumerate().take(3) {
+        let row = col.row(t.px(30.0));
+        let hot = Hot::QuickEnvironment(i as u8);
+        let state = if e.active {
+            State::Selected
+        } else if shell.is_highlighted(hot) {
+            State::Hover
+        } else {
+            State::Normal
+        };
+        // A long environment name is cut to the row with an ellipsis instead
+        // of running under the hotkey.
+        let label = ui::elide(
+            &e.title,
+            &Style::new(t.text_px(TypeStep::Body), t.text()),
+            row.w - t.px(64.0),
+        );
+        ui::list_item(canvas, &t, row, None, &label, None, Some(&e.hotkey), state);
+        shell.hotspots_mut().push(row, hot);
+    }
+
+    // The transitions used to live at the bottom of this panel, which is why
+    // its height grew until the last row sat on the screen edge. They are now
+    // the power menu behind the person icon, and the session's own settings
+    // are in the LitricOS menu; this panel is profiles, style and environments.
+    canvas.set_clip(saved);
+}
+
+/// The power menu: four rows at the top-right, each measured from its label.
+///
+/// Lock is here because a person looks for it where the other three are, not
+/// only in the LitricOS menu. The three that end the session keep the same
+/// confirmation the quick-settings rows had.
+fn draw_power_menu(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    let screen = shell.wm.screen();
+    let items = ["Lock", "Sleep", "Shut down", "Restart"];
+    let row_h = t.px(34.0);
+    let pad = t.sp(Space::Xs);
+    let icon = t.px(18.0);
+    let gap = t.px(12.0);
+    let style = Style::new(t.text_px(TypeStep::Body), t.text());
+    let widest = items
+        .iter()
+        .map(|l| font::measure(&crate::i18n::text(l), &style))
+        .fold(0.0_f32, f32::max);
+    let w = pad * 2.0 + icon + gap + widest + t.px(10.0);
+    let h = pad * 2.0 + row_h * items.len() as f32;
+    let panel = Rect::new(
+        screen.w - w - t.px(12.0),
+        shell.top_bar().h + t.px(8.0),
+        w,
+        h.min(screen.h - shell.top_bar().h - t.px(20.0)),
+    );
+    ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
+    let mut y = panel.y + pad;
+    for (i, label) in items.iter().enumerate() {
+        let row = Rect::new(panel.x + pad, y, w - pad * 2.0, row_h);
+        let hot = Hot::PowerItem(i as u8);
+        if shell.is_highlighted(hot) {
+            ui::list_item(canvas, &t, row, None, "", None, None, State::Hover);
+        }
+        let glyph = if i == 0 {
+            crate::icons::Icon::Lock
+        } else {
+            crate::icons::Icon::Power
+        };
+        crate::icons::draw(
+            canvas,
+            glyph,
+            Rect::new(row.x + t.px(4.0), row.y + (row_h - icon) / 2.0, icon, icon),
+            t.text(),
+            1.6,
+        );
+        let text = crate::i18n::text(label);
+        font::draw(
+            canvas,
+            &text,
+            row.x + t.px(4.0) + icon + gap,
+            row.y + row_h / 2.0 + style.size * 0.35,
+            &style,
+        );
+        shell.hotspots_mut().push(row, hot);
+        y += row_h;
+    }
+}
+
+/// The LitricOS menu, under the wordmark: the session's settings and the lock.
+///
+/// This is where the session control moved to when the panel's bottom section
+/// was taken out; the mark is the one label on the bar that means "the system
+/// itself", so the settings for the session belong under it.
+fn draw_litro_menu(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    let items = [("Session settings", Hot::LitroSession), ("Lock screen", Hot::LitroLock)];
+    let pad = t.sp(Space::Xs);
+    let row_h = t.px(34.0);
+    let style = Style::new(t.text_px(TypeStep::Body), t.text());
+    let widest = items
+        .iter()
+        .map(|(l, _)| font::measure(&crate::i18n::text(l), &style))
+        .fold(0.0_f32, f32::max);
+    let w = widest + pad * 2.0 + t.px(12.0);
+    let h = pad * 2.0 + row_h * items.len() as f32;
+    let panel = Rect::new(t.px(8.0), shell.top_bar().h + t.px(6.0), w, h);
+    ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
+    let mut y = panel.y + pad;
+    for (label, hot) in items {
+        let row = Rect::new(panel.x + pad, y, w - pad * 2.0, row_h);
+        let state = if shell.is_highlighted(hot) {
+            State::Hover
+        } else {
+            State::Normal
+        };
+        let text = crate::i18n::text(label);
+        ui::list_item(canvas, &t, row, None, &text, None, None, state);
+        shell.hotspots_mut().push(row, hot);
+        y += row_h;
+    }
+}
+
+fn draw_notification_list(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    let screen = shell.wm.screen();
+    let w = t.px(340.0).min(screen.w * 0.9);
+    let history = usize::try_from(
+        shell
+            .settings
+            .values
+            .num("notifications.history")
+            .clamp(8.0, 64.0) as i64,
+    )
+    .unwrap_or(32);
+    let items: Vec<(u32, String, String, Priority)> = shell
+        .notifications
+        .items()
+        .iter()
+        .take(history)
+        .map(|n| (n.id, n.title.clone(), n.source.clone(), n.priority))
+        .collect();
+
+    let row_h = t.px(56.0);
+    let h = (t.px(64.0) + (items.len().max(1) as f32) * row_h).min(screen.h * 0.7);
+    let panel = Rect::new(
+        screen.w - w - t.px(12.0),
+        shell.top_bar().h + t.px(8.0),
+        w,
+        h,
+    );
+    // The same downward reveal as the quick-settings panel: one motion
+    // grammar for every panel that drops from the top bar.
+    let reveal = shell.anims().notifications.value();
+    if reveal <= 0.01 {
+        return;
+    }
+    let shown_h = panel.h * reveal;
+    let saved = canvas.push_clip(Rect::new(panel.x, panel.y, panel.w, shown_h));
+    ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
+
+    ui::section_label(
+        canvas,
+        &t,
+        (panel.x + t.sp(Space::Md), panel.y + t.px(24.0)),
+        "NOTIFICATIONS",
+    );
+    if !items.is_empty() {
+        let br = Rect::new(
+            panel.right() - t.px(84.0),
+            panel.y + t.px(10.0),
+            t.px(72.0),
+            t.px(22.0),
+        );
+        ui::button(
+            canvas,
+            &t,
+            br,
+            "Clear all",
+            if shell.is_highlighted(Hot::NotificationsClear) {
+                State::Hover
+            } else {
+                State::Normal
+            },
+            Tone::Neutral,
+        );
+        shell.hotspots_mut().push(br, Hot::NotificationsClear);
+    }
+
+    let mut col = ui::Column::new(
+        Rect::new(panel.x, panel.y + t.px(36.0), panel.w, panel.h),
+        t.sp(Space::Sm),
+        t.px(2.0),
+    );
+    if items.is_empty() {
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+        font::draw(
+            canvas,
+            "Nothing waiting",
+            col.x + t.px(8.0),
+            col.cursor + t.px(22.0),
+            &s,
+        );
+        return;
+    }
+    for (i, (_, title, source, priority)) in items.iter().enumerate() {
+        if col.cursor + row_h > panel.bottom() - t.px(6.0) {
+            break;
+        }
+        let row = col.row(row_h);
+        let hot = Hot::NotificationItem(i);
+        ui::list_item(
+            canvas,
+            &t,
+            row,
+            Some(priority_icon(*priority)),
+            title,
+            Some(source),
+            None,
+            if shell.is_highlighted(hot) {
+                State::Hover
+            } else {
+                State::Normal
+            },
+        );
+        shell.hotspots_mut().push(row, hot);
+    }
+    canvas.set_clip(saved);
+}
+
+const fn priority_icon(p: Priority) -> Icon {
+    match p {
+        Priority::Critical | Priority::High => Icon::Warning,
+        _ => Icon::Info,
+    }
+}
+
+/// Banners for notifications that arrived recently.
+fn draw_banners(canvas: &mut Canvas, shell: &mut Shell) {
+    if shell.overlay == Overlay::Notifications || !shell.settings.values.on("notifications.enabled")
+    {
+        return;
+    }
+    let t = shell.tokens.clone();
+    let screen = shell.wm.screen();
+    let show_source = shell.settings.values.on("notifications.show-source");
+    let limit = shell.settings.values.num("notifications.max-banners");
+    let cap = usize::try_from(limit.max(1.0) as i64).unwrap_or(3);
+    let recent: Vec<(String, String, Priority, String)> = shell
+        .notifications
+        .items()
+        .iter()
+        .filter(|n| shell.notifications.should_banner(n.priority))
+        // A banner shows for anything that will dismiss itself, and for
+        // criticals, which never carry an expiry because what is wrong now
+        // does not stop being wrong five seconds later.
+        .filter(|n| n.expires_ms.is_some() || n.priority == Priority::Critical)
+        .take(cap)
+        .map(|n| {
+            (
+                n.title.clone(),
+                n.body.clone(),
+                n.priority,
+                n.source.clone(),
+            )
+        })
+        .collect();
+
+    let w = t.px(300.0).min(screen.w * 0.6);
+    // Where the stack lives is `notifications.position`. A bottom stack grows
+    // upward from its last banner, so its start is the screen edge minus the
+    // whole stack: `count` banners of `r.h` with `t.px(8.0)` between them.
+    let position = shell.settings.values.pick("notifications.position");
+    let banner_h = t.px(60.0);
+    let count = recent.len().saturating_sub(1) as f32;
+    let mut y = match position {
+        "bottom-right" => (screen.h - t.px(12.0) - banner_h - count * (banner_h + t.px(8.0)))
+            .max(shell.top_bar().h),
+        _ => shell.top_bar().h + t.px(10.0),
+    };
+    let x = match position {
+        "top-center" => (screen.w - w) * 0.5,
+        _ => screen.w - w - t.px(12.0),
+    };
+    for (title, body, priority, source) in recent {
+        let r = Rect::new(x, y, w, banner_h);
+        ui::surface(canvas, &t, r, t.radius(Radius::Md), Material::Popover);
+        let tone = match priority {
+            Priority::Critical => Tone::Bad,
+            Priority::High => Tone::Warning,
+            _ => Tone::Accent,
+        };
+        canvas.fill_round_rect(
+            Rect::new(r.x, r.y + t.px(10.0), t.px(3.0), r.h - t.px(20.0)),
+            t.px(1.5),
+            t.tone(tone),
+        );
+        icons::draw(
+            canvas,
+            priority_icon(priority),
+            Rect::new(r.x + t.px(14.0), r.y + t.px(14.0), t.px(16.0), t.px(16.0)),
+            t.tone(tone),
+            1.0,
+        );
+        let ts = Style::new(t.text_px(TypeStep::Footnote), t.text());
+        let title_room = if show_source {
+            (r.w - t.px(140.0)).max(t.px(60.0))
+        } else {
+            r.w - t.px(50.0)
+        };
+        font::draw(
+            canvas,
+            &ui::elide(&title, &ts, title_room),
+            r.x + t.px(38.0),
+            r.y + t.px(25.0),
+            &ts,
+        );
+        if show_source {
+            let source_style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            let shown = ui::elide(&source, &source_style, r.w * 0.4);
+            let sw = font::measure(&shown, &source_style);
+            font::draw(
+                canvas,
+                &shown,
+                r.right() - t.px(10.0) - sw,
+                r.y + t.px(25.0),
+                &source_style,
+            );
+        }
+        let bs = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        let shown = ui::elide(&body, &bs, r.w - t.px(50.0));
+        font::draw(canvas, &shown, r.x + t.px(38.0), r.y + t.px(43.0), &bs);
+        y += r.h + t.px(8.0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+fn draw_diagnostics(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    let keep = usize::try_from(
+        shell
+            .settings
+            .values
+            .num("diagnostics.history")
+            .clamp(32.0, 512.0) as i64,
+    )
+    .unwrap_or(128);
+    let mut lines = shell.diagnostic_lines();
+    if lines.len() > keep {
+        lines.drain(..lines.len().saturating_sub(keep));
+    }
+    let s = Style::new(t.text_px(TypeStep::Caption), t.text());
+    let line_h = t.px(14.0);
+    let w = t.px(320.0);
+    let h = (lines.len() as f32) * line_h + t.px(20.0);
+    let screen = shell.wm.screen();
+    let r = Rect::new(
+        t.px(12.0),
+        (screen.h - h - t.px(12.0)).max(shell.top_bar().h),
+        w,
+        h.min(screen.h * 0.8),
+    );
+    // Deliberately plain: a diagnostic overlay that looks like the rest of the
+    // interface is a diagnostic overlay somebody will mistake for the product.
+    let opacity =
+        (shell.settings.values.num("diagnostics.overlay-opacity") / 100.0).clamp(0.4, 1.0);
+    canvas.fill_round_rect(r, t.radius(Radius::Sm), with_alpha(rgb(0x000000), opacity));
+    canvas.stroke_round_rect(r, t.radius(Radius::Sm), 1.0, with_alpha(t.accent(), 0.5));
+
+    // A box around every window says what the pixel belongs to when the
+    // question is "which surface drew this", which is the question a layout
+    // bug actually asks.
+    if shell.settings.values.on("diagnostics.boxes") {
+        let windows = shell.visible_windows();
+        for (_, rect, _, _, _) in windows {
+            canvas.stroke_round_rect(
+                rect,
+                t.radius(Radius::Sm),
+                1.0,
+                with_alpha(t.accent(), 0.55),
+            );
+        }
+        canvas.stroke_round_rect(r, t.radius(Radius::Sm), 1.0, with_alpha(t.text(), 0.45));
+        // The hotspot table as well as the windows: the windows answer "which
+        // surface drew this pixel", the hotspots answer "what can be clicked
+        // here", and a control with no rectangle is only visible in the second.
+        // Drawn here, at the end of the frame, the table is complete.
+        for rect in shell.hotspots().rects() {
+            canvas.stroke_round_rect(
+                rect,
+                t.radius(Radius::Sm),
+                1.0,
+                with_alpha(t.accent(), 0.35),
+            );
+        }
+    }
+
+    let mut y = r.y + t.px(16.0);
+    for line in lines {
+        if y > r.bottom() - t.px(4.0) {
+            break;
+        }
+        font::draw(
+            canvas,
+            &ui::elide(&line, &s, r.w - t.px(16.0)),
+            r.x + t.px(8.0),
+            y,
+            &s,
+        );
+        y += line_h;
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::arithmetic_side_effects)]
+mod tests {
+    use super::*;
+    use crate::canvas::luminance;
+    use crate::settings::Value;
+    use crate::shell::{DesktopMode, EnvRow, SystemFacts};
+    use crate::ui::Tokens;
+    use litric_design::{Theme, ThemeKind};
+    use litric_locale::Regional;
+    use litric_wm::HitZone;
+
+    fn shell() -> Shell {
+        let tokens = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
+        let mut s = Shell::new(tokens, 1280.0, 800.0, Regional::fallback("test"));
+        s.mode = DesktopMode::Ready;
+        s.environments = vec![
+            EnvRow {
+                token: "windows".to_owned(),
+                title: "Windows 11".to_owned(),
+                state: "not-installed".to_owned(),
+                active: false,
+                hotkey: "Win+1".to_owned(),
+            },
+            EnvRow {
+                token: "litric".to_owned(),
+                title: "LitricOS".to_owned(),
+                state: "running".to_owned(),
+                active: true,
+                hotkey: "Win+2".to_owned(),
+            },
+        ];
+        s.facts.mem_total_mb = Some(946);
+        s.facts.mem_used_mb = Some(647);
+        s.facts.cpu_fraction = Some(0.08);
+        s.facts.source = "test".to_owned();
+        s
+    }
+
+    fn canvas() -> Canvas {
+        let mut c = Canvas::new(1280, 800, rgb(0x000000));
+        crate::desktop::wallpaper(&mut c, &Theme::of(ThemeKind::Dark));
+        c
+    }
+
+    fn ink(c: &Canvas, r: Rect) -> usize {
+        let mut n = 0;
+        for y in (r.y as i64)..(r.bottom() as i64) {
+            for x in (r.x as i64)..(r.right() as i64) {
+                if luminance(c.get(x, y).unwrap_or(0)) > 0.25 {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn the_top_bar_draws_and_registers_its_hotspots() {
+        let mut s = shell();
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        assert!(ink(&c, s.top_bar()) > 200, "the top bar is empty");
+        for hot in [
+            Hot::Logo,
+            Hot::MenuApps,
+            Hot::MenuWorkspace,
+            Hot::MenuEnvironment,
+            Hot::StatusClock,
+            Hot::StatusNotifications,
+            Hot::StatusUser,
+        ] {
+            assert!(
+                s.hotspots().rect_of(hot).is_some(),
+                "{hot:?} was drawn without a hotspot"
+            );
+        }
+    }
+
+    #[test]
+    fn every_top_bar_hotspot_lies_inside_the_top_bar() {
+        // A status item whose clickable area hangs below the bar steals clicks
+        // from whatever window is underneath.
+        let mut s = shell();
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        let bar = s.top_bar();
+        for hot in [
+            Hot::Logo,
+            Hot::MenuApps,
+            Hot::StatusClock,
+            Hot::StatusNetwork,
+            Hot::StatusAudio,
+            Hot::StatusBattery,
+            Hot::StatusPower,
+            Hot::StatusNotifications,
+            Hot::StatusUser,
+        ] {
+            let Some(r) = s.hotspots().rect_of(hot) else {
+                continue;
+            };
+            assert!(
+                r.bottom() <= bar.bottom() + 6.0,
+                "{hot:?} extends to {} below a {}-tall bar",
+                r.bottom(),
+                bar.h
+            );
+        }
+    }
+
+    #[test]
+    fn the_desktop_has_no_dock_and_the_launcher_carries_every_control() {
+        // The resting desktop draws nothing along the bottom edge: that band
+        // is what a moving pointer used to re-composite on every sample. The
+        // dock is the launcher's bottom row, and every control on it is a
+        // hotspot there.
+        let mut s = shell();
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        let band = Rect::new(0.0, 700.0, 1280.0, 100.0);
+        let at_rest = ink(&c, band);
+        assert!(s.hotspots().rect_of(Hot::DockToggle).is_none());
+        assert!(s.hotspots().rect_of(Hot::DockSearch).is_none());
+
+        s.perform(crate::shortcuts::Action::ToggleLauncher);
+        for _ in 0..60 {
+            s.tick_after(33);
+        }
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        assert!(
+            ink(&c, band) > at_rest,
+            "the launcher drew no dock row along the bottom edge"
+        );
+        assert!(s.hotspots().rect_of(Hot::DockToggle).is_some());
+        assert!(s.hotspots().rect_of(Hot::DockSearch).is_some());
+        for i in DOCK_PINNED {
+            // `get` rather than `[]`: this constant names applications by index,
+            // so a pin that no longer exists is a pin this test should report,
+            // not one that takes the test binary down on a slice bounds panic.
+            let title = App::ALL
+                .get(i)
+                .map_or("<not an application>", |app| app.title());
+            let hot = Hot::DockItem(u8::try_from(i).unwrap_or(u8::MAX));
+            assert!(
+                s.hotspots().rect_of(hot).is_some(),
+                "pinned dock item {i} ({title}) is not clickable in the launcher"
+            );
+        }
+    }
+
+    #[test]
+    fn the_system_bars_centre_names_the_focused_application() {
+        // The bar's centre is the one place that can say which application the
+        // next keystroke reaches. It used to spend that room on the workspace
+        // number, which the pips beside it already say, so the text is checked
+        // on a real frame: the application's name is on the bar, and no
+        // "Workspace N" is.
+        let mut s = shell();
+        let mut c = canvas();
+        c.record_text(true);
+        draw(&mut c, &mut s);
+        // The expectation goes through the same catalogue the drawing does.
+        // `App::title()` is the English name; the bar draws whatever
+        // `i18n::text` makes of it, and with Thai selected (the default) those
+        // are different strings. Comparing the run against the English name
+        // asserts a locale the shell was not drawing in, and says "the centre is
+        // wrong" about a centre that is right.
+        let runs: Vec<String> = c.text_runs().iter().map(|r| r.text.clone()).collect();
+        let desktop = crate::i18n::text("Desktop").into_owned();
+        assert!(
+            runs.contains(&desktop),
+            "nothing focused names the desktop (expected {desktop:?}): {runs:?}"
+        );
+
+        s.open_app(App::Files);
+        let mut c = canvas();
+        c.record_text(true);
+        draw(&mut c, &mut s);
+        let runs: Vec<String> = c.text_runs().iter().map(|r| r.text.clone()).collect();
+        let files = crate::i18n::text(App::Files.title()).into_owned();
+        assert!(
+            runs.contains(&files),
+            "the centre does not name the focused application \
+             (expected {files:?}): {runs:?}"
+        );
+        assert!(
+            !runs
+                .iter()
+                .any(|r| r.starts_with("Workspace ") && r.len() <= 12),
+            "the centre is still a workspace number: {runs:?}"
+        );
+    }
+
+    #[test]
+    fn a_desktop_label_shows_a_real_file_name_not_five_letters() {
+        let mut s = shell();
+        s.desktop_icons.items = vec![crate::apps::DesktopIcon {
+            label: "Screencast-2026-10-16-14-12-35.webm".to_owned(),
+            target: crate::apps::IconTarget::Folder("/Desktop".to_owned()),
+        }];
+        let mut c = canvas();
+        c.record_text(true);
+        draw(&mut c, &mut s);
+        let runs: Vec<String> = c.text_runs().iter().map(|r| r.text.clone()).collect();
+        // The label is drawn as more than one run, each a piece of the name. The
+        // question this test asks is whether the icon shows enough of the name
+        // to tell it apart from its neighbour, so it measures the longest piece
+        // the label drew rather than the exact string: "Screencast-2026" is a
+        // name a person can read, "Scree..." is not.
+        let longest = runs.iter().map(String::len).max().unwrap_or(0);
+        assert!(longest >= 12, "the label was cut down to {runs:?}");
+    }
+
+    #[test]
+    fn a_window_draws_its_chrome_where_the_hit_test_expects_it() {
+        let mut s = shell();
+        s.open_app(App::Activity);
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        let id = s.wm.focused().unwrap_or(0);
+        let frame =
+            s.wm.window(id)
+                .map(|w| w.frame)
+                .unwrap_or(litric_wm::Rect::ZERO);
+        let b = s.wm.chrome().button_rect(&frame, 0);
+        // The close dot is drawn filled, so its centre is bright.
+        assert!(
+            luminance(c.get(b.center().0 as i64, b.center().1 as i64).unwrap_or(0)) > 0.2,
+            "no close button where the hit test says it is"
+        );
+        assert_eq!(
+            s.wm.hit_test(b.center().0, b.center().1).map(|h| h.zone),
+            Some(HitZone::Close)
+        );
+    }
+
+    #[test]
+    fn the_activity_window_shows_unavailable_rather_than_zero() {
+        let mut s = shell();
+        s.facts.gpu_fraction = None;
+        s.open_app(App::Activity);
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        // Not a pixel assertion: the string is what matters, and the renderer
+        // is given it by SystemFacts. This pins the contract.
+        assert_eq!(SystemFacts::or_unknown(s.facts.gpu_fraction), "Unavailable");
+    }
+
+    /// Reveal the dock the way a user does: rest the pointer on the bottom
+    /// edge and let the spring arrive, then expand it.
+    fn open_launcher(s: &mut Shell) {
+        let _ = s.handle(
+            &litric_input::InputEvent::PointerMove {
+                at: litric_input::event::Point::new(640.0, 795.0),
+                delta: litric_input::event::Point::new(1.0, 1.0),
+            },
+            1_000,
+        );
+        for _ in 0..60 {
+            s.tick(1_016);
+        }
+        s.perform(Action::ToggleLauncher);
+        // The morph is a spring: the panel is clickable from the first ticked
+        // frame, and the test ticks so that it is fully out.
+        for _ in 0..60 {
+            s.tick(2_000);
+        }
+    }
+
+    #[test]
+    fn the_launcher_is_the_dock_expanded_and_registers_a_tile_for_each_app() {
+        let mut s = shell();
+        open_launcher(&mut s);
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        for i in 0..App::ALL.len() {
+            assert!(
+                s.hotspots().rect_of(Hot::LauncherItem(i)).is_some(),
+                "launcher tile {i} has no hotspot"
+            );
+        }
+        // The dock's own controls are still there, in the same surface: the
+        // pill did not become a second thing, it grew.
+        assert!(s.hotspots().rect_of(Hot::DockToggle).is_some());
+        assert!(s.hotspots().rect_of(Hot::DockSearch).is_some());
+        assert!(s.hotspots().rect_of(Hot::DockLock).is_some());
+    }
+
+    #[test]
+    fn a_launcher_search_with_no_matches_says_so_and_keeps_the_field() {
+        let mut s = shell();
+        open_launcher(&mut s);
+        let _ = s.handle(
+            &litric_input::InputEvent::TextInput {
+                text: "zzzz".to_owned(),
+            },
+            3_000,
+        );
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        assert!(s.hotspots().rect_of(Hot::LauncherItem(0)).is_none());
+        // The X that collapses the search: a launcher with no matches must
+        // still offer a way back, and Backspace alone is not discoverable.
+        assert!(s.hotspots().rect_of(Hot::DockCollapse).is_some());
+    }
+
+    #[test]
+    fn quick_settings_registers_every_control_it_draws() {
+        let mut s = shell();
+        s.perform(Action::ToggleQuickSettings);
+        // The real loop ticks between input and draw; the spring advances
+        // there, and the panel is clickable from the first ticked frame. The
+        // tick has to name the time that passed — one 60 Hz frame — because
+        // the spring moves by the time the tick gives it, not by the number of
+        // times it is called.
+        s.tick_after(16);
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        for i in 0..4u8 {
+            assert!(
+                s.hotspots().rect_of(Hot::QuickToggle(i)).is_some(),
+                "toggle {i}"
+            );
+            assert!(
+                s.hotspots().rect_of(Hot::QuickPower(i)).is_some(),
+                "power {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_notification_list_draws_when_empty_and_when_full() {
+        let mut s = shell();
+        s.perform(Action::ToggleNotifications);
+        s.tick_after(16); // advance the panel's spring, as the loop does
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        assert!(s.hotspots().rect_of(Hot::NotificationsClear).is_none());
+
+        s.notify(
+            "test",
+            "Disk almost full",
+            "12% remaining",
+            Priority::High,
+            None,
+        );
+        let mut c2 = canvas();
+        draw(&mut c2, &mut s);
+        assert!(s.hotspots().rect_of(Hot::NotificationItem(0)).is_some());
+        assert!(s.hotspots().rect_of(Hot::NotificationsClear).is_some());
+    }
+
+    #[test]
+    fn the_switcher_lists_one_row_per_window() {
+        let mut s = shell();
+        s.open_app(App::Activity);
+        s.open_app(App::Files);
+        s.perform(Action::NextWindow);
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        assert!(s.hotspots().rect_of(Hot::SwitcherItem(0)).is_some());
+        assert!(s.hotspots().rect_of(Hot::SwitcherItem(1)).is_some());
+        assert!(s.hotspots().rect_of(Hot::SwitcherItem(2)).is_none());
+    }
+
+    #[test]
+    fn the_diagnostic_overlay_only_appears_when_asked_for() {
+        let mut s = shell();
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        let quiet = ink(&c, Rect::new(0.0, 400.0, 340.0, 400.0));
+
+        s.diagnostics = true;
+        let mut c2 = canvas();
+        draw(&mut c2, &mut s);
+        let loud = ink(&c2, Rect::new(0.0, 400.0, 340.0, 400.0));
+        assert!(loud > quiet + 100, "the diagnostic overlay drew nothing");
+    }
+
+    /// How many pixels two frames disagree about. The three caret shapes are
+    /// all small, so "the setting reached the pixels" is measured as a count
+    /// rather than as ink, which a filled block and a bar can score alike.
+    fn changed(a: &Canvas, b: &Canvas) -> usize {
+        let mut n = 0_usize;
+        for y in 0_i64..800 {
+            for x in 0_i64..1200 {
+                if a.get(x, y) != b.get(x, y) {
+                    n = n.saturating_add(1);
+                }
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn the_terminal_caret_draws_in_the_shape_its_setting_asks_for() {
+        let mut s = shell();
+        s.open_app(App::Terminal);
+        s.terminal.focused = true;
+
+        let mut bar = canvas();
+        draw(&mut bar, &mut s);
+        let _ = s
+            .settings
+            .values
+            .set("terminal.cursor-style", Value::Pick("block"));
+        let mut block = canvas();
+        draw(&mut block, &mut s);
+        let _ = s
+            .settings
+            .values
+            .set("terminal.cursor-style", Value::Pick("underline"));
+        let mut underline = canvas();
+        draw(&mut underline, &mut s);
+
+        // Every shape is its own pixels: bar is the default, and the two
+        // alternates must not land on it.
+        assert!(changed(&bar, &block) > 10, "the block caret did not draw");
+        assert!(
+            changed(&bar, &underline) > 5,
+            "the underline caret did not draw"
+        );
+        assert!(
+            changed(&block, &underline) > 5,
+            "block and underline are the same caret"
+        );
+    }
+
+    #[test]
+    fn banners_stack_where_the_position_setting_says() {
+        let top_region = Rect::new(900.0, 40.0, 380.0, 160.0);
+        let bottom_region = Rect::new(900.0, 620.0, 380.0, 180.0);
+        // The wallpaper is never empty, so every claim below is made against
+        // the same frame with no banner in it.
+        let mut s = shell();
+        let mut base = canvas();
+        draw(&mut base, &mut s);
+        let (base_top, base_bottom) = (ink(&base, top_region), ink(&base, bottom_region));
+
+        s.notify("Test", "A title", "A body", Priority::Normal, Some(5_000));
+        let mut top = canvas();
+        draw(&mut top, &mut s);
+        assert!(
+            ink(&top, top_region) > base_top + 50,
+            "the banner did not draw top right"
+        );
+        assert_eq!(
+            ink(&top, bottom_region),
+            base_bottom,
+            "the banner drew at the bottom too"
+        );
+
+        let _ = s
+            .settings
+            .values
+            .set("notifications.position", Value::Pick("bottom-right"));
+        let mut bottom = canvas();
+        draw(&mut bottom, &mut s);
+        assert!(
+            ink(&bottom, bottom_region) > base_bottom + 50,
+            "the banner did not move to the bottom"
+        );
+        assert_eq!(
+            ink(&bottom, top_region),
+            base_top,
+            "the banner left a copy at the top"
+        );
+    }
+
+    #[test]
+    fn layout_boxes_outline_the_hotspot_table_when_asked_for() {
+        let mut s = shell();
+        s.open_app(App::Settings);
+        s.diagnostics = true;
+        let mut without = canvas();
+        draw(&mut without, &mut s);
+
+        let _ = s.settings.values.set("diagnostics.boxes", Value::On(true));
+        let mut with = canvas();
+        draw(&mut with, &mut s);
+        assert!(
+            changed(&without, &with) > 20,
+            "the hotspot outlines did not draw"
+        );
+    }
+
+    #[test]
+    fn a_real_application_window_draws_real_content() {
+        // The rule the whole project runs on: an empty window would look like
+        // a bug, and a fake file list would be a lie. Files is a shipped app
+        // with a real view, so its window must have content in it.
+        let mut s = shell();
+        s.open_app(App::Files);
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        let id = s.wm.focused().unwrap_or(0);
+        let frame =
+            s.wm.window(id)
+                .map(|w| w.frame)
+                .unwrap_or(litric_wm::Rect::ZERO);
+        let body = Rect::new(frame.x, frame.y + 40.0, frame.w, frame.h - 40.0);
+        assert!(ink(&c, body) > 150, "the window drew nothing");
+    }
+
+    #[test]
+    fn the_diagnostics_page_names_the_keyboard_that_is_attached() {
+        // A Settings page that says "input: interactive" regardless of what is
+        // plugged in is the page a person opens when typing does nothing, and it
+        // tells them nothing. The names come from the kernel, so the test hands
+        // the shell the same rows the platform would and asks for them back.
+        let mut s = shell();
+        s.settings.page = crate::settings::Category::Diagnostics;
+        s.facts.input_devices = vec![
+            crate::shell::InputDevice {
+                node: "event0".to_owned(),
+                name: "QEMU USB Keyboard".to_owned(),
+                kind: "keyboard".to_owned(),
+            },
+            crate::shell::InputDevice {
+                node: "event2".to_owned(),
+                name: "QEMU USB Tablet".to_owned(),
+                kind: "tablet".to_owned(),
+            },
+        ];
+        s.open_app(App::Settings);
+        let mut c = canvas();
+        c.record_text(true);
+        draw(&mut c, &mut s);
+        let runs: Vec<String> = c.text_runs().iter().map(|r| r.text.clone()).collect();
+        assert!(
+            runs.iter().any(|r| r.contains("QEMU USB Keyboard")),
+            "the attached keyboard is not named: {runs:?}"
+        );
+        assert!(
+            runs.iter()
+                .any(|r| r.contains("keyboard") || r.contains("Keyboard")),
+            "the device class is not shown: {runs:?}"
+        );
+    }
+
+    #[test]
+    fn the_diagnostics_page_says_no_bluetooth_radio_rather_than_unavailable() {
+        // This is the emulated machine's actual state: QEMU has no Bluetooth
+        // radio to give the guest. "Unavailable" would blame the machine; the
+        // sentence has to blame the absence of hardware.
+        let mut s = shell();
+        s.settings.page = crate::settings::Category::Diagnostics;
+        s.facts.bt_state = Some("no-adapter".to_owned());
+        s.facts.bt_daemon = Some(false);
+        s.open_app(App::Settings);
+        let mut c = canvas();
+        c.record_text(true);
+        draw(&mut c, &mut s);
+        let runs: Vec<String> = c.text_runs().iter().map(|r| r.text.clone()).collect();
+        let joined = runs.join(" | ");
+        assert!(
+            joined.contains("No radio") || joined.contains("ไม่มีวิทยุ"),
+            "the page does not say there is no radio: {joined}"
+        );
+    }
+
+    #[test]
+    fn drawing_is_stable_across_frames_when_nothing_changes() {
+        let mut s = shell();
+        s.open_app(App::Activity);
+        let mut a = canvas();
+        draw(&mut a, &mut s);
+        let mut b = canvas();
+        draw(&mut b, &mut s);
+        assert_eq!(a.pixels(), b.pixels(), "two identical frames differ");
+    }
+
+    #[test]
+    fn drawing_survives_a_tiny_display() {
+        let tokens = Tokens::new(Theme::of(ThemeKind::Dark), 0.6);
+        let mut s = Shell::new(tokens, 320.0, 200.0, Regional::fallback("test"));
+        s.mode = DesktopMode::Ready;
+        s.open_app(App::Activity);
+        s.perform(Action::ToggleLauncher);
+        let mut c = Canvas::new(320, 200, rgb(0x000000));
+        draw(&mut c, &mut s);
+        assert_eq!(c.width(), 320);
+    }
+}

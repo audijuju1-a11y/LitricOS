@@ -92,7 +92,7 @@ below surfaced.
 | 5 | dbus-broker | 5 MB | TARGET (not enforced: no drop-in supplies it - BUG-0008) | broker, not dbus-daemon |
 | 6 | iwd + networkd + resolved | 15 MB | TARGET (not enforced: no drop-in supplies it - BUG-0008) | **not** NetworkManager |
 | 7 | seatd | 2 MB | TARGET (not enforced: no drop-in supplies it - BUG-0008) | |
-| 8 | **litric-shell** (compositor + shell) | **110 MB** | `MemoryHigh=110M`, `MemoryMax=140M` [ACK: both are configured on `litric-shell.slice`, which no unit joins, while the service sets its own `MemoryMax=96M` - so the effective High is unbounded and the effective Max is 96M. Choose the number, then change the unit or this cell - BUG-0008] | ADR-0009 |
+| 8 | **litric-shell** (compositor + shell) | **110 MB** | `MemoryHigh=110M`, `MemoryMax=140M` on `litric-shell.slice` joined by the shell service | ADR-0009; measured at 1920×1080 |
 | 9 | pipewire + wireplumber | 18 MB | TARGET (not enforced: no drop-in supplies it - BUG-0008) | socket-activated; **0 MB until first stream** |
 | 10 | litric-defender | 60 MB | TARGET (not enforced: the scanner has no binary in the image, so its units and its slice are parked under image/units-pending/ - BUG-0008) | ADR-0014; v1 allowed 100 MB; the 64 MB cap is designed into the parked `litric-defender.slice`, not removed |
 | 11 | litric-aid (AI, model unloaded) | 8 MB | `MemoryMax=12M` [ACK: `litric-ai.slice` carries it, but no shipped unit joins that slice and no AI service is in the image, so it governs nothing - BUG-0008] | socket-activated; **0 MB until first request** |
@@ -249,6 +249,29 @@ These are **host numbers, not target numbers**, and they are presented as the
 failures they are: every frame path on this list is over the gate, and the two
 bugs above are open. They are recorded here because a budget that is only ever
 compared against nothing is a wish.
+
+#### Measured again after the lock fix — 2026-10-15
+
+[BUG-0018](bugs/BUG-0018-a-locked-frame-costs-half-a-second.md) is fixed: the frame
+that opens a locked session fell from 293.727 ms to **35.819 ms**, and the
+customize sheet from 477.656 ms to **185.718 ms**. Those rows were re-measured on a
+**second host** (Windows 11, `x86_64-pc-windows-gnu`, same release profile), not
+on the WSL2 machine above — which is why the "before" column here reads 293.727 ms
+where the table above reads 569.664 ms for the same frame. The two hosts differ by
+roughly 2x in absolute terms, so the ratio and the pixel counts are the parts that
+carry.
+
+| Frame | Before | After | Speedup | Its interval | Status |
+|---|---:|---:|---:|---:|---|
+| Locked, shipped look | 293.727 ms | **35.819 ms** | 8.2x | 33 ms | **NOT MET** — 1.08x over (was 8.9x) |
+| Locked, entry sheet out | 311.362 ms | **37.983 ms** | 8.2x | 33 ms | **NOT MET** — 1.15x over |
+| Locked, motion "Still" | 306.114 ms | **36.843 ms** | 8.3x | 33 ms | **NOT MET** — 1.12x over |
+| Locked, customize sheet open | 477.656 ms | **185.718 ms** | 2.6x | 33 ms | **NOT MET** — 5.6x; 4.06M of its 7.27M pixels are one soft shadow |
+
+The 16.67 ms gate above is the desktop's. A locked session asks its own loop for
+33 ms (`lock.interval_ms=33`, which `render_bench` prints) and is measured against
+that. Pixels: a locked frame paints 1 909 744 where it painted 10 426 249. Raw
+lines: [`docs/evidence/2026-10-15/bug0018-bench-final.log`](evidence/2026-10-15/bug0018-bench-final.log).
 
 ---
 

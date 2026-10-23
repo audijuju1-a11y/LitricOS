@@ -47,6 +47,7 @@ members = [
 
     # --- native ecosystem: the desktop itself ---------------------------------
     "litric-shell",
+    "litric-text",
 
     # --- benchmark: ADR pending. Destructive-equivalent adversarial testing;
     # zero deps; drives the real defender engine (MASTER prompt framework) ---

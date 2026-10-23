@@ -56,6 +56,8 @@ enable_unit() {
 
 enable_unit litric-selftest.service multi-user.target
 enable_unit litric-mm-tune.service  sysinit.target
+enable_unit litric-etc-overlay.service local-fs.target
+enable_unit litric-first-run.service multi-user.target
 enable_unit litric-sysd.service     multi-user.target
 # The guest supervisor: every launch of Windows or Linux as an environment
 # goes through this daemon (ADR-0015). Enabled alongside sysd, ordered after
@@ -107,6 +109,7 @@ enable_unit systemd-resolved.service multi-user.target
 # a service's state — is what the interface reports.
 enable_unit iwd.service         multi-user.target
 enable_unit bluetooth.service   multi-user.target
+
 
 # --- 2. Repair permissions inherited from the Windows filesystem ------------
 #

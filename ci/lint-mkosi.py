@@ -59,8 +59,12 @@ SCHEMA: dict[str, set[str]] = {
         "EnvironmentFiles", "WithTests", "WithNetwork", "Bootable", "Bootloader",
         "BiosBootloader", "ShimBootloader", "UnifiedKernelImages",
         "UnifiedKernelImageFormat", "Initrds", "InitrdPackages", "MicrocodeHost",
-        "KernelCommandLine", "KernelModulesInclude", "KernelModulesExclude",
-        "KernelModulesInitrdInclude", "KernelModulesInitrdExclude", "Locale",
+        "KernelCommandLine", "KernelModules", "KernelInitrdModules",
+        # The mkosi 26 spellings live in LEGACY_MODULE_KEYS, not here: they parse,
+        # but they parse as regular expressions, and a module list written in that
+        # grammar silently matches nothing (BUG-0020). Accepted by mkosi, rejected
+        # by this linter, which is the whole point of the table.
+        "Locale",
         "LocaleMessages", "Keymap", "Timezone", "Hostname", "RootPassword",
         "RootShell", "Autologin", "MakeInitrd", "SELinuxRelabel",
     },
@@ -76,6 +80,10 @@ SCHEMA: dict[str, set[str]] = {
     # "should be configured in [Build]". This table previously had the directory
     # keys in [Output]; the linter therefore passed a configuration that mkosi
     # refused, which is a false negative -- the worst kind of check.
+    #
+    # The image builds with mkosi 27 as of 2026-10-16, and the [Content] table
+    # above was re-checked against it: `KernelInitrdModules` added, the mkosi 26
+    # `KernelModulesInitrdInclude` kept because mkosi 27 still parses it.
     "Build": {
         "Environment", "EnvironmentFiles", "BuildSources", "BuildDirectory",
         "CacheDirectory", "PackageCacheDirectory", "WithTests", "WithNetwork",
@@ -137,6 +145,34 @@ PATH_KEYS = {
     "SecureBootKey", "SecureBootCertificate", "VerityKey", "VerityCertificate",
     "SignExpectedPcrKey", "SignExpectedPcrCertificate",
 }
+
+# Module settings whose mkosi 26 spelling is a silent trap.
+#
+# mkosi 27 still parses these, but through the *legacy* code path, which treats
+# each entry as a regular expression rather than a glob:
+#
+#     KernelModulesInclude=virtio_*    ->  re:virtio_*   = "virtio" + "_"*
+#     KernelModulesExclude=.*          ->  re:.*         = everything
+#
+# The first matches no real module, the second excludes every remaining one, and
+# the result is an image with an empty /usr/lib/modules. mkosi builds its extra
+# initrd by copying from that directory, so the initrd is empty too and a
+# dm-verity root cannot be mounted. `mkosi summary` will tell you -- it prints
+# `re:` in front of exactly these values -- but nothing in the build does.
+LEGACY_MODULE_KEYS = {
+    "KernelModulesInclude": "KernelModules",
+    "KernelModulesExclude": "KernelModules (write the pattern as -*)",
+    "KernelModulesInitrdInclude": "KernelInitrdModules",
+    "KernelModulesInitrdExclude": "KernelInitrdModules (write the pattern as -*)",
+}
+
+# Every boot needs these before /sysroot can be mounted: the root's own driver
+# and the device mapper the root sits on. Named as (label, predicate) so the
+# message can say which one is absent.
+BOOT_CRITICAL_MODULES = (
+    ("erofs", lambda p: p == "erofs"),
+    ("dm-*", lambda p: p.startswith("dm-") or p.startswith("dm_")),
+)
 
 # mkosi discovers these automatically when they sit next to mkosi.conf.
 # Declaring them as well applies them twice.
@@ -244,6 +280,129 @@ def lint(path: Path) -> list[Finding]:
     return findings
 
 
+def read_list_setting(path: Path, keys: set[str]) -> dict[str, list[str]]:
+    """Collect `key=` plus its indented continuation lines, per key.
+
+    Values are returned as written: stripping trailing comments is deliberately
+    NOT done, because mkosi does not strip them either, so a stray `# note`
+    becomes a glob -- and hiding that here would hide a real defect.
+    """
+    values: dict[str, list[str]] = {}
+    current: str | None = None
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return values
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        if raw[:1] in (" ", "\t"):
+            if current is not None:
+                values[current].append(line)
+            continue
+        if "=" not in line:
+            current = None
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key in keys:
+            current = key
+            values.setdefault(key, [])
+            if value.strip():
+                values[key].append(value.strip())
+        else:
+            current = None
+    return values
+
+
+# Patterns that, used as an exclusion, remove every module there is.
+MATCHES_EVERYTHING = {".*", "*", "/.*", "/**"}
+
+
+def check_module_sets(paths: list[Path]) -> list[Finding]:
+    """The module lists must be consistent, and must cover the boot.
+
+    Four defects, each of which produced a bootable-looking image that could not
+    boot, and none of which any schema check can see:
+
+      1. a legacy key (see LEGACY_MODULE_KEYS) -- accepted by mkosi, matches
+         nothing;
+      2. an initrd list without the root's driver or the device mapper, which
+         only shows up as "Failed to mount /sysroot" ninety seconds into a boot;
+      3. an initrd list asking for a module the image's whitelist drops -- the
+         extra initrd is copied out of the image's /usr/lib/modules, so the name
+         is unreachable even though both lists look right in isolation;
+      4. a whitelist next to an exclude-everything pattern. mkosi's rule is that
+         the exclude branch wins and an include list is a whitelist inside it, so
+         `-.*` plus `virtio*` keeps nothing -- and says nothing.
+    """
+    findings: list[Finding] = []
+    image_patterns: list[str] = []
+    initrd_modules: list[str] = []
+
+    for path in paths:
+        legacy = read_list_setting(path, set(LEGACY_MODULE_KEYS))
+        for key in legacy:
+            findings.append(Finding(
+                path, 0, "ERROR",
+                f"{key}= uses the mkosi 26 spelling, which mkosi 27 parses as a "
+                f"regular expression, not a glob: `virtio_*` matches no module and "
+                f"`.*` excludes every one. Use {LEGACY_MODULE_KEYS[key]}. "
+                f"See docs/bugs/BUG-0020.",
+            ))
+
+        lists = read_list_setting(path, {"KernelModules", "KernelInitrdModules"})
+        image_patterns.extend(lists.get("KernelModules", []))
+        initrd_modules.extend(lists.get("KernelInitrdModules", []))
+
+    if not initrd_modules:
+        findings.append(Finding(
+            paths[0] if paths else Path("image/mkosi.conf"), 0, "ERROR",
+            "no KernelInitrdModules= list: the extra initrd gets no modules, so a "
+            "root on erofs behind dm-verity cannot be mounted",
+        ))
+        return findings
+
+    include = [p for p in image_patterns if not p.startswith("-")]
+    exclude = [p.lstrip("-") for p in image_patterns if p.startswith("-")]
+
+    for pattern in exclude:
+        if pattern in MATCHES_EVERYTHING and include:
+            findings.append(Finding(
+                paths[0] if paths else Path("image/mkosi.conf"), 0, "ERROR",
+                f"KernelModules= carries -{pattern} next to {len(include)} "
+                f"include pattern(s). mkosi evaluates the exclude branch first and "
+                f"the include list only decides *within* what survives it, so this "
+                f"keeps no modules at all: an empty /usr/lib/modules, an empty "
+                f"initrd, and a root that cannot be mounted. Drop the exclusion, or "
+                f"drop the include list and exclude individual patterns.",
+            ))
+
+    for label, predicate in BOOT_CRITICAL_MODULES:
+        if not any(predicate(p) for p in initrd_modules):
+            findings.append(Finding(
+                paths[0] if paths else Path("image/mkosi.conf"), 0, "ERROR",
+                f"the initrd list has no {label!r} pattern. It is a module, not "
+                f"built in, and the boot cannot mount /sysroot without it.",
+            ))
+
+    if include:
+        for pattern in initrd_modules:
+            if pattern.startswith(("-", "!")):
+                continue
+            if pattern not in include:
+                findings.append(Finding(
+                    paths[0] if paths else Path("image/mkosi.conf"), 0, "ERROR",
+                    f"the initrd asks for {pattern!r}, which the image's "
+                    f"whitelist does not keep. mkosi copies the extra initrd out of "
+                    f"the image's /usr/lib/modules, so the name exists on paper and "
+                    f"nowhere else. Add it to that list, or drop the whitelist so "
+                    f"the image carries every module.",
+                ))
+    return findings
+
+
 def self_test() -> int:
     """Prove the linter fails on the known-bad file and passes on the fixed one."""
     root = Path(__file__).resolve().parent.parent
@@ -272,6 +431,66 @@ def self_test() -> int:
         rc = 1
     else:
         print("PASS  current config uses only real sections and correct key placement")
+
+    # The module-set check has to be able to fail too, so it is run against a
+    # synthetic config that reproduces BUG-0020 exactly: the mkosi 26 spellings,
+    # a regex-shaped include list, and an initrd list that is a subset of nothing.
+    scratch = root / "build"
+    scratch.mkdir(parents=True, exist_ok=True)
+    cases = {
+        # The original defect: the mkosi 26 spellings, whose values are regexes.
+        "selftest-bug-0020.conf": (
+            "[Content]\n"
+            "KernelModulesExclude=.*\n"
+            "KernelModulesInclude=\n"
+            "        virtio_*\n"
+            "        dm[-_]*\n"
+            "KernelModulesInitrdInclude=\n"
+            "        erofs\n"
+            "        dm-verity\n",
+            ["mkosi 26 spelling", "no KernelInitrdModules"],
+        ),
+        # The second act: an exclude-everything pattern beside a whitelist, which
+        # mkosi silently resolves by keeping nothing.
+        "selftest-whipsaw.conf": (
+            "[Content]\n"
+            "KernelModules=\n"
+            "        -.*\n"
+            "        erofs\n"
+            "        virtio*\n"
+            "KernelInitrdModules=\n"
+            "        erofs\n"
+            "        dm-*\n",
+            ["keeps no modules at all"],
+        ),
+        # And the quiet one: an initrd list the image's whitelist would drop.
+        "selftest-whitelist.conf": (
+            "[Content]\n"
+            "KernelModules=\n"
+            "        virtio*\n"
+            "KernelInitrdModules=\n"
+            "        erofs\n"
+            "        dm-*\n",
+            ["whitelist does not keep"],
+        ),
+    }
+    try:
+        for name, (text, expected) in cases.items():
+            path = scratch / name
+            path.write_text(text, encoding="utf-8")
+            found = [f for f in check_module_sets([path]) if f.severity == "ERROR"]
+            messages = " ".join(f.message for f in found)
+            missing = [e for e in expected if e not in messages]
+            if missing:
+                print(f"FAIL  module-set check missed {missing} in {name}")
+                rc = 1
+            else:
+                print(f"PASS  regression: {name} is rejected ({len(found)} error(s))")
+            path.unlink(missing_ok=True)
+    finally:
+        for name in cases:
+            (scratch / name).unlink(missing_ok=True)
+
     return rc
 
 
@@ -287,14 +506,21 @@ def main(argv: list[str]) -> int:
     )
 
     errors = 0
+    linted: list[Path] = []
     for path in targets:
         # repart files use systemd-repart syntax, not mkosi syntax.
         if "mkosi.repart" in path.parts:
             continue
+        linted.append(path)
         for f in lint(path):
             print(f)
             if f.severity == "ERROR":
                 errors += 1
+
+    for f in check_module_sets(linted):
+        print(f)
+        if f.severity == "ERROR":
+            errors += 1
 
     if errors:
         print(f"\n{errors} error(s). See docs/bugs/BUG-0001-fabricated-mkosi-config.md")

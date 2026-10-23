@@ -144,7 +144,7 @@ impl Default for Chrome {
             button: 12.0,
             button_gap: 8.0,
             button_inset: 16.0,
-            radius: 14.0,
+            radius: 10.0,
         }
     }
 }

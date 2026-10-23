@@ -127,10 +127,63 @@ fn build() -> Rig {
     // unmeasured -- and the Activity window's whole point is the table. The tick
     // deltas are chosen to reproduce the fixture's own 18% and its per-core
     // pattern exactly, so adding the table changes no other frame.
+    // The Activity window draws graphs from history, and history is what a
+    // running machine has: one sample per poll. So the fixture is a *series* of
+    // samples, one a second apart, ending at the two that were already here --
+    // the earlier ones exist so a frame can show a trend instead of a
+    // two-point line, and the last two are unchanged so every other frame in
+    // this dump is the frame it was before the graphs existed.
+    for step in 0..HISTORY_STEPS {
+        let mut sample = shell.facts.clone();
+        // A machine that is doing something: a slow wave in the machine-wide
+        // busy share, each core offset from its neighbour, memory filling and
+        // emptying a little, and an interface carrying a burst. Every operation
+        // is saturating because the workspace denies arithmetic that can wrap:
+        // these are counters, and a counter that ran past its type should hold
+        // at the ceiling rather than produce a number nobody can explain.
+        sample.cpu_ticks = Some((
+            1_000_u64.saturating_add(step.saturating_mul(40)),
+            4_000_u64.saturating_add(step.saturating_mul(800)),
+        ));
+        sample.core_ticks = CORE_BUSY
+            .iter()
+            .enumerate()
+            .map(|(i, busy)| {
+                let wave = step
+                    .saturating_mul(3)
+                    .saturating_add((i as u64).saturating_mul(5))
+                    % 14;
+                (
+                    100_u64
+                        .saturating_add(step.saturating_mul(40))
+                        .saturating_add(*busy)
+                        .saturating_add(wave),
+                    500_u64.saturating_add(step.saturating_mul(800)),
+                )
+            })
+            .collect();
+        sample.mem_used_mb = Some(430_u64.saturating_add((step % 12).saturating_mul(8)));
+        sample.mem_cached_mb = Some(1_100_u64.saturating_add((step % 25).saturating_mul(6)));
+        sample.net_rx_bytes = Some(
+            812_000_u64
+                .saturating_add(step.saturating_mul(40_000))
+                .saturating_add((step % 9).saturating_mul(21_000)),
+        );
+        sample.net_tx_bytes = Some(
+            120_000_u64
+                .saturating_add(step.saturating_mul(9_000))
+                .saturating_add((step % 5).saturating_mul(3_500)),
+        );
+        sample.processes = processes(step % 2);
+        shell.tick_after(1_000);
+        shell.sample(sample);
+    }
     let mut first = shell.facts.clone();
     first.cpu_ticks = Some((1_000, 4_000));
     first.core_ticks = CORE_BUSY.iter().map(|_| (100, 500)).collect();
     first.processes = processes(0);
+    first.sampled_ms = None;
+    shell.tick_after(1_000);
     shell.sample(first);
     let mut second = shell.facts.clone();
     second.cpu_ticks = Some((1_144, 4_800));
@@ -139,6 +192,8 @@ fn build() -> Rig {
         .map(|b| (100_u64.saturating_add(*b), 600))
         .collect();
     second.processes = processes(1);
+    second.sampled_ms = None;
+    shell.tick_after(1_000);
     shell.sample(second);
     shell.environments = vec![
         env_row("windows", "Windows 11", "not-installed", "Win+1"),
@@ -159,6 +214,11 @@ fn build() -> Rig {
 /// How busy each of the eight logical CPUs is in the fixture, in percent of the
 /// sample interval. It is the same pattern the per-core grid has always drawn.
 const CORE_BUSY: [u64; 8] = [18, 7, 42, 5, 11, 30, 2, 9];
+
+/// How many history samples the fixture feeds before the two that set the
+/// displayed readings. Forty seconds of a machine that is being used: enough
+/// for every graph in the Activity window to have a shape.
+const HISTORY_STEPS: u64 = 40;
 
 /// The process table of the fixture, at sample `step`.
 ///
@@ -225,6 +285,157 @@ fn place(rig: &mut Rig, app: App, x: f32, y: f32, w: f32, h: f32) {
 
 fn scene_idle(_: &mut Rig) {}
 
+/// The Files window with a listing that has files in it: the grid state of the
+/// required golden set (governance §2, screen 3).
+///
+/// The frames are composed here rather than in a live session, so the listing
+/// is the fixture's own -- a folder with a document, a folder, a picture and an
+/// archive -- rather than whatever this host happens to have under `/`.
+fn scene_files(rig: &mut Rig) {
+    let _ = rig.shell.open_app(App::Files);
+    rig.shell.files.rows = file_rows();
+    rig.shell.files.listed = Some("/Documents".to_owned());
+}
+
+/// The same window with nothing in the folder, and nothing selected: the empty
+/// and edge state (governance §2, screen 4).
+fn scene_files_empty(rig: &mut Rig) {
+    scene_files(rig);
+    rig.shell.files.rows.clear();
+    rig.shell.files.selected_rows.clear();
+    rig.shell.files.selected_name = None;
+    rig.shell.files.path = "/Documents/Empty".to_owned();
+    rig.shell.files.listed = Some("/Documents/Empty".to_owned());
+    rig.shell.files.filter.clear();
+}
+
+/// Settings, on the Appearance page: theme cards and the accent picker
+/// (governance §2, screen 5).
+fn scene_settings_appearance(rig: &mut Rig) {
+    let _ = rig.shell.open_app(App::Settings);
+    rig.shell.settings.page = litric_shell::settings::Page::Appearance;
+}
+
+/// The danger dialog: deleting a file, with the object named and Cancel as the
+/// safe default (governance §2, screen 9).
+fn scene_danger_dialog(rig: &mut Rig) {
+    scene_files(rig);
+    rig.shell.files.selected_name = Some("report.pdf".to_owned());
+    rig.shell.files.selected_rows.clear();
+    rig.shell
+        .files
+        .selected_rows
+        .insert("/Documents/report.pdf".to_owned());
+    rig.shell.files.ask_confirm(
+        "Delete permanently",
+        "Delete 'report.pdf' permanently? This cannot be undone.",
+        litric_shell::apps::FilesOp::Delete("/Documents/report.pdf".to_owned()),
+    );
+}
+
+/// The Control Center, open (governance §2, screen 6).
+fn scene_control_centre(rig: &mut Rig) {
+    let _ = rig.shell.perform(Action::ToggleQuickSettings);
+    for _ in 0..40 {
+        rig.shell.tick_after(16);
+    }
+}
+
+/// The notification centre, with a few notifications in it -- including one
+/// stop of the Defender, so the list has a severity to draw (screen 8).
+fn scene_notifications(rig: &mut Rig) {
+    use litric_shell::shell::Priority;
+    rig.shell.notify(
+        "Defender",
+        "Scan complete",
+        "1 204 files, no threats",
+        Priority::Normal,
+        None,
+    );
+    rig.shell.notify(
+        "Files",
+        "Moved 12 items",
+        "to /Documents/Archive",
+        Priority::Normal,
+        None,
+    );
+    rig.shell.notify(
+        "Defender",
+        "Threat blocked",
+        "a download was stopped in Chrome",
+        Priority::Critical,
+        None,
+    );
+    let _ = rig.shell.perform(Action::ToggleNotifications);
+    for _ in 0..40 {
+        rig.shell.tick_after(16);
+    }
+}
+
+/// The power menu under the power glyph: lock, sleep, shut down, restart.
+fn scene_power_menu(rig: &mut Rig) {
+    let _ = rig.shell.perform(Action::TogglePowerMenu);
+    for _ in 0..40 {
+        rig.shell.tick_after(16);
+    }
+}
+
+/// The LitricOS menu under the wordmark: the session's own settings, and the
+/// lock. This is where the quick-settings panel's SESSION section moved to.
+fn scene_litro_menu(rig: &mut Rig) {
+    let _ = rig.shell.perform(Action::ToggleLitroMenu);
+    for _ in 0..40 {
+        rig.shell.tick_after(16);
+    }
+}
+
+/// The boot intro: the mark, the line that says what is happening, and the pen's
+/// own progress as a track. Drawn from the first frame of the session.
+fn scene_boot_intro(rig: &mut Rig) {
+    rig.shell.restart_boot_intro();
+    // Half the pen path: the mark is legible and still visibly in progress.
+    for _ in 0..60 {
+        rig.shell.tick_after(16);
+    }
+}
+
+/// The listing the Files scenes draw: one of each kind the window renders.
+fn file_rows() -> Vec<litric_shell::apps::FileRow> {
+    use litric_shell::apps::{FileKind, FileRow};
+    vec![
+        FileRow {
+            name: "archive-2026-10-16.tar.gz".to_owned(),
+            kind: FileKind::File,
+            size: 12_582_912,
+            mtime: 1_761_000_000,
+        },
+        FileRow {
+            name: "notes.txt".to_owned(),
+            kind: FileKind::File,
+            size: 3_204,
+            mtime: 1_760_000_000,
+        },
+        FileRow {
+            name: "report.pdf".to_owned(),
+            kind: FileKind::File,
+            size: 842_137,
+            mtime: 1_759_500_000,
+        },
+        FileRow {
+            name: "Screencast-2026-10-16-14-12-35.webm".to_owned(),
+            kind: FileKind::File,
+            size: 233_832_448,
+            mtime: 1_759_000_000,
+        },
+        FileRow {
+            name: "Screenshots".to_owned(),
+            kind: FileKind::Dir,
+            size: 0,
+            mtime: 1_758_000_000,
+        },
+    ]
+}
+
 /// The desktop `main.rs` shows at start: Activity and Environments open,
 /// Activity focused.
 fn scene_start(rig: &mut Rig) {
@@ -290,8 +501,57 @@ fn scene_launcher(rig: &mut Rig) {
         1_000,
     );
     let _ = rig.shell.perform(Action::ToggleLauncher);
+    // `tick_after` names the elapsed time. A constant timestamp handed to
+    // `tick` is a delta of zero after the first call, so no spring ever moved
+    // and this frame was the bare desktop with no dock in it.
     for _ in 0..90 {
-        rig.shell.tick(2_000);
+        rig.shell.tick_after(16);
+    }
+}
+
+/// The launcher with a query typed: the panel as results and the field.
+fn scene_search(rig: &mut Rig) {
+    scene_launcher(rig);
+    let _ = rig.shell.handle(
+        &InputEvent::TextInput {
+            text: "fi".to_owned(),
+        },
+        3_000,
+    );
+    for _ in 0..30 {
+        rig.shell.tick_after(16);
+    }
+}
+
+/// Mission Control: every window as a card, including one that is minimized
+/// and one that lives on another workspace.
+fn scene_mission_control(rig: &mut Rig) {
+    let _ = rig.shell.open_app(App::Files);
+    let _ = rig.shell.open_app(App::Terminal);
+    let _ = rig.shell.open_app(App::Settings);
+    if let Some(id) = rig
+        .shell
+        .wm
+        .all()
+        .iter()
+        .find(|w| w.app_id == App::Settings.app_id())
+        .map(|w| w.id)
+    {
+        rig.shell.wm.move_to_workspace(id, 2);
+    }
+    if let Some(id) = rig
+        .shell
+        .wm
+        .all()
+        .iter()
+        .find(|w| w.app_id == App::Terminal.app_id())
+        .map(|w| w.id)
+    {
+        rig.shell.wm.minimize(id);
+    }
+    let _ = rig.shell.perform(Action::ToggleOverview);
+    for _ in 0..30 {
+        rig.shell.tick_after(16);
     }
 }
 
@@ -317,20 +577,38 @@ fn scene_locked_customize(rig: &mut Rig) {
 
 /// Compose one full frame and report what drawing it cost.
 ///
-/// Returns the draw time, the pixels painted, and the text-layout audit for the
-/// frame. The audit runs here rather than in the shell because it is a property
-/// of a composition, and a frame is the only thing that has one.
-fn compose(rig: &mut Rig) -> (f64, u64, String) {
+/// Returns the draw time, the pixels painted, the pixel count split by the kind
+/// of loop that asked for them, and the text-layout audit for the frame. The
+/// audit runs here rather than in the shell because it is a property of a
+/// composition, and a frame is the only thing that has one.
+///
+/// The split is taken from counters [`views::draw`] already keeps, so asking for
+/// it adds no drawing and cannot change the frame. BUG-0018 asks for it: the
+/// total alone stays silent about whether a locked frame spent its work on the
+/// glass blur behind the panels, on the drifting fields, or on the clock's glow.
+fn compose(rig: &mut Rig) -> (f64, u64, String, String) {
     let screen = Rect::new(0.0, 0.0, W as f32, H as f32);
     rig.scene.blit_from(&rig.wallpaper, screen);
     rig.scene.reset_pixels_visited();
     rig.scene.record_text(true);
     let t = Instant::now();
     views::draw(&mut rig.scene, &mut rig.shell);
+    // The pointer belongs to the compositor now (it keeps the pixels under
+    // the arrow so a move need not recompose), so a dumped scene draws it the
+    // way `Compositor::repaint` does: last, over the finished frame.
+    let p = rig.shell.pointer();
+    litric_shell::ui::cursor(&mut rig.scene, p.x, p.y, rig.shell.tokens.scale);
     let ms = t.elapsed().as_secs_f64() * 1000.0;
+    let sites = rig
+        .scene
+        .pixels_visited_by_site()
+        .into_iter()
+        .map(|(s, n)| format!("{}={n}", s.label()))
+        .collect::<Vec<_>>()
+        .join(" ");
     let text = litric_shell::textaudit::report(rig.scene.text_runs(), 3);
     rig.scene.record_text(false);
-    (ms, rig.scene.pixels_visited(), text)
+    (ms, rig.scene.pixels_visited(), text, sites)
 }
 
 /// FNV-1a over the frame's pixels. A golden is identified by this number, not
@@ -367,34 +645,91 @@ fn write_ppm(path: &Path, canvas: &Canvas) -> std::io::Result<usize> {
 }
 
 fn main() -> ExitCode {
-    let dir = std::env::args()
-        .nth(1)
-        .map_or_else(|| PathBuf::from("build/frames"), PathBuf::from);
+    // `--fonts DIR` names a local copy of the faces the image installs, for a
+    // host that is not the image. Without it the faces are read from the system
+    // font directories, which is what the shipping shell does.
+    let mut output = PathBuf::from("build/frames");
+    let mut fonts: Option<PathBuf> = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--fonts" => match args.next() {
+                Some(path) => fonts = Some(PathBuf::from(path)),
+                None => {
+                    eprintln!("frame_dump: --fonts needs a directory");
+                    return ExitCode::FAILURE;
+                }
+            },
+            _ => output = PathBuf::from(arg),
+        }
+    }
+
+    let loaded = match &fonts {
+        Some(path) => litric_shell::font::initialize_from_dir(path),
+        None => litric_shell::font::initialize(),
+    };
+    if !loaded {
+        eprintln!(
+            "frame_dump: no Latin text face is installed, so no frame can be drawn.\n\
+             Install the image's fonts (noto-fonts, ttf-jetbrains-mono-nerd), or pass\n\
+             --fonts DIR pointing at a local copy of NotoSans-Regular.ttf and the rest.\n\
+             Frame dump usage: frame_dump [--fonts DIR] [OUTPUT_DIR]"
+        );
+        return ExitCode::FAILURE;
+    }
+    let faces = litric_shell::font::face_report();
+    if !faces.complete() {
+        // Substituted faces change word widths, so the frames are still worth
+        // looking at but are not identical to the machine's. Say which ones,
+        // rather than letting the reviewer assume.
+        eprintln!(
+            "frame_dump: substituted face(s): {} — frames are usable for layout, not for typography",
+            faces.missing().join(", ")
+        );
+    }
+    let dir = output;
     if let Err(e) = fs::create_dir_all(&dir) {
         eprintln!("frame_dump: cannot create {}: {e}", dir.display());
         return ExitCode::FAILURE;
     }
 
     type Scene = (&'static str, fn(&mut Rig));
-    // The lock scenes are dumped here rather than in the app list because the
-    // lock is not an application: it replaces the whole composition, which makes
-    // this example the only way to look at it without booting the image.
-    let scenes: [Scene; 6] = [
+    // The lock and overlay scenes are dumped here rather than in the app list
+    // because they are not applications: they replace the composition or sit
+    // over it, which makes this example the only way to look at them without
+    // booting the image.
+    //
+    // The set is the governance document's ten required golden screens
+    // (04-QA-LINT-GOVERNANCE §2) plus the frames this dump has always written:
+    // the lock in three states, the launcher and its search, and the remaining
+    // applications. `ci/check-golden-frames.py` names the required ten.
+    let scenes: [Scene; 16] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
+        ("04-files", scene_files),
+        ("16-files-empty", scene_files_empty),
+        ("05-settings", scene_settings_appearance),
+        ("17-control-centre", scene_control_centre),
+        ("18-notifications", scene_notifications),
+        ("19-dialog-danger", scene_danger_dialog),
         ("11-lock", scene_locked),
         ("12-lock-password", scene_locked_entry),
         ("13-lock-customize", scene_locked_customize),
         ("14-launcher", scene_launcher),
+        ("21-mission-control", scene_mission_control),
+        ("22-power-menu", scene_power_menu),
+        ("23-litro-menu", scene_litro_menu),
+        ("24-boot-intro", scene_boot_intro),
     ];
-    let app_scenes: [(App, &str); 7] = [
-        (App::Files, "04-files"),
-        (App::Settings, "05-settings"),
+    // The seek frame is written by the search scene, and the rest of the
+    // applications by the app list.
+    let app_scenes: [(App, &str); 6] = [
         (App::Browser, "06-browser"),
         (App::Terminal, "07-terminal"),
         (App::Trash, "08-trash"),
         (App::Defender, "09-defender"),
         (App::Activity, "10-activity"),
+        (App::Environments, "20-environments"),
     ];
 
     let mut failures = 0usize;
@@ -411,6 +746,14 @@ fn main() -> ExitCode {
         scene_overlap(&mut rig);
         if let Err(e) = dump(&dir, "03-windows-overlap", &mut rig) {
             eprintln!("frame_dump: 03-windows-overlap: {e}");
+            failures = failures.saturating_add(1);
+        }
+    }
+    {
+        let mut rig = build();
+        scene_search(&mut rig);
+        if let Err(e) = dump(&dir, "15-search", &mut rig) {
+            eprintln!("frame_dump: 15-search: {e}");
             failures = failures.saturating_add(1);
         }
     }
@@ -462,7 +805,7 @@ fn partial_frame(rig: &mut Rig) -> (f64, u64, u64, String) {
 }
 
 fn dump(dir: &Path, name: &str, rig: &mut Rig) -> std::io::Result<()> {
-    let (ms, visited, text) = compose(rig);
+    let (ms, visited, text, full_sites) = compose(rig);
     let path = dir.join(format!("{name}.ppm"));
     let bytes = write_ppm(&path, &rig.scene)?;
     let pixels = f64::from(W) * f64::from(H);
@@ -473,6 +816,7 @@ fn dump(dir: &Path, name: &str, rig: &mut Rig) -> std::io::Result<()> {
         visited as f64 / pixels,
         fingerprint(&rig.scene)
     );
+    println!("sites={name} {full_sites}");
     println!(
         "partial={name} damage_area_px={partial_area} partial_visited_px={partial_visited} partial_ms={partial_ms:.2} overdraw={:.1}x",
         partial_visited as f64 / partial_area as f64

@@ -1,0 +1,19 @@
+[Unit]
+Description=Mount persistent LitricOS configuration overlay
+DefaultDependencies=no
+Requires=var.mount
+After=var.mount
+Before=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/mkdir -p /var/lib/litric/etc-overlay/lower /var/lib/litric/etc-overlay/upper /var/lib/litric/etc-overlay/work
+ExecStartPre=/usr/bin/chmod 0700 /var/lib/litric/etc-overlay /var/lib/litric/etc-overlay/lower /var/lib/litric/etc-overlay/upper /var/lib/litric/etc-overlay/work
+# mkosi finalizes /etc/passwd, /etc/shadow and locale after postinst.chroot.
+# Snapshot the completed image at first boot instead, before mounting over it.
+ExecStartPre=/usr/bin/bash -ec 'if [ ! -e /var/lib/litric/etc-overlay/.initialized ]; then /usr/bin/cp -a /etc/. /var/lib/litric/etc-overlay/lower/; /usr/bin/touch /var/lib/litric/etc-overlay/.initialized; fi'
+ExecStart=/usr/bin/mount -t overlay overlay -o lowerdir=/var/lib/litric/etc-overlay/lower,upperdir=/var/lib/litric/etc-overlay/upper,workdir=/var/lib/litric/etc-overlay/work /etc
+
+[Install]
+WantedBy=local-fs.target

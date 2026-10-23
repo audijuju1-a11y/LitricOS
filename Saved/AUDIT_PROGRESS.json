@@ -1,0 +1,87 @@
+{
+  "workspace_root": "/workspace/chats/b3ab5077c4bf98a59e33527d",
+  "started_at": "2026-10-22T02:15:00Z",
+  "phase": "PHASE_5_COMPLETE",
+  "total_discovered_files": 838,
+  "status_counts": {
+    "completed": 838
+  },
+  "batches": [
+    {
+      "batch_id": "B01",
+      "name": "Root, Hidden, & Phase Specs",
+      "target_doc": "Saved/files/01-root-and-workflow-specs.md",
+      "status": "completed"
+    },
+    {
+      "batch_id": "B02",
+      "name": "Kernel, Image (mkosi/systemd), ISO, Keys",
+      "target_doc": "Saved/files/02-kernel-image-iso-keys.md",
+      "status": "completed"
+    },
+    {
+      "batch_id": "B03",
+      "name": "Tools, CI, and Top-Level Tests",
+      "target_doc": "Saved/files/03-tools-ci-tests.md",
+      "status": "completed"
+    },
+    {
+      "batch_id": "B04",
+      "name": "Workspace Cargo Manifests & Design Archive",
+      "target_doc": "Saved/files/04-workspace-cargo-and-zip.md",
+      "status": "completed"
+    },
+    {
+      "batch_id": "B05",
+      "name": "Foundation & Core Crates (10 crates)",
+      "target_doc": "Saved/files/05-crates-foundation-and-core.md",
+      "status": "completed"
+    },
+    {
+      "batch_id": "B06",
+      "name": "App & Service Crates (files, defender, browser, winbridge)",
+      "target_doc": "Saved/files/06-crates-apps-and-services.md",
+      "status": "completed"
+    },
+    {
+      "batch_id": "B07",
+      "name": "Runtime, WM, Input, Sysd, Bench Crates",
+      "target_doc": "Saved/files/07-crates-runtime-and-daemons.md",
+      "status": "completed"
+    },
+    {
+      "batch_id": "B08",
+      "name": "Litric Shell Crate (Desktop, Views, Canvas, Lock, E2E, Audits)",
+      "target_doc": "Saved/files/08-crate-litric-shell.md",
+      "status": "completed"
+    },
+    {
+      "batch_id": "B09",
+      "name": "Architecture, ADR, Bug, Audit & Design Docs",
+      "target_doc": "Saved/files/09-docs-architecture-and-design.md",
+      "status": "completed"
+    },
+    {
+      "batch_id": "B10",
+      "name": "Evidence Captures, Logs, & Frame Dump Artifacts",
+      "target_doc": "Saved/files/10-evidence-and-artifacts.md",
+      "status": "completed"
+    },
+    {
+      "batch_id": "B11",
+      "name": "Historical .backup-pre-v2 Snapshot",
+      "target_doc": "Saved/files/11-backup-pre-v2.md",
+      "status": "completed"
+    }
+  ],
+  "completed_files": 838,
+  "verification": {
+    "inventory_count": 838,
+    "fresh_path_count_excluding_saved_git_target": 838,
+    "missing_inventory_paths": 0,
+    "unindexed_files_excluding_saved_git_target": 0,
+    "report_path_mentions_missing": 0,
+    "build_tests_run": false,
+    "release_status": "NOT_VERIFIED"
+  }
+}

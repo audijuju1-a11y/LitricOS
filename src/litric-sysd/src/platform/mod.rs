@@ -29,6 +29,7 @@
 
 pub mod audio;
 pub mod bluetooth;
+pub mod input;
 pub mod net;
 pub mod power;
 pub mod session;
@@ -53,6 +54,8 @@ pub struct Platform {
     pub power: power::PowerFacts,
     /// Bluetooth adapters and radio blocks.
     pub bluetooth: bluetooth::BtFacts,
+    /// Keyboards, pointers and tablets, as sysfs describes them.
+    pub input: input::InputFacts,
     /// Login sessions, and whether a credential verifier exists.
     pub session: session::SessionFacts,
     /// Whether the root could be read at all.
@@ -74,7 +77,7 @@ impl Platform {
     ///
     /// Stable because the shell and the boot selftest grep this text; a
     /// reordering would silently break a check that reports success by
-    /// absence. The order is net, audio, power, bluetooth, session.
+    /// absence. The order is net, audio, power, bluetooth, input, session.
     #[must_use]
     pub fn to_lines(&self) -> Vec<String> {
         if self.unreadable {
@@ -85,6 +88,7 @@ impl Platform {
         out.extend(self.audio.to_lines());
         out.extend(self.power.to_lines());
         out.extend(self.bluetooth.to_lines());
+        out.extend(self.input.to_lines());
         out.extend(self.session.to_lines());
         out
     }
@@ -109,6 +113,7 @@ pub fn read(root: &Path) -> Platform {
         audio: audio::read(root),
         power: power::read(root),
         bluetooth: bluetooth::read(root),
+        input: input::read(root),
         session: session::read(root),
     }
 }
@@ -163,6 +168,7 @@ mod tests {
         assert!(p.audio.cards.is_empty());
         assert!(p.power.supplies.is_empty());
         assert!(p.bluetooth.adapters.is_empty());
+        assert!(p.input.devices.is_empty());
         assert!(p.session.sessions.is_empty());
         assert!(
             p.to_lines().is_empty(),
@@ -186,6 +192,7 @@ mod tests {
         let text = p.to_lines().join("\n");
         assert!(text.contains("net.iface.count=0"), "{text}");
         assert!(text.contains("bt.state=no-adapter"), "{text}");
+        assert!(text.contains("input.device.count=0"), "{text}");
         assert!(text.contains("audio.card.count=0"), "{text}");
         assert!(text.contains("power.battery.count=0"), "{text}");
         assert!(text.contains("auth.available=none"), "{text}");

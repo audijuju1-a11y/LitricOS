@@ -41,6 +41,21 @@ pub enum Action {
     SnapLeft,
     /// Snap the focused window to the right half.
     SnapRight,
+    /// Snap the focused window to the top-left quarter.
+    SnapTopLeft,
+    /// Snap the focused window to the top-right quarter.
+    SnapTopRight,
+    /// Snap the focused window to the bottom-left quarter.
+    SnapBottomLeft,
+    /// Snap the focused window to the bottom-right quarter.
+    SnapBottomRight,
+    /// Put the focused window back to the size it had before it was snapped or
+    /// maximized.
+    RestoreWindow,
+    /// Cycle through the focused application's own windows.
+    CycleAppWindow,
+    /// Show every window, on every workspace, at once.
+    ToggleOverview,
     /// Centre the focused window.
     CenterWindow,
     /// Show workspace `n`, counting from zero.
@@ -57,6 +72,10 @@ pub enum Action {
     Open(App),
     /// Open the quick-settings panel.
     ToggleQuickSettings,
+    /// Open the power menu: lock, sleep, shut down, restart.
+    TogglePowerMenu,
+    /// Open the LitricOS menu under the wordmark: the session's own settings.
+    ToggleLitroMenu,
     /// Open the notification list.
     ToggleNotifications,
     /// Show the diagnostic overlay.
@@ -176,6 +195,18 @@ impl App {
         }
     }
 
+    /// The application a window's `app_id` names, if this shell has it.
+    ///
+    /// The window manager stores the reverse-DNS identifier, so naming the
+    /// application that has focus means turning that identifier back into the
+    /// name the user knows. A window whose `app_id` is not one of ours -- a
+    /// future component, a test fixture -- is not an error: the caller falls
+    /// back to the window's own title rather than inventing a name.
+    #[must_use]
+    pub fn from_app_id(id: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|a| a.app_id() == id)
+    }
+
     /// A one-line description for the launcher.
     #[must_use]
     pub const fn subtitle(self) -> &'static str {
@@ -206,7 +237,11 @@ impl App {
     #[must_use]
     pub const fn default_size(self) -> (f32, f32) {
         match self {
-            Self::Activity => (480.0, 340.0),
+            // Activity is a system dashboard, not a meter card. Give its
+            // overview and process table enough room to coexist at the default
+            // size on a 1280x800 display; the shell clips each section to its
+            // own pane on smaller displays.
+            Self::Activity => (620.0, 620.0),
             Self::Environments => (420.0, 300.0),
             Self::Settings => (720.0, 520.0),
             Self::Files => (760.0, 500.0),
@@ -313,6 +348,13 @@ impl Action {
             Self::ToggleMaximize => "Maximize or restore".to_owned(),
             Self::SnapLeft => "Snap left".to_owned(),
             Self::SnapRight => "Snap right".to_owned(),
+            Self::SnapTopLeft => "Snap to the top-left quarter".to_owned(),
+            Self::SnapTopRight => "Snap to the top-right quarter".to_owned(),
+            Self::SnapBottomLeft => "Snap to the bottom-left quarter".to_owned(),
+            Self::SnapBottomRight => "Snap to the bottom-right quarter".to_owned(),
+            Self::RestoreWindow => "Restore window size".to_owned(),
+            Self::CycleAppWindow => "Cycle this application's windows".to_owned(),
+            Self::ToggleOverview => "Show every window".to_owned(),
             Self::CenterWindow => "Centre window".to_owned(),
             Self::Workspace(n) => format!("Workspace {}", n.saturating_add(1)),
             Self::NextWorkspace => "Next workspace".to_owned(),
@@ -323,6 +365,8 @@ impl Action {
             Self::ShowDesktop => "Show desktop".to_owned(),
             Self::Open(app) => format!("Open {}", app.title()),
             Self::ToggleQuickSettings => "Quick settings".to_owned(),
+            Self::TogglePowerMenu => "Power menu".to_owned(),
+            Self::ToggleLitroMenu => "LitricOS menu".to_owned(),
             Self::ToggleNotifications => "Notifications".to_owned(),
             Self::ToggleDiagnostics => "Diagnostics".to_owned(),
             Self::Lock => "Lock".to_owned(),
@@ -530,6 +574,20 @@ impl Shortcuts {
         add(Binding::meta(Key::Up), Action::ToggleMaximize, true);
         add(Binding::meta(Key::Left), Action::SnapLeft, true);
         add(Binding::meta(Key::Right), Action::SnapRight, true);
+        // Quarters: the same two arrows with Ctrl, so the halves stay one
+        // modifier press away and the quarters are the deliberate larger step.
+        // Shift, not Ctrl: Win+Ctrl+arrows are the workspace cycle, and a
+        // shortcut table may not bind one combination to two meanings.
+        add(Binding::meta_shift(Key::Left), Action::SnapTopLeft, true);
+        add(Binding::meta_shift(Key::Right), Action::SnapTopRight, true);
+        add(Binding::meta_shift(Key::Down), Action::SnapBottomLeft, true);
+        add(Binding::meta_shift(Key::Up), Action::SnapBottomRight, true);
+        add(Binding::meta(Key::Char('r')), Action::RestoreWindow, true);
+        // The window-level cycle. Alt+Tab walks every window; this walks the
+        // ones belonging to the application the user is already in.
+        add(Binding::meta(Key::Char('`')), Action::CycleAppWindow, true);
+        // Mission Control. Meta+Tab rather than Alt+Tab, which is the switcher.
+        add(Binding::meta(Key::Tab), Action::ToggleOverview, true);
         add(Binding::meta(Key::Char('c')), Action::CenterWindow, true);
         add(Binding::meta(Key::Char('d')), Action::ShowDesktop, true);
 
