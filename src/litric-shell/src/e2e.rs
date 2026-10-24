@@ -887,8 +887,8 @@ fn journey_launcher_click_opens_focuses_then_minimizes() {
 
 #[test]
 fn journey_the_bars_height_is_a_strip_and_its_width_is_wider_than_a_shelf() {
-    // The dock stays on the resting desktop, and it is low and wide: a 44-px
-    // strip carrying 32-px tiles, floating 10 px above the edge, and a large
+    // The dock stays on the resting desktop, and it is low and wide: a 62-px
+    // strip carrying 46-px icons, floating 12 px above the edge, and a large
     // share of the screen's width. (The earlier contract -- tiles under 32 px
     // in a 30-px strip -- is superseded by docs/design/2026-10-24-shell-v4-plan.md
     // section 3.2: at that size the icons were glyph-sized specks.)
@@ -905,14 +905,14 @@ fn journey_the_bars_height_is_a_strip_and_its_width_is_wider_than_a_shelf() {
         top = top.min(r.y);
         bottom = bottom.max(r.bottom());
     }
-    // 32-px tiles plus the 2-px margin each hotspot carries.
+    // 46-px icons plus the 2-px margin each hotspot carries.
     assert!(
-        (bottom - top) <= 36.5,
+        (bottom - top) <= 50.5,
         "the bar's tiles are {} px tall, so the bar is not a strip",
         bottom - top
     );
-    // 10 px of float and 6 px of padding under the tile: the tile's bottom is
-    // about 16 px above the edge, and never as far as the old 24-px float.
+    // 12 px of float and 8 px of padding under the icon: its bottom is about
+    // 20 px above the edge, and never as far as the old 24-px float.
     assert!(
         bottom <= 800.0 - 8.0 && bottom >= 800.0 - 40.0,
         "the bar sits {} px above the bottom edge",

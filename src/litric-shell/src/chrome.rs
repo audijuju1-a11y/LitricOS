@@ -39,30 +39,30 @@ pub const TOP_BAR_DATE_MIN_W: f32 = 1100.0;
 
 /// The dock's height at rest. Low and wide: it holds the applications and
 /// nothing taller than they are.
-pub const DOCK_H: f32 = 44.0;
+pub const DOCK_H: f32 = 62.0;
 
 /// The side of an application tile in the dock.
-pub const DOCK_ICON: f32 = 32.0;
+pub const DOCK_ICON: f32 = 46.0;
 
 /// The distance between two tiles.
-pub const DOCK_GAP: f32 = 8.0;
+pub const DOCK_GAP: f32 = 6.0;
 
 /// The dock's inner padding at its ends.
-pub const DOCK_PAD: f32 = 10.0;
+pub const DOCK_PAD: f32 = 12.0;
 
 /// How far a hovered tile rises. The strip has no room for magnification, and
 /// re-cutting every icon on every pointer move is work the frame cannot afford;
 /// a fixed lift costs one tile.
-pub const DOCK_LIFT: f32 = 3.0;
+pub const DOCK_LIFT: f32 = 7.0;
 
 /// The gap between the dock and the bottom edge of the screen.
-pub const DOCK_FLOAT: f32 = 10.0;
+pub const DOCK_FLOAT: f32 = 12.0;
 
 /// The corner radius of the resting dock.
-pub const DOCK_RADIUS: f32 = 16.0;
+pub const DOCK_RADIUS: f32 = 22.0;
 
 /// The width of the search field at rest.
-pub const DOCK_SEARCH_W: f32 = 176.0;
+pub const DOCK_SEARCH_W: f32 = 150.0;
 
 /// The room a separator takes between two groups of tiles.
 pub const DOCK_SEPARATOR: f32 = 12.0;
@@ -87,3 +87,7 @@ pub const LOCK_CHIP_H: f32 = 60.0;
 
 /// The room between the clock's baseline and the widget row.
 pub const LOCK_CLOCK_TO_CHIPS: f32 = 44.0;
+
+
+/// Pure white, for a hairline of light on glass and for a mark under the pointer.
+pub const WHITE: u32 = 0xFF_FF_FF_FF;

@@ -759,6 +759,40 @@ impl Canvas {
         self.px.fill(color);
     }
 
+    /// Cross-fade towards another canvas of the same size: every pixel moves
+    /// `t` (`0..=1`) of the way from what it is to what `src` has, inside the
+    /// clip. Both are opaque, so this is a plain per-channel mix.
+    ///
+    /// This is how the boot surface hands over to the desktop. Drawing a
+    /// translucent mark over the desktop would blend every overlapping pen
+    /// segment twice and bead the joints; mixing two finished frames cannot.
+    pub fn mix_from(&mut self, src: &Self, t: f32) {
+        if self.width != src.width || self.height != src.height {
+            return;
+        }
+        let k = round_half_up(t.clamp(0.0, 1.0) * 256.0).min(256);
+        if k == 0 {
+            return;
+        }
+        let r = Rect::new(0.0, 0.0, self.width as f32, self.height as f32);
+        let (x0, y0, x1, y1) = self.span(&r);
+        for y in y0..y1 {
+            let row = (y as usize).saturating_mul(self.width as usize);
+            for x in x0..x1 {
+                let i = row.saturating_add(x as usize);
+                let (Some(&b), Some(d)) = (src.px.get(i), self.px.get_mut(i)) else {
+                    continue;
+                };
+                let mix = |shift: u32| {
+                    let from = (*d >> shift) & 0xFF;
+                    let to = (b >> shift) & 0xFF;
+                    (from * (256 - k) + to * k + 128) >> 8
+                };
+                *d = 0xFF00_0000 | (mix(16) << 16) | (mix(8) << 8) | mix(0);
+            }
+        }
+    }
+
     /// Copy a region from another canvas, inside the clip.
     ///
     /// This is how damage tracking erases: the wallpaper is rendered once into
@@ -1000,6 +1034,30 @@ impl Canvas {
                 let qy = py - (y0 + dy * t);
                 let d = (qx * qx + qy * qy).sqrt() - half;
                 self.blend_in(x, y, color, coverage(d));
+            }
+        }
+    }
+
+    /// Composite a `w` x `h` bitmap of straight-alpha ARGB pixels with its
+    /// top-left corner at `(x, y)`, inside the clip.
+    ///
+    /// The artwork the shell embeds (the dock's icons) goes through here: each
+    /// pixel is blended over what is already on the canvas by its own alpha,
+    /// times `alpha`, so a whole icon can fade in.
+    pub fn draw_argb(&mut self, x: i64, y: i64, w: u32, h: u32, px: &[u32], alpha: f32) {
+        // The span is the bitmap's box cut to the canvas and the clip, so a
+        // partial repaint blends the artwork only inside its own region: drawn
+        // again outside it, a soft edge would be blended over itself.
+        let bounds = Rect::new(x as f32, y as f32, w as f32, h as f32);
+        let (sx0, sy0, sx1, sy1) = self.span(&bounds);
+        for py in sy0..sy1 {
+            let row = (py.saturating_sub(y)) as usize;
+            for pxl in sx0..sx1 {
+                let col = (pxl.saturating_sub(x)) as usize;
+                let Some(&c) = px.get(row.saturating_mul(w as usize).saturating_add(col)) else {
+                    continue;
+                };
+                self.blend_in(pxl, py, c, alpha);
             }
         }
     }
@@ -2284,6 +2342,19 @@ mod tests {
                 assert_eq!(blend(dst, src, 1.0), blend_with_round(dst, src, 1.0));
             }
         }
+    }
+
+    #[test]
+    fn mixing_two_frames_is_a_per_channel_cross_fade() {
+        let mut a = Canvas::new(2, 1, rgb(0x00_00_00));
+        let b = Canvas::new(2, 1, rgb(0xFF_80_20));
+        a.mix_from(&b, 0.0);
+        assert_eq!(a.get(0, 0), Some(rgb(0x00_00_00)));
+        a.mix_from(&b, 1.0);
+        assert_eq!(a.get(1, 0), Some(rgb(0xFF_80_20)));
+        let mut half = Canvas::new(2, 1, rgb(0x00_00_00));
+        half.mix_from(&b, 0.5);
+        assert_eq!(half.get(0, 0), Some(rgb(0x80_40_10)));
     }
 
     #[test]

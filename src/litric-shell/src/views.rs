@@ -11,6 +11,7 @@ use litric_design::{Radius, Space, TypeStep};
 use litric_wm::WindowState;
 
 use crate::apps::{FileKind, FilesHot, SortKey};
+use crate::appicons;
 use crate::canvas::{rgb, with_alpha, Canvas, Rect};
 use crate::chrome;
 use crate::font::{self, Style};
@@ -28,12 +29,28 @@ use crate::ui::{self, Material, State, Tokens, Tone};
 pub fn draw(canvas: &mut Canvas, shell: &mut Shell) {
     crate::i18n::set_current(shell.settings.preferences.language);
     shell.hotspots_mut().clear();
-    // The boot intro is its own surface: nothing of the desktop is drawn
-    // under it, so there is nothing to hit and nothing to show through.
+    // The boot intro is its own surface: while it covers the screen nothing of
+    // the desktop is drawn under it, so there is nothing to hit and nothing to
+    // show through. Its last moments are a cross-fade into whatever comes
+    // next (the first-run setup, the lock or the desktop), which is drawn
+    // underneath for exactly that long.
     if let Some(progress) = shell.boot_intro_now() {
-        crate::wordmark::draw_intro(canvas, progress, shell.boot_intro_note());
+        let cover = shell.boot_intro_cover();
+        if cover >= 1.0 {
+            crate::wordmark::draw_intro(canvas, progress);
+            return;
+        }
+        draw_surface(canvas, shell);
+        let mut mark = Canvas::new(canvas.width(), canvas.height(), 0);
+        crate::wordmark::draw_intro(&mut mark, 1.0);
+        canvas.mix_from(&mark, cover);
         return;
     }
+    draw_surface(canvas, shell);
+}
+
+/// Whatever the shell shows once the intro is out of the way.
+fn draw_surface(canvas: &mut Canvas, shell: &mut Shell) {
     // Locked: one surface, and nothing else runs. The lock surface starts by
     // clearing the frame buffer, so what was on screen is gone from the pixels
     // as well as from the input path -- the "clear, then draw" order
@@ -324,18 +341,14 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
     let h = bar.h;
     let pad = t.px(chrome::TOP_BAR_PAD);
 
-    canvas.fill_round_rect(
-        bar,
-        0.0,
-        with_alpha(
-            ui::rgb_of(t.theme.palette.bg_base),
-            chrome::TOP_BAR_SURFACE_ALPHA,
-        ),
-    );
+    // Glass, like the dock: the wallpaper's wave runs under the bar and shows
+    // through it. The scene carries a backdrop blurred once, so this copies a
+    // 28-pixel band of it rather than blurring live pixels.
+    crate::desktop::glass_at(canvas, &t.theme, bar, 0.0, 30);
     canvas.fill_round_rect(
         Rect::new(0.0, h - 1.0, bar.w, 1.0),
         0.0,
-        with_alpha(t.text(), 0.10),
+        with_alpha(chrome::WHITE, 0.09),
     );
 
     let size = t.text_px(TypeStep::Footnote);
@@ -365,7 +378,8 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
     // to be measured before the left is drawn: a menu drawn past the clock is a
     // menu drawn over the time.
     let clock = shell.regional.clock(shell.clock_seconds());
-    let clock_w = font::measure(&clock, &menu_lit);
+    let clock_style = Style::bold(size, t.text());
+    let clock_w = font::measure(&clock, &clock_style);
     let date = short_date(&shell.regional.date(shell.clock_seconds()));
     let date_w = font::measure(&date, &menu_style);
 
@@ -429,6 +443,8 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
     let mark = t.px(18.0);
     let mut x = pad;
     let logo = Rect::new(x, (h - mark) / 2.0, mark, mark);
+    // The mark is a bare glyph in paper white, as the system's own mark is on
+    // the desktops it is compared with: the bar's one fixed point.
     icons::draw(
         canvas,
         Icon::Litric,
@@ -438,7 +454,7 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
         } else {
             t.text()
         },
-        1.1,
+        1.3,
     );
     shell
         .hotspots_mut()
@@ -503,13 +519,19 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
     let mut rx = bar.w - pad;
     rx -= user_w;
     let user_r = Rect::new(rx, (h - user_w) / 2.0, user_w, user_w);
-    icons::draw(canvas, Icon::User, user_r, t.text_dim(), 1.0);
+    canvas.fill_circle(
+        user_r.center().0,
+        user_r.center().1,
+        user_w / 2.0,
+        with_alpha(t.text(), 0.14),
+    );
+    icons::draw(canvas, Icon::User, user_r.inflate(-user_w * 0.2), t.text(), 1.0);
     shell
         .hotspots_mut()
         .push(user_r.inflate(t.px(5.0)), Hot::StatusUser);
 
     rx -= t.px(14.0) + clock_w;
-    font::draw(canvas, &clock, rx, baseline, &menu_lit);
+    font::draw(canvas, &clock, rx, baseline, &clock_style);
     shell.hotspots_mut().push(
         Rect::new(rx - t.px(6.0), 0.0, clock_w + t.px(12.0), h),
         Hot::StatusClock,
@@ -521,6 +543,16 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
 
     rx -= t.px(14.0);
     let icon = t.px(chrome::TOP_BAR_ICON);
+    // The status icons share one capsule: they are one control, the place the
+    // quick settings open from, and a capsule says so where a loose row of
+    // glyphs would not.
+    let capsule = Rect::new(
+        rx - icons_w - t.px(2.0),
+        (h - t.px(22.0)) / 2.0,
+        icons_w - (step - icon) + t.px(12.0),
+        t.px(22.0),
+    );
+    canvas.fill_round_rect(capsule, capsule.h / 2.0, with_alpha(t.text(), 0.08));
     let mut bell: Option<Rect> = None;
     for (glyph, hot, tone) in icons_row.iter().rev() {
         rx -= step;
@@ -3163,23 +3195,25 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
     // ---- the dock row, always at the bottom of the same surface ----------
     let row_y = panel.bottom() - dock_h;
     let tile_y = row_y + (dock_h - item) / 2.0;
-    let tile_radius = item * chrome::DOCK_TILE_RADIUS;
     let button = Rect::new(rest_x + pad, tile_y, item, item);
     let button_hover = shell.is_highlighted(Hot::DockToggle);
-    // The launcher is the one accent tile: the other tiles are quiet, so the
-    // way into everything is also the one thing that is not.
-    canvas.fill_round_rect(
-        button,
-        tile_radius,
-        with_alpha(t.accent(), if button_hover { 1.0 } else { 0.92 }),
-    );
-    icons::draw(
-        canvas,
-        Icon::Grid,
-        button.inflate(-button.w * 0.26),
-        with_alpha(rgb(0x000000), 0.85),
-        1.0,
-    );
+    // The launcher is the pale tile in the set: every application has a colour
+    // of its own, so the way into all of them is the one that has none. It
+    // rises on hover like the rest.
+    let button_r = if button_hover {
+        Rect::new(button.x, button.y - t.px(chrome::DOCK_LIFT), button.w, button.h)
+    } else {
+        button
+    };
+    let grown = |r: Rect, hovered: bool| {
+        if hovered {
+            let k = item * 0.14;
+            Rect::new(r.x - k / 2.0, r.y - k, r.w + k, r.h + k)
+        } else {
+            r
+        }
+    };
+    appicons::draw(canvas, appicons::Slot::Launcher, grown(button_r, button_hover), 1.0);
     shell.hotspots_mut().push(button, Hot::DockToggle);
 
     // Pinned tiles: shown in both states -- the tiles the user was aiming at
@@ -3216,29 +3250,19 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
         } else {
             home
         };
-        canvas.fill_round_rect(
-            r,
-            tile_radius,
-            with_alpha(t.text(), if hovered { 0.18 } else { 0.09 }),
-        );
         if hovered {
             tip = Some((r, app.title()));
         }
-        icons::draw(
-            canvas,
-            icon_for(*app),
-            r.inflate(-r.w * 0.24),
-            t.accent(),
-            1.0,
-        );
-        // Running indicator: one dot under a running app, in the app's colour,
-        // on the strip's own padding below the tile.
+        // Original artwork, scaled once and kept: see `appicons`.
+        appicons::draw(canvas, appicons::Slot::App(*app), grown(r, hovered), 1.0);
+        // Running indicator: one dot under a running app, in paper white, on
+        // the strip's own padding below the tile.
         if shell.wm.all().iter().any(|w| w.app_id == app.app_id()) {
             canvas.fill_circle(
                 home.center().0,
-                home.bottom() + t.px(3.0),
+                home.bottom() + t.px(4.0),
                 t.px(2.0),
-                t.accent(),
+                with_alpha(t.text(), 0.9),
             );
         }
         shell.hotspots_mut().push(home.inflate(t.px(2.0)), hot);
@@ -3422,30 +3446,15 @@ fn launcher_tiles(
         }
         let hot = Hot::LauncherItem(i);
         let hovered = shell.is_highlighted(hot);
+        // The same artwork as the dock, larger: one icon per application
+        // wherever it appears. It rises a little under the pointer.
         let chip = Rect::new(
             cell.center().0 - t.px(41.0),
-            cell.y + t.px(4.0),
+            cell.y + t.px(if hovered { 0.0 } else { 4.0 }),
             t.px(82.0),
             t.px(82.0),
         );
-        canvas.fill_round_rect(
-            chip,
-            t.px(22.0),
-            with_alpha(rgb(0xFFFFFF), (if hovered { 0.16 } else { 0.08 }) * opacity),
-        );
-        canvas.stroke_round_rect(
-            chip,
-            t.px(22.0),
-            1.0,
-            with_alpha(rgb(0xFFFFFF), 0.10 * opacity),
-        );
-        icons::draw(
-            canvas,
-            icon_for(*app),
-            chip.inflate(-t.px(21.0)),
-            with_alpha(t.accent(), opacity),
-            1.2,
-        );
+        appicons::draw(canvas, appicons::Slot::App(*app), chip, opacity);
         let style = Style::new(
             t.text_px(TypeStep::Footnote),
             with_alpha(t.text(), 0.9 * opacity),
@@ -3455,7 +3464,7 @@ fn launcher_tiles(
             canvas,
             &name,
             cell.center().0 - font::measure(&name, &style) / 2.0,
-            chip.bottom() + t.px(24.0),
+            cell.y + t.px(86.0) + t.px(24.0),
             &style,
         );
         shell.hotspots_mut().push(cell, hot);
