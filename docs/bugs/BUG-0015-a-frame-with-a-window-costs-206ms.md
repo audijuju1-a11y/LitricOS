@@ -218,3 +218,27 @@ under the test above, and it is the next thing worth measuring.
   down.
 * The shadow optimisation above is **not implemented**, only identified and
   attributed by measurement.
+
+## Update 2026-10-24 (branch `redesign/shell-v4`)
+
+Done, with a measurement and a test behind each:
+
+* `Canvas::soft_shadow` composes its twelve rings in one pass and, when a glass
+  backdrop is attached, skips the pixels under its own panel. Three-window frame:
+  shadow 8.77 M -> 0.80 M pixel visits, total 11.36 M -> 3.39 M. Tests:
+  `the_one_pass_shadow_equals_the_twelve_ring_shadow`,
+  `a_shadow_under_an_opaque_panel_with_a_backdrop_leaves_the_same_frame`.
+* `blend` / `with_alpha` round with an integer step instead of `f32::round`
+  (a library call on this target); `fill_round_rect` skips the distance in the
+  fully-covered core. Tests: `integer_rounding_blends_exactly_as_float_rounding_did`,
+  `the_filled_core_skips_the_distance_and_changes_no_pixel`.
+* All 24 `frame_dump` scenes are pixel-identical before and after.
+
+`render_bench`, same host, old and new builds interleaved 3x, minimum of the
+medians: full frame 133.7 -> 92.4 ms, pointer move 132.9 -> 95.8 ms, open window
+288.1 -> 206.0 ms.
+
+**Not fixed.** A full frame is still ~92 ms against the 16.67 ms gate; this is a
+host figure, not a QEMU one. Remaining from the callgrind profile: the glass
+backdrop's `box_blur_pass`, per-pixel float `blend`, and
+`stroke_round_rect` walking the whole bounding box for an outline.

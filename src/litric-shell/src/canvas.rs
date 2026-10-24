@@ -53,9 +53,28 @@ pub fn blend(dst: u32, src: u32, extra: f32) -> u32 {
         let s = f32::from(((src >> shift) & 0xFF) as u8);
         let d = f32::from(((dst >> shift) & 0xFF) as u8);
         let v = s * sa + d * (1.0 - sa);
-        (v.round().clamp(0.0, 255.0) as u32) << shift
+        round_half_up(v).min(255) << shift
     };
     0xFF00_0000 | mix(16) | mix(8) | mix(0)
+}
+
+/// `v.round()` for a `v` that is never negative, as an integer.
+///
+/// `f32::round` is a library call on the targets this shell is built for -- no
+/// SSE4.1 `roundss` is assumed -- and every pixel the renderer composites went
+/// through it three times, which the profile priced at about a twelfth of a
+/// frame. For a non-negative value, rounding half away from zero is: take the
+/// integer part, and add one if the fraction is at least a half. The fraction
+/// is `v` minus a nearby integer, which a float subtracts exactly, so this is
+/// the same answer as `round` for every input, not an approximation of it.
+#[inline]
+fn round_half_up(v: f32) -> u32 {
+    let whole = v as u32;
+    if v - whole as f32 >= 0.5 {
+        whole.saturating_add(1)
+    } else {
+        whole
+    }
 }
 
 /// Pack straight 8-bit channels into `0xAARRGGBB`.
@@ -73,7 +92,7 @@ pub const fn rgb(hex: u32) -> u32 {
 /// The same colour at a different alpha.
 #[must_use]
 pub fn with_alpha(color: u32, alpha: f32) -> u32 {
-    let a = (alpha.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u32;
+    let a = round_half_up(alpha.clamp(0.0, 1.0) * 255.0).min(255);
     (a << 24) | (color & 0x00FF_FFFF)
 }
 
@@ -913,10 +932,27 @@ impl Canvas {
     /// A filled, anti-aliased rounded rectangle. `radius` of 0 is a plain rect.
     pub fn fill_round_rect(&mut self, r: Rect, radius: f32, color: u32) {
         let (x0, y0, x1, y1) = self.span(&r.inflate(1.5));
+        // The core: pixels whose centres lie in the rectangle inset by the
+        // corner radius (and by at least half a pixel, so a plain rectangle's
+        // straight edges are not in it). Inside it the signed distance is at
+        // most `-max(radius, 0.5)`, so coverage is exactly 1 and the distance
+        // -- a square root per pixel -- need not be computed. The pixel is still
+        // composited by the same call, so the result is the same bit for bit.
+        let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
+        let inset = rad.max(0.5);
+        let core_x0 = (r.x + inset - 0.5).ceil() as i64;
+        let core_x1 = (r.right() - inset - 0.5).floor() as i64 + 1;
+        let core_y0 = (r.y + inset - 0.5).ceil() as i64;
+        let core_y1 = (r.bottom() - inset - 0.5).floor() as i64 + 1;
         for y in y0..y1 {
+            let in_rows = y >= core_y0 && y < core_y1 && core_x0 < core_x1;
             for x in x0..x1 {
-                let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius);
-                self.blend_in(x, y, color, coverage(d));
+                if in_rows && x >= core_x0 && x < core_x1 {
+                    self.blend_in(x, y, color, 1.0);
+                } else {
+                    let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius);
+                    self.blend_in(x, y, color, coverage(d));
+                }
             }
         }
     }
@@ -2195,6 +2231,100 @@ mod tests {
                 radius + grow,
                 with_alpha(rgba(0, 0, 0, 255), a),
             );
+        }
+    }
+
+    /// `blend` as it was written before the integer rounding: the reference
+    /// the faster one must equal for every input.
+    fn blend_with_round(dst: u32, src: u32, extra: f32) -> u32 {
+        let sa = f32::from(((src >> 24) & 0xFF) as u8) / 255.0 * extra.clamp(0.0, 1.0);
+        if sa <= 0.0 {
+            return dst;
+        }
+        if sa >= 1.0 {
+            return 0xFF00_0000 | (src & 0x00FF_FFFF);
+        }
+        let mix = |shift: u32| -> u32 {
+            let s = f32::from(((src >> shift) & 0xFF) as u8);
+            let d = f32::from(((dst >> shift) & 0xFF) as u8);
+            let v = s * sa + d * (1.0 - sa);
+            (v.round().clamp(0.0, 255.0) as u32) << shift
+        };
+        0xFF00_0000 | mix(16) | mix(8) | mix(0)
+    }
+
+    #[test]
+    fn integer_rounding_blends_exactly_as_float_rounding_did() {
+        // A deterministic sweep, not a sample: every source alpha, a spread of
+        // channel values at both ends and in the middle, and coverages that
+        // land on, just under and just over a half.
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let extras = [0.0_f32, 0.001, 0.25, 0.4999, 0.5, 0.5001, 0.75, 0.999, 1.0, 1.5];
+        for _ in 0..400_000 {
+            let r = next();
+            let dst = 0xFF00_0000 | (r as u32 & 0x00FF_FFFF);
+            let src = (next() >> 11) as u32;
+            let extra = extras[(r >> 40) as usize % extras.len()];
+            assert_eq!(
+                blend(dst, src, extra),
+                blend_with_round(dst, src, extra),
+                "dst {dst:#010x} src {src:#010x} extra {extra}"
+            );
+        }
+        for a in 0..=255u32 {
+            for v in [0u32, 1, 127, 128, 254, 255] {
+                let src = (a << 24) | (v << 16) | (v << 8) | v;
+                let dst = 0xFF00_0000 | ((255 - v) << 16) | (v << 8) | 17;
+                assert_eq!(blend(dst, src, 1.0), blend_with_round(dst, src, 1.0));
+            }
+        }
+    }
+
+    #[test]
+    fn with_alpha_rounds_the_way_it_always_did() {
+        for i in 0..=10_000 {
+            let alpha = i as f32 / 10_000.0;
+            let want = (alpha.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u32;
+            assert_eq!(with_alpha(0x00AB_CDEF, alpha) >> 24, want, "alpha {alpha}");
+        }
+    }
+
+    #[test]
+    fn the_filled_core_skips_the_distance_and_changes_no_pixel() {
+        // Plain rectangles, pills, fractional edges and a radius larger than the
+        // shape: each must leave the same pixels as filling every pixel with its
+        // own distance.
+        fn reference(c: &mut Canvas, r: Rect, radius: f32, colour: u32) {
+            let (x0, y0, x1, y1) = c.span(&r.inflate(1.5));
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius);
+                    c.blend_in(x, y, colour, coverage(d));
+                }
+            }
+        }
+        for (r, radius) in [
+            (Rect::new(10.0, 10.0, 80.0, 50.0), 0.0),
+            (Rect::new(10.5, 9.25, 80.75, 50.5), 14.0),
+            (Rect::new(20.0, 20.0, 100.0, 30.0), 15.0),
+            (Rect::new(20.3, 20.7, 30.0, 30.0), 500.0),
+            (Rect::new(5.0, 5.0, 3.0, 3.0), 1.0),
+            (Rect::new(40.0, 40.0, 0.4, 60.0), 0.0),
+            (Rect::new(-10.0, -6.0, 60.0, 40.0), 9.0),
+        ] {
+            for colour in [rgb(0x336699), with_alpha(rgb(0xFFFFFF), 0.37)] {
+                let mut want = textured(160, 120);
+                let mut got = textured(160, 120);
+                reference(&mut want, r, radius, colour);
+                got.fill_round_rect(r, radius, colour);
+                assert_eq!(want.pixels(), got.pixels(), "{r:?} radius {radius}");
+            }
         }
     }
 
