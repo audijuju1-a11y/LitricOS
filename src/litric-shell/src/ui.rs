@@ -205,7 +205,7 @@ impl Tokens {
     }
 }
 
-fn rgb_of(c: litric_design::Rgb) -> u32 {
+pub(crate) fn rgb_of(c: litric_design::Rgb) -> u32 {
     crate::canvas::rgba(c.r, c.g, c.b, 255)
 }
 

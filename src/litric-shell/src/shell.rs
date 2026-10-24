@@ -2297,7 +2297,7 @@ impl Shell {
     ///
     /// The dock is not a system bar -- it holds applications, not the machine's
     /// state -- so it is not measured here.
-    pub const TOP_BAR_LOGICAL: f32 = 24.0;
+    pub const TOP_BAR_LOGICAL: f32 = crate::chrome::TOP_BAR_H;
 
     /// The top bar's rectangle.
     #[must_use]
