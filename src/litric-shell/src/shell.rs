@@ -390,6 +390,18 @@ pub enum Hot {
     SettingsCategory(u8),
     /// Change the shell interface language.
     SettingsLanguage,
+    /// An accent swatch: the index into `settings::Accent::ALL`.
+    SettingsAccent(u8),
+    /// Increase contrast.
+    SettingsContrast,
+    /// The Settings search field.
+    SettingsSearch,
+    /// A Settings search result: the index into the current hits.
+    SettingsResult(u8),
+    /// The Settings back control.
+    SettingsBack,
+    /// A card on the Settings home page: the index into `settings::HOME_CARDS`.
+    SettingsCard(u8),
     /// Cycle the supported colour themes.
     SettingsTheme,
     /// Toggle reduced motion in the shell.
@@ -2128,6 +2140,12 @@ pub struct Shell {
     /// The dock's fully open rectangle, as the draw side last laid it out.
     /// Damaged instead of the whole screen while the dock animates.
     dock_settled: Option<Rect>,
+    /// Every rectangle a panel drew inside on the last drawn frame: the
+    /// top-bar panels, the context menu, a dialog and the banner stack.
+    /// Damaged instead of the screen while one of their springs animates, which
+    /// is the difference between a reveal costing a full frame and costing its
+    /// own area. Cleared by `begin_panel_frame`, unioned by `note_panel`.
+    panel_bounds: Option<Rect>,
     /// The clock text as of the last time the shell's time moved. The top bar
     /// is damaged when it changes and not otherwise.
     drawn_clock: String,
@@ -2157,7 +2175,7 @@ impl Shell {
         let Some(next) = self.settings.begin(preferences) else {
             return Vec::new();
         };
-        self.tokens.theme = litric_design::Theme::of(next.theme);
+        self.tokens.theme = next.theme();
         self.quick.reduce_motion = next.reduce_motion;
         self.request_full_redraw();
         vec![Effect::PersistPreferences(next)]
@@ -2168,7 +2186,7 @@ impl Shell {
     pub fn finish_preferences_save(&mut self, result: Result<(), String>) {
         self.settings.finish(result);
         let preferences = self.settings.preferences;
-        self.tokens.theme = litric_design::Theme::of(preferences.theme);
+        self.tokens.theme = preferences.theme();
         self.quick.reduce_motion = preferences.reduce_motion;
         self.request_full_redraw();
     }
@@ -2201,6 +2219,24 @@ impl Shell {
     fn toggle_reduced_motion(&mut self) -> Vec<Effect> {
         let mut next = self.settings.preferences;
         next.reduce_motion = !next.reduce_motion;
+        self.save_preferences(next)
+    }
+
+    fn toggle_contrast(&mut self) -> Vec<Effect> {
+        let mut next = self.settings.preferences;
+        next.contrast = !next.contrast;
+        self.save_preferences(next)
+    }
+
+    /// Pick the accent a swatch stands for. A stale index (a hotspot from a
+    /// frame that offered fewer swatches) is ignored rather than clamped: the
+    /// swatch that was clicked is the one that must change colour.
+    fn set_accent(&mut self, index: u8) -> Vec<Effect> {
+        let Some(accent) = crate::settings::Accent::from_index(index) else {
+            return Vec::new();
+        };
+        let mut next = self.settings.preferences;
+        next.accent = accent;
         self.save_preferences(next)
     }
 
@@ -2270,6 +2306,7 @@ impl Shell {
             switcher_holding: false,
             drawn_focus: None,
             dock_settled: None,
+            panel_bounds: None,
             boot_started_ms: None,
             drawn_clock,
         }
@@ -2290,6 +2327,56 @@ impl Shell {
     #[must_use]
     pub const fn dock_settled(&self) -> Option<Rect> {
         self.dock_settled
+    }
+
+    /// Start a new frame's record of what panels draw inside.
+    ///
+    /// Called once at the top of [`crate::views::draw`], before anything is
+    /// painted, so a frame that draws no panel leaves nothing to damage for
+    /// one on the next.
+    pub fn begin_panel_frame(&mut self) {
+        self.panel_bounds = None;
+    }
+
+    /// Record that a panel drew inside `r` on the frame being drawn.
+    ///
+    /// Panels do not have to know who reads this: `tick` damages the union of
+    /// every rectangle recorded here on the last drawn frame instead of the
+    /// whole screen while a panel's spring animates. Every panel in `views`
+    /// reveals inside the rectangle it settles into (each one clips its own
+    /// reveal), so the union is a complete bound on the pixels a reveal can
+    /// touch -- `the_reveal_of_every_panel_matches_a_full_redraw` holds that to
+    /// a byte.
+    pub fn note_panel(&mut self, r: Rect) {
+        self.panel_bounds = Some(match self.panel_bounds {
+            None => r,
+            Some(prev) => {
+                let x = prev.x.min(r.x);
+                let y = prev.y.min(r.y);
+                Rect::new(
+                    x,
+                    y,
+                    prev.right().max(r.right()) - x,
+                    prev.bottom().max(r.bottom()) - y,
+                )
+            }
+        });
+    }
+
+    /// Everything a panel drew inside on the last drawn frame.
+    #[must_use]
+    pub const fn panel_bounds(&self) -> Option<Rect> {
+        self.panel_bounds
+    }
+
+    /// How far a panel's shadow reaches past the rectangle it draws in.
+    ///
+    /// `ui::surface`'s `Dialog` material -- the largest shadow any panel uses --
+    /// is spread 40 with a 14-pixel offset, and `soft_shadow` grows its
+    /// outermost ring by 11/12 of the spread and anti-aliases the edge by half a
+    /// pixel. The two pixels are for the pointer's arrow at the panel's edge.
+    fn panel_reach(&self) -> f32 {
+        self.tokens.px(40.0 + 14.0) + 2.0
     }
 
     /// The top bar's height in logical units. There is no bottom bar: one
@@ -2664,6 +2751,25 @@ impl Shell {
                 // keypress must not open at half speed.
                 _ if self.animating() => LifeState::Active.frame_interval_ms(),
                 _ => 0,
+            };
+        }
+        // A spring in flight is work that has not happened yet: the next
+        // `tick` will move it and damage the pixels it moves. This branch is
+        // *after* `is_dirty`, because the loop asks this question at the top of
+        // an iteration whose frame already consumed the damage `tick` produced
+        // -- so "nothing is damaged right now" and "nothing is animating" are
+        // different states, and treating the first as the second slept for up
+        // to a second in the middle of an animation. The spring then advanced
+        // with one step clamped to `MAX_STEP_MS` per second: a panel opened in
+        // two visible jumps, roughly a second after the click.
+        //
+        // `a_spring_mid_flight_asks_for_the_next_frame_after_the_damage_was_
+        // taken` is the regression test.
+        if self.animating() {
+            return match self.life() {
+                // A locked session paces itself, and is always damaged anyway.
+                LifeState::Locked => LifeState::Locked.frame_interval_ms(),
+                _ => LifeState::Active.frame_interval_ms(),
             };
         }
         let until_clock = self.next_clock_change_ms().saturating_sub(now_ms);
@@ -3093,6 +3199,8 @@ impl Shell {
         // list is state, the draw side only samples values.
         {
             let focused = self.wm.focused();
+            let alive: Vec<u32> = self.wm.all().iter().map(|w| w.id).collect();
+            self.anims.focus.forget_closed(&alive);
             let windows: Vec<(u32, bool)> = self
                 .wm
                 .visible()
@@ -3129,8 +3237,36 @@ impl Shell {
                 None => self.request_full_redraw(),
             }
         }
-        if moved.other {
-            self.request_full_redraw();
+        if moved.panels {
+            // A panel's own rectangle, not the screen. Every panel in `views`
+            // reveals inside the rectangle it settles into -- each one clips its
+            // reveal to a growing height from its own top edge -- so the union
+            // the draw side published on the last frame it drew is a complete
+            // bound on what a reveal can touch. Before such a frame exists
+            // (the frame the panel first opens on) there is nothing to trust and
+            // the open falls back to one full redraw.
+            match self.panel_bounds {
+                Some(rect) => self.damage.push(rect.inflate(self.panel_reach())),
+                None => self.request_full_redraw(),
+            }
+        }
+        if moved.windows {
+            // A focus change is two windows and their shadows, not the desktop.
+            // Every visible frame is damaged: the elevation of a window the
+            // focus left and one it arrived at both move, and `wm.visible()`
+            // is the smallest set that always contains both.
+            let reach = self.shadow_reach();
+            let frames: Vec<Rect> = self
+                .wm
+                .visible()
+                .iter()
+                .map(|w| to_rect(w.frame).inflate(reach))
+                .collect();
+            if frames.is_empty() {
+                self.request_full_redraw();
+            } else {
+                self.damage.extend(frames);
+            }
         }
         // The Defender's scan and the browser's engine pump run between
         // frames, in bounded slices, so neither can starve the compositor.
@@ -3315,9 +3451,18 @@ impl Shell {
                 return;
             }
         }
-        // Overlays are large and can move; repainting the whole screen when one
-        // opens or closes is cheaper than tracking their exact extent and
-        // getting it subtly wrong.
+        // A panel that is on screen has published the rectangle it draws in, so
+        // opening or closing it damages that rectangle plus its shadow rather
+        // than the screen. The first open of a session has no such rectangle and
+        // still costs a full frame; every one after it costs its own area.
+        //
+        // A closing panel has just stopped being drawn, so the rectangle is the
+        // one from the last frame it *was* drawn on -- which is exactly the
+        // region its pixels occupy.
+        if let Some(rect) = self.panel_bounds {
+            self.damage.push(rect.inflate(self.panel_reach()));
+            return;
+        }
         self.request_full_redraw();
     }
 
@@ -3395,6 +3540,22 @@ impl Shell {
         }
         self.meta_tap.interfere();
 
+        // A focused search field owns the keys it understands, and Ctrl+E gives
+        // it that focus from anywhere in the session -- the shortcut is how a
+        // person reaches settings search without finding the window first
+        // (Part 2 WB.00.F04: Ctrl+E moves focus to the Settings search box).
+        if self.settings.search_focus {
+            if let Some(effects) = self.settings_key(key, mods, repeat) {
+                return effects;
+            }
+        } else if key == Key::Char('e') && mods.ctrl && !mods.alt && !mods.meta && !repeat {
+            let effects = self.open_app(App::Settings);
+            self.settings.search_focus = true;
+            self.settings.search.select_all();
+            self.request_full_redraw();
+            return effects;
+        }
+
         // One focus order for the controls each frame actually drew. Tab and
         // Shift+Tab work across app chrome and panel controls; Enter activates
         // the focused control. Text fields keep Enter's app-specific meaning.
@@ -3448,6 +3609,62 @@ impl Shell {
             return Vec::new();
         };
         self.perform(action)
+    }
+
+    /// Keys the Settings search field consumes while it has the keyboard.
+    ///
+    /// `None` means "not mine": Tab, the global shortcut table and the rest of
+    /// the session keep working while a field is focused, which is the
+    /// difference between a search box and a modal.
+    fn settings_key(&mut self, key: Key, mods: Modifiers, repeat: bool) -> Option<Vec<Effect>> {
+        match key {
+            Key::Escape => {
+                self.settings.search.clear();
+                self.settings.search_focus = false;
+                self.settings.selected = 0;
+                self.request_full_redraw();
+                Some(Vec::new())
+            }
+            Key::Enter if !repeat => {
+                // Enter opens the result the arrows pointed at: the page it
+                // opens is the answer to the query.
+                if let Some(hit) = self.settings.selected_hit() {
+                    self.settings.go(hit.page);
+                    self.request_full_redraw();
+                }
+                Some(Vec::new())
+            }
+            Key::Down if !repeat => {
+                if self.settings.select_next(true) {
+                    self.request_full_redraw();
+                }
+                Some(Vec::new())
+            }
+            Key::Up if !repeat => {
+                if self.settings.select_next(false) {
+                    self.request_full_redraw();
+                }
+                Some(Vec::new())
+            }
+            Key::Backspace if !repeat => {
+                if self.settings.search.is_empty() {
+                    // Part 2 WB.00.F03: Backspace leaves the section.
+                    if self.settings.back() {
+                        self.request_full_redraw();
+                    }
+                } else if self.settings.search.backspace(mods.ctrl) {
+                    self.settings.selected = 0;
+                    self.request_full_redraw();
+                }
+                Some(Vec::new())
+            }
+            Key::Left | Key::Right | Key::Home | Key::End => {
+                let _ = self.settings.search.handle_key(key, mods);
+                self.request_full_redraw();
+                Some(Vec::new())
+            }
+            _ => None,
+        }
     }
 
     fn key_up(&mut self, key: Key, _mods: Modifiers) -> Vec<Effect> {
@@ -3905,6 +4122,17 @@ impl Shell {
     }
 
     fn text_input(&mut self, text: &str) {
+        // The Settings search field, when it has the keyboard, is the only thing
+        // a character can mean: it is drawn with a focus ring, and the window it
+        // is in is the one the person is looking at.
+        if self.settings.search_focus {
+            let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+            if !clean.is_empty() && self.settings.search.insert(&clean) {
+                self.settings.selected = 0;
+                self.request_full_redraw();
+            }
+            return;
+        }
         // A modal dialog on the desktop owns the keyboard, and it is asked
         // **first** — before any window, focused or not. It used to be reached
         // only through `text_into_app`, which returns early when no window has
@@ -4385,14 +4613,44 @@ impl Shell {
                 Vec::new()
             }
             Hot::SettingsCategory(index) => {
+                // A category click is a navigation, so it goes through `go` and
+                // the back control can return from it.
                 if let Some(page) = crate::settings::Page::from_index(index) {
-                    self.settings.page = page;
+                    self.settings.go(page);
+                }
+                Vec::new()
+            }
+            Hot::SettingsSearch => {
+                self.settings.search_focus = true;
+                Vec::new()
+            }
+            Hot::SettingsResult(index) => {
+                // The index addresses the list the last frame drew. A stale one
+                // (a click after the query changed) addresses nothing, and
+                // nothing is what it does.
+                if let Some(hit) = self.settings.hits().get(usize::from(index)).copied() {
+                    self.settings.go(hit.page);
+                }
+                Vec::new()
+            }
+            Hot::SettingsBack => {
+                let _ = self.settings.back();
+                Vec::new()
+            }
+            Hot::SettingsCard(index) => {
+                if let Some(page) = crate::settings::HOME_CARDS
+                    .get(usize::from(index))
+                    .copied()
+                {
+                    self.settings.go(page);
                 }
                 Vec::new()
             }
             Hot::SettingsLanguage => self.toggle_language(),
             Hot::SettingsTheme => self.cycle_theme(),
             Hot::SettingsMotion => self.toggle_reduced_motion(),
+            Hot::SettingsContrast => self.toggle_contrast(),
+            Hot::SettingsAccent(index) => self.set_accent(index),
             Hot::SetupDone => self.finish_first_run(),
             // The dock and the launcher it becomes.
             Hot::DockToggle => self.perform(Action::ToggleLauncher),
@@ -6094,6 +6352,286 @@ mod tests {
     }
 
     #[test]
+    fn a_spring_mid_flight_asks_for_the_next_frame_after_the_damage_was_taken() {
+        // The loop order is `tick` (which damages), `take_damage`, draw, then
+        // back to the top -- so the question `wake_after_ms` is asked with the
+        // frame's damage already consumed and a spring still in flight. It used
+        // to answer that question from the damage alone and sleep until the
+        // clock's next tick: an opening panel froze for up to a second and then
+        // arrived in two visible jumps, because `Anim::step` clamps its
+        // integration delta to 100 ms. Both halves of the answer are needed --
+        // "a spring in hand" and "a spring mid-flight with the frame already
+        // drawn" -- and only the first had a test
+        // (`motion_that_outlives_the_idle_timer_still_runs_at_the_active_pace`).
+        let mut s = shell();
+        s.activate(Hot::Logo);
+        let t = 30_000;
+        s.tick(t);
+        let _ = s.take_damage();
+        assert!(s.anims().animating(), "fixture: the launcher is opening");
+        assert!(
+            !s.is_dirty(),
+            "fixture: the frame that drew the spring has taken its damage"
+        );
+        assert_eq!(
+            s.wake_after_ms(t),
+            LifeState::Active.frame_interval_ms(),
+            "a spring still in flight must ask for its next frame even though the last \
+             frame's damage was already taken"
+        );
+        // And once it lands, the loop goes back to sleep on the clock rather
+        // than polling a settled animation.
+        let mut t = t;
+        for _ in 0..60 {
+            t = t.saturating_add(16);
+            s.tick(t);
+            let _ = s.take_damage();
+        }
+        assert!(!s.anims().animating(), "fixture: the springs have landed");
+        assert!(
+            s.wake_after_ms(t) > LifeState::Active.frame_interval_ms(),
+            "a settled desktop must not keep waking at the frame rate"
+        );
+    }
+
+    #[test]
+    fn a_swatch_changes_the_accent_the_whole_shell_draws_with() {
+        let mut s = shell();
+        let before = s.tokens.accent();
+        let effects = s.activate(Hot::SettingsAccent(5)); // settings::Accent::Pink
+        assert_eq!(
+            s.settings.preferences.accent,
+            crate::settings::Accent::Pink,
+            "the preference did not take"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::PersistPreferences(_))),
+            "the choice was not offered for persistence"
+        );
+        // The theme under the tokens is what every control reads, so a swatch
+        // that only changed the record would be a colour nobody draws.
+        assert_ne!(
+            s.tokens.theme.palette.accent,
+            litric_design::Theme::of(s.settings.preferences.theme)
+                .palette
+                .accent
+        );
+        assert_ne!(s.tokens.accent(), before);
+        s.finish_preferences_save(Ok(()));
+        // Choosing the colour that is already chosen is not a write.
+        assert!(s.activate(Hot::SettingsAccent(5)).is_empty());
+        // A stale index (a hotspot from a page that offered fewer swatches) is
+        // refused rather than clamped onto a colour nobody clicked.
+        assert!(s.activate(Hot::SettingsAccent(99)).is_empty());
+        assert_eq!(
+            s.settings.preferences.accent,
+            crate::settings::Accent::Pink
+        );
+    }
+
+    #[test]
+    fn the_contrast_switch_is_a_real_theme_change() {
+        let mut s = shell();
+        let before = s.tokens.theme.palette;
+        let effects = s.activate(Hot::SettingsContrast);
+        assert!(s.settings.preferences.contrast);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::PersistPreferences(_)))
+        );
+        let after = s.tokens.theme.palette;
+        assert!(
+            after.border.contrast(after.bg_base) > before.border.contrast(before.bg_base),
+            "the switch changed the record but not the hairlines"
+        );
+        s.finish_preferences_save(Ok(()));
+        s.activate(Hot::SettingsContrast);
+        assert!(!s.settings.preferences.contrast);
+        s.finish_preferences_save(Ok(()));
+    }
+
+    #[test]
+    fn the_settings_page_publishes_a_switch_and_a_swatch_for_every_choice() {
+        // A control nobody can hit is not a control: this draws the page the way
+        // the loop does and reads back the hotspot registry.
+        let mut s = shell();
+        let _ = s.open_app(App::Settings);
+        s.settings.page = crate::settings::Page::Accessibility;
+        let mut canvas = crate::canvas::Canvas::new(1280, 800, crate::canvas::rgb(0x000000));
+        crate::views::draw(&mut canvas, &mut s);
+        assert!(
+            s.hotspots().rect_of(Hot::SettingsMotion).is_some(),
+            "the motion switch is drawn but not hittable"
+        );
+        assert!(
+            s.hotspots().rect_of(Hot::SettingsContrast).is_some(),
+            "the contrast switch is drawn but not hittable"
+        );
+        s.settings.page = crate::settings::Page::Appearance;
+        crate::views::draw(&mut canvas, &mut s);
+        for index in 0..crate::settings::Accent::ALL.len() {
+            let hot = Hot::SettingsAccent(u8::try_from(index).unwrap_or(u8::MAX));
+            assert!(
+                s.hotspots().rect_of(hot).is_some(),
+                "accent swatch {index} is not hittable"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_e_reaches_the_settings_search_and_the_arrows_and_enter_work_it() {
+        // Part 2 WB.00.F04: Ctrl+E moves focus to the Settings search box, the
+        // arrow keys browse the results, Enter opens one. The whole journey is
+        // driven through `handle`, which is the path a keyboard takes.
+        let mut s = shell();
+        assert!(!s.settings.search_focus, "fixture: nothing is focused");
+        let mut t = 1_000_u64;
+        let ctrl_e = Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        };
+        let _ = s.handle(&key(Key::Char('e'), ctrl_e), t);
+        assert!(s.settings.search_focus, "Ctrl+E did not focus search");
+        assert_eq!(s.settings.search.text(), "", "the field started with text in it");
+        assert!(
+            s.wm
+                .visible()
+                .iter()
+                .any(|w| w.app_id == App::Settings.app_id()),
+            "Ctrl+E did not bring Settings up"
+        );
+        t = t.saturating_add(10);
+        s.handle(
+            &InputEvent::TextInput {
+                text: "contrast".to_owned(),
+            },
+            t,
+        );
+        assert_eq!(s.settings.search.text(), "contrast");
+        let hits = s.settings.hits();
+        assert!(!hits.is_empty(), "a query with matches listed none");
+        // Down moves the selection, and it wraps rather than stopping.
+        t = t.saturating_add(10);
+        s.handle(&key(Key::Down, Modifiers::NONE), t);
+        assert_eq!(s.settings.selected, 1 % hits.len());
+        t = t.saturating_add(10);
+        s.handle(&key(Key::Up, Modifiers::NONE), t);
+        assert_eq!(s.settings.selected, 0);
+        // Enter opens the row the arrows point at.
+        let target = s.settings.selected_hit().map(|hit| hit.page);
+        assert!(target.is_some(), "fixture: a result is selected");
+        t = t.saturating_add(10);
+        s.handle(&key(Key::Enter, Modifiers::NONE), t);
+        assert_eq!(Some(s.settings.page), target);
+        assert!(!s.settings.search_focus, "Enter left the field focused");
+        // Backspace with an empty query leaves the page (WB.00.F03).
+        t = t.saturating_add(10);
+        s.handle(&key(Key::Char('e'), ctrl_e), t);
+        assert!(s.settings.search.is_empty());
+        let before = s.settings.page;
+        t = t.saturating_add(10);
+        s.handle(&key(Key::Backspace, Modifiers::NONE), t);
+        assert_ne!(s.settings.page, before, "Backspace did not go back");
+        // Escape closes the field and forgets the query.
+        let _ = s.handle(
+            &InputEvent::TextInput {
+                text: "blue".to_owned(),
+            },
+            t,
+        );
+        t = t.saturating_add(10);
+        s.handle(&key(Key::Escape, Modifiers::NONE), t);
+        assert!(!s.settings.search_focus);
+        assert!(s.settings.search.is_empty());
+    }
+
+    #[test]
+    fn the_home_page_offers_cards_and_the_back_control_appears_only_after_a_step() {
+        let mut s = shell();
+        let _ = s.open_app(App::Settings);
+        s.settings.page = crate::settings::Page::Home;
+        let mut canvas = crate::canvas::Canvas::new(1280, 800, crate::canvas::rgb(0x000000));
+        crate::views::draw(&mut canvas, &mut s);
+        for index in 0..crate::settings::HOME_CARDS.len() {
+            let hot = Hot::SettingsCard(u8::try_from(index).unwrap_or(u8::MAX));
+            assert!(
+                s.hotspots().rect_of(hot).is_some(),
+                "home card {index} is drawn but not hittable"
+            );
+        }
+        assert!(s.hotspots().rect_of(Hot::SettingsSearch).is_some());
+        assert!(
+            s.hotspots().rect_of(Hot::SettingsBack).is_none(),
+            "the first page offered a way back to nowhere"
+        );
+        // A card is a navigation, and the way back appears with it.
+        s.activate(Hot::SettingsCard(1));
+        assert_eq!(s.settings.page, crate::settings::HOME_CARDS[1]);
+        crate::views::draw(&mut canvas, &mut s);
+        assert!(s.hotspots().rect_of(Hot::SettingsBack).is_some());
+        s.activate(Hot::SettingsBack);
+        assert_eq!(s.settings.page, crate::settings::Page::Home);
+    }
+
+    #[test]
+    fn a_closed_panel_does_not_ask_for_frames_no_surface_paints() {
+        // Opening a panel is animated; closing it repaints. Nothing draws a
+        // panel that is not the current overlay (`views::draw_overlay` matches
+        // on `shell.overlay`), so a closing spring's travel happens entirely
+        // behind a surface that has already gone -- and because `tick` treats
+        // any spring that moved as a whole-screen redraw, each of those frames
+        // is a frame of work whose result is the frame before it.
+        //
+        // Measured on this workspace before the fix: 13 frames, at 1280x800.
+        // After it: none -- the frame that erases the panel is the one the
+        // close itself damaged.
+        let mut s = shell();
+        let mut t = 1_000;
+        s.activate(Hot::MenuEnvironment);
+        s.tick(t);
+        assert_eq!(s.overlay, Overlay::QuickSettings, "fixture: it is open");
+        // Let the reveal run, so the exit has somewhere to travel from.
+        for _ in 0..8 {
+            t = t.saturating_add(16);
+            s.tick(t);
+        }
+        assert!(
+            s.anims().quick_settings.value() > 0.1,
+            "fixture: the panel has revealed"
+        );
+        let _ = s.take_damage();
+        s.activate(Hot::MenuEnvironment);
+        assert_eq!(s.overlay, Overlay::None, "fixture: it is closed");
+        s.tick(t);
+        let _ = s.take_damage();
+        // The panel's spring is already at rest: the closed value is its end
+        // state, and there is no surface to travel behind. What this test then
+        // checks is that the loop stops asking for frames.
+        assert!(
+            s.anims().quick_settings.settled(),
+            "a closed panel must not still be travelling"
+        );
+        let mut painted = 0_u32;
+        let mut steps = 0_u32;
+        while s.anims().animating() && steps < 200 {
+            t = t.saturating_add(16);
+            steps = steps.saturating_add(1);
+            s.tick(t);
+            if s.is_dirty() {
+                painted = painted.saturating_add(1);
+            }
+            let _ = s.take_damage();
+        }
+        assert_eq!(
+            painted, 0,
+            "closing a panel repainted {painted} frames of a surface nothing draws"
+        );
+    }
+
+    #[test]
     fn a_spring_settles_within_its_token_budget_at_every_frame_pace() {
         // The defect this pins down: `tick` stepped every spring by a constant
         // 16 ms, so at the idle pace (33 ms) an animation took twice its
@@ -6101,27 +6639,26 @@ mod tests {
         // A settle budget is in milliseconds and has to mean milliseconds.
         for pace in [8_u64, 16, 33, 100] {
             let mut s = shell();
-            s.activate(Hot::MenuApps);
+            s.activate(Hot::MenuEnvironment);
             let mut t = 1_000;
             s.tick(t);
             let started = t;
             assert!(
-                !s.anims().launcher.settled(),
-                "fixture: the launcher's spring should be opening"
+                !s.anims().quick_settings.settled(),
+                "fixture: the quick-settings reveal should be opening"
             );
             let mut steps: u32 = 0;
-            // This waits on the launcher's own spring, whose token is FAST.
-            // `animating()` would also wait for the dock's morph, which is a
-            // different token with a different budget, and this test is about
-            // one budget meaning one number of milliseconds.
-            while !s.anims().launcher.settled() && steps < 400 {
+            // This waits on the panel's own spring, whose token is FAST.
+            // `animating()` would also wait for springs on other tokens, and
+            // this test is about one budget meaning one number of milliseconds.
+            while !s.anims().quick_settings.settled() && steps < 400 {
                 t = t.saturating_add(pace);
                 s.tick(t);
                 steps = steps.saturating_add(1);
             }
             assert!(
-                s.anims().launcher.settled(),
-                "at a {pace} ms pace the launcher never settled"
+                s.anims().quick_settings.settled(),
+                "at a {pace} ms pace the panel never settled"
             );
             let elapsed = t.saturating_sub(started);
             let budget = u64::from(litric_design::Motion::FAST.settle_ms);

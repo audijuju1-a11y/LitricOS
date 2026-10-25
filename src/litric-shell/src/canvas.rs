@@ -332,6 +332,136 @@ fn coverage(d: f32) -> f32 {
     (0.5 - d).clamp(0.0, 1.0)
 }
 
+/// How many concentric rings a soft shadow is built from: enough that the
+/// banding between them is below one 8-bit level.
+const STEP_COUNT: usize = 12;
+
+/// One ring of a [`Canvas::soft_shadow`]: a rounded rectangle's geometry and
+/// the black it composites, with everything that does not change per pixel
+/// already worked out.
+///
+/// `sd_round_rect` recomputes a centre and two half-extents for every pixel it
+/// is asked about. Those are ring constants, so this holds them: a ring costs a
+/// subtraction, an absolute value and a square root per pixel instead of that
+/// plus five more operations.
+#[derive(Debug, Clone, Copy)]
+struct ShadowRing {
+    /// Centre of the ring's rounded rectangle.
+    cx: f32,
+    /// Centre, vertically.
+    cy: f32,
+    /// Half width minus the corner radius: the `qx` offset of the signed
+    /// distance.
+    qx0: f32,
+    /// Half height minus the corner radius.
+    qy0: f32,
+    /// The corner radius, subtracted from the distance.
+    rad: f32,
+    /// The box the ring's span comes from.
+    rect: Rect,
+    /// What the ring composites: black at its own alpha.
+    color: u32,
+    /// That alpha, as 0..1, for the full-coverage table.
+    alpha: f32,
+}
+
+impl ShadowRing {
+    /// Ring `i` of a soft shadow: `r` grown by `grow` in its box and in its
+    /// radius, moved down by `dy`, filled with `color`.
+    fn new(r: Rect, radius: f32, dy: f32, grow: f32, color: u32) -> Self {
+        let rect = Rect::new(
+            r.x - grow,
+            r.y + dy - grow,
+            r.w + grow * 2.0,
+            r.h + grow * 2.0,
+        );
+        let (cx, cy) = rect.center();
+        let hw = rect.w / 2.0;
+        let hh = rect.h / 2.0;
+        let rad = radius.min(hw).min(hh).max(0.0);
+        let alpha = f32::from(u8::try_from((color >> 24) & 0xFF).unwrap_or(0)) / 255.0;
+        Self {
+            cx,
+            cy,
+            qx0: hw - rad,
+            qy0: hh - rad,
+            rad,
+            rect,
+            color,
+            alpha,
+        }
+    }
+
+    /// [`sd_round_rect`] and [`coverage`] for this ring, in one call.
+    ///
+    /// The same arithmetic in the same order, so a coverage this returns is the
+    /// coverage the per-ring fill returned.
+    fn coverage_at(&self, px: f32, py: f32) -> f32 {
+        let qx = (px - self.cx).abs() - self.qx0;
+        let qy = (py - self.cy).abs() - self.qy0;
+        let ax = qx.max(0.0);
+        let ay = qy.max(0.0);
+        coverage((ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - self.rad)
+    }
+
+    /// One channel of a pixel this ring covers whole.
+    ///
+    /// [`blend`] with a black source reduces to `round(d * (1 - a))`: the
+    /// source term is zero, so the only channel arithmetic left is the
+    /// destination's own scaling. Keeping the same `round` and `clamp` is what
+    /// makes folding twelve of these into a table reproduce twelve blends.
+    fn channel(&self, value: u8) -> u8 {
+        if self.alpha >= 1.0 {
+            return 0;
+        }
+        if self.alpha <= 0.0 {
+            return value;
+        }
+        (f32::from(value) * (1.0 - self.alpha))
+            .round()
+            .clamp(0.0, f32::from(u8::MAX)) as u8
+    }
+
+    /// What a pixel becomes after the rings that cover it whole.
+    ///
+    /// `table[k]` is the fold of rings `STEPS-1 .. k` at coverage 1;
+    /// `table[STEPS]` is the identity. `None` leaves the pixel alone.
+    fn coverage_table(rings: &[Self; STEP_COUNT]) -> [[u8; 256]; STEP_COUNT + 1] {
+        let mut table = [[0_u8; 256]; STEP_COUNT + 1];
+        if let Some(row) = table.get_mut(STEP_COUNT) {
+            for (value, slot) in row.iter_mut().enumerate() {
+                *slot = u8::try_from(value).unwrap_or(u8::MAX);
+            }
+        }
+        for i in (0..STEP_COUNT).rev() {
+            let (head, tail) = table.split_at_mut(i.saturating_add(1));
+            let (Some(next), Some(dst), Some(ring)) = (tail.first(), head.last_mut(), rings.get(i))
+            else {
+                continue;
+            };
+            for (value, slot) in dst.iter_mut().enumerate() {
+                *slot = next.get(value).copied().map_or(0, |c| ring.channel(c));
+            }
+        }
+        table
+    }
+
+    /// Apply a coverage-table row to a packed pixel.
+    ///
+    /// A blend always leaves the destination opaque, which is why the alpha
+    /// byte is written back as `0xFF` rather than folded.
+    fn through_table(value: u32, table: Option<&[u8; 256]>) -> u32 {
+        let Some(row) = table else {
+            return value;
+        };
+        let channel = |shift: u32| -> u32 {
+            let at = ((value >> shift) & 0xFF) as usize;
+            u32::from(row.get(at).copied().unwrap_or(0)) << shift
+        };
+        0xFF00_0000 | channel(16) | channel(8) | channel(0)
+    }
+}
+
 /// The pixels whose centres lie inside a clip rectangle, as a half-open range
 /// `(x0, y0, x1, y1)`.
 ///
@@ -1245,26 +1375,122 @@ impl Canvas {
     /// avoids allocating a second full-size buffer for something that is only
     /// ever a dark halo. The outermost ring is grown by 11/12 of `spread` and
     /// moved down by `dy`.
+    ///
+    /// # Each pixel once, not twelve times
+    ///
+    /// The rings are nested: ring `i` is ring 0 grown by `spread * i / 12` in
+    /// both its box and its corner radius, and every ring carries the same
+    /// `dy`. A pixel's coverage therefore rises monotonically from the
+    /// outermost ring inward, and is exactly 1 for every ring that contains it
+    /// whole. Painting twelve filled rounded rectangles repeated the same work
+    /// over the same pixels, and `frame_dump` billed it: on a two-window
+    /// desktop 4.19 M of one frame's 6.48 M pixel visits were shadow rings, and
+    /// most of them lay over the window's own area, whose result the window
+    /// body then covered.
+    ///
+    /// This walks each pixel once. A pixel outside every ring costs one
+    /// distance; a pixel inside every ring costs one distance plus one 8-bit
+    /// table lookup that folds the twelve full-coverage blends; only the band
+    /// between the innermost and the outermost edge blends ring by ring. The
+    /// table is built from the same per-channel arithmetic `blend` performs
+    /// (black at coverage 1 over a channel `d` is `round(d * (1 - a))`), so the
+    /// bytes are the bytes the twelve-ring loop produced, not an approximation
+    /// of them: `a_shadow_matches_the_twelve_ring_oracle` compares this against
+    /// that loop over a sweep of boxes, radii, spreads and alphas.
     pub fn soft_shadow(&mut self, r: Rect, radius: f32, spread: f32, dy: f32, alpha: f32) {
-        const STEPS: u32 = 12;
-        let prev = self.set_site(Site::Shadow);
-        for i in (0..STEPS).rev() {
-            let t = f32::from(i as u16) / f32::from(STEPS as u16);
+        const STEPS: usize = STEP_COUNT;
+        let rings: [ShadowRing; STEPS] = core::array::from_fn(|i| {
+            let steps = f32::from(u16::try_from(STEPS).unwrap_or(u16::MAX));
+            let t = f32::from(u16::try_from(i).unwrap_or(u16::MAX)) / steps;
             let grow = spread * t;
             // Squared falloff: a linear one leaves a visible outer edge where
             // the last ring stops, which reads as a rectangle rather than a
             // shadow.
-            let a = alpha * (1.0 - t) * (1.0 - t) / f32::from(STEPS as u16) * 3.0;
-            self.fill_round_rect(
-                Rect::new(
-                    r.x - grow,
-                    r.y + dy - grow,
-                    r.w + grow * 2.0,
-                    r.h + grow * 2.0,
-                ),
+            let a = alpha * (1.0 - t) * (1.0 - t) / steps * 3.0;
+            ShadowRing::new(
+                r,
                 radius + grow,
+                dy,
+                grow,
                 with_alpha(rgba(0, 0, 0, 255), a),
-            );
+            )
+        });
+        let prev = self.set_site(Site::Shadow);
+        let full = ShadowRing::coverage_table(&rings);
+        let (Some(outer), Some(inner)) = (rings.last(), rings.first()) else {
+            self.set_site(prev);
+            return;
+        };
+        let (x0, y0, x1, y1) = self.span(&outer.rect.inflate(1.5));
+        if x1 <= x0 || y1 <= y0 {
+            self.set_site(prev);
+            return;
+        }
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let Some(dst) = self.index(x, y).and_then(|i| self.px.get_mut(i)) else {
+                    continue;
+                };
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                if outer.coverage_at(px, py) <= 0.0 {
+                    continue;
+                }
+                if inner.coverage_at(px, py) >= 1.0 {
+                    // Every ring covers this pixel whole -- the window's own
+                    // area, most of the time. One lookup, no blends.
+                    *dst = ShadowRing::through_table(*dst, full.first());
+                    continue;
+                }
+                // The innermost ring that covers this pixel whole. Coverage only
+                // rises as the rings grow, so that boundary is a binary search.
+                let mut lo = 0_usize;
+                let mut hi = STEPS;
+                while lo < hi {
+                    let mid = lo.saturating_add(hi.saturating_sub(lo).div_euclid(2));
+                    if rings
+                        .get(mid)
+                        .is_some_and(|ring| ring.coverage_at(px, py) >= 1.0)
+                    {
+                        hi = mid;
+                    } else {
+                        lo = mid.saturating_add(1);
+                    }
+                }
+                // The search is sound only while the rings nest. They do for
+                // every box the shell draws, but a degenerate one could break
+                // it, and a wrong boundary is a wrong shadow: check the answer
+                // and fall back to the twelve blends when it does not hold.
+                let sound = rings
+                    .get(lo)
+                    .is_none_or(|ring| ring.coverage_at(px, py) >= 1.0)
+                    && (lo == 0
+                        || rings
+                            .get(lo.saturating_sub(1))
+                            .is_some_and(|ring| ring.coverage_at(px, py) < 1.0));
+                let mut value = *dst;
+                if sound {
+                    value = ShadowRing::through_table(value, full.get(lo));
+                    let mut j = lo;
+                    while j > 0 {
+                        j = j.saturating_sub(1);
+                        let Some(ring) = rings.get(j) else { break };
+                        let cov = ring.coverage_at(px, py);
+                        if cov <= 0.0 {
+                            break;
+                        }
+                        value = blend(value, ring.color, cov);
+                    }
+                } else {
+                    for ring in rings.iter().rev() {
+                        let cov = ring.coverage_at(px, py);
+                        if cov > 0.0 {
+                            value = blend(value, ring.color, cov);
+                        }
+                    }
+                }
+                *dst = value;
+            }
         }
         self.set_site(prev);
     }
@@ -2126,6 +2352,99 @@ mod tests {
         let by = c.pixels_visited_by_site();
         assert_eq!(by.first().map(|(s, _)| *s), Some(Site::Shadow), "{by:?}");
         assert!(by.first().is_some_and(|(_, n)| *n > 0));
+    }
+
+    /// The twelve-ring loop [`Canvas::soft_shadow`] was, kept as the oracle.
+    ///
+    /// Every ring is a filled rounded rectangle drawn outermost first, which is
+    /// what the original implementation did and what the current one has to
+    /// reproduce byte for byte. It is the reference, not a second production
+    /// path: nothing outside this test module calls it.
+    fn twelve_ring_shadow(c: &mut Canvas, r: Rect, radius: f32, spread: f32, dy: f32, alpha: f32) {
+        const STEPS: u32 = 12;
+        for i in (0..STEPS).rev() {
+            let t = f32::from(i as u16) / f32::from(STEPS as u16);
+            let grow = spread * t;
+            let a = alpha * (1.0 - t) * (1.0 - t) / f32::from(STEPS as u16) * 3.0;
+            c.fill_round_rect(
+                Rect::new(
+                    r.x - grow,
+                    r.y + dy - grow,
+                    r.w + grow * 2.0,
+                    r.h + grow * 2.0,
+                ),
+                radius + grow,
+                with_alpha(rgba(0, 0, 0, 255), a),
+            );
+        }
+    }
+
+    /// Every box a shadow is drawn under, at every shape the oracle cares about.
+    ///
+    /// The list is deliberately unkind: a three-pixel square (the corner radius
+    /// saturates against the half extent), a wide flat strip (it saturates in
+    /// one axis only), a zero-spread shadow (every ring coincident), a negative
+    /// `dy`, and a spread smaller than the one-pixel anti-aliasing ramp, where
+    /// more than one ring is partially covering.
+    const SHADOW_CASES: [(Rect, f32, f32, f32, f32); 6] = [
+        (Rect::new(40.0, 30.0, 120.0, 90.0), 8.0, 20.0, 4.0, 0.5),
+        (Rect::new(10.0, 10.0, 3.0, 3.0), 8.0, 20.0, 4.0, 0.5),
+        (Rect::new(20.0, 60.0, 180.0, 6.0), 14.0, 40.0, 14.0, 0.65),
+        (Rect::new(30.0, 30.0, 100.0, 60.0), 24.0, 0.0, 0.0, 0.35),
+        (Rect::new(25.0, 25.0, 150.0, 120.0), 0.0, 12.5, -3.0, 0.6),
+        (Rect::new(60.0, 40.0, 80.0, 50.0), 6.0, 3.0, 1.0, 0.4),
+    ];
+
+    #[test]
+    fn a_shadow_matches_the_twelve_ring_oracle() {
+        // The claim the rewritten `soft_shadow` makes: it walks each pixel once
+        // instead of twelve times and produces the same bytes. If this ever
+        // fails, the shadow is an approximation and the table folding is where
+        // it diverged.
+        for (r, radius, spread, dy, alpha) in SHADOW_CASES {
+            let mut fast = textured(240, 220);
+            let mut slow = textured(240, 220);
+            fast.soft_shadow(r, radius, spread, dy, alpha);
+            twelve_ring_shadow(&mut slow, r, radius, spread, dy, alpha);
+            let differing = fast
+                .pixels()
+                .iter()
+                .zip(slow.pixels())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(
+                differing, 0,
+                "{differing} pixels differ for {r:?} radius={radius} spread={spread} \
+                 dy={dy} alpha={alpha}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_clipped_shadow_matches_the_oracle_and_writes_nothing_outside_the_clip() {
+        // A partial frame clips the canvas and repaints inside a damage region.
+        // The single-pass version takes its span from the clip, so this is the
+        // property that keeps a damaged corner byte-identical to the frame it
+        // was cut from.
+        let clip = Rect::new(70.0, 50.0, 40.0, 36.0);
+        for (r, radius, spread, dy, alpha) in SHADOW_CASES {
+            let mut fast = textured(240, 220);
+            let mut slow = textured(240, 220);
+            fast.set_clip(Some(clip));
+            slow.set_clip(Some(clip));
+            fast.soft_shadow(r, radius, spread, dy, alpha);
+            twelve_ring_shadow(&mut slow, r, radius, spread, dy, alpha);
+            let differing = fast
+                .pixels()
+                .iter()
+                .zip(slow.pixels())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(
+                differing, 0,
+                "{differing} clipped pixels differ for {r:?} spread={spread}"
+            );
+        }
     }
 
     #[test]

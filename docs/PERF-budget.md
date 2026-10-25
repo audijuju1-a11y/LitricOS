@@ -250,6 +250,66 @@ failures they are: every frame path on this list is over the gate, and the two
 bugs above are open. They are recorded here because a budget that is only ever
 compared against nothing is a wish.
 
+#### Measured before and after the shadow pass — 2026-10-25
+
+Third host: an 8-vCPU Linux 6.1 cloud VM, `x86_64-unknown-linux-gnu`, rustc
+1.99.1, release profile, 1280x800, software rasteriser, no GPU in the path. Tool:
+the same `cargo run --release -p litric-shell --example render_bench`, 15 runs per
+line (median). **Machine-relative**: the same binary is ~3x slower here than on
+the 2026-10-15 host, so read the ratio, not the millisecond.
+
+[BUG-0024](bugs/BUG-0024-a-shadow-was-painted-twelve-times-over.md) is the change
+between the columns: `Canvas::soft_shadow` walked twelve nested rings per pixel
+and now walks each pixel once. All 24 `frame_dump` scene fingerprints are
+byte-identical across it, so this is the same picture for less work.
+
+| Frame | before | after | change | Budget | Status |
+|---|---:|---:|---:|---:|---|
+| Desktop, two windows open | 115.233 ms | **38.095 ms** | 3.02x | 16.67 ms | **NOT MET** — 2.3x |
+| After one pointer move | 118.973 ms | **38.416 ms** | 3.10x | 16.67 ms | **NOT MET** — 2.3x |
+| After opening a window | 248.147 ms | **77.502 ms** | 3.20x | 16.67 ms | **NOT MET** — 4.6x |
+| Locked, customize sheet open | 102.910 ms | **26.737 ms** | 3.85x | 33 ms | **MET** — 0.81x |
+| Locked, shipped look | 8.183 ms | 8.254 ms | — | 33 ms | **MET** |
+| Full-screen blur, two passes r3 | 36.435 ms | 36.435 ms | — | — | untouched by this change |
+| Present a full frame | 4.440 ms | 4.390 ms | — | — | not the bottleneck |
+| Present one damage band | 0.166 ms | 0.152 ms | — | — | not the bottleneck |
+
+`render_bench` times `views::draw` unclipped, which is not what the loop does for
+an interaction. The loop's own path, one damage-clipped frame through
+`Compositor::repaint`, is `frame_dump`'s `partial_ms=` for a 160x48 region:
+**0.8-2.1 ms** across the desktop scenes after this change. That is the number a
+pointer move or a hover actually costs, and it is inside budget.
+
+What is left in a full frame, by `frame_dump`'s site split on
+`02-desktop-start`: `draw=736 020` (fills, strokes, text), `glass=450 394`
+(per-panel sampling of the cached backdrop), `shadow=393 298` (was 4 187 722).
+The shadow is no longer the story; the generic rasteriser is.
+
+#### Measured again after panel-surface damage — 2026-10-25
+
+Same host and tool as the table above, and one new section in `render_bench`:
+`panel_reveal`. It clicks Quick Settings through the hotspot registry, then times
+every frame of the 120 ms reveal through `Compositor::repaint` — the loop's own
+path, not the unclipped one the rest of the bench reproduces — and reports the
+two kinds of frame that come out of it.
+
+| Frame | n | median | damage area | Budget | Status |
+|---|---:|---:|---:|---:|---|
+| Reveal frame, whole screen (`panel_reveal_full`) | 10 | **26.171 ms** | 1 024 000 px | 16.67 ms | **NOT MET** — 1.56x |
+| Reveal frame, panel only (`panel_reveal_damaged`) | 100 | **13.056 ms** | 198 900 px | 16.67 ms | **MET** |
+
+One full frame per open (the frame that first paints the panel, before a
+rectangle exists to trust), ten panel frames after it: **2.00x cheaper**, and the
+only kind of frame a reveal still costs is inside budget. The desktop is left to
+come to rest before the section measures, so this is one animation, not two.
+
+`every_panel_reveal_is_a_partial_frame_that_matches_a_full_redraw`
+(`src/litric-shell/src/main.rs`) is the correctness half: every one of those
+damaged frames is compared, byte for byte, with a full redraw of the same state,
+for Quick Settings, Notifications, the launcher and a focus change between two
+windows. All 24 `frame_dump` scene fingerprints
+are unchanged from HEAD across the whole change.
+
 #### Measured again after the lock fix — 2026-10-15
 
 [BUG-0018](bugs/BUG-0018-a-locked-frame-costs-half-a-second.md) is fixed: the frame

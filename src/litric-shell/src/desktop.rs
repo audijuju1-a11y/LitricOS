@@ -257,6 +257,17 @@ impl Compositor {
         } else {
             Repaint::plan(damage, w, h)
         };
+        // Put back the pixels the pointer borrowed before anything else is
+        // composed. The arrow is compositor-owned ([`Self::paint_cursor`]) and a
+        // repaint does not necessarily include its footprint: when the pointer
+        // is over the top bar and the damage is a panel in the corner, nothing
+        // in the plan covers the arrow, so forgetting the snapshot without
+        // restoring it left the old arrow in the scene and blended a second copy
+        // over its own anti-aliased edge. It cost 65 pixels of the bar per
+        // partial frame and nothing noticed until a panel reveal was compared
+        // pixel for pixel with a full redraw
+        // (`every_panel_reveal_is_a_partial_frame_that_matches_a_full_redraw`).
+        self.restore_cursor();
         self.cursor = None;
         for region in plan.rects(w, h) {
             let saved = self.scene.set_clip(Some(region));
@@ -276,6 +287,19 @@ impl Compositor {
         self.paint_cursor(shell);
         shell.counted_frame();
         plan
+    }
+
+    /// Put back the pixels under the pointer and forget where it was.
+    ///
+    /// The other half of [`Self::paint_cursor`]: whatever the arrow covered was
+    /// saved, and a frame that borrows the scene again has to hand it back
+    /// first. [`Self::move_cursor`] does this for its own two rectangles; a
+    /// repaint needs it for one, because a damaged region need not include the
+    /// pointer at all.
+    fn restore_cursor(&mut self) {
+        if let Some((rect, px)) = self.cursor.take() {
+            self.scene.restore(rect, &px);
+        }
     }
 
     /// Draw the pointer at its current position, keeping what it covers.

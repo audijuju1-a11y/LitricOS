@@ -85,21 +85,31 @@ pub struct ShellAnims {
 }
 
 /// Which springs moved, grouped by where their pixels are.
+///
+/// The groups are the three rectangles the draw side can bound, and each exists
+/// because repainting the whole screen for it is what made an opening panel cost
+/// a full frame where a small one would do. A spring that is not in one of these
+/// groups has no business moving: nothing samples it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Moved {
     /// The dock and the launcher it morphs into: one surface at the bottom
-    /// centre of the screen, and the only animated surface whose footprint the
-    /// shell can bound exactly.
+    /// centre of the screen.
     pub dock: bool,
-    /// Any other spring. These keep the whole-frame redraw.
-    pub other: bool,
+    /// A panel that drops from the top bar, a context menu, a dialog or a
+    /// banner. Every one of them reveals inside the rectangle it settles into
+    /// (`views` clips each reveal to its own panel), and the draw side publishes
+    /// that rectangle through [`crate::shell::Shell::note_panel`].
+    pub panels: bool,
+    /// The per-window focus springs. Their pixels are the windows' own frames
+    /// and shadows, which the window manager already knows.
+    pub windows: bool,
 }
 
 impl Moved {
     /// Nothing moved.
     #[must_use]
     pub const fn none(self) -> bool {
-        !self.dock && !self.other
+        !self.dock && !self.panels && !self.windows
     }
 }
 
@@ -144,14 +154,35 @@ impl ShellAnims {
         retiring_banners: &[u32],
     ) {
         self.set_reduced_motion(reduce_motion);
-        self.launcher.set_target(f32::from(launcher_open));
-        self.quick_settings.set_target(f32::from(quick_settings_open));
-        self.notifications.set_target(f32::from(notifications_open));
-        self.context_menu.set_target(f32::from(menu_open));
+        // Channels sampled while their surface is open. They travel on the way
+        // in, because a draw call reads the value and paints the reveal; they
+        // snap on the way out, because nothing paints a surface that is no
+        // longer the current overlay (`views::draw_overlay` matches on
+        // `shell.overlay`), so the travel would repaint what is already on
+        // screen -- `tick` treats a spring that moved as a full redraw.
+        // Measured: closing the quick-settings panel repainted 13 frames of a
+        // surface nothing draws, at the compositor's full-frame cost each.
+        open_or_snap(&mut self.quick_settings, quick_settings_open);
+        open_or_snap(&mut self.notifications, notifications_open);
+        open_or_snap(&mut self.context_menu, menu_open);
+        // The dock is the exception in both directions: it is on screen at
+        // rest, so its morph travels down as well as up.
         self.launcher_morph.set_target(f32::from(launcher_open));
-        self.switcher.set_target(f32::from(switcher_open));
-        self.overview.set_target(f32::from(overview_open));
-        self.dialog.set_target(f32::from(dialog_open));
+        // Channels nothing samples at all. No draw call reads `launcher`,
+        // `overview`, `switcher` or `dialog`, so they are held at their end
+        // state: travelling them can only ask for frames that repaint what is
+        // already there. One Mission Control open used to be 450 ms of `SLOW`
+        // travel at a full-frame redraw per frame for no visible change.
+        //
+        // An exit transition is a change to the draw side first: it needs the
+        // outgoing surface's own snapshot (`Shell::retiring_overlay` and the
+        // two sibling fields already exist and `views` does not read them), and
+        // once it does, the channel moves back to travelling in both
+        // directions here.
+        hold(&mut self.launcher, launcher_open);
+        hold(&mut self.overview, overview_open);
+        hold(&mut self.switcher, switcher_open);
+        hold(&mut self.dialog, dialog_open);
         self.banners.sync(active_banners, retiring_banners);
     }
 
@@ -214,14 +245,15 @@ impl ShellAnims {
             dock: self.launcher.step(dt_ms) | self.launcher_morph.step(dt_ms),
             ..Moved::default()
         };
-        moved.other = self.quick_settings.step(dt_ms);
-        moved.other |= self.notifications.step(dt_ms);
-        moved.other |= self.context_menu.step(dt_ms);
-        moved.other |= self.overview.step(dt_ms);
-        moved.other |= self.switcher.step(dt_ms);
-        moved.other |= self.dialog.step(dt_ms);
-        moved.other |= self.banners.step(dt_ms);
-        moved.other |= self.focus.step(dt_ms);
+        moved.panels = self.quick_settings.step(dt_ms);
+        moved.panels |= self.notifications.step(dt_ms);
+        moved.panels |= self.context_menu.step(dt_ms);
+        moved.panels |= self.overview.step(dt_ms);
+        moved.panels |= self.switcher.step(dt_ms);
+        moved.panels |= self.dialog.step(dt_ms);
+        moved.panels |= self.banners.step(dt_ms);
+        // The focus springs redraw windows, not panels: a different rectangle.
+        moved.windows = self.focus.step(dt_ms);
         self.last_moved = moved;
         moved
     }
@@ -299,6 +331,22 @@ impl FocusAnims {
         }
     }
 
+    /// Forget the springs of windows the window manager no longer holds.
+    ///
+    /// A spring for a window that has closed is invisible: nothing draws it, so
+    /// travelling it to its last target only reports "windows moved", and that
+    /// damage is every window that *is* on screen. A window closed while its
+    /// elevation was still gliding left one behind, and the frame loop then
+    /// repainted the desktop for the rest of that spring's budget -- up to a
+    /// `FAST` settle window of frames with no pixel to show for it.
+    ///
+    /// A window that still exists keeps its elevation, minimized or on another
+    /// workspace: `Shell::tick` passes every window the manager holds, so a
+    /// window that comes back rises from where it left off.
+    pub fn forget_closed(&mut self, alive: &[u32]) {
+        self.springs.retain(|id, _| alive.contains(id));
+    }
+
     /// Whether any window is mid-transition.
     #[must_use]
     pub fn animating(&self) -> bool {
@@ -342,21 +390,36 @@ impl BannerAnims {
     /// Synchronise bounded lifetime with the notification model. A plain
     /// `BTreeMap` otherwise retains one scalar for every banner ever posted in
     /// a long-lived session.
+    ///
+    /// A banner's reveal is not sampled by any draw call -- `views::draw_banners`
+    /// lays the stack out from `shell.notifications`, not from a spring -- so
+    /// these are kept at their end state rather than travelled to. The stack
+    /// appears the frame the notification arrives and leaves the frame it is
+    /// dismissed, which is what it did visually before; what it no longer does
+    /// is spend a full redraw per frame for the length of a `FAST` budget on
+    /// pixels that never moved. Colouring the entrance and exit is a change to
+    /// `draw_banners` first, and `show`/`retire` are already the right shape for
+    /// it.
     fn sync(&mut self, active: &[u32], retiring: &[u32]) {
         for id in active {
             self.show(*id);
+            if let Some(spring) = self.springs.get_mut(id) {
+                spring.snap_to(1.0);
+            }
         }
         for id in retiring {
             self.retire(*id);
+            if let Some(spring) = self.springs.get_mut(id) {
+                spring.snap_to(0.0);
+            }
         }
         for (id, spring) in &mut self.springs {
             if !active.contains(id) && !retiring.contains(id) {
-                spring.set_target(0.0);
+                spring.snap_to(0.0);
             }
         }
-        self.springs.retain(|id, spring| {
-            active.contains(id) || retiring.contains(id) || !spring.settled()
-        });
+        self.springs
+            .retain(|id, _| active.contains(id) || retiring.contains(id));
     }
 
     /// Step all entries and report whether any pixels changed.
@@ -381,6 +444,34 @@ impl BannerAnims {
         for spring in self.springs.values_mut() {
             spring.set_reduced_motion(reduce_motion);
         }
+    }
+}
+
+/// Put a spring at its end state without travelling to it.
+///
+/// For animation channels no draw call samples: see the list in
+/// [`ShellAnims::sync`]. Snap rather than retarget, because `settled()` is what
+/// stops the frame loop, and a spring travelling toward a value nothing reads
+/// keeps it awake for its whole settle budget.
+fn hold(spring: &mut Anim, open: bool) {
+    if open {
+        spring.snap_to(1.0);
+    } else {
+        spring.snap_to(0.0);
+    }
+}
+
+/// Travel toward a panel's reveal when it opens, and snap to nothing when it
+/// closes.
+///
+/// The asymmetry is not an oversight: `views` samples a panel's reveal while the
+/// panel is drawn, and stops drawing it the frame the overlay changes. An exit
+/// spring would therefore travel behind an absent surface.
+fn open_or_snap(spring: &mut Anim, open: bool) {
+    if open {
+        spring.set_target(1.0);
+    } else {
+        spring.snap_to(0.0);
     }
 }
 
@@ -554,6 +645,33 @@ mod tests {
     use super::*;
 
     const DT: u32 = 16;
+
+    #[test]
+    fn a_spring_for_a_window_that_closed_is_forgotten_not_travelled() {
+        // The defect: `FocusAnims` kept a spring for every window id it had
+        // ever seen. A window closed while its elevation was still gliding left
+        // its spring behind, and `step` kept reporting movement for it -- which
+        // `Shell::tick` answers by damaging every visible window. Closing a
+        // window therefore repainted the windows that were left, for the rest of
+        // a budget that belonged to a window which no longer exists.
+        let mut f = FocusAnims::default();
+        f.elevation(1, false); // window 1, at rest
+        f.elevation(2, true); // window 2 opens and starts to rise
+        assert!(f.step(16), "fixture: window 2 is mid-reveal");
+        // Window 2 closes mid-reveal. Window 1 is still there and still at rest.
+        f.forget_closed(&[1]);
+        assert!(
+            !f.animating(),
+            "a closed window's spring kept the frame loop awake"
+        );
+        assert!(
+            !f.step(16),
+            "a closed window's spring still reported movement"
+        );
+        // The window that survived kept its elevation, so a window that comes
+        // back does not glide up from nothing.
+        assert_eq!(f.elevation(1, false), 0.0);
+    }
 
     #[test]
     fn a_retargeted_spring_settles_on_the_new_target_within_budget() {

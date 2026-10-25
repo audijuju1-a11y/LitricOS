@@ -30,13 +30,14 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use litric_design::{Theme, ThemeKind};
-use litric_input::event::{InputEvent, Point};
+use litric_input::event::{InputEvent, Point, PointerButton};
+use litric_input::keys::Modifiers;
 use litric_locale::Regional;
 use litric_shell::canvas::{rgb, Canvas, Rect, Site};
 use litric_shell::desktop;
 use litric_shell::fb::{FbInfo, Framebuffer};
 use litric_shell::lock::Stage;
-use litric_shell::shell::{DesktopMode, EnvRow, Shell};
+use litric_shell::shell::{DesktopMode, EnvRow, Hot, Shell};
 use litric_shell::shortcuts::App;
 use litric_shell::ui::Tokens;
 use litric_shell::views;
@@ -169,6 +170,44 @@ fn frame(b: &mut Bench) -> Frame {
         restored_px,
         visited_px: b.scene.pixels_visited(),
     }
+}
+
+/// Click a control the last drawn frame published, the way a pointer would.
+///
+/// The hotspot registry is the only route into the shell's controls from
+/// outside the crate, and it is also the honest one: it is the same rectangle a
+/// person aims at.
+fn click(b: &mut Bench, now: &mut u64, hot: Hot) -> bool {
+    let Some(rect) = b.shell.hotspots().rect_of(hot) else {
+        eprintln!("render_bench: {hot:?} is not on screen, so the reveal cannot be measured");
+        return false;
+    };
+    let (x, y) = rect.center();
+    let at = Point::new(x, y);
+    for ev in [
+        InputEvent::PointerMove {
+            at,
+            delta: Point::new(1.0, 1.0),
+        },
+        InputEvent::PointerButton {
+            button: PointerButton::Primary,
+            pressed: true,
+            at,
+            clicks: 1,
+            mods: Modifiers::NONE,
+        },
+        InputEvent::PointerButton {
+            button: PointerButton::Primary,
+            pressed: false,
+            at,
+            clicks: 1,
+            mods: Modifiers::NONE,
+        },
+    ] {
+        *now = (*now).saturating_add(4);
+        b.shell.handle(&ev, *now);
+    }
+    true
 }
 
 /// Time the lock screen in whatever state it is in now, and say what one frame
@@ -352,6 +391,88 @@ fn main() -> ExitCode {
         let _ = frame(&mut b);
     }
     report("open_window_frame", times);
+
+    // ---- a panel's reveal, through the compositor --------------------------
+    //
+    // Clicking Quick Settings travels a `FAST` spring while the panel grows its
+    // height from its own top edge. Two kinds of frame come out of that, and
+    // before the draw side published the rectangle it paints in, every one of
+    // them was the first kind:
+    //
+    // * `panel_reveal_full` -- frames that repainted the whole screen. Now at
+    //   most one per open: the frame that first paints the panel, before any
+    //   rectangle exists to trust.
+    // * `panel_reveal_damaged` -- frames that repainted only what
+    //   `Shell::note_panel` said the panel drew in, plus the reach of its
+    //   shadow.
+    //
+    // Measured through `Compositor::repaint` and not through `frame` above,
+    // because `frame` calls `views::draw` unclipped: its partial-frame figure is
+    // an upper bound on the loop's cost, not the cost. The comparison that
+    // matters is these two against each other -- the same reveal, drawn two
+    // ways -- and `every_panel_reveal_is_a_partial_frame_that_matches_a_full_
+    // redraw` (main.rs) holds the second kind to a byte of the first.
+    //
+    // The desktop is left to come to rest first: the section above opened and
+    // closed a window fifteen times, and a window that closes mid-reveal leaves
+    // a focus spring travelling. Measuring a panel against that would be
+    // measuring two animations at once.
+    for _ in 0..40 {
+        now = now.saturating_add(16);
+        b.shell.tick(now);
+        let _ = b.shell.take_damage();
+    }
+    let mut comp = desktop::Compositor::new(W, H, &b.shell.tokens.theme);
+    let _ = comp.repaint(&mut b.shell, true, &[]);
+    let mut full_frames: Vec<f64> = Vec::new();
+    let mut panel_frames: Vec<f64> = Vec::new();
+    let mut panel_px = 0.0_f64;
+    for _ in 0..10_u32 {
+        now = now.saturating_add(16);
+        if !click(&mut b, &mut now, Hot::MenuEnvironment) {
+            return ExitCode::FAILURE;
+        }
+        for _ in 0..12 {
+            now = now.saturating_add(16);
+            b.shell.tick(now);
+            if !b.shell.is_dirty() {
+                continue;
+            }
+            let full = b.shell.needs_full_redraw();
+            let damage = b.shell.take_damage();
+            let t = Instant::now();
+            let plan = comp.repaint(&mut b.shell, full, &damage);
+            let ms = elapsed_ms(t);
+            if full {
+                full_frames.push(ms);
+            } else {
+                panel_frames.push(ms);
+                let area: f64 = plan
+                    .rects(W, H)
+                    .iter()
+                    .map(|r| f64::from(r.w) * f64::from(r.h))
+                    .sum();
+                panel_px = panel_px.max(area);
+            }
+        }
+        // Close it again, so the next open starts from the desktop.
+        now = now.saturating_add(16);
+        if !click(&mut b, &mut now, Hot::MenuEnvironment) {
+            return ExitCode::FAILURE;
+        }
+        b.shell.tick(now);
+        let full = b.shell.needs_full_redraw();
+        let damage = b.shell.take_damage();
+        let _ = comp.repaint(&mut b.shell, full, &damage);
+    }
+    println!(
+        "panel_reveal.panel_area_px={panel_px:.0} screen_px={} full_frames={} panel_frames={}",
+        W.saturating_mul(H),
+        full_frames.len(),
+        panel_frames.len()
+    );
+    report("panel_reveal_full", full_frames);
+    report("panel_reveal_damaged", panel_frames);
 
     // ---- the box blur on its own -------------------------------------------
     for radius in [3_u32, 10, 30] {

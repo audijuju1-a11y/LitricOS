@@ -27,6 +27,10 @@ use crate::ui::{self, Material, State, Tokens, Tone};
 pub fn draw(canvas: &mut Canvas, shell: &mut Shell) {
     crate::i18n::set_current(shell.settings.preferences.language);
     shell.hotspots_mut().clear();
+    // A panel that is not on screen this frame must leave no rectangle behind
+    // for the next frame to damage: what a reveal can touch is exactly what the
+    // last frame painted.
+    shell.begin_panel_frame();
     // The boot intro is its own surface: nothing of the desktop is drawn
     // under it, so there is nothing to hit and nothing to show through.
     if let Some(progress) = shell.boot_intro_now() {
@@ -148,6 +152,7 @@ fn draw_context_menu(canvas: &mut Canvas, shell: &mut Shell) {
         return;
     }
     let shown_h = h * reveal;
+    shell.note_panel(panel);
     let saved = canvas.push_clip(Rect::new(x, y, w, shown_h));
     ui::surface(canvas, &t, panel, t.radius(Radius::Md), Material::Popover);
     let mut ry = y + t.px(4.0);
@@ -206,13 +211,10 @@ fn draw_desktop_dialog(canvas: &mut Canvas, shell: &mut Shell) {
     };
     let t = shell.tokens.clone();
     let screen = shell.wm.screen();
-    ui::surface(
-        canvas,
-        &t,
-        Rect::new(0.0, 0.0, screen.w, screen.h),
-        0.0,
-        Material::Scrim,
-    );
+    let scrim = Rect::new(0.0, 0.0, screen.w, screen.h);
+    // A dialog dims the whole session, so its bound is the screen.
+    shell.note_panel(scrim);
+    ui::surface(canvas, &t, scrim, 0.0, Material::Scrim);
     // The title, the detail line, whether there is a text field, the word on
     // the affirmative button, and its tone. One table, so a dialog cannot be
     // drawn with a button that has nothing behind it.
@@ -2203,39 +2205,188 @@ fn draw_settings(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let sidebar = Rect::new(body.x, body.y, sidebar_w, body.h);
     canvas.fill_round_rect(sidebar, 0.0, with_alpha(rgb(0x000000), 0.16));
 
-    let mut col = ui::Column::new(sidebar, t.sp(Space::Sm), t.px(2.0));
-    for (i, page) in crate::settings::Page::ALL.iter().copied().enumerate() {
-        let row = col.row(t.px(30.0));
-        if shell.is_highlighted(Hot::SettingsCategory(i as u8)) {
-            canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.text(), 0.055));
-        }
-        ui::list_item(
+    // The search field is the first thing in the sidebar, because it is the
+    // first thing a person reaches for in a settings application (Part 2
+    // WB.00.F08, Part 5 §13.1). It is drawn even when empty, so the shortcut it
+    // advertises has something to land on.
+    let pad = t.sp(Space::Sm);
+    let field = Rect::new(sidebar.x + pad, sidebar.y + pad, sidebar.w - pad * 2.0, t.px(28.0));
+    let focused = shell.settings.search_focus;
+    ui::surface(
+        canvas,
+        &t,
+        field,
+        t.radius(Radius::Sm),
+        if focused {
+            Material::Elevated
+        } else {
+            Material::Solid
+        },
+    );
+    canvas.stroke_round_rect(
+        field,
+        t.radius(Radius::Sm),
+        1.0,
+        if focused {
+            with_alpha(t.accent(), 0.85)
+        } else {
+            t.border()
+        },
+    );
+    icons::draw(
+        canvas,
+        Icon::Search,
+        Rect::new(
+            field.x + t.px(8.0),
+            field.y + t.px(7.0),
+            t.px(14.0),
+            t.px(14.0),
+        ),
+        t.text_dim(),
+        1.0,
+    );
+    let query = shell.settings.search.text().to_owned();
+    let field_style = Style::new(t.text_px(TypeStep::Caption), t.text());
+    let shown = ui::elide(&query, &field_style, field.w - t.px(34.0));
+    if query.is_empty() {
+        let hint = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        font::draw(
             canvas,
-            &t,
-            row,
-            Some(settings_icon(page)),
-            page.title(),
-            None,
-            None,
-            if page == shell.settings.page {
-                State::Selected
-            } else {
-                State::Normal
-            },
+            crate::i18n::text("Search settings").as_ref(),
+            field.x + t.px(28.0),
+            field.y + t.px(18.0),
+            &hint,
         );
-        shell
-            .hotspots_mut()
-            .push(row, Hot::SettingsCategory(i as u8));
+    } else {
+        font::draw(
+            canvas,
+            &shown,
+            field.x + t.px(28.0),
+            field.y + t.px(18.0),
+            &field_style,
+        );
+    }
+    shell.hotspots_mut().push(field, Hot::SettingsSearch);
+
+    let hits = shell.settings.hits();
+    let list_limit = sidebar.bottom() - pad;
+    // Compact rows with no gap: the search field takes a row of the sidebar,
+    // and fourteen categories have to fit above the bottom edge without a
+    // scrollbar this shell does not have. `try_row` drops what does not fit,
+    // and dropping the last category would be a page nobody could reach.
+    let mut col = ui::Column::new(
+        Rect::new(sidebar.x, field.bottom() + pad, sidebar.w, sidebar.h - field.h - pad * 3.0),
+        t.sp(Space::Sm),
+        t.px(0.0),
+    );
+    if !hits.is_empty() {
+        // Results replace the category list while a query is typed, which is
+        // what Windows and macOS both do: two lists of different things in the
+        // same column is worse than either one.
+        for (index, hit) in hits.iter().enumerate() {
+            let Some(row) = col.try_row(t.px(34.0), list_limit) else {
+                break;
+            };
+            let chosen = index == shell.settings.selected;
+            if chosen || shell.is_highlighted(Hot::SettingsResult(index as u8)) {
+                canvas.fill_round_rect(
+                    row,
+                    t.radius(Radius::Sm),
+                    with_alpha(t.accent(), if chosen { 0.22 } else { 0.10 }),
+                );
+            }
+            let label = Style::new(t.text_px(TypeStep::Caption), t.text());
+            font::draw(
+                canvas,
+                &ui::elide(crate::i18n::text(hit.label).as_ref(), &label, row.w - t.px(16.0)),
+                row.x + t.px(8.0),
+                row.y + t.px(14.0),
+                &label,
+            );
+            let where_ = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            font::draw(
+                canvas,
+                &ui::elide(
+                    crate::i18n::text(hit.page.title()).as_ref(),
+                    &where_,
+                    row.w - t.px(16.0),
+                ),
+                row.x + t.px(8.0),
+                row.y + t.px(29.0),
+                &where_,
+            );
+            if let Ok(index) = u8::try_from(index) {
+                shell.hotspots_mut().push(row, Hot::SettingsResult(index));
+            }
+        }
+    } else if !query.is_empty() {
+        let none = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        font::draw(
+            canvas,
+            crate::i18n::text("No settings match").as_ref(),
+            col.x + t.px(8.0),
+            col.cursor + t.px(16.0),
+            &none,
+        );
+    } else {
+        for (i, page) in crate::settings::Page::ALL.iter().copied().enumerate() {
+            let Some(row) = col.try_row(t.px(26.0), list_limit) else {
+                break;
+            };
+            if shell.is_highlighted(Hot::SettingsCategory(i as u8)) {
+                canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.text(), 0.055));
+            }
+            ui::list_item(
+                canvas,
+                &t,
+                row,
+                Some(settings_icon(page)),
+                page.title(),
+                None,
+                None,
+                if page == shell.settings.page {
+                    State::Selected
+                } else {
+                    State::Normal
+                },
+            );
+            shell
+                .hotspots_mut()
+                .push(row, Hot::SettingsCategory(i as u8));
+        }
     }
 
     let pane = Rect::new(body.x + sidebar_w, body.y, body.w - sidebar_w, body.h);
     let selected_page = shell.settings.page;
     let mut c = ui::Column::new(pane, t.sp(Space::Lg), t.sp(Space::Sm));
     let title_style = t.style_bold(TypeStep::Title3);
+    let mut title_x = c.x;
+    // The back control is drawn only when there is somewhere to go: a disabled
+    // arrow on the first page is a promise the shell cannot keep.
+    if shell.settings.back_target().is_some() {
+        let back = Rect::new(pane.x + t.sp(Space::Sm), body.y + t.sp(Space::Sm), t.px(28.0), t.px(28.0));
+        if shell.is_highlighted(Hot::SettingsBack) {
+            canvas.fill_round_rect(back, t.radius(Radius::Sm), with_alpha(t.text(), 0.07));
+        }
+        icons::draw(canvas, Icon::ChevronRight, back, t.text_dim(), 1.0);
+        // The shared glyph points forward; a back arrow is the same mark
+        // mirrored, and the sprite cannot be mirrored without a scale, so the
+        // control is a glyph plus a label instead of a lie about direction.
+        let label = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        font::draw(
+            canvas,
+            crate::i18n::text("Back").as_ref(),
+            back.x + t.px(2.0),
+            back.bottom() + t.px(11.0),
+            &label,
+        );
+        shell.hotspots_mut().push(back, Hot::SettingsBack);
+        title_x = back.right() + t.sp(Space::Sm);
+    }
     font::draw(
         canvas,
-        selected_page.title(),
-        c.x,
+        crate::i18n::text(selected_page.title()).as_ref(),
+        title_x,
         c.cursor + t.px(24.0),
         &title_style,
     );
@@ -2399,6 +2550,7 @@ fn kind_label(kind: &str) -> &'static str {
 fn settings_icon(page: crate::settings::Page) -> Icon {
     use crate::settings::Page;
     match page {
+        Page::Home => Icon::Settings,
         Page::Appearance => Icon::Grid,
         Page::Display => Icon::Window,
         Page::Input => Icon::Terminal,
@@ -2432,6 +2584,104 @@ fn settings_button(
     );
     ui::button(canvas, t, r, label, State::Normal, Tone::Accent);
     shell.hotspots_mut().push(r, hot);
+}
+
+/// A settings row whose control is a switch on the trailing edge.
+///
+/// The whole row is the target, not the 40x22 switch: a settings page is a list
+/// of choices, and a person aiming at the third one should not have to hit a
+/// twenty-two pixel strip. `detail` is the sentence that says what the switch
+/// does, because "Reduce motion" is a name, not an explanation.
+struct SwitchRow<'a> {
+    /// The control's name.
+    label: &'a str,
+    /// The sentence under it that says what it does.
+    detail: &'a str,
+    /// Whether the switch is on.
+    on: bool,
+    /// The control it answers as.
+    hot: Hot,
+}
+
+fn settings_switch(
+    canvas: &mut Canvas,
+    shell: &mut Shell,
+    t: &Tokens,
+    pane: Rect,
+    y: f32,
+    choice: SwitchRow<'_>,
+) {
+    let SwitchRow { label, detail, on, hot } = choice;
+    let row = Rect::new(
+        pane.x + t.sp(Space::Lg),
+        y,
+        pane.w - t.sp(Space::Lg) * 2.0,
+        t.px(44.0),
+    );
+    if shell.is_highlighted(hot) {
+        canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.text(), 0.05));
+    }
+    let label_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    font::draw(canvas, label, row.x, row.y + t.px(17.0), &label_style);
+    let detail_style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    font::draw(
+        canvas,
+        &ui::elide(detail, &detail_style, row.w - t.px(64.0)),
+        row.x,
+        row.y + t.px(33.0),
+        &detail_style,
+    );
+    let control = Rect::new(
+        row.right() - t.px(42.0),
+        row.y + t.px(11.0),
+        t.px(40.0),
+        t.px(22.0),
+    );
+    ui::switch(canvas, t, control, on);
+    shell.hotspots_mut().push(row, hot);
+}
+
+/// The accent swatches: one per `settings::Accent`, the chosen one ringed.
+///
+/// A swatch is a colour with no word on it, so the row is also the only place a
+/// person can see *which* colour is current without opening a menu. The name of
+/// the chosen one is printed under the row for the same reason.
+fn settings_swatches(
+    canvas: &mut Canvas,
+    shell: &mut Shell,
+    t: &Tokens,
+    pane: Rect,
+    y: f32,
+    chosen: crate::settings::Accent,
+) {
+    use crate::settings::Accent;
+    let x = pane.x + t.sp(Space::Lg);
+    let label_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    font::draw(canvas, "Accent colour", x, y + t.px(12.0), &label_style);
+    let mut sx = x;
+    let side = t.px(22.0);
+    for (index, accent) in Accent::ALL.iter().copied().enumerate() {
+        let r = Rect::new(sx, y + t.px(24.0), side, side);
+        let colour = accent.rgb().map_or_else(
+            || t.accent(),
+            |c| crate::canvas::rgba(c.r, c.g, c.b, 255),
+        );
+        ui::swatch(canvas, t, r, colour, accent == chosen);
+        if let Ok(index) = u8::try_from(index) {
+            shell
+                .hotspots_mut()
+                .push(r.inflate(t.px(5.0)), Hot::SettingsAccent(index));
+        }
+        sx += side + t.px(9.0);
+    }
+    let detail_style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    font::draw(
+        canvas,
+        chosen.label(),
+        sx + t.px(4.0),
+        y + t.px(40.0),
+        &detail_style,
+    );
 }
 
 fn settings_rows(canvas: &mut Canvas, t: &Tokens, pane: Rect, rows: &[(String, String)]) {
@@ -2471,9 +2721,96 @@ fn draw_settings_page(
     let facts = shell.facts.clone();
     let mut y = pane.y + t.px(48.0);
     match page {
+        Page::Home => {
+            let note = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            font::draw(
+                canvas,
+                crate::i18n::text("Recommended").as_ref(),
+                pane.x + t.sp(Space::Lg),
+                y + t.px(20.0),
+                &note,
+            );
+            // The section label needs a line of its own: the header above it is
+            // a 28-level title, and 14 pixels between the two baselines is the
+            // collision the layout audit fails on.
+            y += t.px(34.0);
+            let pad = t.sp(Space::Lg);
+            let gap = t.sp(Space::Sm);
+            let card_w = (pane.w - pad * 2.0 - gap) / 2.0;
+            let card_h = t.px(88.0);
+            for (index, page) in crate::settings::HOME_CARDS.iter().copied().enumerate() {
+                // Two columns: the low bit picks the column, the shift picks
+                // the row. No division, no cast of a remainder.
+                let column = if index & 1 == 0 { 0.0 } else { 1.0 };
+                let row = (index >> 1) as f32;
+                let card = Rect::new(
+                    pane.x + pad + column * (card_w + gap),
+                    y + row * (card_h + gap),
+                    card_w,
+                    card_h,
+                );
+                let hot = Hot::SettingsCard(index as u8);
+                let hovered = shell.is_highlighted(hot);
+                ui::surface(
+                    canvas,
+                    t,
+                    card,
+                    t.radius(Radius::Lg),
+                    if hovered {
+                        Material::Elevated
+                    } else {
+                        Material::Flat
+                    },
+                );
+                canvas.stroke_round_rect(card, t.radius(Radius::Lg), 1.0, t.border());
+                icons::draw(
+                    canvas,
+                    settings_icon(page),
+                    Rect::new(
+                        card.x + t.px(12.0),
+                        card.y + t.px(14.0),
+                        t.px(16.0),
+                        t.px(16.0),
+                    ),
+                    t.accent(),
+                    1.0,
+                );
+                font::draw(
+                    canvas,
+                    crate::i18n::text(page.title()).as_ref(),
+                    card.x + t.px(12.0),
+                    card.y + t.px(46.0),
+                    &t.style_bold(TypeStep::Footnote),
+                );
+                let value = settings_card_value(shell, page);
+                font::draw(
+                    canvas,
+                    &ui::elide(&value, &note, card.w - t.px(24.0)),
+                    card.x + t.px(12.0),
+                    card.y + t.px(68.0),
+                    &note,
+                );
+                shell.hotspots_mut().push(card, hot);
+            }
+            y += card_h * 2.0 + gap;
+            let hint = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            font::draw(
+                canvas,
+                crate::i18n::text("Every category is in the sidebar; Ctrl+E searches them.").as_ref(),
+                pane.x + pad,
+                y + t.px(26.0),
+                &hint,
+            );
+        }
         Page::Appearance => {
             let theme = shell.settings.preferences.theme;
-            let label = format!("{} · {}", "Change theme", theme_name(theme));
+            // The static half goes through the catalog by hand: the whole
+            // string is composed, so the draw path cannot look it up.
+            let label = format!(
+                "{} · {}",
+                crate::i18n::text("Change theme"),
+                crate::i18n::text(theme_name(theme))
+            );
             settings_button(canvas, shell, t, pane, y, &label, Hot::SettingsTheme);
             y += t.px(40.0);
             // `label` rather than `title`: a language offered under its own
@@ -2483,10 +2820,19 @@ fn draw_settings_page(
             // drawn the button says so and says why.
             let label = format!(
                 "{} · {}",
-                "Change language",
+                crate::i18n::text("Change language"),
                 shell.settings.preferences.language.label()
             );
             settings_button(canvas, shell, t, pane, y, &label, Hot::SettingsLanguage);
+            y += t.px(52.0);
+            settings_swatches(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                shell.settings.preferences.accent,
+            );
         }
         Page::Display => {
             settings_rows(
@@ -2673,21 +3019,38 @@ fn draw_settings_page(
             }
         }
         Page::Accessibility => {
-            let label = format!(
-                "{} · {}",
-                "Reduce motion",
-                if shell.settings.preferences.reduce_motion {
-                    "On"
-                } else {
-                    "Off"
-                }
+            settings_switch(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SwitchRow {
+                    label: "Reduce motion",
+                    detail: "Springs settle in one frame instead of travelling.",
+                    on: shell.settings.preferences.reduce_motion,
+                    hot: Hot::SettingsMotion,
+                },
             );
-            settings_button(canvas, shell, t, pane, y, &label, Hot::SettingsMotion);
-            y += t.px(42.0);
+            y += t.px(48.0);
+            settings_switch(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SwitchRow {
+                    label: "Increase contrast",
+                    detail: "Darkens outlines and pulls secondary text toward the body colour.",
+                    on: shell.settings.preferences.contrast,
+                    hot: Hot::SettingsContrast,
+                },
+            );
+            y += t.px(52.0);
             let note = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
             font::draw(
                 canvas,
-                "High contrast themes are available in Appearance.",
+                "High contrast themes are also available in Appearance.",
                 pane.x + t.sp(Space::Lg),
                 y + t.px(16.0),
                 &note,
@@ -2823,6 +3186,45 @@ fn draw_settings_page(
             pane.bottom() - t.px(8.0),
             &hint,
         );
+    }
+}
+
+/// The current value a home card shows under its name.
+///
+/// A card that only names a page is a button; a card that answers the question
+/// the page exists to answer is a summary. These read the same state the page
+/// reads, so the two can never disagree.
+fn settings_card_value(shell: &Shell, page: crate::settings::Page) -> String {
+    let prefs = shell.settings.preferences;
+    match page {
+        crate::settings::Page::Appearance => format!(
+            "{} · {}",
+            crate::i18n::text(theme_name(prefs.theme)),
+            crate::i18n::text(prefs.accent.label())
+        ),
+        crate::settings::Page::Accessibility => format!(
+            "{} · {}",
+            if prefs.reduce_motion {
+                crate::i18n::text("Reduced motion")
+            } else {
+                crate::i18n::text("Full motion")
+            },
+            if prefs.contrast {
+                crate::i18n::text("High contrast")
+            } else {
+                crate::i18n::text("Standard contrast")
+            }
+        ),
+        crate::settings::Page::Display => {
+            let screen = shell.wm.screen();
+            format!("{:.0} × {:.0}", screen.w, screen.h)
+        }
+        crate::settings::Page::Network => shell
+            .facts
+            .network
+            .clone()
+            .unwrap_or_else(|| crate::i18n::text("Unavailable").into_owned()),
+        other => other.title().to_owned(),
     }
 }
 
@@ -4014,6 +4416,10 @@ fn draw_overview(canvas: &mut Canvas, shell: &mut Shell) {
 
     // The desktop stays visible under the dim, so the overview reads as a layer
     // over the session rather than a different screen.
+    // Mission Control is a layer over the whole session, so its bound is the
+    // screen. Saying so is still worth doing: it keeps one rule ("the draw side
+    // publishes what it painted") instead of a special case per overlay.
+    shell.note_panel(screen);
     canvas.fill_round_rect(screen, 0.0, with_alpha(rgb(0x000000), 0.74));
     shell.hotspots_mut().push(screen, Hot::OverviewBackdrop);
 
@@ -4242,6 +4648,7 @@ fn draw_switcher(canvas: &mut Canvas, shell: &mut Shell, selected: usize) {
     let w = t.px(420.0).min(screen.w * 0.7);
     let h = (windows.len() as f32) * row_h + t.px(52.0);
     let panel = Rect::new((screen.w - w) / 2.0, (screen.h - h) / 2.0, w, h);
+    shell.note_panel(panel);
     ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
 
     ui::section_label(
@@ -4311,6 +4718,9 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
         return;
     }
     let shown_h = panel.h * reveal;
+    // The rectangle this panel settles into, published for damage: a reveal
+    // frame repaints this and its shadow, not the screen.
+    shell.note_panel(panel);
     let saved = canvas.push_clip(Rect::new(panel.x, panel.y, panel.w, shown_h));
     ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
 
@@ -4496,6 +4906,7 @@ fn draw_power_menu(canvas: &mut Canvas, shell: &mut Shell) {
         return;
     }
     let shown_h = panel.h * reveal;
+    shell.note_panel(panel);
     let saved = canvas.push_clip(Rect::new(panel.x, panel.y, panel.w, shown_h));
     ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
     let mut y = panel.y + pad;
@@ -4568,6 +4979,7 @@ fn draw_litro_menu(canvas: &mut Canvas, shell: &mut Shell) {
         return;
     }
     let shown_h = panel.h * reveal;
+    shell.note_panel(panel);
     let saved = canvas.push_clip(Rect::new(panel.x, panel.y, panel.w, shown_h));
     ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
     let mut y = panel.y + pad;
@@ -4616,6 +5028,7 @@ fn draw_notification_list(canvas: &mut Canvas, shell: &mut Shell) {
         return;
     }
     let shown_h = panel.h * reveal;
+    shell.note_panel(panel);
     let saved = canvas.push_clip(Rect::new(panel.x, panel.y, panel.w, shown_h));
     ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
 
@@ -4719,6 +5132,7 @@ fn draw_banners(canvas: &mut Canvas, shell: &mut Shell) {
     let mut y = shell.top_bar().h + t.px(10.0);
     for (title, body, priority) in recent {
         let r = Rect::new(screen.w - w - t.px(12.0), y, w, t.px(60.0));
+        shell.note_panel(r);
         ui::surface(canvas, &t, r, t.radius(Radius::Md), Material::Popover);
         let tone = match priority {
             Priority::Critical => Tone::Bad,

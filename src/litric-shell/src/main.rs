@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use litric_design::{Theme, ThemeKind};
+use litric_design::ThemeKind;
 use litric_input::backend::InputSource;
 use litric_input::keys::layout_by_name;
 use litric_locale::Regional;
@@ -1329,6 +1329,16 @@ fn load_preferences(args: &Args, regional: &Regional) -> litric_shell::settings:
                         preferences.language = language;
                     }
                 }
+                "accent" => {
+                    if let Some(accent) = litric_shell::settings::Accent::parse(value) {
+                        preferences.accent = accent;
+                    }
+                }
+                "contrast" => {
+                    if let Some(enabled) = parse_bool(value) {
+                        preferences.contrast = enabled;
+                    }
+                }
                 "reduce_motion" => {
                     if let Some(enabled) = parse_bool(value) {
                         preferences.reduce_motion = enabled;
@@ -1390,6 +1400,8 @@ fn store_preferences(
             .map_err(|error| format!("cannot create temporary settings file: {error}"))?;
         writeln!(file, "theme={}", preferences.theme.token())
             .and_then(|()| writeln!(file, "language={}", preferences.language.token()))
+            .and_then(|()| writeln!(file, "accent={}", preferences.accent.token()))
+            .and_then(|()| writeln!(file, "contrast={}", u8::from(preferences.contrast)))
             .and_then(|()| {
                 writeln!(
                     file,
@@ -1414,7 +1426,7 @@ fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
     let _ = litric_shell::font::initialize();
     let regional = Regional::detect(&args.root, |k| std::env::var(k).ok());
     let preferences = load_preferences(args, &regional);
-    let theme = Theme::of(preferences.theme);
+    let theme = preferences.theme();
     let tokens = Tokens::new(theme, scale);
     let mut shell = Shell::new(tokens, width as f32, height as f32, regional);
     shell.load_preferences(preferences);
@@ -2066,6 +2078,129 @@ mod tests {
         assert!(should_log_over_budget(100), "every hundredth still reports");
         assert!(should_log_over_budget(1_000));
         assert!(!should_log_over_budget(1_001));
+    }
+
+    /// Every animation frame of a panel must be a partial frame that is still
+    /// byte-identical to the whole desktop.
+    ///
+    /// `tick` used to answer a moving spring with `request_full_redraw`, so an
+    /// opening panel cost a full frame per frame of its reveal. `moved.panels`
+    /// now damages the rectangle the draw side published, which is only safe if
+    /// every panel really does reveal inside that rectangle -- every one clips
+    /// its own reveal to a growing height from its top edge, so it should be.
+    /// This is the test that decides it: one damaged frame, then the same state
+    /// redrawn in full, compared pixel for pixel.
+    #[test]
+    fn every_panel_reveal_is_a_partial_frame_that_matches_a_full_redraw() {
+        let (args, mut s) = oracle_session();
+        // `oracle_session` has already ticked at 1_000 ms. Starting the clock a
+        // frame later keeps every spring's delta small, so the reveals in this
+        // test are mid-flight rather than snapped to their targets by the
+        // settle budget.
+        let mut t = 1_016u64;
+
+        // Two windows, so a focus change has something to raise.
+        for app in [App::Environments, App::Activity] {
+            let effects = s.shell.open_app(app);
+            apply(&args, &mut s.shell, &effects);
+        }
+        s.shell.tick(t);
+        loop_frame(&mut s);
+        assert_matches_full_redraw(&mut s, "two windows open");
+
+        // A click is what a person does, and it is the path that has to stay
+        // correct: the hotspot registry the last frame published decides where
+        // it lands.
+        let click = |s: &mut Session, t: &mut u64, hot: Hot| {
+            let r = s.shell.hotspots().rect_of(hot).expect("the control exists");
+            let (x, y) = r.center();
+            for ev in [
+                InputEvent::PointerMove {
+                    at: Point::new(x, y),
+                    delta: Point::new(1.0, 1.0),
+                },
+                InputEvent::PointerButton {
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    at: Point::new(x, y),
+                    clicks: 1,
+                    mods: Modifiers::NONE,
+                },
+                InputEvent::PointerButton {
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    at: Point::new(x, y),
+                    clicks: 1,
+                    mods: Modifiers::NONE,
+                },
+            ] {
+                *t = t.saturating_add(4);
+                let effects = s.shell.handle(&ev, *t);
+                apply(&args, &mut s.shell, &effects);
+            }
+            *t = t.saturating_add(16);
+            s.shell.tick(*t);
+            loop_frame(s);
+        };
+
+        for (name, hot) in [
+            ("quick settings", Hot::MenuEnvironment),
+            ("notifications", Hot::StatusNotifications),
+            ("launcher", Hot::Logo),
+        ] {
+            click(&mut s, &mut t, hot);
+            let mut partial = 0_u32;
+            let mut full = 0_u32;
+            for _ in 0..16 {
+                t = t.saturating_add(16);
+                s.shell.tick(t);
+                if !s.shell.is_dirty() {
+                    continue;
+                }
+                if s.shell.needs_full_redraw() {
+                    full = full.saturating_add(1);
+                } else {
+                    partial = partial.saturating_add(1);
+                }
+                loop_frame(&mut s);
+                assert_matches_full_redraw(&mut s, name);
+            }
+            assert!(
+                partial > 0,
+                "{name}: not one frame of its reveal was a partial redraw"
+            );
+            assert!(
+                full <= 1,
+                "{name}: {full} frames of its reveal repainted the whole screen"
+            );
+
+            // Close it again: the frame that erases the panel is partial too,
+            // and still identical to a full redraw of the state without it.
+            click(&mut s, &mut t, hot);
+            assert_matches_full_redraw(&mut s, name);
+        }
+
+        // A focus change raises one window and lowers another. Those pixels are
+        // the windows' frames and shadows, never the desktop.
+        let ids: Vec<u32> = s.shell.wm.visible().iter().map(|w| w.id).collect();
+        assert!(ids.len() >= 2, "fixture: two windows are open");
+        s.shell.wm.focus_window(ids[0]);
+        let mut moved = 0_u32;
+        for _ in 0..10 {
+            t = t.saturating_add(16);
+            s.shell.tick(t);
+            if !s.shell.is_dirty() {
+                continue;
+            }
+            moved = moved.saturating_add(1);
+            assert!(
+                !s.shell.needs_full_redraw(),
+                "a focus transition repainted the whole screen"
+            );
+            loop_frame(&mut s);
+            assert_matches_full_redraw(&mut s, "focus elevation");
+        }
+        assert!(moved > 0, "fixture: the focus springs travelled");
     }
 
     #[test]

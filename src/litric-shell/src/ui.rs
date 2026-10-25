@@ -266,6 +266,55 @@ pub fn focus_ring(canvas: &mut Canvas, t: &Tokens, r: Rect, radius: f32) {
     );
 }
 
+/// A switch, without its label: the control half of a settings row.
+///
+/// Off is a hairline track with a knob at the leading edge; on is an accent
+/// track with the knob at the trailing edge. Both the fill *and* the knob move,
+/// so the state survives a colour-blind reader and a low-contrast display -- the
+/// rule this file opens with.
+///
+/// The knob is the elevated surface colour, which is what keeps it visible on
+/// the accent *and* on the neutral track.
+pub fn switch(canvas: &mut Canvas, t: &Tokens, r: Rect, on: bool) {
+    let radius = r.h / 2.0;
+    let track = if on {
+        with_alpha(t.accent(), 1.0)
+    } else {
+        with_alpha(t.text(), 0.20)
+    };
+    canvas.fill_round_rect(r, radius, track);
+    canvas.stroke_round_rect(
+        r,
+        radius,
+        1.0,
+        if on {
+            with_alpha(t.accent(), 1.0)
+        } else {
+            with_alpha(t.text(), 0.18)
+        },
+    );
+    let knob = r.h - t.px(4.0);
+    let x = if on {
+        r.right() - t.px(2.0) - knob
+    } else {
+        r.x + t.px(2.0)
+    };
+    let face = Rect::new(x, r.y + t.px(2.0), knob, knob);
+    canvas.fill_round_rect(face, knob / 2.0, with_alpha(rgb(0xFFFFFF), 0.96));
+    canvas.stroke_round_rect(face, knob / 2.0, 1.0, with_alpha(rgb(0x000000), 0.18));
+}
+
+/// A colour swatch: the fill, a ring when chosen, and a hairline so a dark
+/// accent on a dark pane is still a shape.
+pub fn swatch(canvas: &mut Canvas, t: &Tokens, r: Rect, colour: u32, chosen: bool) {
+    let radius = r.h / 2.0;
+    canvas.fill_round_rect(r, radius, colour);
+    canvas.stroke_round_rect(r, radius, 1.0, with_alpha(rgb(0xFFFFFF), 0.28));
+    if chosen {
+        canvas.stroke_round_rect(r.inflate(t.px(3.0)), radius + t.px(3.0), t.px(2.0), t.text());
+    }
+}
+
 /// A text button.
 ///
 /// Returns the rectangle it occupied, so the caller can register a hotspot
@@ -722,6 +771,18 @@ impl Column {
         let r = Rect::new(self.x, self.cursor, self.width, height);
         self.cursor += height + self.gap;
         r
+    }
+
+    /// Take a row of this height, or `None` when it would run past `limit`.
+    ///
+    /// `row` always answers, which is right for a layout measured in advance and
+    /// wrong for a list that can be longer than its column: a search over every
+    /// setting must not draw its last rows under the window's bottom edge.
+    pub fn try_row(&mut self, height: f32, limit: f32) -> Option<Rect> {
+        if self.cursor + height > limit {
+            return None;
+        }
+        Some(self.row(height))
     }
 
     /// Skip some space.
