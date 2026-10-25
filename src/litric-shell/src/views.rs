@@ -4373,8 +4373,26 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
         return;
     }
     let shown_h = panel.h * reveal;
+    // The shadow is drawn under a wider clip than the glass. Cut to the panel's
+    // own rectangle it fills the gaps its rounded corners leave, and the panel
+    // looks square-cornered on a pale desktop.
+    let reach = t.px(40.0);
+    let shadow_clip = canvas.push_clip(Rect::new(
+        panel.x - reach,
+        panel.y,
+        panel.w + reach * 2.0,
+        shown_h + reach,
+    ));
+    canvas.soft_shadow(
+        Rect::new(panel.x, panel.y, panel.w, shown_h),
+        t.px(22.0),
+        t.px(28.0),
+        t.px(10.0),
+        0.55,
+    );
+    canvas.set_clip(shadow_clip);
     let saved = canvas.push_clip(Rect::new(panel.x, panel.y, panel.w, shown_h));
-    ui::surface(canvas, &t, panel, t.px(22.0), Material::Popover);
+    crate::desktop::glass_at(canvas, &t.theme, panel, t.px(22.0), 88);
 
     let card = |canvas: &mut Canvas, r: Rect| {
         canvas.fill_round_rect(r, card_radius, with_alpha(t.text(), 0.07));
