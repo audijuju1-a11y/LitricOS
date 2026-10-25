@@ -1,0 +1,366 @@
+id,os,section,keys,action
+KS.001,Windows 11,Windows Copilot keyboard shortcuts,Copilot key / Copilot key / (when Copilot is not available or disabled),"Open Microsoft Copilot or Microsoft 365 Copilot. / Open or close Windows search. / If Copilot isn't available, it will open Settings so you can choose what the key does."
+KS.002,Windows 11,Text editing keyboard shortcuts,Backspace,Delete characters to the left of the cursor.
+KS.003,Windows 11,Text editing keyboard shortcuts,Ctrl+A,Select all text.
+KS.004,Windows 11,Text editing keyboard shortcuts,Ctrl+B,Apply the bold format to the selected text.
+KS.005,Windows 11,Text editing keyboard shortcuts,Ctrl+Backspace,Delete words to the left of the cursor.
+KS.006,Windows 11,Text editing keyboard shortcuts,Ctrl+C / Ctrl+Insert,Copy the selected text.
+KS.007,Windows 11,Text editing keyboard shortcuts,Ctrl+Del,Delete words to the right of the cursor.
+KS.008,Windows 11,Text editing keyboard shortcuts,Ctrl+Down arrow,Move the cursor forward to the beginning of the next paragraph.
+KS.009,Windows 11,Text editing keyboard shortcuts,Ctrl+End,Move the cursor forward to the end of the document.
+KS.010,Windows 11,Text editing keyboard shortcuts,Ctrl+F,Find text.
+KS.011,Windows 11,Text editing keyboard shortcuts,Ctrl+H,Find and replace text.
+KS.012,Windows 11,Text editing keyboard shortcuts,Ctrl+Home,Move the cursor backward to the beginning of the document.
+KS.013,Windows 11,Text editing keyboard shortcuts,Ctrl+I,Apply the italic format to the selected text.
+KS.014,Windows 11,Text editing keyboard shortcuts,Ctrl+Left arrow,Move the cursor backward to the beginning of the previous word.
+KS.015,Windows 11,Text editing keyboard shortcuts,Ctrl+Right arrow,Move the cursor forward to the beginning of the next word.
+KS.016,Windows 11,Text editing keyboard shortcuts,Ctrl+Shift+V,Paste as plain text.
+KS.017,Windows 11,Text editing keyboard shortcuts,Ctrl+U,Apply the underline format to the selected text.
+KS.018,Windows 11,Text editing keyboard shortcuts,Ctrl+Up arrow,Move the cursor backward to the beginning of the previous paragraph.
+KS.019,Windows 11,Text editing keyboard shortcuts,Ctrl+V / Shift+Insert,Paste the last item from the clipboard.
+KS.020,Windows 11,Text editing keyboard shortcuts,Ctrl+X,Cut the selected text.
+KS.021,Windows 11,Text editing keyboard shortcuts,Ctrl+Y,Redo typing that was undone with Ctrl+Z.
+KS.022,Windows 11,Text editing keyboard shortcuts,Ctrl+Z,Undo the last typing.
+KS.023,Windows 11,Text editing keyboard shortcuts,Del or Delete,Delete characters to the right of the cursor.
+KS.024,Windows 11,Text editing keyboard shortcuts,Down arrow,Move the cursor forward to the next line.
+KS.025,Windows 11,Text editing keyboard shortcuts,End,Move the cursor forward to the end of the line.
+KS.026,Windows 11,Text editing keyboard shortcuts,Home,Move the cursor backward to the beginning of the line.
+KS.027,Windows 11,Text editing keyboard shortcuts,Left arrow,Move the cursor backward to the previous character.
+KS.028,Windows 11,Text editing keyboard shortcuts,Page down or PgDn,Move the cursor forward by one page.
+KS.029,Windows 11,Text editing keyboard shortcuts,Page up or PgUp,Move the cursor backward by one page.
+KS.030,Windows 11,Text editing keyboard shortcuts,Right arrow,Move the cursor forward to the next character.
+KS.031,Windows 11,Text editing keyboard shortcuts,Shift+Ctrl+Down arrow,Select paragraphs forward from the current cursor position.
+KS.032,Windows 11,Text editing keyboard shortcuts,Shift+Ctrl+End,Select text between the current cursor position and the end of the document.
+KS.033,Windows 11,Text editing keyboard shortcuts,Shift+Ctrl+Home,Select text between the current cursor position and the beginning of the document.
+KS.034,Windows 11,Text editing keyboard shortcuts,Shift+Ctrl+Left,Select words backward from the current cursor position.
+KS.035,Windows 11,Text editing keyboard shortcuts,Shift+Ctrl+Right,Select words forward from the current cursor position.
+KS.036,Windows 11,Text editing keyboard shortcuts,Shift+Ctrl+Up,Select paragraphs backward the current cursor position.
+KS.037,Windows 11,Text editing keyboard shortcuts,Shift+Down arrow,Select lines forward from the current cursor position.
+KS.038,Windows 11,Text editing keyboard shortcuts,Shift+End,Select text from the current cursor position to the end of the current line.
+KS.039,Windows 11,Text editing keyboard shortcuts,Shift+Home,Select text from the current cursor position to the beginning of the current line.
+KS.040,Windows 11,Text editing keyboard shortcuts,Shift+Left arrow,Select characters backward from the current cursor position.
+KS.041,Windows 11,Text editing keyboard shortcuts,Shift+Page Down,Select one page of text forward from the current cursor position.
+KS.042,Windows 11,Text editing keyboard shortcuts,Shift+Page Up,Select one page of text backward from the current cursor position.
+KS.043,Windows 11,Text editing keyboard shortcuts,Shift+Right arrow,Select characters forward from the current cursor position.
+KS.044,Windows 11,Text editing keyboard shortcuts,Shift+Up arrow,Select lines backward from the current cursor position.
+KS.045,Windows 11,Text editing keyboard shortcuts,Tab,Indent the cursor one tab stop.
+KS.046,Windows 11,Text editing keyboard shortcuts,Up arrow,Move the cursor backward to the previous line.
+KS.047,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+A,Set focus to the first icon in the Suggested actions menu.
+KS.048,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+Esc,Cycle through windows in the order in which they were opened.
+KS.049,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+F4,"Close the active window. If no windows are open, prompt to shutdown."
+KS.050,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+F8,Show your password on the sign-in screen.
+KS.051,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+Left arrow,Go back.
+KS.052,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+Page Down,Move down one screen.
+KS.053,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+Page Up,Move up one screen.
+KS.054,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+PrtScn,Capture a screenshot of the active window and copy it to the clipboard.
+KS.055,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+Right arrow,Go forward.
+KS.056,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+Shift+arrow keys,"When a group or tile is in focus on the Start menu, move it in the specified direction."
+KS.057,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+Ctrl+Insert,Switch focus back to the host machine from Windows Sandbox.
+KS.058,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+Spacebar,Open the context menu for the active window.
+KS.059,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+Tab,"Switch between open windows. To cycle through multiple windows, continue to hold the Alt key and press Tab multiple times."
+KS.060,Windows 11,Desktop and other general Windows keyboard shortcuts,Alt+underlined letter,"For actions in command or context menus, some windows and apps specify keyboard shortcuts by underlining a character in the action name. Press Alt and then the letter to do that action."
+KS.061,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+A,Select all items in a window.
+KS.062,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+Alt+Del,"Switch to the security screen where you can lock the desktop, switch user, sign out, change a password, or open Task Manager."
+KS.063,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+Alt+Tab,View a thumbnail of all open apps. Use the arrow keys to switch between open apps.
+KS.064,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+Esc,Open the Start menu.
+KS.065,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+F4,"In apps that are full-screen and let you have multiple documents open at the same time, close the active document but not the entire app."
+KS.066,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+F5 / Ctrl+R,Refresh the current window.
+KS.067,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+Shift,"When multiple keyboard layouts are available, switch the keyboard layout."
+KS.068,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+Shift+arrow keys,"When a tile is in focus on the Start menu, move it into another tile to create a folder."
+KS.069,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+Shift+Esc,Open Task Manager.
+KS.070,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+Spacebar,"Enable or disable the Chinese input method editor (IME). For more information, see Microsoft Simplified Chinese IME and Microsoft Traditional Chinese IME."
+KS.071,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+Y,Redo an action that was previously undone with Ctrl+Z.
+KS.072,Windows 11,Desktop and other general Windows keyboard shortcuts,Ctrl+Z,Undo the previous action.
+KS.073,Windows 11,Desktop and other general Windows keyboard shortcuts,Esc or Escape,"Stop or leave the current task, or dismiss a dialog box."
+KS.074,Windows 11,Desktop and other general Windows keyboard shortcuts,F5,Refresh the active window.
+KS.075,Windows 11,Desktop and other general Windows keyboard shortcuts,F6,Cycle through elements in a window or on the desktop.
+KS.076,Windows 11,Desktop and other general Windows keyboard shortcuts,F10,Activate the menu bar in the active window.
+KS.077,Windows 11,Desktop and other general Windows keyboard shortcuts,PrtScn or Print Screen,"Select a region of the screen to capture a screenshot to the clipboard. You can then open the Snipping Tool to share or markup the image. / Note: You can turn off this default behavior. Select Start > Settings > Accessibility > Keyboard , and set Use the Print Screen button to open screen snipping to Off. / Open the Settings app"
+KS.078,Windows 11,Windows key keyboard shortcuts,Windows key,Open or close the Start menu.
+KS.079,Windows 11,Windows key keyboard shortcuts,Windows key+A,Open the Windows 11 action center.
+KS.080,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+A,"Set focus to a Windows tip when one is available. / / When a Windows tip appears, bring focus to the tip. Press the keys again to bring focus to the element on the screen to which the Windows tip is anchored."
+KS.081,Windows 11,Windows key keyboard shortcuts,Windows key+Alt+B,"Turn high dynamic range (HDR) on or off. For more information, see What is HDR in Windows?."
+KS.082,Windows 11,Windows key keyboard shortcuts,Windows key+C,"Open Microsoft Copilot or Microsoft 365 Copilot. / / Tip: To customize what happens when you press the Windows key+C shortcut, go to Settings > Personalization > Text input > Customize Copilot key on keyboard."
+KS.083,Windows 11,Windows key keyboard shortcuts,Windows key+C / (when Copilot is not available or disabled),Open or close Windows search.
+KS.084,Windows 11,Windows key keyboard shortcuts,Windows key+Alt+D,Display and hide the date and time on the desktop.
+KS.085,Windows 11,Windows key keyboard shortcuts,Windows key+Alt+Down arrow,Snap the active window to the bottom half of the screen.
+KS.086,Windows 11,Windows key keyboard shortcuts,Windows key+Alt+H,"When voice typing is open, set the focus to the keyboard."
+KS.087,Windows 11,Windows key keyboard shortcuts,Windows key+Alt+K,Mute or unmute the microphone in supported apps.
+KS.088,Windows 11,Windows key keyboard shortcuts,Windows key+Alt+Up arrow,Snap the active window to the top half of the screen.
+KS.089,Windows 11,Windows key keyboard shortcuts,"Windows key+comma (,)",Temporarily peek at the desktop.
+KS.090,Windows 11,Windows key keyboard shortcuts,Windows key+Ctrl+C,"If turned on in settings, enable or disable color filters. / Open the Settings app"
+KS.091,Windows 11,Windows key keyboard shortcuts,Windows key+Ctrl+Enter,Open Narrator.
+KS.092,Windows 11,Windows key keyboard shortcuts,Windows key+Ctrl+F,Search for devices on a network.
+KS.093,Windows 11,Windows key keyboard shortcuts,Windows key+Ctrl+Q,Open Quick Assist.
+KS.094,Windows 11,Windows key keyboard shortcuts,Windows key+Ctrl+Shift+B,Wake up the device when the screen is blank or black.
+KS.095,Windows 11,Windows key keyboard shortcuts,Windows key+Ctrl+Spacebar,Change to a previously selected input option.
+KS.096,Windows 11,Windows key keyboard shortcuts,Windows key+Ctrl+V,"Open the sound output page of quick settings, which includes settings for the output device, spatial sound, and the volume mixer."
+KS.097,Windows 11,Windows key keyboard shortcuts,Windows key+D,Display and hide the desktop.
+KS.098,Windows 11,Windows key keyboard shortcuts,Windows key+Down arrow,Minimize the active window.
+KS.099,Windows 11,Windows key keyboard shortcuts,Windows key+E,Open File Explorer.
+KS.100,Windows 11,Windows key keyboard shortcuts,Windows key+Esc,Close Magnifier.
+KS.101,Windows 11,Windows key keyboard shortcuts,Windows key+F,Open Feedback Hub.
+KS.102,Windows 11,Windows key keyboard shortcuts,Windows key+forward slash (/),Start input method editor (IME) reconversion.
+KS.103,Windows 11,Windows key keyboard shortcuts,Windows key+G,"Open the Game Bar. For more information, see Keyboard shortcuts for Game Bar."
+KS.104,Windows 11,Windows key keyboard shortcuts,Windows key+H,Open voice dictation.
+KS.105,Windows 11,Windows key keyboard shortcuts,Windows key+Home,Minimize or restore all windows except the active window.
+KS.106,Windows 11,Windows key keyboard shortcuts,Windows key+I,Open Settings.
+KS.107,Windows 11,Windows key keyboard shortcuts,Windows key+J,Open Recall. / (Available on devices that meet the minimum system requirements)
+KS.108,Windows 11,Windows key keyboard shortcuts,Windows key+K,"Open Cast from Quick Settings to connect to a display. For more information, see Screen mirroring and projecting to your PC or wireless display."
+KS.109,Windows 11,Windows key keyboard shortcuts,Windows key+L,Lock the computer.
+KS.110,Windows 11,Windows key keyboard shortcuts,Windows key+Left arrow,Snap the window to the left side of the screen.
+KS.111,Windows 11,Windows key keyboard shortcuts,Windows key+M,Minimize all windows.
+KS.112,Windows 11,Windows key keyboard shortcuts,Windows key+Minus (-),Zoom out in Magnifier.
+KS.113,Windows 11,Windows key keyboard shortcuts,Windows key+N,Open notification center and calendar.
+KS.114,Windows 11,Windows key keyboard shortcuts,Windows key+O,Lock the device orientation.
+KS.115,Windows 11,Windows key keyboard shortcuts,Windows key+P,Open project settings to choose a presentation display mode.
+KS.116,Windows 11,Windows key keyboard shortcuts,Windows key+Pause,Opens the Settings app to the System > About page.
+KS.117,Windows 11,Windows key keyboard shortcuts,Windows key+Period (.) / Windows key+Semicolon (;),Open the emoji panel.
+KS.118,Windows 11,Windows key keyboard shortcuts,Windows key+Plus (+),Zoom in with the Magnifier.
+KS.119,Windows 11,Windows key keyboard shortcuts,Windows key+PrtScn,Capture a full screen screenshot and save it to a file in the Screenshots subfolder of the Pictures folder.
+KS.120,Windows 11,Windows key keyboard shortcuts,Windows key+Q,Open search.
+KS.121,Windows 11,Windows key keyboard shortcuts,Windows key+R,Open the Run dialog box.
+KS.122,Windows 11,Windows key keyboard shortcuts,Windows key+Right arrow,Snap the window to the right side of the screen.
+KS.123,Windows 11,Windows key keyboard shortcuts,Windows key+S,Open search.
+KS.124,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+Down arrow,"If a window is snapped or maximized, restore it."
+KS.125,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+Enter,"If the active window is a Universal Windows Platform (UWP) app, make it full screen."
+KS.126,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+Left arrow,Move the active window to the monitor on the left.
+KS.127,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+M,Restore minimized windows.
+KS.128,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+R,"Select a region of the screen to record a video. It then opens the screen recording in the Snipping Tool. By default, this screen recording is automatically saved as an MP4 file in the Screen Recordings subfolder of your Videos folder."
+KS.129,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+Right arrow,Move the active window to the monitor on the right.
+KS.130,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+S,Select a region of the screen to capture a screenshot to the clipboard. You can then open the Snipping Tool to share or markup the image.
+KS.131,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+Spacebar,Switch backward through input languages and keyboard layouts.
+KS.132,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+Up arrow,Stretch the desktop window to the top and bottom of the screen.
+KS.133,Windows 11,Windows key keyboard shortcuts,Windows key+Shift+V,Cycle through notifications.
+KS.134,Windows 11,Windows key keyboard shortcuts,Windows key+Spacebar,Switch forward through input languages and keyboard layouts.
+KS.135,Windows 11,Windows key keyboard shortcuts,Windows key+Tab,Open Task View.
+KS.136,Windows 11,Windows key keyboard shortcuts,Windows key+U,Open the Settings app to the Accessibility section.
+KS.137,Windows 11,Windows key keyboard shortcuts,Windows key+Up arrow,Maximize the active window.
+KS.138,Windows 11,Windows key keyboard shortcuts,Windows key+V,"Open the clipboard history. / Note: Clipboard history isn't turned on by default. To turn it on, use this keyboard shortcut and then select the prompt to turn on history. You can also turn it on in the Settings app > System > Clipboard , and set Clipboard history to On. / Open the Settings app"
+KS.139,Windows 11,Windows key keyboard shortcuts,Windows key+W,Open Widgets.
+KS.140,Windows 11,Windows key keyboard shortcuts,Windows key+X,Open the Quick Link menu. This shortcut is the same action as right-click on the Start menu.
+KS.141,Windows 11,Windows key keyboard shortcuts,Windows key+Y,Switch input between Windows Mixed Reality and your desktop.
+KS.142,Windows 11,Windows key keyboard shortcuts,Windows key+Z,Open the snap layouts.
+KS.143,Windows 11,Command prompt keyboard shortcuts,Ctrl+C / Ctrl+Insert,Copy the selected text.
+KS.144,Windows 11,Command prompt keyboard shortcuts,Ctrl+V / Shift+Insert,Paste the selected text.
+KS.145,Windows 11,Command prompt keyboard shortcuts,Ctrl+M,Enter Mark mode.
+KS.146,Windows 11,Command prompt keyboard shortcuts,Alt+selection key,Begin selection in block mode.
+KS.147,Windows 11,Command prompt keyboard shortcuts,Arrow keys,Move the cursor in the direction specified.
+KS.148,Windows 11,Command prompt keyboard shortcuts,Page up,Move the cursor by one page up.
+KS.149,Windows 11,Command prompt keyboard shortcuts,Page down,Move the cursor by one page down.
+KS.150,Windows 11,Command prompt keyboard shortcuts,Ctrl+Home (Mark mode),Move the cursor to the beginning of the buffer.
+KS.151,Windows 11,Command prompt keyboard shortcuts,Ctrl+End (Mark mode),Move the cursor to the end of the buffer.
+KS.152,Windows 11,Command prompt keyboard shortcuts,Ctrl+Up arrow,Move up one line in the output history.
+KS.153,Windows 11,Command prompt keyboard shortcuts,Ctrl+Down arrow,Move down one line in the output history.
+KS.154,Windows 11,Command prompt keyboard shortcuts,Ctrl+Home (History navigation),"If the command line is empty, move the viewport to the top of the buffer. Otherwise, delete all the characters to the left of the cursor in the command line."
+KS.155,Windows 11,Command prompt keyboard shortcuts,Ctrl+End (History navigation),"If the command line is empty, move the viewport to the command line. Otherwise, delete all the characters to the right of the cursor in the command line."
+KS.156,Windows 11,Dialog box keyboard shortcuts,F4,Display the items in the active list.
+KS.157,Windows 11,Dialog box keyboard shortcuts,Ctrl+Tab,Move forward through tabs.
+KS.158,Windows 11,Dialog box keyboard shortcuts,Ctrl+Shift+Tab,Move back through tabs.
+KS.159,Windows 11,Dialog box keyboard shortcuts,"Ctrl+1, 2, 3,...",Move to that tab number.
+KS.160,Windows 11,Dialog box keyboard shortcuts,Tab,Move forward through options.
+KS.161,Windows 11,Dialog box keyboard shortcuts,Shift+Tab,Move back through options.
+KS.162,Windows 11,Dialog box keyboard shortcuts,Alt+underlined letter,Perform the command (or select the option) that is used with that letter.
+KS.163,Windows 11,Dialog box keyboard shortcuts,Spacebar,Select or clear the check box if the active option is a check box.
+KS.164,Windows 11,Dialog box keyboard shortcuts,Backspace,Open a folder one level up if a folder is selected in the Save As or Open dialog box.
+KS.165,Windows 11,Dialog box keyboard shortcuts,Arrow keys,Select a button if the active option is a group of option buttons.
+KS.166,Windows 11,File Explorer keyboard shortcuts,Alt+D,Select the address bar.
+KS.167,Windows 11,File Explorer keyboard shortcuts,Alt+Enter,Display properties for the selected item.
+KS.168,Windows 11,File Explorer keyboard shortcuts,Alt+Left arrow / Backspace,Navigate to the previous folder.
+KS.169,Windows 11,File Explorer keyboard shortcuts,Alt+mouse drag a file,"When you drop the file, create a shortcut to the original file in that location."
+KS.170,Windows 11,File Explorer keyboard shortcuts,Alt+P,Show or hide the preview pane.
+KS.171,Windows 11,File Explorer keyboard shortcuts,Alt+Right arrow,View the next folder.
+KS.172,Windows 11,File Explorer keyboard shortcuts,Alt+Shift+P,Show or hide the details pane.
+KS.173,Windows 11,File Explorer keyboard shortcuts,Alt+Up arrow,Move up a level in the folder path.
+KS.174,Windows 11,File Explorer keyboard shortcuts,Ctrl+Arrow key (to move to an item)+Spacebar,Select multiple individual items.
+KS.175,Windows 11,File Explorer keyboard shortcuts,Ctrl+D / Delete,Delete the selected item and move it to the Recycle Bin.
+KS.176,Windows 11,File Explorer keyboard shortcuts,Ctrl+E / Ctrl+F,Select the search box.
+KS.177,Windows 11,File Explorer keyboard shortcuts,Ctrl+L,Focus on the address bar.
+KS.178,Windows 11,File Explorer keyboard shortcuts,Ctrl+mouse drag a file,"When you drop the file, create a copy in that location."
+KS.179,Windows 11,File Explorer keyboard shortcuts,Ctrl+mouse scroll wheel,Change the size and appearance of file and folder icons.
+KS.180,Windows 11,File Explorer keyboard shortcuts,Ctrl+N,Open a new window.
+KS.181,Windows 11,File Explorer keyboard shortcuts,Ctrl+Number (1-9),Move to that tab number.
+KS.182,Windows 11,File Explorer keyboard shortcuts,Ctrl+Plus (+),Resize all columns to fit text. / Note: This shortcut requires using a numeric keypad.
+KS.183,Windows 11,File Explorer keyboard shortcuts,Ctrl+Shift+E,Expands all folders from the tree in the navigation pane.
+KS.184,Windows 11,File Explorer keyboard shortcuts,Ctrl+Shift+N,Create a new folder.
+KS.185,Windows 11,File Explorer keyboard shortcuts,Ctrl+Shift+Number (1-9),"Change the view style. For example, 2 is Large icons and 6 is Details."
+KS.186,Windows 11,File Explorer keyboard shortcuts,Ctrl+Shift+Tab,Move to the previous tab.
+KS.187,Windows 11,File Explorer keyboard shortcuts,Ctrl+T,Open a new tab and switch to it.
+KS.188,Windows 11,File Explorer keyboard shortcuts,Ctrl+W,Closes the active tab. Closes the window if there's only one tab open.
+KS.189,Windows 11,File Explorer keyboard shortcuts,Ctrl+Tab,Move to the next tab.
+KS.190,Windows 11,File Explorer keyboard shortcuts,End,Scroll to the bottom of the active window.
+KS.191,Windows 11,File Explorer keyboard shortcuts,F2,Rename the selected item.
+KS.192,Windows 11,File Explorer keyboard shortcuts,F3,Search for a file or folder.
+KS.193,Windows 11,File Explorer keyboard shortcuts,F4,Select the address bar to change the current path.
+KS.194,Windows 11,File Explorer keyboard shortcuts,F5,Refresh the window.
+KS.195,Windows 11,File Explorer keyboard shortcuts,F6,Cycle through elements in the window.
+KS.196,Windows 11,File Explorer keyboard shortcuts,F11,Maximize or minimize the active window.
+KS.197,Windows 11,File Explorer keyboard shortcuts,Home,Scroll to the top of the active window.
+KS.198,Windows 11,File Explorer keyboard shortcuts,Left arrow,"Collapse the current selection (if it's expanded), or select the folder that the folder was in."
+KS.199,Windows 11,File Explorer keyboard shortcuts,Right arrow,"Display the current selection (if it's collapsed), or select the first subfolder."
+KS.200,Windows 11,File Explorer keyboard shortcuts,Shift+Arrow keys,Select multiple items.
+KS.201,Windows 11,File Explorer keyboard shortcuts,Shift+Delete,Permanently delete the selected item without moving it to the Recycle Bin.
+KS.202,Windows 11,File Explorer keyboard shortcuts,Shift+F10,Display the context menu for the selected item.
+KS.203,Windows 11,File Explorer keyboard shortcuts,Shift+mouse drag a file,"When you drop the file, move it to that location."
+KS.204,Windows 11,File Explorer keyboard shortcuts,Shift+mouse right-click,Display the Show more options context menu for the selected item.
+KS.205,Windows 11,File Explorer keyboard shortcuts,Windows key+E,Open File Explorer.
+KS.206,Windows 11,Multiple desktops keyboard shortcuts,Windows key+Tab,Open Task view.
+KS.207,Windows 11,Multiple desktops keyboard shortcuts,Windows key+Ctrl+D,Create another desktop.
+KS.208,Windows 11,Multiple desktops keyboard shortcuts,Windows key+Ctrl+Right arrow,Switch between other desktops you've created on the right.
+KS.209,Windows 11,Multiple desktops keyboard shortcuts,Windows key+Ctrl+Left arrow,Switch between other desktops you've created on the left.
+KS.210,Windows 11,Multiple desktops keyboard shortcuts,Windows key+Ctrl+F4,Close the desktop you're using.
+KS.211,Windows 11,Taskbar keyboard shortcuts,Alt+Shift+Arrow,"When an app icon is in focus, move it's position in the direction of the arrow."
+KS.212,Windows 11,Taskbar keyboard shortcuts,Ctrl+select a grouped app icon on the taskbar,"When multiple windows for the same app are grouped on the taskbar, press Ctrl as you select the taskbar icon to shift focus through the windows in the app group."
+KS.213,Windows 11,Taskbar keyboard shortcuts,Ctrl+Shift+select an app icon on the taskbar,Open the app as an administrator.
+KS.214,Windows 11,Taskbar keyboard shortcuts,Shift+right-click an app icon on the taskbar,Show the window menu for the app.
+KS.215,Windows 11,Taskbar keyboard shortcuts,Shift+right-click a grouped taskbar button,Show the window menu for the group.
+KS.216,Windows 11,Taskbar keyboard shortcuts,Shift+select an app icon on the taskbar,Open another instance of the app.
+KS.217,Windows 11,Taskbar keyboard shortcuts,Windows key+Alt+Enter (on taskbar item focus),Open taskbar settings.
+KS.218,Windows 11,Taskbar keyboard shortcuts,Windows key+Alt+number (0-9),Open the jump list for the app pinned to the taskbar in the position indicated by the number.
+KS.219,Windows 11,Taskbar keyboard shortcuts,Windows key+B,Set the focus to the first icon in the notification area of the taskbar.
+KS.220,Windows 11,Taskbar keyboard shortcuts,Windows key+Ctrl+number (0-9),Switch to the last active window of the app pinned to the taskbar in the position indicated by the number.
+KS.221,Windows 11,Taskbar keyboard shortcuts,Windows key+Ctrl+Shift+number (0-9),Open as an administrator a new instance of the app located at the given position on the taskbar.
+KS.222,Windows 11,Taskbar keyboard shortcuts,Windows key+number (0-9),"Open the app pinned to the taskbar in the position indicated by the number. If the app is already running, switch to that app."
+KS.223,Windows 11,Taskbar keyboard shortcuts,Windows key+Shift+Number (0-9),Start a new instance of the app pinned to the taskbar in the position indicated by the number.
+KS.224,Windows 11,Taskbar keyboard shortcuts,Windows key+T,"Cycle through apps in the taskbar. When connected to multiple monitors, continued use will cycle through apps on all available displays."
+KS.225,Windows 11,Taskbar keyboard shortcuts,Windows key+Shift+T,"Move to the previous app in the taskbar. When connected to multiple monitors, continued use will cycle through apps on all available displays."
+KS.226,Windows 11,Settings keyboard shortcuts,Arrow keys,Move focus through the currently selected region. / Scroll the page.
+KS.227,Windows 11,Settings keyboard shortcuts,Backspace,Navigate backwards.
+KS.228,Windows 11,Settings keyboard shortcuts,Enter / Spacebar,Select the current item in focus.
+KS.229,Windows 11,Settings keyboard shortcuts,Shift+Tab,Cycle backward through regions.
+KS.230,Windows 11,Settings keyboard shortcuts,Tab,Cycle forward through regions.
+KS.231,Windows 11,Settings keyboard shortcuts,Windows key+I,Open the Settings app.
+KS.232,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+X,Cut the selected item.
+KS.233,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+C (or Ctrl+Insert),Copy the selected item.
+KS.234,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+V (or Shift+Insert),Paste the selected item.
+KS.235,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Z,Undo an action.
+KS.236,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+Tab,Switch between open apps.
+KS.237,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+F4,"Close the active item, or exit the active app."
+KS.238,Windows 10,"Copy, paste, and other general keyboard shortcuts",Windows key+L,Lock your PC.
+KS.239,Windows 10,"Copy, paste, and other general keyboard shortcuts",Windows key+D,Display and hide the desktop.
+KS.240,Windows 10,"Copy, paste, and other general keyboard shortcuts",F2,Rename the selected item.
+KS.241,Windows 10,"Copy, paste, and other general keyboard shortcuts",F3,Search for a file or folder in File Explorer.
+KS.242,Windows 10,"Copy, paste, and other general keyboard shortcuts",F4,Display the address bar list in File Explorer.
+KS.243,Windows 10,"Copy, paste, and other general keyboard shortcuts",F5,Refresh the active window.
+KS.244,Windows 10,"Copy, paste, and other general keyboard shortcuts",F6,Cycle through screen elements in a window or on the desktop.
+KS.245,Windows 10,"Copy, paste, and other general keyboard shortcuts",F10,Activate the Menu bar in the active app.
+KS.246,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+F8,Show your password on the sign-in screen.
+KS.247,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+Esc,Cycle through items in the order in which they were opened.
+KS.248,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+underlined letter,Perform the command for that letter.
+KS.249,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+Enter,Display properties for the selected item.
+KS.250,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+Spacebar,Open the shortcut menu for the active window.
+KS.251,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+Left arrow,Go back.
+KS.252,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+Right arrow,Go forward.
+KS.253,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+Page Up,Move up one screen.
+KS.254,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+Page Down,Move down one screen.
+KS.255,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+F4,Close the active document (in apps that are full-screen and let you have multiple documents open at the same time).
+KS.256,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+A,Select all items in a document or window.
+KS.257,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+D (or Delete),Delete the selected item and move it to the Recycle Bin.
+KS.258,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+R (or F5),Refresh the active window.
+KS.259,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Y,Redo an action.
+KS.260,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Right arrow,Move the cursor to the beginning of the next word.
+KS.261,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Left arrow,Move the cursor to the beginning of the previous word.
+KS.262,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Down arrow,Move the cursor to the beginning of the next paragraph.
+KS.263,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Up arrow,Move the cursor to the beginning of the previous paragraph.
+KS.264,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Alt+Tab,Use the arrow keys to switch between all open apps.
+KS.265,Windows 10,"Copy, paste, and other general keyboard shortcuts",Alt+Shift+arrow keys,"When a group or tile is in focus on the Start menu, move it in the direction specified."
+KS.266,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Shift+arrow keys,"When a tile is in focus on the Start menu, move it into another tile to create a folder."
+KS.267,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+arrow keys,Resize the Start menu when it's open.
+KS.268,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+arrow key (to move to an item)+Spacebar,Select multiple individual items in a window or on the desktop.
+KS.269,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Shift with an arrow key,Select a block of text.
+KS.270,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Esc,Open Start.
+KS.271,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Shift+Esc,Open Task Manager.
+KS.272,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Shift,Switch the keyboard layout when multiple keyboard layouts are available.
+KS.273,Windows 10,"Copy, paste, and other general keyboard shortcuts",Ctrl+Spacebar,Turn the Chinese input method editor (IME) on or off.
+KS.274,Windows 10,"Copy, paste, and other general keyboard shortcuts",Shift+F10,Display the shortcut menu for the selected item.
+KS.275,Windows 10,"Copy, paste, and other general keyboard shortcuts",Shift with any arrow key,"Select more than one item in a window or on the desktop, or select text in a document."
+KS.276,Windows 10,"Copy, paste, and other general keyboard shortcuts",Shift+Delete,Delete the selected item without moving it to the Recycle Bin first.
+KS.277,Windows 10,"Copy, paste, and other general keyboard shortcuts",Right arrow,"Open the next menu to the right, or open a submenu."
+KS.278,Windows 10,"Copy, paste, and other general keyboard shortcuts",Left arrow,"Open the next menu to the left, or close a submenu."
+KS.279,Windows 10,"Copy, paste, and other general keyboard shortcuts",Esc,Stop or leave the current task.
+KS.280,Windows 10,"Copy, paste, and other general keyboard shortcuts",PrtScn,"Take a screenshot of your whole screen and copy it to the clipboard. / Note: You can change this shortcut so it also opens screen snipping, which lets you edit your screenshot. Select Start ** > Settings > Ease of Access > Keyboard, and turn on the toggle under Print Screen shortcut. / Use PrtScn key to open screen snipping"
+KS.281,Windows 10,Windows key keyboard shortcuts,Windows key,Open or close Start.
+KS.282,Windows 10,Windows key keyboard shortcuts,Windows key+A,Open Action center.
+KS.283,Windows 10,Windows key keyboard shortcuts,Windows key+B,Set focus in the notification area.
+KS.284,Windows 10,Windows key keyboard shortcuts,Windows key+C,"Open Cortana in listening mode. / / Notes: / This shortcut is turned off by default. To turn it on, select Start > Settings > Cortana, and turn on the toggle under Let Cortana listen for my commands when I press the Windows key+C.Cortana is available only in certain countries/regions, and some Cortana features might not be available everywhere. If Cortana isn't available or is turned off, you can still use search."
+KS.285,Windows 10,Windows key keyboard shortcuts,Windows key+Shift+C,Open the charms menu.
+KS.286,Windows 10,Windows key keyboard shortcuts,Windows key+F,Open Feedback Hub and take a screenshot.
+KS.287,Windows 10,Windows key keyboard shortcuts,Windows key+G,Open Game bar when a game is open.
+KS.288,Windows 10,Windows key keyboard shortcuts,Windows key+Alt+B,"Turn HDR on or off. / Note: Applies to the Game Bar app version 5.721.7292.0 or newer. To update your Game Bar, go to the Microsoft Store app and check for updates."
+KS.289,Windows 10,Windows key keyboard shortcuts,Windows key+H,Start dictation.
+KS.290,Windows 10,Windows key keyboard shortcuts,Windows key+Shift+A,"Set focus to a Windows tip when one is available. / / When a Windows tip appears, bring focus to the Tip. Pressing the keyboard shortcuts again to bring focus to the element on the screen to which the Windows tip is anchored."
+KS.291,Windows 10,Windows key keyboard shortcuts,Windows key+K,Open the Connect quick action.
+KS.292,Windows 10,Windows key keyboard shortcuts,Windows key+L,Lock your PC or switch accounts.
+KS.293,Windows 10,Windows key keyboard shortcuts,Windows key+O,Lock device orientation.
+KS.294,Windows 10,Windows key keyboard shortcuts,Windows key+P,Choose a presentation display mode.
+KS.295,Windows 10,Windows key keyboard shortcuts,Windows key+Shift+S,Take a screenshot of part of your screen.
+KS.296,Windows 10,Windows key keyboard shortcuts,Windows key+T,Cycle through apps on the taskbar.
+KS.297,Windows 10,Windows key keyboard shortcuts,Windows key+U,Open Ease of Access Center.
+KS.298,Windows 10,Windows key keyboard shortcuts,Windows key+V,"Open the clipboard. / / Note / To activate this shortcut, select Start > Settings > System > Clipboard, and turn on the toggle under Clipboard history."
+KS.299,Windows 10,Windows key keyboard shortcuts,Windows key+X,Open the Quick Link menu.
+KS.300,Windows 10,Windows key keyboard shortcuts,Windows key+Z,Show the commands available in an app in full-screen mode.
+KS.301,Windows 10,Windows key keyboard shortcuts,Windows key+period (.) or semicolon (;),Open emoji panel.
+KS.302,Windows 10,Windows key keyboard shortcuts,Windows key+Pause,Display the System Properties dialog box.
+KS.303,Windows 10,Windows key keyboard shortcuts,Windows key+Ctrl+F,Search for PCs (if you're on a network).
+KS.304,Windows 10,Windows key keyboard shortcuts,Windows key+Shift+M,Restore minimized windows on the desktop.
+KS.305,Windows 10,Windows key keyboard shortcuts,Windows key+number,"Open the desktop and start the app pinned to the taskbar in the position indicated by the number. If the app is already running, switch to that app."
+KS.306,Windows 10,Windows key keyboard shortcuts,Windows key+Shift+number,Open the desktop and start a new instance of the app pinned to the taskbar in the position indicated by the number.
+KS.307,Windows 10,Windows key keyboard shortcuts,Windows key+Ctrl+number,Open the desktop and switch to the last active window of the app pinned to the taskbar in the position indicated by the number.
+KS.308,Windows 10,Windows key keyboard shortcuts,Windows key+Alt+number,Open the desktop and open the Jump List for the app pinned to the taskbar in the position indicated by the number.
+KS.309,Windows 10,Windows key keyboard shortcuts,Windows key+Ctrl+Shift+number,Open the desktop and open a new instance of the app located at the given position on the taskbar as an administrator.
+KS.310,Windows 10,Windows key keyboard shortcuts,Windows key+Tab,Open Task view.
+KS.311,Windows 10,Windows key keyboard shortcuts,Windows key+Up arrow,Maximize the window.
+KS.312,Windows 10,Windows key keyboard shortcuts,Windows key+Down arrow,Remove current app from screen or minimize the desktop window.
+KS.313,Windows 10,Windows key keyboard shortcuts,Windows key+Left arrow,Maximize the app or desktop window to the left side of the screen.
+KS.314,Windows 10,Windows key keyboard shortcuts,Windows key+Right arrow,Maximize the app or desktop window to the right side of the screen.
+KS.315,Windows 10,Windows key keyboard shortcuts,Windows key+Home,Minimize all except the active desktop window (restores all windows on second stroke).
+KS.316,Windows 10,Windows key keyboard shortcuts,Windows key+Shift+Down arrow,"Restore or minimize active desktop windows vertically, maintaining width."
+KS.317,Windows 10,Windows key keyboard shortcuts,Windows key+Shift+Left arrow or Right arrow,Move an app or window in the desktop from one monitor to another.
+KS.318,Windows 10,Windows key keyboard shortcuts,Windows key+Spacebar,Switch input language and keyboard layout.
+KS.319,Windows 10,Windows key keyboard shortcuts,Windows key+Ctrl+Spacebar,Change to a previously selected input.
+KS.320,Windows 10,Windows key keyboard shortcuts,Windows key+Ctrl+Enter,Turn on Narrator.
+KS.321,Windows 10,Windows key keyboard shortcuts,Windows key+Plus (+),Open Magnifier.
+KS.322,Windows 10,Windows key keyboard shortcuts,Windows key+forward slash (/),Begin IME reconversion.
+KS.323,Windows 10,Windows key keyboard shortcuts,Windows key+Ctrl+V,Open shoulder taps.
+KS.324,Windows 10,Windows key keyboard shortcuts,Windows key+Ctrl+Shift+B,Wake PC from blank or black screen.
+KS.325,Windows 10,Windows key keyboard shortcuts,Windows key+Alt+Enter (on taskbar item focus),Open taskbar settings.
+KS.326,Windows 10,Command Prompt keyboard shortcuts,Ctrl+C (or Ctrl+Insert),Copy the selected text.
+KS.327,Windows 10,Command Prompt keyboard shortcuts,Ctrl+V (or Shift+Insert),Paste the selected text.
+KS.328,Windows 10,Command Prompt keyboard shortcuts,Ctrl+M,Enter Mark mode.
+KS.329,Windows 10,Command Prompt keyboard shortcuts,Alt+selection key,Begin selection in block mode.
+KS.330,Windows 10,Command Prompt keyboard shortcuts,Arrow keys,Move the cursor in the direction specified.
+KS.331,Windows 10,Command Prompt keyboard shortcuts,Page up,Move the cursor by one page up.
+KS.332,Windows 10,Command Prompt keyboard shortcuts,Page down,Move the cursor by one page down.
+KS.333,Windows 10,Command Prompt keyboard shortcuts,Ctrl+Home (Mark mode),Move the cursor to the beginning of the buffer.
+KS.334,Windows 10,Command Prompt keyboard shortcuts,Ctrl+End (Mark mode),Move the cursor to the end of the buffer.
+KS.335,Windows 10,Command Prompt keyboard shortcuts,Ctrl+Up arrow,Move up one line in the output history.
+KS.336,Windows 10,Command Prompt keyboard shortcuts,Ctrl+Down arrow,Move down one line in the output history.
+KS.337,Windows 10,Command Prompt keyboard shortcuts,Ctrl+Home (History navigation),"If the command line is empty, move the viewport to the top of the buffer. Otherwise, delete all the characters to the left of the cursor in the command line."
+KS.338,Windows 10,Command Prompt keyboard shortcuts,Ctrl+End (History navigation),"If the command line is empty, move the viewport to the command line. Otherwise, delete all the characters to the right of the cursor in the command line."
+KS.339,Windows 10,Dialog box keyboard shortcuts,Ctrl+number (number 1–9),Move to nth tab.
+KS.340,Windows 10,File Explorer keyboard shortcuts,Ctrl+E,Select the search box.
+KS.341,Windows 10,File Explorer keyboard shortcuts,Ctrl+F,Select the search box.
+KS.342,Windows 10,File Explorer keyboard shortcuts,Ctrl+W,Close the active window.
+KS.343,Windows 10,File Explorer keyboard shortcuts,Ctrl+Shift+E,Display all folders above the selected folder.
+KS.344,Windows 10,File Explorer keyboard shortcuts,Num Lock+asterisk (*),Display all subfolders under the selected folder.
+KS.345,Windows 10,File Explorer keyboard shortcuts,Num Lock+plus (+),Display the contents of the selected folder.
+KS.346,Windows 10,File Explorer keyboard shortcuts,Num Lock+minus (-),Collapse the selected folder.
+KS.347,Windows 10,File Explorer keyboard shortcuts,Alt+P,Display the preview panel.
+KS.348,Windows 10,File Explorer keyboard shortcuts,Alt+Enter,Open the Properties dialog box for the selected item.
+KS.349,Windows 10,File Explorer keyboard shortcuts,Alt+Up arrow,View the folder that the folder was in.
+KS.350,Windows 10,File Explorer keyboard shortcuts,Alt+Left arrow,View the previous folder.
+KS.351,Windows 10,File Explorer keyboard shortcuts,Backspace,View the previous folder.
+KS.352,Windows 10,File Explorer keyboard shortcuts,End,Display the bottom of the active window.
+KS.353,Windows 10,File Explorer keyboard shortcuts,Home,Display the top of the active window.
+KS.354,Windows 10,Virtual desktops keyboard shortcuts,Windows key+Tab,Open Task view.
+KS.355,Windows 10,Virtual desktops keyboard shortcuts,Windows key+Ctrl+D,Add a virtual desktop.
+KS.356,Windows 10,Virtual desktops keyboard shortcuts,Windows key+Ctrl+Right arrow,Switch between virtual desktops you've created on the right.
+KS.357,Windows 10,Virtual desktops keyboard shortcuts,Windows key+Ctrl+Left arrow,Switch between virtual desktops you've created on the left.
+KS.358,Windows 10,Virtual desktops keyboard shortcuts,Windows key+Ctrl+F4,Close the virtual desktop you're using.
+KS.359,Windows 10,Taskbar keyboard shortcuts,Shift+click a taskbar button,Open an app or quickly open another instance of an app.
+KS.360,Windows 10,Taskbar keyboard shortcuts,Ctrl+Shift+click a taskbar button,Open an app as an administrator.
+KS.361,Windows 10,Taskbar keyboard shortcuts,Shift+right-click a taskbar button,Show the window menu for the app.
+KS.362,Windows 10,Taskbar keyboard shortcuts,Ctrl+click a grouped taskbar button,Cycle through the windows of the group.
+KS.363,Windows 10,Settings keyboard shortcuts,Windows key+I,Open settings.
+KS.364,Windows 10,Settings keyboard shortcuts,Backspace,Go back to the settings home page.
+KS.365,Windows 10,Settings keyboard shortcuts,Type on any page with search box,Search settings.
