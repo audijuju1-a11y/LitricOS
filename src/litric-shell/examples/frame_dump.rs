@@ -56,8 +56,25 @@ use litric_shell::shortcuts::{Action, App};
 use litric_shell::ui::Tokens;
 use litric_shell::views;
 
-const W: u32 = 1280;
-const H: u32 = 800;
+/// The canvas size, `--size WxH`. 1280x800 unless asked otherwise.
+static SIZE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
+/// The theme, `--theme light`. Dark unless asked otherwise.
+static THEME: std::sync::OnceLock<ThemeKind> = std::sync::OnceLock::new();
+
+fn width() -> u32 {
+    SIZE.get().copied().unwrap_or((1280, 800)).0
+}
+
+fn height() -> u32 {
+    SIZE.get().copied().unwrap_or((1280, 800)).1
+}
+
+/// The logical-to-physical scale the shell itself picks for a display of this
+/// width (`main.rs::run_png`): the design is drawn for 1280, so a wider screen
+/// is the same layout, larger.
+fn scale() -> f32 {
+    (width() as f32 / 1280.0).clamp(0.6, 3.0)
+}
 
 /// One desktop, its wallpaper layer, and the frame being composed.
 struct Rig {
@@ -80,11 +97,11 @@ fn env_row(token: &str, title: &str, state: &str, hotkey: &str) -> EnvRow {
 /// A desktop with fixed, plausible facts -- the same fixture `render_bench`
 /// uses, so the two examples describe the same machine.
 fn build() -> Rig {
-    let theme = Theme::of(ThemeKind::Dark);
+    let theme = Theme::of(THEME.get().copied().unwrap_or(ThemeKind::Dark));
     let mut shell = Shell::new(
-        Tokens::new(theme, 1.0),
-        W as f32,
-        H as f32,
+        Tokens::new(theme, scale()),
+        width() as f32,
+        height() as f32,
         Regional::fallback("frame-dump"),
     );
     shell.mode = DesktopMode::Ready;
@@ -200,7 +217,7 @@ fn build() -> Rig {
         env_row("litric", "LitricOS", "running", "Win+2"),
         env_row("linux", "Linux", "not-installed", "Win+3"),
     ];
-    let mut wallpaper = Canvas::new(W, H, rgb(0x000000));
+    let mut wallpaper = Canvas::new(width(), height(), rgb(0x000000));
     desktop::wallpaper(&mut wallpaper, &theme);
     let scene = wallpaper.clone();
     Rig {
@@ -495,7 +512,7 @@ fn scene_app(app: App) -> impl Fn(&mut Rig) {
 fn scene_launcher(rig: &mut Rig) {
     let _ = rig.shell.handle(
         &InputEvent::PointerMove {
-            at: Point::new(W as f32 / 2.0, H as f32 - 5.0),
+            at: Point::new(width() as f32 / 2.0, height() as f32 - 5.0),
             delta: Point::new(1.0, 1.0),
         },
         1_000,
@@ -587,7 +604,7 @@ fn scene_locked_customize(rig: &mut Rig) {
 /// total alone stays silent about whether a locked frame spent its work on the
 /// glass blur behind the panels, on the drifting fields, or on the clock's glow.
 fn compose(rig: &mut Rig) -> (f64, u64, String, String) {
-    let screen = Rect::new(0.0, 0.0, W as f32, H as f32);
+    let screen = Rect::new(0.0, 0.0, width() as f32, height() as f32);
     rig.scene.blit_from(&rig.wallpaper, screen);
     rig.scene.reset_pixels_visited();
     rig.scene.record_text(true);
@@ -628,12 +645,12 @@ fn fingerprint(canvas: &Canvas) -> u64 {
 /// already reads, and the one QEMU's `screendump` already writes.
 fn write_ppm(path: &Path, canvas: &Canvas) -> std::io::Result<usize> {
     let mut out = Vec::with_capacity(
-        (W as usize)
-            .saturating_mul(H as usize)
+        (width() as usize)
+            .saturating_mul(height() as usize)
             .saturating_mul(3)
             .saturating_add(32),
     );
-    out.extend_from_slice(format!("P6\n{W} {H}\n255\n").as_bytes());
+    out.extend_from_slice(format!("P6\n{} {}\n255\n", width(), height()).as_bytes());
     for &px in canvas.pixels() {
         out.push(((px >> 16) & 0xFF) as u8);
         out.push(((px >> 8) & 0xFF) as u8);
@@ -660,6 +677,33 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             },
+            "--size" => {
+                let parsed = args.next().and_then(|v| {
+                    let (w, h) = v.split_once('x')?;
+                    Some((w.parse::<u32>().ok()?, h.parse::<u32>().ok()?))
+                });
+                match parsed {
+                    Some((w, h)) if w >= 640 && h >= 400 => {
+                        let _ = SIZE.set((w, h));
+                    }
+                    _ => {
+                        eprintln!("frame_dump: --size needs WxH, at least 640x400");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            "--theme" => match args.next().as_deref() {
+                Some("light") => {
+                    let _ = THEME.set(ThemeKind::Light);
+                }
+                Some("dark") => {
+                    let _ = THEME.set(ThemeKind::Dark);
+                }
+                _ => {
+                    eprintln!("frame_dump: --theme is dark or light");
+                    return ExitCode::FAILURE;
+                }
+            },
             _ => output = PathBuf::from(arg),
         }
     }
@@ -673,7 +717,7 @@ fn main() -> ExitCode {
             "frame_dump: no Latin text face is installed, so no frame can be drawn.\n\
              Install the image's fonts (noto-fonts, ttf-jetbrains-mono-nerd), or pass\n\
              --fonts DIR pointing at a local copy of NotoSans-Regular.ttf and the rest.\n\
-             Frame dump usage: frame_dump [--fonts DIR] [OUTPUT_DIR]"
+             Frame dump usage: frame_dump [--fonts DIR] [--size WxH] [--theme dark|light] [OUTPUT_DIR]"
         );
         return ExitCode::FAILURE;
     }
@@ -788,7 +832,7 @@ fn main() -> ExitCode {
 fn partial_frame(rig: &mut Rig) -> (f64, u64, u64, String) {
     let region = Rect::new(600.0, 560.0, 160.0, 48.0);
     let area = (region.w * region.h) as u64;
-    let mut comp = desktop::Compositor::new(W, H, &rig.theme);
+    let mut comp = desktop::Compositor::new(width(), height(), &rig.theme);
     let _ = comp.repaint(&mut rig.shell, true, &[]);
     comp.scene.reset_pixels_visited();
     let t = Instant::now();
@@ -808,7 +852,7 @@ fn dump(dir: &Path, name: &str, rig: &mut Rig) -> std::io::Result<()> {
     let (ms, visited, text, full_sites) = compose(rig);
     let path = dir.join(format!("{name}.ppm"));
     let bytes = write_ppm(&path, &rig.scene)?;
-    let pixels = f64::from(W) * f64::from(H);
+    let pixels = f64::from(width()) * f64::from(height());
     let (partial_ms, partial_visited, partial_area, sites) = partial_frame(rig);
     println!(
         "scene={name} ppm={} bytes={bytes} px={pixels:.0} visited_px={visited} coverage={:.3} draw_ms={ms:.2} fingerprint=0x{:016x}",

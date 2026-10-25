@@ -2153,13 +2153,16 @@ pub struct Shell {
     boot_started_ms: Option<u64>,
 }
 
-/// How long the boot intro runs, in ms. The pen write takes most of it; the
-/// rest is the short hold before the desktop takes over.
-pub const BOOT_INTRO_MS: u64 = 2_400;
+/// How long the boot intro runs, in ms: the pen write, a short hold on the
+/// finished mark, and the cross-fade into the first surface.
+pub const BOOT_INTRO_MS: u64 = 2_300;
 
-/// The part of the intro during which the pen writes the mark. The remainder
-/// holds the finished mark before the desktop appears.
-pub const BOOT_WRITE_MS: u64 = 1_900;
+/// The part of the intro during which the pen writes the mark.
+pub const BOOT_WRITE_MS: u64 = 1_600;
+
+/// When the intro starts to give way: the finished mark is held until here,
+/// and the rest of [`BOOT_INTRO_MS`] is the cross-fade.
+pub const BOOT_COVER_MS: u64 = 1_950;
 
 impl Shell {
     /// Replace startup defaults with a validated preference record.
@@ -2384,7 +2387,7 @@ impl Shell {
     ///
     /// The dock is not a system bar -- it holds applications, not the machine's
     /// state -- so it is not measured here.
-    pub const TOP_BAR_LOGICAL: f32 = 24.0;
+    pub const TOP_BAR_LOGICAL: f32 = crate::chrome::TOP_BAR_H;
 
     /// The top bar's rectangle.
     #[must_use]
@@ -3123,26 +3126,23 @@ impl Shell {
         Some((elapsed as f32 / BOOT_WRITE_MS as f32).min(1.0))
     }
 
-    /// What the boot intro says under the mark at this moment.
-    ///
-    /// A stage, not a spinner: "Getting things ready" is the first thing the
-    /// machine says, and it keeps saying something true as the session comes
-    /// up. The words are stages of the same length as the intro, so the note
-    /// and the pen finish together rather than one running out before the
-    /// other.
+    /// How much of the screen the boot surface still covers, from 1 (all of it)
+    /// to 0 (none). It holds at 1 through the write and the hold, then falls
+    /// over the cross-fade. Reduced motion has no cross-fade: the surface stays
+    /// whole until the intro ends.
     #[must_use]
-    pub fn boot_intro_note(&self) -> &'static str {
+    #[allow(clippy::cast_precision_loss)]
+    pub fn boot_intro_cover(&self) -> f32 {
         let Some(started) = self.boot_started_ms else {
-            return "";
+            return 0.0;
         };
         let elapsed = self.now_ms.saturating_sub(started);
-        if elapsed < 800 {
-            "Getting things ready"
-        } else if elapsed < 1_700 {
-            "Starting your session"
-        } else {
-            "Almost there"
+        if self.quick.reduce_motion || elapsed <= BOOT_COVER_MS {
+            return 1.0;
         }
+        let span = BOOT_INTRO_MS.saturating_sub(BOOT_COVER_MS).max(1);
+        let gone = (elapsed - BOOT_COVER_MS) as f32 / span as f32;
+        (1.0 - gone).clamp(0.0, 1.0)
     }
 
     /// [`Self::boot_intro_progress`] at the shell's own clock, for drawing.
@@ -6088,14 +6088,19 @@ mod tests {
         let _ = b.repaint(&mut full, false, &damage);
 
         let mut mismatched = 0u32;
+        let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, 0_i64, 0_i64);
         for y in 0..800 {
             for x in 0..1280 {
                 if a.scene.get(x, y) != b.scene.get(x, y) {
                     mismatched = mismatched.saturating_add(1);
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
                 }
             }
         }
-        assert_eq!(mismatched, 0, "{mismatched} pixels differ from a full composition");
+        assert_eq!(
+            mismatched, 0,
+            "{mismatched} pixels differ from a full composition, within x {x0}..{x1} y {y0}..{y1}"
+        );
     }
 
     #[test]

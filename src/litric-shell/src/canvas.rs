@@ -53,9 +53,28 @@ pub fn blend(dst: u32, src: u32, extra: f32) -> u32 {
         let s = f32::from(((src >> shift) & 0xFF) as u8);
         let d = f32::from(((dst >> shift) & 0xFF) as u8);
         let v = s * sa + d * (1.0 - sa);
-        (v.round().clamp(0.0, 255.0) as u32) << shift
+        round_half_up(v).min(255) << shift
     };
     0xFF00_0000 | mix(16) | mix(8) | mix(0)
+}
+
+/// `v.round()` for a `v` that is never negative, as an integer.
+///
+/// `f32::round` is a library call on the targets this shell is built for -- no
+/// SSE4.1 `roundss` is assumed -- and every pixel the renderer composites went
+/// through it three times, which the profile priced at about a twelfth of a
+/// frame. For a non-negative value, rounding half away from zero is: take the
+/// integer part, and add one if the fraction is at least a half. The fraction
+/// is `v` minus a nearby integer, which a float subtracts exactly, so this is
+/// the same answer as `round` for every input, not an approximation of it.
+#[inline]
+fn round_half_up(v: f32) -> u32 {
+    let whole = v as u32;
+    if v - whole as f32 >= 0.5 {
+        whole.saturating_add(1)
+    } else {
+        whole
+    }
 }
 
 /// Pack straight 8-bit channels into `0xAARRGGBB`.
@@ -73,7 +92,7 @@ pub const fn rgb(hex: u32) -> u32 {
 /// The same colour at a different alpha.
 #[must_use]
 pub fn with_alpha(color: u32, alpha: f32) -> u32 {
-    let a = (alpha.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u32;
+    let a = round_half_up(alpha.clamp(0.0, 1.0) * 255.0).min(255);
     (a << 24) | (color & 0x00FF_FFFF)
 }
 
@@ -721,6 +740,17 @@ impl Canvas {
         self.runs.as_deref().unwrap_or(&[])
     }
 
+    /// Run `draw` with the text recorder paused, then put it back.
+    ///
+    /// For ink that is not a line of text anyone reads: the shadow under a word
+    /// is the word again, a pixel lower, and recording it would report every
+    /// word as overlapping itself.
+    pub fn unrecorded(&mut self, draw: impl FnOnce(&mut Self)) {
+        let runs = self.runs.take();
+        draw(self);
+        self.runs = runs;
+    }
+
     /// Whether a recorder is attached.
     #[must_use]
     pub const fn is_recording_text(&self) -> bool {
@@ -868,6 +898,40 @@ impl Canvas {
     /// frame" depend on whatever the last panel happened to leave set.
     pub fn clear(&mut self, color: u32) {
         self.px.fill(color);
+    }
+
+    /// Cross-fade towards another canvas of the same size: every pixel moves
+    /// `t` (`0..=1`) of the way from what it is to what `src` has, inside the
+    /// clip. Both are opaque, so this is a plain per-channel mix.
+    ///
+    /// This is how the boot surface hands over to the desktop. Drawing a
+    /// translucent mark over the desktop would blend every overlapping pen
+    /// segment twice and bead the joints; mixing two finished frames cannot.
+    pub fn mix_from(&mut self, src: &Self, t: f32) {
+        if self.width != src.width || self.height != src.height {
+            return;
+        }
+        let k = round_half_up(t.clamp(0.0, 1.0) * 256.0).min(256);
+        if k == 0 {
+            return;
+        }
+        let r = Rect::new(0.0, 0.0, self.width as f32, self.height as f32);
+        let (x0, y0, x1, y1) = self.span(&r);
+        for y in y0..y1 {
+            let row = (y as usize).saturating_mul(self.width as usize);
+            for x in x0..x1 {
+                let i = row.saturating_add(x as usize);
+                let (Some(&b), Some(d)) = (src.px.get(i), self.px.get_mut(i)) else {
+                    continue;
+                };
+                let mix = |shift: u32| {
+                    let from = (*d >> shift) & 0xFF;
+                    let to = (b >> shift) & 0xFF;
+                    (from * (256 - k) + to * k + 128) >> 8
+                };
+                *d = 0xFF00_0000 | (mix(16) << 16) | (mix(8) << 8) | mix(0);
+            }
+        }
     }
 
     /// Copy a region from another canvas, inside the clip.
@@ -1043,10 +1107,27 @@ impl Canvas {
     /// A filled, anti-aliased rounded rectangle. `radius` of 0 is a plain rect.
     pub fn fill_round_rect(&mut self, r: Rect, radius: f32, color: u32) {
         let (x0, y0, x1, y1) = self.span(&r.inflate(1.5));
+        // The core: pixels whose centres lie in the rectangle inset by the
+        // corner radius (and by at least half a pixel, so a plain rectangle's
+        // straight edges are not in it). Inside it the signed distance is at
+        // most `-max(radius, 0.5)`, so coverage is exactly 1 and the distance
+        // -- a square root per pixel -- need not be computed. The pixel is still
+        // composited by the same call, so the result is the same bit for bit.
+        let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
+        let inset = rad.max(0.5);
+        let core_x0 = (r.x + inset - 0.5).ceil() as i64;
+        let core_x1 = (r.right() - inset - 0.5).floor() as i64 + 1;
+        let core_y0 = (r.y + inset - 0.5).ceil() as i64;
+        let core_y1 = (r.bottom() - inset - 0.5).floor() as i64 + 1;
         for y in y0..y1 {
+            let in_rows = y >= core_y0 && y < core_y1 && core_x0 < core_x1;
             for x in x0..x1 {
-                let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius);
-                self.blend_in(x, y, color, coverage(d));
+                if in_rows && x >= core_x0 && x < core_x1 {
+                    self.blend_in(x, y, color, 1.0);
+                } else {
+                    let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius);
+                    self.blend_in(x, y, color, coverage(d));
+                }
             }
         }
     }
@@ -1094,6 +1175,30 @@ impl Canvas {
                 let qy = py - (y0 + dy * t);
                 let d = (qx * qx + qy * qy).sqrt() - half;
                 self.blend_in(x, y, color, coverage(d));
+            }
+        }
+    }
+
+    /// Composite a `w` x `h` bitmap of straight-alpha ARGB pixels with its
+    /// top-left corner at `(x, y)`, inside the clip.
+    ///
+    /// The artwork the shell embeds (the dock's icons) goes through here: each
+    /// pixel is blended over what is already on the canvas by its own alpha,
+    /// times `alpha`, so a whole icon can fade in.
+    pub fn draw_argb(&mut self, x: i64, y: i64, w: u32, h: u32, px: &[u32], alpha: f32) {
+        // The span is the bitmap's box cut to the canvas and the clip, so a
+        // partial repaint blends the artwork only inside its own region: drawn
+        // again outside it, a soft edge would be blended over itself.
+        let bounds = Rect::new(x as f32, y as f32, w as f32, h as f32);
+        let (sx0, sy0, sx1, sy1) = self.span(&bounds);
+        for py in sy0..sy1 {
+            let row = (py.saturating_sub(y)) as usize;
+            for pxl in sx0..sx1 {
+                let col = (pxl.saturating_sub(x)) as usize;
+                let Some(&c) = px.get(row.saturating_mul(w as usize).saturating_add(col)) else {
+                    continue;
+                };
+                self.blend_in(pxl, py, c, alpha);
             }
         }
     }
@@ -2344,6 +2449,192 @@ mod tests {
         assert_eq!(c.pixels_visited(), by.iter().map(|(_, n)| n).sum::<u64>());
     }
 
+    /// The shadow as it was drawn before it was composed in one pass: twelve
+    /// grown rounded rectangles, outermost first. Kept here as the reference the
+    /// single-pass version must equal, pixel for pixel.
+    fn twelve_ring_shadow(c: &mut Canvas, r: Rect, radius: f32, spread: f32, dy: f32, alpha: f32) {
+        const STEPS: u32 = 12;
+        for i in (0..STEPS).rev() {
+            let t = f32::from(i as u16) / f32::from(STEPS as u16);
+            let grow = spread * t;
+            let a = alpha * (1.0 - t) * (1.0 - t) / f32::from(STEPS as u16) * 3.0;
+            c.fill_round_rect(
+                Rect::new(r.x - grow, r.y + dy - grow, r.w + grow * 2.0, r.h + grow * 2.0),
+                radius + grow,
+                with_alpha(rgba(0, 0, 0, 255), a),
+            );
+        }
+    }
+
+    /// `blend` as it was written before the integer rounding: the reference
+    /// the faster one must equal for every input.
+    fn blend_with_round(dst: u32, src: u32, extra: f32) -> u32 {
+        let sa = f32::from(((src >> 24) & 0xFF) as u8) / 255.0 * extra.clamp(0.0, 1.0);
+        if sa <= 0.0 {
+            return dst;
+        }
+        if sa >= 1.0 {
+            return 0xFF00_0000 | (src & 0x00FF_FFFF);
+        }
+        let mix = |shift: u32| -> u32 {
+            let s = f32::from(((src >> shift) & 0xFF) as u8);
+            let d = f32::from(((dst >> shift) & 0xFF) as u8);
+            let v = s * sa + d * (1.0 - sa);
+            (v.round().clamp(0.0, 255.0) as u32) << shift
+        };
+        0xFF00_0000 | mix(16) | mix(8) | mix(0)
+    }
+
+    #[test]
+    fn integer_rounding_blends_exactly_as_float_rounding_did() {
+        // A deterministic sweep, not a sample: every source alpha, a spread of
+        // channel values at both ends and in the middle, and coverages that
+        // land on, just under and just over a half.
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let extras = [0.0_f32, 0.001, 0.25, 0.4999, 0.5, 0.5001, 0.75, 0.999, 1.0, 1.5];
+        for _ in 0..400_000 {
+            let r = next();
+            let dst = 0xFF00_0000 | (r as u32 & 0x00FF_FFFF);
+            let src = (next() >> 11) as u32;
+            let extra = extras[(r >> 40) as usize % extras.len()];
+            assert_eq!(
+                blend(dst, src, extra),
+                blend_with_round(dst, src, extra),
+                "dst {dst:#010x} src {src:#010x} extra {extra}"
+            );
+        }
+        for a in 0..=255u32 {
+            for v in [0u32, 1, 127, 128, 254, 255] {
+                let src = (a << 24) | (v << 16) | (v << 8) | v;
+                let dst = 0xFF00_0000 | ((255 - v) << 16) | (v << 8) | 17;
+                assert_eq!(blend(dst, src, 1.0), blend_with_round(dst, src, 1.0));
+            }
+        }
+    }
+
+    #[test]
+    fn mixing_two_frames_is_a_per_channel_cross_fade() {
+        let mut a = Canvas::new(2, 1, rgb(0x00_00_00));
+        let b = Canvas::new(2, 1, rgb(0xFF_80_20));
+        a.mix_from(&b, 0.0);
+        assert_eq!(a.get(0, 0), Some(rgb(0x00_00_00)));
+        a.mix_from(&b, 1.0);
+        assert_eq!(a.get(1, 0), Some(rgb(0xFF_80_20)));
+        let mut half = Canvas::new(2, 1, rgb(0x00_00_00));
+        half.mix_from(&b, 0.5);
+        assert_eq!(half.get(0, 0), Some(rgb(0x80_40_10)));
+    }
+
+    #[test]
+    fn with_alpha_rounds_the_way_it_always_did() {
+        for i in 0..=10_000 {
+            let alpha = i as f32 / 10_000.0;
+            let want = (alpha.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u32;
+            assert_eq!(with_alpha(0x00AB_CDEF, alpha) >> 24, want, "alpha {alpha}");
+        }
+    }
+
+    #[test]
+    fn the_filled_core_skips_the_distance_and_changes_no_pixel() {
+        // Plain rectangles, pills, fractional edges and a radius larger than the
+        // shape: each must leave the same pixels as filling every pixel with its
+        // own distance.
+        fn reference(c: &mut Canvas, r: Rect, radius: f32, colour: u32) {
+            let (x0, y0, x1, y1) = c.span(&r.inflate(1.5));
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius);
+                    c.blend_in(x, y, colour, coverage(d));
+                }
+            }
+        }
+        for (r, radius) in [
+            (Rect::new(10.0, 10.0, 80.0, 50.0), 0.0),
+            (Rect::new(10.5, 9.25, 80.75, 50.5), 14.0),
+            (Rect::new(20.0, 20.0, 100.0, 30.0), 15.0),
+            (Rect::new(20.3, 20.7, 30.0, 30.0), 500.0),
+            (Rect::new(5.0, 5.0, 3.0, 3.0), 1.0),
+            (Rect::new(40.0, 40.0, 0.4, 60.0), 0.0),
+            (Rect::new(-10.0, -6.0, 60.0, 40.0), 9.0),
+        ] {
+            for colour in [rgb(0x336699), with_alpha(rgb(0xFFFFFF), 0.37)] {
+                let mut want = textured(160, 120);
+                let mut got = textured(160, 120);
+                reference(&mut want, r, radius, colour);
+                got.fill_round_rect(r, radius, colour);
+                assert_eq!(want.pixels(), got.pixels(), "{r:?} radius {radius}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_one_pass_shadow_equals_the_twelve_ring_shadow() {
+        // Panels the shell really draws: a window, a pill dock, a dialog.
+        for (r, radius, spread, dy, alpha) in [
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 30.0, 12.0, 0.60),
+            (Rect::new(40.0, 120.0, 150.0, 30.0), 15.0, 40.0, 14.0, 0.45),
+            (Rect::new(70.0, 40.0, 60.0, 60.0), 40.0, 24.0, 10.0, 0.35),
+            (Rect::new(10.5, 20.25, 120.0, 70.0), 0.0, 18.0, 7.0, 0.40),
+        ] {
+            let mut want = textured(260, 200);
+            let mut got = textured(260, 200);
+            twelve_ring_shadow(&mut want, r, radius, spread, dy, alpha);
+            got.soft_shadow(r, radius, spread, dy, alpha);
+            assert_eq!(
+                want.pixels(),
+                got.pixels(),
+                "shadow differs for {r:?} radius {radius} spread {spread}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shadow_under_an_opaque_panel_with_a_backdrop_leaves_the_same_frame() {
+        // With a backdrop attached the shadow skips the pixels under its own
+        // panel. That is only allowed if the panel then covers them completely,
+        // so the finished frame -- shadow, then the panel -- must match.
+        let r = Rect::new(60.0, 50.0, 140.0, 90.0);
+        let radius = 14.0;
+        let backdrop = std::rc::Rc::new(textured(260, 200));
+        let paint_panel = |c: &mut Canvas| {
+            c.glass_backdrop(r, radius, 3, 1.0);
+            c.fill_round_rect(r, radius, with_alpha(rgb(0x101820), 0.6));
+        };
+        let mut want = textured(260, 200);
+        assert!(want.set_backdrop(Some(backdrop.clone())));
+        twelve_ring_shadow(&mut want, r, radius, 30.0, 12.0, 0.6);
+        paint_panel(&mut want);
+
+        let mut got = textured(260, 200);
+        assert!(got.set_backdrop(Some(backdrop)));
+        got.soft_shadow(r, radius, 30.0, 12.0, 0.6);
+        paint_panel(&mut got);
+        assert_eq!(want.pixels(), got.pixels());
+    }
+
+    #[test]
+    fn the_one_pass_shadow_visits_far_fewer_pixels_under_a_window() {
+        let r = Rect::new(60.0, 50.0, 140.0, 90.0);
+        let backdrop = std::rc::Rc::new(textured(260, 200));
+        let mut c = textured(260, 200);
+        assert!(c.set_backdrop(Some(backdrop)));
+        c.reset_pixels_visited();
+        c.soft_shadow(r, 14.0, 30.0, 12.0, 0.6);
+        let one_pass = c.pixels_visited();
+        let mut d = textured(260, 200);
+        d.reset_pixels_visited();
+        let prev = d.set_site(Site::Shadow);
+        twelve_ring_shadow(&mut d, r, 14.0, 30.0, 12.0, 0.6);
+        d.set_site(prev);
+        assert!(one_pass * 3 < d.pixels_visited(), "{one_pass} vs {}", d.pixels_visited());
+    }
+
     #[test]
     fn a_soft_shadow_is_billed_to_the_shadow_not_to_plain_fills() {
         let mut c = textured(200, 200);
@@ -2352,31 +2643,6 @@ mod tests {
         let by = c.pixels_visited_by_site();
         assert_eq!(by.first().map(|(s, _)| *s), Some(Site::Shadow), "{by:?}");
         assert!(by.first().is_some_and(|(_, n)| *n > 0));
-    }
-
-    /// The twelve-ring loop [`Canvas::soft_shadow`] was, kept as the oracle.
-    ///
-    /// Every ring is a filled rounded rectangle drawn outermost first, which is
-    /// what the original implementation did and what the current one has to
-    /// reproduce byte for byte. It is the reference, not a second production
-    /// path: nothing outside this test module calls it.
-    fn twelve_ring_shadow(c: &mut Canvas, r: Rect, radius: f32, spread: f32, dy: f32, alpha: f32) {
-        const STEPS: u32 = 12;
-        for i in (0..STEPS).rev() {
-            let t = f32::from(i as u16) / f32::from(STEPS as u16);
-            let grow = spread * t;
-            let a = alpha * (1.0 - t) * (1.0 - t) / f32::from(STEPS as u16) * 3.0;
-            c.fill_round_rect(
-                Rect::new(
-                    r.x - grow,
-                    r.y + dy - grow,
-                    r.w + grow * 2.0,
-                    r.h + grow * 2.0,
-                ),
-                radius + grow,
-                with_alpha(rgba(0, 0, 0, 255), a),
-            );
-        }
     }
 
     /// Every box a shadow is drawn under, at every shape the oracle cares about.

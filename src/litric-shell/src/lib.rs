@@ -32,8 +32,10 @@
 
 pub mod activity;
 pub mod anim;
+pub mod appicons;
 pub mod apps;
 pub mod canvas;
+pub mod chrome;
 pub mod desktop;
 pub mod domkey;
 pub mod fb;
