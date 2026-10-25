@@ -1,0 +1,238 @@
+category,page,uri,note
+Accounts,Access work or school,ms-settings:workplace,
+Accounts,Email & app accounts,ms-settings:emailandaccounts,
+Accounts,Family & other people,ms-settings:otherusers,
+Accounts,Provisioning,ms-settings:provisioning,(only available on mobile and if the enterprise has deployed a provisioning package)  (only available if enterprise has deployed a provisioning package)
+Accounts,Provisioning,ms-settings:workplace-provisioning,(only available on mobile and if the enterprise has deployed a provisioning package)  (only available if enterprise has deployed a provisioning package)
+Accounts,Repair token,ms-settings:workplace-repairtoken,
+Accounts,Set up a kiosk,ms-settings:assignedaccess,
+Accounts,Sign-in options,ms-settings:signinoptions,
+Accounts,Sign-in options,ms-settings:signinoptions-dynamiclock,
+Accounts,Sync your settings,ms-settings:sync,(**Backup page deprecated in Windows 11**)
+Accounts,Sync your settings,ms-settings:backup,(**Backup page deprecated in Windows 11**)
+Accounts,Windows Anywhere,ms-settings:windowsanywhere,(device must be Windows Anywhere-capable)
+Accounts,Windows Hello setup,ms-settings:signinoptions-launchfaceenrollment,
+Accounts,Windows Hello setup,ms-settings:signinoptions-launchfingerprintenrollment,
+Accounts,Your info,ms-settings:yourinfo,
+Apps,Apps & Features,ms-settings:appsfeatures,
+Apps,App features,ms-settings:appsfeatures-app,"(Reset, manage add-on & downloadable content, etc. for the app) To access this page with a URI, use the  URI and pass an optional parameter of the *package family name* of the app. Example: ``"
+Apps,App features,ms-settings:appsfeatures-app,"(Reset, manage add-on & downloadable content, etc. for the app) To access this page with a URI, use the  URI and pass an optional parameter of the *package family name* of the app. Example: ``"
+Apps,App features,ms-settings:appsfeatures-app?<PFN>,"(Reset, manage add-on & downloadable content, etc. for the app) To access this page with a URI, use the  URI and pass an optional parameter of the *package family name* of the app. Example: ``"
+Apps,Apps for websites,ms-settings:appsforwebsites,
+Apps,Default apps,ms-settings:defaultapps,"(**Behavior introduced in Windows 11, version 21H2 (with 2023-04 Cumulative Update) or 22H2 (with 2023-04 Cumulative Update), or later.**) Append the query string parameter in the following formats using the Uri-escaped name of an app to directly launch the default settings page for that app: - regi"
+Apps,Default browser settings,ms-settings:defaultbrowsersettings,(**Deprecated in Windows 11**)
+Apps,Manage optional features,ms-settings:optionalfeatures,
+Apps,Offline Maps,ms-settings:maps,(Download maps)
+Apps,Offline Maps,ms-settings:maps-downloadmaps,(Download maps)
+Apps,Startup apps,ms-settings:startupapps,
+Apps,Video playback,ms-settings:videoplayback,
+Control Center,Control center,ms-settings:controlcenter,
+Cortana,Cortana across my devices,ms-settings:cortana-notifications,
+Cortana,More details,ms-settings:cortana-moredetails,
+Cortana,Permissions & History,ms-settings:cortana-permissions,
+Cortana,Searching Windows,ms-settings:cortana-windowssearch,
+Cortana,Talk to Cortana,ms-settings:cortana-language,
+Cortana,Talk to Cortana,ms-settings:cortana,
+Cortana,Talk to Cortana,ms-settings:cortana-talktocortana,
+Devices,AutoPlay,ms-settings:autoplay,
+Devices,Bluetooth,ms-settings:bluetooth,
+Devices,Connected Devices,ms-settings:connecteddevices,
+Devices,Default camera,ms-settings:camera,"(**Behavior deprecated in Windows 10, version 1809 and later**)"
+Devices,Camera settings,ms-settings:camera,"(**Behavior introduced in Windows 11, build 22000 and later**) Append the query string parameter `cameraId` set to the Uri-escaped symbolic link name of a camera device to directly launch the settings for that camera. For more information, see Launch the camera settings page."
+Devices,Mouse & touchpad,ms-settings:mousetouchpad,(touchpad settings only available on devices that have a touchpad)
+Devices,Pen & Windows Ink,ms-settings:pen,
+Devices,Printers & scanners,ms-settings:printers,
+Devices,Touch,ms-settings:devices-touch,
+Devices,Touchpad,ms-settings:devices-touchpad,(only available if touchpad hardware is present)
+Devices,Text Suggestions,ms-settings:devicestyping-hwkbtextsuggestions,
+Devices,Typing,ms-settings:typing,
+Devices,USB,ms-settings:usb,
+Devices,Wheel,ms-settings:wheel,(only available if a **Surface Dial** device is paired)
+Devices,Your phone,ms-settings:mobile-devices,
+Ease of access,Audio,ms-settings:easeofaccess-audio,
+Ease of access,Closed captions,ms-settings:easeofaccess-closedcaptioning,
+Ease of access,Color filters,ms-settings:easeofaccess-colorfilter,
+Ease of access,Color filters,ms-settings:easeofaccess-colorfilter-adaptivecolorlink,
+Ease of access,Color filters,ms-settings:easeofaccess-colorfilter-bluelightlink,
+Ease of access,Display,ms-settings:easeofaccess-display,
+Ease of access,Eye control,ms-settings:easeofaccess-eyecontrol,
+Ease of access,Hearing devices,ms-settings:easeofaccess-hearingaids,"(**Added in Windows 11, Version 24H2**)"
+Ease of access,High contrast,ms-settings:easeofaccess-highcontrast,
+Ease of access,Keyboard,ms-settings:easeofaccess-keyboard,
+Ease of access,Magnifier,ms-settings:easeofaccess-magnifier,
+Ease of access,Mouse,ms-settings:easeofaccess-mouse,
+Ease of access,Mouse pointer & touch,ms-settings:easeofaccess-mousepointer,
+Ease of access,Narrator,ms-settings:easeofaccess-narrator,
+Ease of access,Narrator,ms-settings:easeofaccess-narrator-isautostartenabled,
+Ease of access,Speech,ms-settings:easeofaccess-speechrecognition,
+Ease of access,Text cursor,ms-settings:easeofaccess-cursor,
+Ease of access,Visual Effects,ms-settings:easeofaccess-visualeffects,
+Extras,Extras,ms-settings:extras,"(only available if ""settings apps"" have been installed, for example, by a 3rd party)"
+Family Group,Family Group,ms-settings:family-group,
+Gaming,Game bar,ms-settings:gaming-gamebar,
+Gaming,Game DVR,ms-settings:gaming-gamedvr,
+Gaming,Game Mode,ms-settings:gaming-gamemode,
+Gaming,Playing a game full screen,ms-settings:quietmomentsgame,
+Gaming,TruePlay,ms-settings:gaming-trueplay,"(**As of Windows 10, version 1809 (10.0; Build 17763), this feature is removed from Windows**)"
+Mixed reality,Audio and speech,ms-settings:holographic-audio,
+Mixed reality,Environment,ms-settings:privacy-holographic-environment,
+Mixed reality,Headset display,ms-settings:holographic-headset,
+Mixed reality,Uninstall,ms-settings:holographic-management,
+Mixed reality,Startup and desktop,ms-settings:holographic-startupandesktop,
+Network and internet,Network & internet,ms-settings:network-status,
+Network and internet,Advanced settings,ms-settings:network-advancedsettings,
+Network and internet,Airplane mode,ms-settings:network-airplanemode,
+Network and internet,Airplane mode,ms-settings:proximity,
+Network and internet,Cellular & SIM,ms-settings:network-cellular,
+Network and internet,Dial-up,ms-settings:network-dialup,
+Network and internet,DirectAccess,ms-settings:network-directaccess,(only available if DirectAccess is enabled)
+Network and internet,Ethernet,ms-settings:network-ethernet,
+Network and internet,Manage known networks,ms-settings:network-wifisettings,
+Network and internet,Mobile hotspot,ms-settings:network-mobilehotspot,
+Network and internet,Proxy,ms-settings:network-proxy,
+Network and internet,VPN,ms-settings:network-vpn,
+Network and internet,Wi-Fi,ms-settings:network-wifi,(only available if the device has a wifi adapter)
+Network and internet,Wi-Fi provisioning,ms-settings:wifi-provisioning,
+Personalization,Background,ms-settings:personalization-background,
+Personalization,Choose which folders appear on Start,ms-settings:personalization-start-places,
+Personalization,Colors,ms-settings:personalization-colors,
+Personalization,Colors,ms-settings:colors,
+Personalization,Customize Copilot key on keyboard,ms-settings:personalization-textinput-copilot-hardwarekey,
+Personalization,Dynamic Lighting,ms-settings:personalization-lighting,
+Personalization,Fonts,ms-settings:fonts,
+Personalization,Glance,ms-settings:personalization-glance,"(**Deprecated in Windows 10, version 1809 and later**)"
+Personalization,Lock screen,ms-settings:lockscreen,
+Personalization,Navigation bar,ms-settings:personalization-navbar,"(**Deprecated in Windows 10, version 1809 and later**)"
+Personalization,Personalization (category),ms-settings:personalization,
+Personalization,Start,ms-settings:personalization-start,
+Personalization,Taskbar,ms-settings:taskbar,
+Personalization,Text input,ms-settings:personalization-textinput,
+Personalization,Touch Keyboard,ms-settings:personalization-touchkeyboard,
+Personalization,Themes,ms-settings:themes,
+Phone,Your phone,ms-settings:mobile-devices,(Opens **Your Phone** app)
+Phone,Your phone,ms-settings:mobile-devices-addphone,(Opens **Your Phone** app)
+Phone,Your phone,ms-settings:mobile-devices-addphone-direct,(Opens **Your Phone** app)
+Phone,Device Usage,ms-settings:deviceusage,
+Privacy,Accessory apps,ms-settings:privacy-accessoryapps,"(**Deprecated in Windows 10, version 1809 and later**)"
+Privacy,Account info,ms-settings:privacy-accountinfo,
+Privacy,Activity history,ms-settings:privacy-activityhistory,
+Privacy,Advertising ID,ms-settings:privacy-advertisingid,"(**Deprecated in Windows 10, version 1809 and later**)"
+Privacy,App diagnostics,ms-settings:privacy-appdiagnostics,
+Privacy,Automatic file downloads,ms-settings:privacy-automaticfiledownloads,
+Privacy,Background Apps,ms-settings:privacy-backgroundapps,"(**Deprecated in Windows 11, 21H2 and later**) **Note:** In Windows 11, the background app permissions are accessed individually. To view the permissions, go to **Apps->Installed apps** and then select **""...""** on a modern app and choose **Advanced options**. The advanced page is present for modern"
+Privacy,Background Apps,ms-settings:appsfeatures-app,"(**Deprecated in Windows 11, 21H2 and later**) **Note:** In Windows 11, the background app permissions are accessed individually. To view the permissions, go to **Apps->Installed apps** and then select **""...""** on a modern app and choose **Advanced options**. The advanced page is present for modern"
+Privacy,Background Spatial Perception,ms-settings:privacy-backgroundspatialperception,
+Privacy,Calendar,ms-settings:privacy-calendar,
+Privacy,Call history,ms-settings:privacy-callhistory,
+Privacy,Camera,ms-settings:privacy-webcam,
+Privacy,Contacts,ms-settings:privacy-contacts,
+Privacy,Documents,ms-settings:privacy-documents,
+Privacy,Downloads folder,ms-settings:privacy-downloadsfolder,
+Privacy,Email,ms-settings:privacy-email,
+Privacy,Eye tracker,ms-settings:privacy-eyetracker,(requires eyetracker hardware)
+Privacy,Feedback & diagnostics,ms-settings:privacy-feedback,
+Privacy,File system,ms-settings:privacy-broadfilesystemaccess,
+Privacy,General,ms-settings:privacy,or
+Privacy,General,ms-settings:privacy-general,or
+Privacy,Graphics,ms-settings:privacy-graphicscaptureprogrammatic,
+Privacy,Graphics,ms-settings:privacy-graphicscapturewithoutborder,
+Privacy,Inking & typing,ms-settings:privacy-speechtyping,
+Privacy,Location,ms-settings:privacy-location,
+Privacy,Messaging,ms-settings:privacy-messaging,
+Privacy,Microphone,ms-settings:privacy-microphone,
+Privacy,Motion,ms-settings:privacy-motion,
+Privacy,Music Library,ms-settings:privacy-musiclibrary,
+Privacy,Notifications,ms-settings:privacy-notifications,
+Privacy,Other devices,ms-settings:privacy-customdevices,
+Privacy,Phone calls,ms-settings:privacy-phonecalls,
+Privacy,Pictures,ms-settings:privacy-pictures,
+Privacy,Radios,ms-settings:privacy-radios,
+Privacy,Speech,ms-settings:privacy-speech,
+Privacy,Tasks,ms-settings:privacy-tasks,
+Privacy,Videos,ms-settings:privacy-videos,
+Privacy,Voice activation,ms-settings:privacy-voiceactivation,
+Search,Search,ms-settings:search,
+Search,Search more details,ms-settings:search-moredetails,
+Search,Search Permissions,ms-settings:search-permissions,
+Sound,Volume mixer,ms-settings:apps-volume,
+Sound,Sound,ms-settings:sound,
+Sound,Sound devices,ms-settings:sound-devices,
+Sound,Default microphone,ms-settings:sound-defaultinputproperties,
+Sound,Default audio output,ms-settings:sound-defaultoutputproperties,
+Sound,Audio device properties (specific device),ms-settings:sound-properties?endpointId={0.0.0.00000000}.{aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb},{0.0.0.00000000}.{aaaaaaaa-0000-1111-2222-bbbbbbbbbbbb} **Note:** User of URI must know the `endpointId` string to use.
+Sound,Audio device properties (specific device),ms-settings:sound-properties?interfaceId=\\?\SWD#MMDEVAPI#{3.0.0.00000003}.{bbbbbbbb-1111-2222-3333-cccccccccccc}#{cccccccc-2222-3333-4444-dddddddddddd},\\?\SWD#MMDEVAPI#{3.0.0.00000003}.{bbbbbbbb-1111-2222-3333-cccccccccccc}#{cccccccc-2222-3333-4444-dddddddddddd} **Note:** User of URI must know the `interfaceId` string to use and the string must be escaped correctly before sending.
+Surface Hub,Accounts,ms-settings:surfacehub-accounts,
+Surface Hub,Session cleanup,ms-settings:surfacehub-sessioncleanup,
+Surface Hub,Team Conferencing,ms-settings:surfacehub-calling,
+Surface Hub,Team device management,ms-settings:surfacehub-devicemanagement,
+Surface Hub,Welcome screen,ms-settings:surfacehub-welcome,
+System,About,ms-settings:about,
+System,Advanced display settings,ms-settings:display-advanced,(only available on devices that support advanced display options)
+System,Battery Saver,ms-settings:batterysaver,"(only available on devices that have a battery, such as a tablet)"
+System,Battery Saver settings,ms-settings:batterysaver-settings,"(only available on devices that have a battery, such as a tablet)"
+System,Battery use,ms-settings:batterysaver-usagedetails,"(only available on devices that have a battery, such as a tablet)"
+System,Clipboard,ms-settings:clipboard,
+System,Default Save Locations,ms-settings:savelocations,
+System,Display,ms-settings:display,
+System,Display,ms-settings:screenrotation,
+System,Duplicating my display,ms-settings:quietmomentspresentation,
+System,During these hours,ms-settings:quietmomentsscheduled,
+System,Encryption,ms-settings:deviceencryption,
+System,Energy recommendations,ms-settings:energyrecommendations,"**(Available in February Moment update for Windows 11, Version 22H2, Build 22624 or later)**"
+System,Focus assist,ms-settings:quiethours,
+System,Graphics Settings,ms-settings:display-advancedgraphics,(only available on devices that support advanced graphics options)
+System,Graphics Default Settings,ms-settings:display-advancedgraphics-default,
+System,Multitasking,ms-settings:multitasking,
+System,Multitasking,ms-settings:multitasking-sgupdate,
+System,Night light settings,ms-settings:nightlight,
+System,Projecting to this PC,ms-settings:project,
+System,Shared experiences,ms-settings:crossdevice,
+System,Tablet mode,ms-settings:tabletmode,(**Removed in Windows 11**)
+System,Taskbar,ms-settings:taskbar,
+System,Notifications & actions,ms-settings:notifications,
+System,Remote Desktop,ms-settings:remotedesktop,
+System,Phone,ms-settings:phone,"(**Deprecated in Windows 10, version 1809 and later**)"
+System,Power & sleep,ms-settings:powersleep,
+System,Presence sensing,ms-settings:presence,"(**Added in May Moment update for Windows 11, Version 22H2, Build 22624**)"
+System,Storage,ms-settings:storagesense,
+System,Storage Sense,ms-settings:storagepolicies,
+System,Storage recommendations,ms-settings:storagerecommendations,
+System,Disks & volumes,ms-settings:disksandvolumes,
+Time and language,Date & time,ms-settings:dateandtime,
+Time and language,Japan IME settings,ms-settings:regionlanguage-jpnime,(available if the Microsoft Japan input method editor is installed)
+Time and language,Region,ms-settings:regionformatting,
+Time and language,Language,ms-settings:keyboard,
+Time and language,Language,ms-settings:keyboard-advanced,
+Time and language,Language,ms-settings:regionlanguage,
+Time and language,Language,ms-settings:regionlanguage-bpmfime,
+Time and language,Language,ms-settings:regionlanguage-cangjieime,
+Time and language,Language,ms-settings:regionlanguage-chsime-wubi-udp,
+Time and language,Language,ms-settings:regionlanguage-quickime,
+Time and language,Language,ms-settings:regionlanguage-korime,
+Time and language,Pinyin IME settings,ms-settings:regionlanguage-chsime-pinyin,(available if the Microsoft Pinyin input method editor is installed)
+Time and language,Pinyin IME settings,ms-settings:regionlanguage-chsime-pinyin-domainlexicon,(available if the Microsoft Pinyin input method editor is installed)
+Time and language,Pinyin IME settings,ms-settings:regionlanguage-chsime-pinyin-keyconfig,(available if the Microsoft Pinyin input method editor is installed)
+Time and language,Pinyin IME settings,ms-settings:regionlanguage-chsime-pinyin-udp,(available if the Microsoft Pinyin input method editor is installed)
+Time and language,Speech,ms-settings:speech,
+Time and language,Wubi IME settings,ms-settings:regionlanguage-chsime-wubi,(available if the Microsoft Wubi input method editor is installed)
+Update and security,Activation,ms-settings:activation,
+Update and security,Backup,ms-settings:backup,(page removed in Windows 11; opens Sync)
+Update and security,Delivery Optimization,ms-settings:delivery-optimization,
+Update and security,Delivery Optimization,ms-settings:delivery-optimization-activity,
+Update and security,Delivery Optimization,ms-settings:delivery-optimization-advanced,
+Update and security,Find My Device,ms-settings:findmydevice,
+Update and security,For developers,ms-settings:developers,
+Update and security,Recovery,ms-settings:recovery,
+Update and security,Launch Security Key Enrollment,ms-settings:signinoptions-launchsecuritykeyenrollment,
+Update and security,Troubleshoot,ms-settings:troubleshoot,
+Update and security,Windows Security,ms-settings:windowsdefender,
+Update and security,Windows Insider Program,ms-settings:windowsinsider,(only present if user is enrolled in WIP)
+Update and security,Windows Insider Program,ms-settings:windowsinsider-optin,(only present if user is enrolled in WIP)
+Update and security,Windows Update,ms-settings:windowsupdate,
+Update and security,Windows Update,ms-settings:windowsupdate-action,
+Update and security,Windows Update-Active hours,ms-settings:windowsupdate-activehours,
+Update and security,Windows Update-Advanced options,ms-settings:windowsupdate-options,
+Update and security,Windows Update-Optional updates,ms-settings:windowsupdate-optionalupdates,
+Update and security,Windows Update-Restart options,ms-settings:windowsupdate-restartoptions,
+Update and security,Windows Update-Seeker on demand,ms-settings:windowsupdate-seekerondemand,
+Update and security,Windows Update-View update history,ms-settings:windowsupdate-history,

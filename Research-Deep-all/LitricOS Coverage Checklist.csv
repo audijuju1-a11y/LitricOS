@@ -1,0 +1,598 @@
+id,parent,title,status,note
+CH00,,Version baseline verification,PENDING,
+CH00.01,CH00,Windows 11 GA version/build,COMPLETE,"26H2, OS build 26300.9711 (KB5127648, 2026-10-13)"
+CH00.02,CH00,Windows 11 26H1 scope (new-device only),COMPLETE,Not offered in-place from 24H2/25H2
+CH00.03,CH00,macOS latest GA version/build,COMPLETE,"macOS 27.0.1 Golden Gate (26A434, 2026-09-28); 27.2 RC 26B118 excluded"
+CH00.04,CH00,macOS 27 marketing page (apple.com/macos),PARTIAL,Fetched page still showed Tahoe; treated as stale cache
+CH00.05,CH00,GNOME stable,COMPLETE,GNOME 51 'A Coruña' (2026-09-16); 51.1 point release
+CH00.06,CH00,KDE Plasma stable,COMPLETE,Plasma 6.8.1 (2026-10-20); Frameworks 6.31.0; Gear 26.08.2
+CH00.07,CH00,Xfce stable,COMPLETE,Xfce 4.20 (2024-12-15) still current per xfce.org
+CH00.08,CH00,Cinnamon / Linux Mint,PARTIAL,Mint 22.3 current; Mint 27 due Christmas 2026; exact Cinnamon version not yet verified
+CH00.09,CH00,COSMIC Epoch,COMPLETE,Epoch 1.11.0 (20 Oct 2026)
+CH00.10,CH00,elementary OS / Pantheon,COMPLETE,OS 8.1.1 (2026-02-26); component versions from releases.elementary.io
+CH00.11,CH00,Budgie,COMPLETE,Budgie 10.10.3 (2026-09-27)
+CH00.12,CH00,ChromeOS stable,COMPLETE,16805.33.0 / browser 154.0.8037.151 (2026-10-09); later M156 rollout reported by third party only
+F,,Research F — Shared component catalog,PENDING,
+F.01,F,Buttons,PENDING,
+F.02,F,Text fields,PENDING,
+F.03,F,Switches,PENDING,
+F.04,F,Checkboxes,PENDING,
+F.05,F,Radio controls,PENDING,
+F.06,F,Sliders,PENDING,
+F.07,F,Pickers (date/time/color/file),PENDING,
+F.08,F,Tabs,PENDING,
+F.09,F,Navigation views,PENDING,
+F.10,F,Sidebars,PENDING,
+F.11,F,Command bars/toolbars,PENDING,
+F.12,F,Menus,PENDING,
+F.13,F,Context menus,PENDING,
+F.14,F,Tooltips,PENDING,
+F.15,F,Dialogs,PENDING,
+F.16,F,Sheets,PENDING,
+F.17,F,Notifications/banners/toasts,PENDING,
+F.18,F,Progress indicators,PENDING,
+F.19,F,Lists,PENDING,
+F.20,F,Trees,PENDING,
+F.21,F,Grids/tables,PENDING,
+F.22,F,Cards,PENDING,
+F.23,F,Search fields,PENDING,
+F.24,F,Empty states,PENDING,
+F.25,F,Loading states,PENDING,
+F.26,F,Errors/validation,PENDING,
+F.27,F,Confirmation flows,PENDING,
+G,,Research G — Tokens & accessibility,PARTIAL,"Windows evidence for G.01–G.11, G.14 (Part 4)."
+G.01,G,Color tokens,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.02,G,Typography,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.03,G,Spacing,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.04,G,Radii,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.05,G,Shadows/elevation,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.06,G,Materials/blur,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.07,G,Icons,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.08,G,Motion timing/easing,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.09,G,Light/dark,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.10,G,Contrast & high-contrast themes,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.11,G,Display scaling/HiDPI,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.12,G,Multi-monitor,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.13,G,Localization & RTL,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.14,G,Keyboard-only navigation,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.15,G,Screen readers & a11y APIs,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.16,G,Pointer/touch/trackpad,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.17,G,Reduced motion/transparency,PARTIAL,macOS evidence added in Part 7. Linux pending.
+G.18,G,Sound & visual feedback,PARTIAL,macOS evidence added in Part 7. Linux pending.
+H,,Research H — Workflows,PENDING,
+H.01,H,First boot & setup,PENDING,
+H.02,H,Account creation,PENDING,
+H.03,H,Unlock,PENDING,
+H.04,H,Launch/switch apps,PENDING,
+H.05,H,Window management,PENDING,
+H.06,H,Display change,PENDING,
+H.07,H,Audio change,PENDING,
+H.08,H,Network change,PENDING,
+H.09,H,Device pairing,PENDING,
+H.10,H,Install/uninstall software,PENDING,
+H.11,H,Default apps,PENDING,
+H.12,H,File management,PENDING,
+H.13,H,Permissions grant/revoke,PENDING,
+H.14,H,Updates,PENDING,
+H.15,H,Recovery,PENDING,
+H.16,H,Backups,PENDING,
+H.17,H,Troubleshooting,PENDING,
+H.18,H,Accessibility change,PENDING,
+H.19,H,Shutdown,PENDING,
+H.20,H,Failure/cancel/retry/rollback paths (per workflow),PENDING,
+I,,Research I — Technical integration & LitricOS feasibility,PENDING,
+I.01,I,Public UI frameworks per OS,PENDING,
+I.02,I,Shell extension points,PENDING,
+I.03,I,"Settings persistence (registry, defaults/plist, GSettings/dconf, KConfig)",PENDING,
+I.04,I,Permission models (UAC/TCC/polkit/portals),PENDING,
+I.05,I,Notification APIs,PENDING,
+I.06,I,IPC/events,PENDING,
+I.07,I,Compositor protocols (Wayland),PENDING,
+I.08,I,Undocumented vs public boundary,PENDING,
+I.09,I,Comparison matrix,PENDING,
+I.10,I,ADOPT/ADAPT/AVOID/INVESTIGATE decisions,PENDING,
+I.11,I,Validation tests per decision,PENDING,
+J,,Research J — Source register & audit,PENDING,
+J.01,J,Register schema,PENDING,
+J.02,J,URL/domain dedupe,PENDING,
+J.03,J,Domain count toward 400 target,PENDING,
+J.04,J,Inspected vs snippet-only counts,PENDING,
+J.05,J,Primary vs independent counts,PENDING,
+J.06,J,Inaccessible log,PENDING,
+J.07,J,Contradictions log,PENDING,
+J.08,J,Per-subsystem coverage audit,PENDING,
+LB,,Research E — Budgie 10.10,PENDING,
+LB.01,LB,Shell components & compositor,PENDING,
+LB.02,LB,Launcher,PENDING,
+LB.03,LB,Panel / dock,PENDING,
+LB.04,LB,System Settings inventory,PENDING,
+LB.05,LB,File manager,PENDING,
+LB.06,LB,Window behaviour & tiling,PENDING,
+LB.07,LB,Notifications,PENDING,
+LB.08,LB,Workspace model,PENDING,
+LB.09,LB,Customization model,PENDING,
+LB.10,LB,Design language / HIG / tokens,PENDING,
+LB.11,LB,Accessibility,PENDING,
+LB.12,LB,Limitations & known issues,PENDING,
+LB.13,LB,"Integration points (portals, D-Bus, APIs)",PENDING,
+LB.14,LB,DE vs kernel vs distro boundary,PENDING,
+LC,,Research E — Cinnamon (Mint 22.3 / 27),PENDING,
+LC.01,LC,Shell components & compositor,PENDING,
+LC.02,LC,Launcher,PENDING,
+LC.03,LC,Panel / dock,PENDING,
+LC.04,LC,System Settings inventory,PENDING,
+LC.05,LC,File manager,PENDING,
+LC.06,LC,Window behaviour & tiling,PENDING,
+LC.07,LC,Notifications,PENDING,
+LC.08,LC,Workspace model,PENDING,
+LC.09,LC,Customization model,PENDING,
+LC.10,LC,Design language / HIG / tokens,PENDING,
+LC.11,LC,Accessibility,PENDING,
+LC.12,LC,Limitations & known issues,PENDING,
+LC.13,LC,"Integration points (portals, D-Bus, APIs)",PENDING,
+LC.14,LC,DE vs kernel vs distro boundary,PENDING,
+LG,,Research E — GNOME 51,PENDING,
+LG.01,LG,Shell components & compositor,PENDING,
+LG.02,LG,Launcher,PENDING,
+LG.03,LG,Panel / dock,PENDING,
+LG.04,LG,System Settings inventory,PENDING,
+LG.05,LG,File manager,PENDING,
+LG.06,LG,Window behaviour & tiling,PENDING,
+LG.07,LG,Notifications,PENDING,
+LG.08,LG,Workspace model,PENDING,
+LG.09,LG,Customization model,PENDING,
+LG.10,LG,Design language / HIG / tokens,PENDING,
+LG.11,LG,Accessibility,PENDING,
+LG.12,LG,Limitations & known issues,PENDING,
+LG.13,LG,"Integration points (portals, D-Bus, APIs)",PENDING,
+LG.14,LG,DE vs kernel vs distro boundary,PENDING,
+LK,,Research E — KDE Plasma 6.8,PENDING,
+LK.01,LK,Shell components & compositor,PENDING,
+LK.02,LK,Launcher,PENDING,
+LK.03,LK,Panel / dock,PENDING,
+LK.04,LK,System Settings inventory,PENDING,
+LK.05,LK,File manager,PENDING,
+LK.06,LK,Window behaviour & tiling,PENDING,
+LK.07,LK,Notifications,PENDING,
+LK.08,LK,Workspace model,PENDING,
+LK.09,LK,Customization model,PENDING,
+LK.10,LK,Design language / HIG / tokens,PENDING,
+LK.11,LK,Accessibility,PENDING,
+LK.12,LK,Limitations & known issues,PENDING,
+LK.13,LK,"Integration points (portals, D-Bus, APIs)",PENDING,
+LK.14,LK,DE vs kernel vs distro boundary,PENDING,
+LO,,Research E — COSMIC Epoch 1.11,PENDING,
+LO.01,LO,Shell components & compositor,PENDING,
+LO.02,LO,Launcher,PENDING,
+LO.03,LO,Panel / dock,PENDING,
+LO.04,LO,System Settings inventory,PENDING,
+LO.05,LO,File manager,PENDING,
+LO.06,LO,Window behaviour & tiling,PENDING,
+LO.07,LO,Notifications,PENDING,
+LO.08,LO,Workspace model,PENDING,
+LO.09,LO,Customization model,PENDING,
+LO.10,LO,Design language / HIG / tokens,PENDING,
+LO.11,LO,Accessibility,PENDING,
+LO.12,LO,Limitations & known issues,PENDING,
+LO.13,LO,"Integration points (portals, D-Bus, APIs)",PENDING,
+LO.14,LO,DE vs kernel vs distro boundary,PENDING,
+LP,,Research E — Pantheon (elementary OS 8.1),PENDING,
+LP.01,LP,Shell components & compositor,PENDING,
+LP.02,LP,Launcher,PENDING,
+LP.03,LP,Panel / dock,PENDING,
+LP.04,LP,System Settings inventory,PENDING,
+LP.05,LP,File manager,PENDING,
+LP.06,LP,Window behaviour & tiling,PENDING,
+LP.07,LP,Notifications,PENDING,
+LP.08,LP,Workspace model,PENDING,
+LP.09,LP,Customization model,PENDING,
+LP.10,LP,Design language / HIG / tokens,PENDING,
+LP.11,LP,Accessibility,PENDING,
+LP.12,LP,Limitations & known issues,PENDING,
+LP.13,LP,"Integration points (portals, D-Bus, APIs)",PENDING,
+LP.14,LP,DE vs kernel vs distro boundary,PENDING,
+LR,,Research E — ChromeOS 154+,PENDING,
+LR.01,LR,Shell components & compositor,PENDING,
+LR.02,LR,Launcher,PENDING,
+LR.03,LR,Panel / dock,PENDING,
+LR.04,LR,System Settings inventory,PENDING,
+LR.05,LR,File manager,PENDING,
+LR.06,LR,Window behaviour & tiling,PENDING,
+LR.07,LR,Notifications,PENDING,
+LR.08,LR,Workspace model,PENDING,
+LR.09,LR,Customization model,PENDING,
+LR.10,LR,Design language / HIG / tokens,PENDING,
+LR.11,LR,Accessibility,PENDING,
+LR.12,LR,Limitations & known issues,PENDING,
+LR.13,LR,"Integration points (portals, D-Bus, APIs)",PENDING,
+LR.14,LR,DE vs kernel vs distro boundary,PENDING,
+LX,,Research E — Xfce 4.20,PENDING,
+LX.01,LX,Shell components & compositor,PENDING,
+LX.02,LX,Launcher,PENDING,
+LX.03,LX,Panel / dock,PENDING,
+LX.04,LX,System Settings inventory,PENDING,
+LX.05,LX,File manager,PENDING,
+LX.06,LX,Window behaviour & tiling,PENDING,
+LX.07,LX,Notifications,PENDING,
+LX.08,LX,Workspace model,PENDING,
+LX.09,LX,Customization model,PENDING,
+LX.10,LX,Design language / HIG / tokens,PENDING,
+LX.11,LX,Accessibility,PENDING,
+LX.12,LX,Limitations & known issues,PENDING,
+LX.13,LX,"Integration points (portals, D-Bus, APIs)",PENDING,
+LX.14,LX,DE vs kernel vs distro boundary,PENDING,
+MC,,Research C — macOS 27 desktop model,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.01,MC,Menu bar,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.01.01,MC.01,Apple menu,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.01.02,MC.01,App menu & standard menus,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.01.03,MC.01,Menu item image visibility (27 change),COMPLETE,SDK-dependent menu-image rules are documented in the macOS 27 release notes (T1) and corroborated by 5 independent sources; API NSMenuItem.preferredImageVisibility.
+MC.01.04,MC.01,Status menus / menu extras,PARTIAL,"Apple documents Command-drag rearranging; macOS 27 overflow control and MenuBarAgent changes are third-party evidence only (GAP-B5-03, 04)."
+MC.01.05,MC.01,Live Activities,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.01.06,MC.01,Menu bar hiding & customization,PARTIAL,Menu Bar pane options captured (Automatically hide and show the menu bar: Always/On Desktop Only/In Full Screen Only/Never).
+MC.02,MC,Dock,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.02.01,MC.02,Placement/size/magnification,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.02.02,MC.02,App indicators,PARTIAL,Background-process indicator only in independent beta reports; release notes reference a fixed bug in it (GAP-B5-02).
+MC.02.03,MC.02,Context menu incl. background processes (27),PARTIAL,Dock shortcut menu items documented; the new background-activity menu item name is unverified (GAP-B5-02).
+MC.02.04,MC.02,Stacks,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.02.05,MC.02,Minimize effects,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.03,MC,Finder,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.03.01,MC.03,Windows/tabs/views,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.03.02,MC.03,Sidebar,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.03.03,MC.03,Tags,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.03.04,MC.03,Search & smart folders,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.03.05,MC.03,Quick Look,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.03.06,MC.03,Get Info,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.03.07,MC.03,Copy/move/conflict,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.03.08,MC.03,Trash & recovery,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.03.09,MC.03,Desktop & stacks,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.04,MC,Window model,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.04.01,MC.04,App vs window relationship,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.04.02,MC.04,Active/inactive appearance,PARTIAL,Corner radius and shadow changes reported qualitatively; no numeric values published (GAP-B5-07).
+MC.04.03,MC.04,Traffic-light controls (27 redesign),PARTIAL,"Redesign corroborated by 6 independent sources; no Apple T1 description (GAP-B5-01, supersedes Part 1 GAP-007)."
+MC.04.04,MC.04,Full screen,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.04.05,MC.04,Window tiling & Move & Resize,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.04.06,MC.04,Sheets & panels,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.04.07,MC.04,Window restoration/persistence,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.05,MC,Spaces / Mission Control / Stage Manager,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.05.01,MC.05,Spaces,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.05.02,MC.05,Mission Control,PARTIAL,Guide captured; third-party reports of changed Dock accessibility notifications and animation bugs (GAP-B5-06).
+MC.05.03,MC.05,App Exposé,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.05.04,MC.05,Stage Manager,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.06,MC,Spotlight,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.06.01,MC.06,Search,PARTIAL,Spotlight guide captured; Spotlight menu-bar icon status conflicts (GAP-B5-05).
+MC.06.02,MC.06,Actions & quick keys,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.06.03,MC.06,Intelligence/Siri integration,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.07,MC,Control Center & Notification Center,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.07.01,MC.07,Modules & customization,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.07.02,MC.07,Third-party controls,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.07.03,MC.07,Notification grouping,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.07.04,MC.07,Widgets on desktop,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.08,MC,Dialogs & panels,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.08.01,MC.08,"Open/Save panels (Recents Cmd-Shift-F, 27)",PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.08.02,MC.08,Print,PARTIAL,Mac User Guide print page captured; HIG Printing page inaccessible (GAP-B5-11).
+MC.08.03,MC.08,Share,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.08.04,MC.08,Services menu,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.08.05,MC.08,Alerts,PARTIAL,"Only HIG guidance (developer, not OS behaviour) and the NSAlert release-note item."
+MC.09,MC,Input,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.09.01,MC.09,Keyboard shortcuts,COMPLETE,208 system shortcuts parsed from Apple KB 102650 (published 2026-09-14) and the tiling-shortcut page; app-specific shortcuts are out of scope (MC.03/MD.30).
+MC.09.02,MC.09,Trackpad gestures,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.09.03,MC.09,Full Keyboard Access,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.09.04,MC.09,Screenshots (Cmd-Shift-3/4/5),PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.10,MC,Session,PARTIAL,Researched in Part 6 (Chapter 14).
+MC.10.01,MC.10,Login window,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.10.02,MC.10,Fast user switching,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.10.03,MC.10,Lock,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.10.04,MC.10,Force Quit,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.10.05,MC.10,Startup/shutdown/restart,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
+MC.10.06,MC.10,Setup Assistant,PARTIAL,Only a model-specific guide (MacBook Pro) describes Setup Assistant steps (GAP-B5-09).
+MD,,Research D — macOS 27 System Settings inventory,PARTIAL,"Researched in Part 5 (Chapter 13): 1 COMPLETE, 37 PARTIAL."
+MD.01,MD,"Sidebar enumeration (exact order, hardware-dependent items)",PARTIAL,Pane set evidenced from 27 guide navigation paths; canonical sidebar order not published by Apple (GAP-B4-01).
+MD.02,MD,Apple Account,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.03,MD,Family,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.04,MD,Wi-Fi,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.05,MD,Bluetooth,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.06,MD,Network,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.07,MD,VPN,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.08,MD,Battery / Energy,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.09,MD,"General (About, Software Update, Storage, AppleCare, AirDrop & Handoff, Login Items & Extensions, Language & Region, Date & Time, Sharing, Time Machine, Transfer or Reset, Startup Disk, Device Management)",PARTIAL,12 of 13 General subpages from the 27 guide; AppleCare & Warranty and AutoFill & Passwords only from support articles (GAP-B4-11).
+MD.10,MD,Accessibility,PARTIAL,"25 Accessibility subpages captured; label conflicts with independent 27 reports (GAP-B4-03, 04)."
+MD.11,MD,Appearance,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.12,MD,Apple Intelligence & Siri,PARTIAL,"Guide documents pane as ""Siri""; Apple Intelligence master switch reported removed (GAP-B4-05, 06)."
+MD.13,MD,Control Center,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.14,MD,Desktop & Dock,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.15,MD,Displays,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.16,MD,Spotlight,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.17,MD,Wallpaper,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.18,MD,Screen Saver,PARTIAL,Screen Saver page captured; whether it is a separate sidebar item or reached via Wallpaper is unverified (GAP-B4-09).
+MD.19,MD,Notifications,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.20,MD,Sound,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.21,MD,Focus,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.22,MD,Screen Time,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.23,MD,Lock Screen,PARTIAL,Guide lacks the user-name/photo visibility switch reported by geeksmodo (GAP-B4-08).
+MD.24,MD,Privacy & Security,PARTIAL,"Privacy list captured; ""Accessibility"" vs ""Device Control and Data Access"" conflict (GAP-B4-02)."
+MD.25,MD,Touch ID & Password / Login Password,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.26,MD,Users & Groups,PARTIAL,Users & Groups captured; legacy login-options topic redirects (GAP-B4-12).
+MD.27,MD,Internet Accounts,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.28,MD,Game Center,PARTIAL,"Game Center settings now documented in the Games User Guide (1.0 / macOS 27), not the Mac User Guide."
+MD.29,MD,Wallet & Apple Pay,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.30,MD,Keyboard,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.31,MD,Mouse,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.32,MD,Trackpad,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.33,MD,Game Controllers,PARTIAL,Only Games User Guide coverage; MDM identifier com.apple.Game-Controller-Settings.extension listed by Apple (GAP-B4-10).
+MD.34,MD,Printers & Scanners,PARTIAL,Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13).
+MD.35,MD,Menu Bar (if separate in 27),PARTIAL,Menu Bar confirmed as its own sidebar pane in 27 (resolves GAP-006).
+MD.36,MD,"App Settings conventions (Cmd-,)",COMPLETE,Command-Comma and settings-window rules documented by Apple HIG and the Mac shortcuts page; HIG detail continues in Part 7.
+MD.37,MD,x-apple.systempreferences URL schemes,PARTIAL,"209 URL rows; extension IDs listed by Apple for MDM, URL-scheme use undocumented and 27 validity untested (GAP-B4-13)."
+MD.38,MD,Configuration profiles / MDM,PARTIAL,"SystemPreferences payload (deprecated), Restrictions keys and 27 payload removals captured; DDM replacements only partly covered (GAP-B4-14)."
+MG,,macOS design system (HIG),PARTIAL,Researched in Part 7 (Chapter 15).
+MG.01,MG,Liquid Glass materials,PARTIAL,"API surface and design rules are verified at T1. The slider has no public API or stored-value documentation, there is no numeric blur, refraction or tint recipe, and the HIG Materials page has not been revised for macOS 27."
+MG.02,MG,Color & semantic colors,PARTIAL,"Semantic names, availability and settings are verified at T1. Numeric values for the macOS 26/27 system colors were not published in text, and the community dumps found are older than macOS 26."
+MG.03,MG,SF Pro typography & Dynamic Type equivalents,PARTIAL,"Text styles, tracking and minimum sizes are verified at T1. The HIG typography revision is from 2025, and no macOS 27 change log entry was found. The SF font licence prevents LitricOS from reusing the fonts (Rule 10)."
+MG.04,MG,SF Symbols,PARTIAL,"Library facts and APIs are verified at T1. Per-symbol inventories were not taken, because copying glyphs is excluded by Rule 10. The HIG has not been updated for SF Symbols 8."
+MG.05,MG,Layout & spacing,PARTIAL,Layout rules and APIs are verified at T1. Apple publishes no numeric spacing scale for macOS 26/27.
+MG.06,MG,Corner radii/concentricity,PARTIAL,"The concentricity model and APIs are verified at T1. Numeric window and control radii are unpublished; macOS 26 values come only from independent measurements, and macOS 27 values are unknown."
+MG.07,MG,Motion,PARTIAL,Framework animation defaults are verified at T1 with exact parameters. System-shell motion timings are unpublished.
+MG.08,MG,Control sizes (mini/small/regular/large/extra-large),PARTIAL,"The size ladder, shapes and compatibility flag are verified at T1. Heights are unpublished, and the SwiftUI extraLarge doc conflicts with the sessions."
+MG.09,MG,Dark mode & increased contrast,PARTIAL,"Appearance names, APIs and glass behaviour are verified at T1. How the settings are coupled is known only from independent sources, and the Show borders API symbol was not located."
+MG.10,MG,Accessibility semantics (NSAccessibility),PARTIAL,"The role, subrole and protocol inventory is complete for the fetched pages. Per-control role mapping and the notification inventory were not audited one by one."
+WA,,Research A — Windows 11 shell & system UI,PARTIAL,Researched in Part 3 (Chapter 10).
+WA.01,WA,Desktop,PARTIAL,Group researched in Part 3; see child items.
+WA.01.01,WA.01,Wallpaper/slideshow/spotlight,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.01.02,WA.01,"Desktop icons, arrange, auto-arrange, grid",PARTIAL,Only T4/T5 evidence (3 sources); no official Windows 11 article describes this feature. Low–medium confidence.
+WA.01.03,WA.01,Desktop context menu (Win11 compact vs 'Show more options'),PARTIAL,1 T1/T2 and 3 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.02,WA,Start,PARTIAL,Group researched in Part 3; see child items.
+WA.02.01,WA.02,"Pinned grid, folders",PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.02.02,WA.02,Recommended / Recent section,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.02.03,WA.02,All apps view(s),PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.02.04,WA.02,Start size Small/Large & section hiding (26H2),PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.02.05,WA.02,Power menu & account menu,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.02.06,WA.02,Start keyboard navigation,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.03,WA,Taskbar,PARTIAL,Group researched in Part 3; see child items.
+WA.03.01,WA.03,Alignment/position top/left/right (26H2),PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.03.02,WA.03,Smaller taskbar option,PARTIAL,3 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.03.03,WA.03,"Grouping, labels, combine behaviour",PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.03.04,WA.03,Jump lists & app-specific actions,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.03.05,WA.03,Thumbnail previews & hover,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.03.06,WA.03,Overflow menu,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.03.07,WA.03,Taskbar corner icons / system tray,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.03.08,WA.03,"Badges, flash, progress",PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.03.09,WA.03,AI agent monitoring,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.04,WA,Search,PARTIAL,Group researched in Part 3; see child items.
+WA.04.01,WA.04,Search box modes,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.04.02,WA.04,Result preview & type labels,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.04.03,WA.04,Web/Store suggestion toggles,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.04.04,WA.04,Indexing dependency,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.05,WA,Widgets board & notification controls,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.06,WA,Quick Settings,PARTIAL,Group researched in Part 3; see child items.
+WA.06.01,WA.06,"Tiles, edit, sliders",PARTIAL,3 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.06.02,WA.06,Wi-Fi/Bluetooth sub-panels,PARTIAL,1 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.06.03,WA.06,Media controls,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.07,WA,Notifications,PARTIAL,Group researched in Part 3; see child items.
+WA.07.01,WA.07,Notification Center,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.07.02,WA.07,Toasts lifecycle,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.07.03,WA.07,Do not disturb / Focus,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.07.04,WA.07,Badges & priority,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.08,WA,Task View & virtual desktops,PARTIAL,Group researched in Part 3; see child items.
+WA.08.01,WA.08,Create/rename/reorder/close,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.08.02,WA.08,Per-desktop wallpaper,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.08.03,WA.08,Alt+Tab scope,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.08.04,WA.08,Timeline legacy (deprecated),NOT APPLICABLE,Timeline is not part of the Windows 11 shell. Legacy behaviour is recorded here and in WA.16.
+WA.09,WA,Window management,PARTIAL,Group researched in Part 3; see child items.
+WA.09.01,WA.09,Snap Layouts flyout,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.09.02,WA.09,Snap Groups,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.09.03,WA.09,Snap assist,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.09.04,WA.09,"Drag-to-edge, shake, maximize/restore",PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.09.05,WA.09,Title bar controls & caption buttons,PARTIAL,4 T1/T2 and 0 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.09.06,WA.09,Win+arrow shortcuts,COMPLETE,Every Windows key + arrow combination is listed in Microsoft's keyboard shortcuts article (Appendix 3A). Live-build check pending (VP-03).
+WA.09.07,WA.09,Multi-monitor window restore,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.10,WA,"Lock, sign-in, session",PARTIAL,Group researched in Part 3; see child items.
+WA.10.01,WA.10,Lock screen status & widgets,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.10.02,WA.10,"Sign-in (PIN, Hello, password, passkey)",PARTIAL,2 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.10.03,WA.10,User switching & Ctrl+Alt+Del screen,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.10.04,WA.10,Shutdown/restart/sleep/hibernate,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.10.05,WA.10,Update-and-restart flows,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.11,WA,OOBE / first-run,PARTIAL,Group researched in Part 3; see child items.
+WA.11.01,WA.11,Region/keyboard,PARTIAL,3 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.11.02,WA.11,Network requirement,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.11.03,WA.11,Microsoft account requirement & local account paths,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.11.04,WA.11,Privacy pages,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.11.05,WA.11,Restore from backup,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.12,WA,UAC & permission prompts,PARTIAL,Group researched in Part 3; see child items.
+WA.12.01,WA.12,Consent vs credential prompts,PARTIAL,2 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.12.02,WA.12,Secure desktop,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.12.03,WA.12,Admin protection (if available),PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.12.04,WA.12,App capability prompts (camera/mic/location),PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13,WA,File Explorer,PARTIAL,Group researched in Part 3; see child items.
+WA.13.01,WA.13,"Home, Gallery, Quick Access",PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.02,WA.13,Navigation pane,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.03,WA.13,Address bar/breadcrumbs,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.04,WA.13,Tabs,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.05,WA.13,Command bar & menus,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.06,WA.13,"Views, sort, group",PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.07,WA.13,Selection model,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.08,WA.13,Details/preview pane,PARTIAL,2 T1/T2 and 4 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.09,WA.13,Search in Explorer,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.10,WA.13,Copy/move progress dialog,PARTIAL,Only T4/T5 evidence (2 sources); no official Windows 11 article describes this feature. Low–medium confidence.
+WA.13.11,WA.13,Conflict resolution,PARTIAL,Only T4/T5 evidence (3 sources); no official Windows 11 article describes this feature. Low–medium confidence.
+WA.13.12,WA.13,Rename (incl. voice typing 26H2),PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.13,WA.13,Delete & Recycle Bin,PARTIAL,Only T4/T5 evidence (5 sources); no official Windows 11 article describes this feature. Low–medium confidence.
+WA.13.14,WA.13,Context menus (modern/legacy),PARTIAL,2 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.15,WA.13,Drag & drop semantics,PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.16,WA.13,Archive formats,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.17,WA.13,AI actions,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.13.18,WA.13,Properties dialog,PARTIAL,Only T4/T5 evidence (2 sources); no official Windows 11 article describes this feature. Low–medium confidence.
+WA.14,WA,Common dialogs,PARTIAL,Group researched in Part 3; see child items.
+WA.14.01,WA.14,Open/Save (IFileDialog),PARTIAL,2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.14.02,WA.14,Print dialog (modern/legacy),PARTIAL,2 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.14.03,WA.14,Share sheet,PARTIAL,3 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.14.04,WA.14,Folder picker,PARTIAL,2 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.15,WA,System-wide tools,PARTIAL,Group researched in Part 3; see child items.
+WA.15.01,WA.15,Clipboard history (Win+V),PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.15.02,WA.15,Snipping Tool / PrtScn,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.15.03,WA.15,Emoji & symbols panel (Win+.),PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.15.04,WA.15,Touch keyboard/IME,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.15.05,WA.15,Voice typing (Win+H),PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.15.06,WA.15,Run dialog,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
+WA.16,WA,Legacy Windows (10/7) interface differences,PARTIAL,Only T4/T5 evidence (2 sources); no official Windows 11 article describes this feature. Low–medium confidence.
+WB,,Research B — Windows Settings (26H2) full inventory,PENDING,
+WB.01,WB,System,PARTIAL,Category researched in Part 2; see child items.
+WB.01.01,WB.01,Display,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.01.01,WB.01.01,System > Display > HDR (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.01.02,WB.01.01,System > Display > Night light (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.01.03,WB.01.01,System > Display > Graphics (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.01.04,WB.01.01,System > Display > Scale (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.02,WB.01,Sound,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.02.01,WB.01.02,System > Sound > Volume mixer (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.03,WB.01,Notifications,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.03.01,WB.01.03,System > Notifications > Do not disturb (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.04,WB.01,Focus,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.05,WB.01,Power & battery,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.05.01,WB.01.05,System > Power & battery > Energy saver (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.05.02,WB.01.05,"System > Power & battery > Screen, sleep & hibernate timeouts (added in Part 2)",PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.06,WB.01,Storage,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.06.01,WB.01.06,System > Storage > Cleanup recommendations (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.07,WB.01,Nearby sharing,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.08,WB.01,Multitasking,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.08.01,WB.01.08,System > Multitasking > Desktops (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.09,WB.01,For developers / Advanced,COMPLETE,Official Advanced settings page enumerates the full page contents (updated 2026-02-26); live-build check pending (VP-01).
+WB.01.10,WB.01,Activation,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.11,WB.01,Troubleshoot,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.12,WB.01,Recovery,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.12.01,WB.01.12,System > Recovery > Fix problems using Windows Update (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.12.02,WB.01.12,System > Recovery > Point-in-time restore (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.13,WB.01,Projecting to this PC,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.14,WB.01,Remote Desktop,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.15,WB.01,Clipboard,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.16,WB.01,Optional features (location),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.17,WB.01,About,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.18,WB.01,Settings Agent (AI),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.01.19,WB.01,System > System components (added in Part 2),PARTIAL,Only independent or preview-era evidence; no official Microsoft documentation found for this page.
+WB.02,WB,Bluetooth & devices,PARTIAL,Category researched in Part 2; see child items.
+WB.02.01,WB.02,Devices,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.02.02,WB.02,Printers & scanners,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.02.03,WB.02,Phone Link / mobile devices,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.02.04,WB.02,Cameras,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.02.05,WB.02,Mouse,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.02.06,WB.02,Touchpad,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.02.07,WB.02,Pen & Windows Ink,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.02.08,WB.02,Keyboard / Text input,NOT FOUND,No 'Keyboard' page under Bluetooth & devices was documented in the sources inspected; keyboard options are covered under Time & language > Typing (WB.07.03) and Accessibility > Keyboard (WB.09.12). Needs a live-build check.
+WB.02.09,WB.02,AutoPlay,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.02.10,WB.02,USB,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.02.11,WB.02,Shared Audio,PARTIAL,Only independent or preview-era evidence; no official Microsoft documentation found for this page.
+WB.02.12,WB.02,Bluetooth & devices > Touch (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.03,WB,Network & internet,PARTIAL,Category researched in Part 2; see child items.
+WB.03.01,WB.03,Wi-Fi,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.03.02,WB.03,Ethernet,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.03.03,WB.03,VPN,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.03.04,WB.03,Mobile hotspot,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.03.05,WB.03,Airplane mode,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.03.06,WB.03,Proxy,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.03.07,WB.03,Dial-up,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.03.08,WB.03,Advanced network settings,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.03.09,WB.03,Data usage,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.03.10,WB.03,Network & internet > DNS over HTTPS (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.03.11,WB.03,Network & internet > Cellular (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.04,WB,Personalization,PARTIAL,Category researched in Part 2; see child items.
+WB.04.01,WB.04,Background,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.04.02,WB.04,Colors,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.04.03,WB.04,Themes,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.04.04,WB.04,Dynamic Lighting,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.04.05,WB.04,Lock screen,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.04.06,WB.04,Text input,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.04.07,WB.04,Start,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.04.08,WB.04,Taskbar,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.04.09,WB.04,Fonts,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.04.10,WB.04,Device usage,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.05,WB,Apps,PARTIAL,Category researched in Part 2; see child items.
+WB.05.01,WB.05,Installed apps,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.05.02,WB.05,Advanced app settings,PARTIAL,Only community Q&A evidence; official documentation not found.
+WB.05.03,WB.05,Default apps,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.05.04,WB.05,Offline maps,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.05.05,WB.05,Optional features,NOT APPLICABLE,Optional features sits under System > Optional features in current documentation (see WB.01.16).
+WB.05.06,WB.05,Apps for websites,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.05.07,WB.05,Video playback,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.05.08,WB.05,Startup,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.05.09,WB.05,Actions,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.05.10,WB.05,Apps > App reset/repair (Advanced options) (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.06,WB,Accounts,PARTIAL,Category researched in Part 2; see child items.
+WB.06.01,WB.06,Your info,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.06.02,WB.06,Email & accounts,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.06.03,WB.06,Sign-in options,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.06.03.01,WB.06.03,Accounts > Sign-in options > Dynamic lock (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.06.04,WB.06,Passkeys,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.06.05,WB.06,Family,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.06.06,WB.06,Windows backup,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.06.07,WB.06,Other users,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.06.08,WB.06,Access work or school,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.07,WB,Time & language,PARTIAL,Category researched in Part 2; see child items.
+WB.07.01,WB.07,Date & time,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.07.02,WB.07,Language & region,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.07.03,WB.07,Typing,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.07.04,WB.07,Speech,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.08,WB,Gaming,PARTIAL,Category researched in Part 2; see child items.
+WB.08.01,WB.08,Game Bar,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.08.02,WB.08,Captures,PARTIAL,Only community Q&A evidence; official documentation not found.
+WB.08.03,WB.08,Game Mode,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.09,WB,Accessibility,PARTIAL,Category researched in Part 2; see child items.
+WB.09.01,WB.09,Text size,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.02,WB.09,Visual effects,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.03,WB.09,Mouse pointer & touch,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.04,WB.09,Text cursor,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.05,WB.09,Magnifier,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.06,WB.09,Color filters,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.07,WB.09,Contrast themes,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.08,WB.09,Narrator,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.09,WB.09,Audio,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.10,WB.09,Captions,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.11,WB.09,Speech / Voice access,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.12,WB.09,Keyboard,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.09.13,WB.09,Mouse,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.09.14,WB.09,Eye control,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.10,WB,Privacy & security,PARTIAL,Category researched in Part 2; see child items.
+WB.10.01,WB.10,Windows Security,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.10.02,WB.10,Find my device,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.10.03,WB.10,Device encryption / BitLocker,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.10.04,WB.10,For developers,NOT APPLICABLE,For developers moved to System > Advanced in 25H2 and later (see WB.01.09).
+WB.10.05,WB.10,"Windows permissions (general, speech, inking, diagnostics, activity, search)",PARTIAL,Children WB.10.05.01–.05 documented.
+WB.10.05.01,WB.10.05,Privacy & security > General (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.10.05.02,WB.10.05,Privacy & security > Speech / Inking & typing personalization (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.10.05.03,WB.10.05,Privacy & security > Diagnostics & feedback (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.10.05.04,WB.10.05,Privacy & security > Activity history (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.10.05.05,WB.10.05,Privacy & security > Search permissions / Searching Windows (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.10.06,WB.10,"App permissions (location, camera, mic, etc.)",PARTIAL,Children WB.10.06.01–.03 documented.
+WB.10.06.01,WB.10.06,Privacy & security > Location (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.10.06.02,WB.10.06,Privacy & security > Camera / Microphone (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.10.06.03,WB.10.06,Privacy & security > App permissions (general) (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.10.07,WB.10,Privacy & security > Smart App Control (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.11,WB,Windows Update,PARTIAL,Category researched in Part 2; see child items.
+WB.11.01,WB.11,Updates & pause,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.11.01.01,WB.11.01,Windows Update > Pause updates (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.11.02,WB.11,Update history,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.11.03,WB.11,Advanced options,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.11.04,WB.11,Windows Insider Program,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.11.05,WB.11,Restart workflows & active hours,PARTIAL,Restart scheduling and active hours are covered in WB.11.01 and WB.11.03.
+WB.11.06,WB.11,Windows Update > Delivery Optimization (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.12,WB,Beyond Settings,PARTIAL,Category researched in Part 2; see child items.
+WB.12.01,WB.12,ms-settings URI register (229 distinct URIs on MS Learn),COMPLETE,Full MS Learn URI table parsed (Appendix 2B). Live resolution test pending (VP-02).
+WB.12.02,WB.12,Control Panel applets,PARTIAL,Official source confirms the page exists but documents few or none of its controls.
+WB.12.03,WB.12,Windows Security app,PARTIAL,See WB.10.01 (Windows Security app).
+WB.12.04,WB.12,Device Manager,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.12.05,WB.12,Task Manager (incl. NPU),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.12.06,WB.12,Disk Management,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.12.07,WB.12,Legacy dialogs (sysdm.cpl etc.),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
+WB.12.08,WB.12,Group Policy / MDM-only settings,PENDING,Group Policy / MDM Policy CSP mapping is scheduled for Part 12 (Research I).
+WB.12.09,WB.12,SKU differences (Home/Pro/Enterprise/Education),PARTIAL,SKU/hardware conditions captured per page where sources state them; no consolidated Home/Pro/Enterprise matrix yet.
+WC,,Research A3 — Fluent / WinUI design system,PARTIAL,"Researched in Part 4 (Chapter 12): 2 COMPLETE, 11 PARTIAL."
+WC.01,WC,Design principles,PARTIAL,"Principles documented by Microsoft Learn and Fluent 2; qualitative only, no exhaustive list."
+WC.02,WC,Color & theming tokens,PARTIAL,83 core Color tokens × 3 themes enumerated from source; SystemAccentColor shades are computed at runtime (not in XAML) and not verified.
+WC.03,WC,Typography ramp (Segoe UI Variable),COMPLETE,Type ramp sizes (source) + line heights/weights/axes (docs) agree; naming difference recorded as GAP-B3-04.
+WC.04,WC,Spacing & layout grid,PARTIAL,"4 epx base unit, spacing guidance and breakpoints documented; no exhaustive spacing token set exists in source."
+WC.05,WC,Geometry & corner radius,COMPLETE,ControlCornerRadius 4 / OverlayCornerRadius 8 (source) match docs; Win32 DWMWCP enum documented.
+WC.06,WC,Elevation & shadows,PARTIAL,Elevation depths documented; shadow blur/offset/opacity of ThemeShadow are not published.
+WC.07,WC,"Materials: Mica, Mica Alt, Acrylic, Smoke",PARTIAL,Acrylic recipe constants from source; Mica/Mica Alt tint parameters live in closed WinAppSDK/DWM code.
+WC.08,WC,Iconography (Segoe Fluent Icons),PARTIAL,"Glyph table counted (1,574 unique code points); count conflicts across pages (GAP-B3-01)."
+WC.09,WC,Motion: timing & easing,PARTIAL,Duration/easing tokens from source; docs disagree on exit curve and legacy durations (GAP-B3-02/03).
+WC.10,WC,Control states (rest/hover/pressed/disabled/focus),PARTIAL,"State brushes for 21 resource files (Button, CheckBox, ToggleSwitch, TextBox, etc.) captured; other controls not downloaded."
+WC.11,WC,Focus visuals,PARTIAL,Two-tone focus visual (2px/1px/1px margin) documented; framework defaults not in downloaded XAML.
+WC.12,WC,Win32 / common controls conventions,PARTIAL,"Win32 UX guide (legacy), ComCtl32 v6 visual styles, DWM attributes and dark mode guidance captured; per-control Win32 dark rendering unverified."
+WC.13,WC,"Loading, error, empty states",PARTIAL,ProgressRing/ProgressBar/InfoBar/ContentDialog guidance and dimensions captured; no official empty-state pattern found.
