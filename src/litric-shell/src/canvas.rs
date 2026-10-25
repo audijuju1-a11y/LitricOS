@@ -610,6 +610,17 @@ impl Canvas {
         self.runs.as_deref().unwrap_or(&[])
     }
 
+    /// Run `draw` with the text recorder paused, then put it back.
+    ///
+    /// For ink that is not a line of text anyone reads: the shadow under a word
+    /// is the word again, a pixel lower, and recording it would report every
+    /// word as overlapping itself.
+    pub fn unrecorded(&mut self, draw: impl FnOnce(&mut Self)) {
+        let runs = self.runs.take();
+        draw(self);
+        self.runs = runs;
+    }
+
     /// Whether a recorder is attached.
     #[must_use]
     pub const fn is_recording_text(&self) -> bool {

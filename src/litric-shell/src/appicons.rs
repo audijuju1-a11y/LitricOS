@@ -23,10 +23,13 @@ pub enum Slot {
     Launcher,
     /// An application.
     App(App),
+    /// The LitricOS mark: white on transparent, to be tinted.
+    Mark,
 }
 
 const fn bytes(slot: Slot) -> &'static [u8] {
     match slot {
+        Slot::Mark => include_bytes!("../../../assets/brand/litric-mark.png"),
         Slot::Launcher => include_bytes!("../../../assets/icons/dock/launcher.png"),
         Slot::App(App::Files) => include_bytes!("../../../assets/icons/dock/files.png"),
         Slot::App(App::Browser) => include_bytes!("../../../assets/icons/dock/browser.png"),
@@ -147,6 +150,27 @@ pub fn draw(canvas: &mut Canvas, slot: Slot, r: Rect, alpha: f32) {
     }
 }
 
+/// Draw `slot` in one colour: its shape is its alpha, `color` is what it is
+/// painted with. This is how the mark takes the theme's text colour.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn draw_tinted(canvas: &mut Canvas, slot: Slot, r: Rect, color: u32) {
+    let size = r.w.round().max(1.0) as usize;
+    if let Some(px) = scaled(slot, size) {
+        let tinted: Vec<u32> = px
+            .iter()
+            .map(|p| (p & 0xFF00_0000) | (color & 0x00FF_FFFF))
+            .collect();
+        canvas.draw_argb(
+            r.x.round() as i64,
+            r.y.round() as i64,
+            size as u32,
+            size as u32,
+            &tinted,
+            1.0,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,7 +178,7 @@ mod tests {
 
     #[test]
     fn every_icon_decodes_as_256_square_rgba() {
-        let all = std::iter::once(Slot::Launcher).chain(App::ALL.iter().map(|a| Slot::App(*a)));
+        let all = [Slot::Launcher, Slot::Mark].into_iter().chain(App::ALL.iter().map(|a| Slot::App(*a)));
         for slot in all {
             let b = decode(bytes(slot)).unwrap_or_else(|| panic!("{slot:?} did not decode"));
             assert_eq!((b.w, b.h), (256, 256), "{slot:?}");
@@ -178,6 +202,17 @@ mod tests {
         let px = scale(&b, 48);
         assert_eq!(px.first().map(|p| p >> 24), Some(0), "the corner is not empty");
         assert!(px.iter().any(|p| p >> 24 == 255), "nothing is opaque");
+    }
+
+    #[test]
+    fn a_tinted_mark_takes_the_colour_and_keeps_its_shape() {
+        let field = rgb(0x00_00_00);
+        let ink = rgb(0xF4_F2_ED);
+        let mut c = Canvas::new(40, 40, field);
+        draw_tinted(&mut c, Slot::Mark, Rect::new(4.0, 4.0, 32.0, 32.0), ink);
+        assert_eq!(c.get(0, 0), Some(field), "ink outside the mark's box");
+        let inked = c.pixels().iter().filter(|&&p| p == ink).count();
+        assert!(inked > 20, "the mark left no solid ink ({inked})");
     }
 
     #[test]

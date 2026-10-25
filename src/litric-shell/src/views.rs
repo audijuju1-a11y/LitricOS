@@ -335,21 +335,26 @@ fn draw_desktop_dialog(canvas: &mut Canvas, shell: &mut Shell) {
 /// bare wallpaper was legible on the one wallpaper it was tuned for and on no
 /// other; a fill makes the contrast the same everywhere for the price of one
 /// rectangle.
+/// Text on the bar: a soft shadow one pixel down, then the text itself.
+fn bar_text(canvas: &mut Canvas, text: &str, x: f32, baseline: f32, style: &Style, shadow: u32) {
+    canvas.unrecorded(|c| {
+        font::draw(c, text, x, baseline + 1.0, &style.colored(shadow));
+    });
+    font::draw(canvas, text, x, baseline, style);
+}
+
 fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
     let t = shell.tokens.clone();
     let bar = shell.top_bar();
     let h = bar.h;
     let pad = t.px(chrome::TOP_BAR_PAD);
 
-    // Glass, like the dock: the wallpaper's wave runs under the bar and shows
-    // through it. The scene carries a backdrop blurred once, so this copies a
-    // 28-pixel band of it rather than blurring live pixels.
-    crate::desktop::glass_at(canvas, &t.theme, bar, 0.0, 30);
-    canvas.fill_round_rect(
-        Rect::new(0.0, h - 1.0, bar.w, 1.0),
-        0.0,
-        with_alpha(chrome::WHITE, 0.09),
-    );
+    // No background. The bar is the wallpaper with the system's words on it:
+    // nothing is filled, so nothing needs to be restored or blended, and the
+    // desktop runs to the very top of the screen. What keeps the words legible
+    // over any wallpaper is a soft shadow under each, in the theme's base
+    // colour (see `bar_text`), not a plate behind them.
+    let shadow = with_alpha(ui::rgb_of(t.theme.palette.bg_base), 0.55);
 
     let size = t.text_px(TypeStep::Footnote);
     let name_style = Style::bold(size, t.text());
@@ -440,21 +445,20 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
     };
 
     // --- left: the mark, the application, the menus -----------------------
-    let mark = t.px(18.0);
+    let mark = t.px(20.0);
     let mut x = pad;
     let logo = Rect::new(x, (h - mark) / 2.0, mark, mark);
-    // The mark is a bare glyph in paper white, as the system's own mark is on
-    // the desktops it is compared with: the bar's one fixed point.
-    icons::draw(
+    // The mark: the pen-drawn ring and L the boot wordmark begins with, tinted
+    // with the text colour so it is right on either theme.
+    appicons::draw_tinted(
         canvas,
-        Icon::Litric,
+        appicons::Slot::Mark,
         logo,
         if shell.is_highlighted(Hot::Logo) {
             t.accent()
         } else {
             t.text()
         },
-        1.3,
     );
     shell
         .hotspots_mut()
@@ -462,7 +466,7 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
     x += mark + t.px(12.0);
 
     let name_w = font::measure(&title, &name_style);
-    font::draw(canvas, &title, x, baseline, &name_style);
+    bar_text(canvas, &title, x, baseline, &name_style, shadow);
     x += name_w + t.px(chrome::TOP_BAR_GAP);
 
     let menus = [
@@ -492,12 +496,13 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
         if lit {
             canvas.fill_round_rect(r, t.radius(Radius::Sm), with_alpha(t.text(), 0.12));
         }
-        font::draw(
+        bar_text(
             canvas,
             label,
             x,
             baseline,
             if lit { &menu_lit } else { &menu_style },
+            shadow,
         );
         shell.hotspots_mut().push(r, hot);
         x += w + t.px(chrome::TOP_BAR_GAP);
@@ -510,7 +515,7 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
         if shell.is_highlighted(Hot::MenuApps) {
             canvas.fill_round_rect(r, t.radius(Radius::Sm), with_alpha(t.text(), 0.12));
         }
-        font::draw(canvas, "\u{203A}", x, baseline, &menu_style);
+        bar_text(canvas, "\u{203A}", x, baseline, &menu_style, shadow);
         shell.hotspots_mut().push(r, Hot::MenuApps);
     }
     let left_end = x;
@@ -531,14 +536,14 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
         .push(user_r.inflate(t.px(5.0)), Hot::StatusUser);
 
     rx -= t.px(14.0) + clock_w;
-    font::draw(canvas, &clock, rx, baseline, &clock_style);
+    bar_text(canvas, &clock, rx, baseline, &clock_style, shadow);
     shell.hotspots_mut().push(
         Rect::new(rx - t.px(6.0), 0.0, clock_w + t.px(12.0), h),
         Hot::StatusClock,
     );
     if show_date {
         rx -= t.px(8.0) + date_w;
-        font::draw(canvas, &date, rx, baseline, &menu_style);
+        bar_text(canvas, &date, rx, baseline, &menu_style, shadow);
     }
 
     rx -= t.px(14.0);
@@ -552,7 +557,7 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
         icons_w - (step - icon) + t.px(12.0),
         t.px(22.0),
     );
-    canvas.fill_round_rect(capsule, capsule.h / 2.0, with_alpha(t.text(), 0.08));
+    canvas.fill_round_rect(capsule, capsule.h / 2.0, with_alpha(t.text(), 0.10));
     let mut bell: Option<Rect> = None;
     for (glyph, hot, tone) in icons_row.iter().rev() {
         rx -= step;
@@ -4327,46 +4332,83 @@ fn icon_for_app_id(app_id: &str) -> Icon {
 fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
     let t = shell.tokens.clone();
     let screen = shell.wm.screen();
-    let w = t.px(320.0).min(screen.w * 0.9);
-    // The panel is four sections: power profile, system toggles, environment.
-    // The session rows that used to be a fifth section here moved to the power
-    // menu behind the power and person icons, so the height is now measured
-    // from what is in it and still clamped to the screen: a panel whose last
-    // row is off the bottom is a panel whose last row cannot be clicked.
+    let w = t.px(344.0).min(screen.w * 0.92);
+    let pad = t.px(12.0);
+    let gap = t.px(10.0);
+    let inner_w = w - pad * 2.0;
+    let card_radius = t.px(16.0);
+
+    // Three cards on one glass sheet, each one thing: the power profile, the
+    // system switches, the environment. A card is measured from what it holds,
+    // and the sheet from its cards, so nothing is clipped at the bottom; the
+    // panel is still clamped to the screen, because a row below the edge cannot
+    // be clicked.
+    let label_h = t.px(26.0);
+    let power_h = label_h + t.px(46.0);
+    let switch_h = t.px(44.0);
+    let toggles_h = label_h + switch_h * 4.0 + t.px(6.0);
+    let env_rows = shell.environments.len().min(3);
+    let env_row_h = t.px(32.0);
+    let env_h = if env_rows == 0 {
+        0.0
+    } else {
+        label_h + env_row_h * env_rows as f32 + t.px(8.0)
+    };
+    let mut total = pad + power_h + gap + toggles_h + pad;
+    if env_rows > 0 {
+        total += gap + env_h;
+    }
+    let top = shell.top_bar().h + t.px(6.0);
     let panel = Rect::new(
-        screen.w - w - t.px(12.0),
-        shell.top_bar().h + t.px(8.0),
+        screen.w - w - t.px(10.0),
+        top,
         w,
-        t.px(420.0).min(screen.h - shell.top_bar().h - t.px(20.0)),
+        total.min(screen.h - top - t.px(12.0)),
     );
-    // The panel reveals downward under a clip that grows with its spring,
-    // and its rows only become clickable once the spring is far enough
-    // along that a click can only be aiming at the panel, not passing
-    // through the reveal.
+    // The panel reveals downward under a clip that grows with its spring, and
+    // its rows only become clickable once the spring is far enough along that a
+    // click can only be aiming at the panel, not passing through the reveal.
     let reveal = shell.anims().quick_settings.value();
     if reveal <= 0.01 {
         return;
     }
     let shown_h = panel.h * reveal;
     let saved = canvas.push_clip(Rect::new(panel.x, panel.y, panel.w, shown_h));
-    ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
+    ui::surface(canvas, &t, panel, t.px(22.0), Material::Popover);
 
-    let mut col = ui::Column::new(panel, t.sp(Space::Md), t.sp(Space::Xs));
-    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "POWER");
-    col.space(t.px(18.0));
+    let card = |canvas: &mut Canvas, r: Rect| {
+        canvas.fill_round_rect(r, card_radius, with_alpha(t.text(), 0.07));
+        canvas.stroke_round_rect(r, card_radius, 1.0, with_alpha(chrome::WHITE, 0.07));
+    };
+    let on_accent = ui::rgb_of(t.theme.palette.bg_base);
+    let mut y = panel.y + pad;
 
-    let row = col.row(t.px(34.0));
-    let seg_w = row.w / 4.0;
+    // ---- power profile -----------------------------------------------------
+    let power = Rect::new(panel.x + pad, y, inner_w, power_h);
+    card(canvas, power);
+    ui::section_label(
+        canvas,
+        &t,
+        (power.x + t.px(14.0), power.y + t.px(19.0)),
+        "POWER",
+    );
+    let track = Rect::new(
+        power.x + t.px(8.0),
+        power.y + label_h + t.px(2.0),
+        power.w - t.px(16.0),
+        t.px(34.0),
+    );
+    canvas.fill_round_rect(track, track.h / 2.0, with_alpha(t.text(), 0.08));
+    let seg_w = track.w / 4.0;
     // Four labels in a third of the screen: "Performance" does not fit a 70-pixel
-    // segment at the footnote step, and a label drawn past its button is the
-    // overflow this panel kept being reported for. Each segment therefore gets
-    // the longest label that measures inside it -- the full word when it fits,
-    // a compact one when it does not -- and an ellipsis as the last resort.
+    // segment at the footnote step, so each segment gets the longest label that
+    // measures inside it -- the full word when it fits, a compact one when it
+    // does not -- and an ellipsis as the last resort.
     let seg_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
-    let room = seg_w - t.px(16.0);
+    let room = seg_w - t.px(12.0);
     let compact = ["Eco", "Balanced", "Perf", "Max"];
     for (i, p) in PowerProfile::ALL.iter().enumerate() {
-        let r = Rect::new(row.x + (i as f32) * seg_w, row.y, seg_w - t.px(4.0), row.h);
+        let r = Rect::new(track.x + i as f32 * seg_w, track.y, seg_w, track.h);
         let hot = Hot::QuickPower(i as u8);
         let full = p.title();
         let label = if font::measure(full, &seg_style) <= room {
@@ -4375,123 +4417,160 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
             compact.get(i).copied().unwrap_or(full).to_owned()
         };
         let label = ui::elide(&label, &seg_style, room);
-        let state = if *p == shell.quick.power {
-            State::Selected
+        let selected = *p == shell.quick.power;
+        if selected {
+            canvas.fill_round_rect(r.inflate(-t.px(3.0)), (r.h - t.px(6.0)) / 2.0, t.accent());
         } else if shell.is_highlighted(hot) {
-            State::Hover
+            canvas.fill_round_rect(
+                r.inflate(-t.px(3.0)),
+                (r.h - t.px(6.0)) / 2.0,
+                with_alpha(t.text(), 0.10),
+            );
+        }
+        let style = if selected {
+            Style::bold(seg_style.size, on_accent)
         } else {
-            State::Normal
+            seg_style
         };
-        ui::button(
+        font::draw(
             canvas,
-            &t,
-            r,
             &label,
-            state,
-            if *p == shell.quick.power {
-                Tone::Accent
-            } else {
-                Tone::Neutral
-            },
+            r.x + (r.w - font::measure(&label, &style)) / 2.0,
+            r.y + r.h / 2.0 + style.size * 0.36,
+            &style,
         );
         shell.hotspots_mut().push(r, hot);
     }
-    col.space(t.px(10.0));
-    ui::separator(canvas, &t, col.row(1.0));
-    col.space(t.px(8.0));
+    y += power_h + gap;
 
-    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "SYSTEM");
-    col.space(t.px(18.0));
-
-    let toggles: [(&str, bool, bool); 4] = [
+    // ---- system switches ---------------------------------------------------
+    let toggles: [(&str, Icon, bool, bool); 4] = [
         (
             "Do Not Disturb",
+            Icon::Notifications,
             shell.quick.do_not_disturb,
             shell.quick.is_applied("do_not_disturb"),
         ),
         (
             "Adaptive Idle",
+            Icon::Power,
             shell.quick.adaptive_idle,
             shell.quick.is_applied("adaptive_idle"),
         ),
         (
             "Reduce Transparency",
+            Icon::Window,
             shell.quick.reduce_transparency,
             shell.quick.is_applied("reduce_transparency"),
         ),
         (
             "Reduce Motion",
+            Icon::Activity,
             shell.quick.reduce_motion,
             shell.quick.is_applied("reduce_motion"),
         ),
     ];
-    for (i, (label, on, applied)) in toggles.iter().enumerate() {
-        let row = col.row(t.px(38.0));
+    let sys = Rect::new(panel.x + pad, y, inner_w, toggles_h);
+    card(canvas, sys);
+    ui::section_label(canvas, &t, (sys.x + t.px(14.0), sys.y + t.px(19.0)), "SYSTEM");
+    for (i, (label, icon, on, applied)) in toggles.iter().enumerate() {
+        let row = Rect::new(
+            sys.x + t.px(6.0),
+            sys.y + label_h + switch_h * i as f32,
+            sys.w - t.px(12.0),
+            switch_h,
+        );
         let hot = Hot::QuickToggle(i as u8);
         if shell.is_highlighted(hot) {
-            canvas.fill_round_rect(row, t.radius(Radius::Md), with_alpha(rgb(0xFFFFFF), 0.06));
+            canvas.fill_round_rect(row, t.px(12.0), with_alpha(t.text(), 0.07));
         }
-        let s = Style::new(t.text_px(TypeStep::Footnote), t.text());
-        font::draw(
-            canvas,
-            label,
-            row.x + t.px(8.0),
-            row.y + row.h / 2.0 + s.size * 0.36,
-            &s,
+        // The glyph sits in a disc that fills with the accent when the switch
+        // is on, so the state reads from across the panel before the switch does.
+        let disc = Rect::new(row.x + t.px(8.0), row.y + (row.h - t.px(30.0)) / 2.0, t.px(30.0), t.px(30.0));
+        canvas.fill_circle(
+            disc.center().0,
+            disc.center().1,
+            disc.w / 2.0,
+            if *on { t.accent() } else { with_alpha(t.text(), 0.12) },
         );
-        if !applied {
-            // A control that only records a preference must say so.
-            let n = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
-            font::draw(
-                canvas,
-                "preference only",
-                row.x + t.px(8.0),
-                row.y + row.h - t.px(2.0),
-                &n,
-            );
-        }
-        let tr = Rect::new(
-            row.right() - t.px(48.0),
-            row.y + t.px(8.0),
+        icons::draw(
+            canvas,
+            *icon,
+            disc.inflate(-t.px(8.0)),
+            if *on { on_accent } else { t.text() },
+            1.1,
+        );
+        let text_x = disc.right() + t.px(12.0);
+        let name = Style::new(t.text_px(TypeStep::Footnote), t.text());
+        let sw = Rect::new(
+            row.right() - t.px(8.0) - t.px(40.0),
+            row.y + (row.h - t.px(22.0)) / 2.0,
             t.px(40.0),
             t.px(22.0),
         );
-        ui::toggle(canvas, &t, tr, *on, State::Normal);
+        let room = sw.x - t.px(8.0) - text_x;
+        let label = ui::elide(label, &name, room);
+        if *applied {
+            font::draw(canvas, &label, text_x, row.y + row.h / 2.0 + name.size * 0.36, &name);
+        } else {
+            // A control that only records a preference must say so.
+            font::draw(canvas, &label, text_x, row.y + row.h / 2.0 - t.px(1.0), &name);
+            let note = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            font::draw(
+                canvas,
+                &ui::elide("preference only", &note, room),
+                text_x,
+                row.y + row.h / 2.0 + t.px(12.0),
+                &note,
+            );
+        }
+        ui::toggle(canvas, &t, sw, *on, State::Normal);
         shell.hotspots_mut().push(row, hot);
     }
+    y += toggles_h + gap;
 
-    col.space(t.px(8.0));
-    ui::separator(canvas, &t, col.row(1.0));
-    col.space(t.px(8.0));
-    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "ENVIRONMENT");
-    col.space(t.px(16.0));
-
-    let envs = shell.environments.clone();
-    for (i, e) in envs.iter().enumerate().take(3) {
-        let row = col.row(t.px(30.0));
-        let hot = Hot::QuickEnvironment(i as u8);
-        let state = if e.active {
-            State::Selected
-        } else if shell.is_highlighted(hot) {
-            State::Hover
-        } else {
-            State::Normal
-        };
-        ui::list_item(
+    // ---- environment -------------------------------------------------------
+    if env_rows > 0 {
+        let env = Rect::new(panel.x + pad, y, inner_w, env_h);
+        card(canvas, env);
+        ui::section_label(
             canvas,
             &t,
-            row,
-            None,
-            &ui::elide(
-                &e.title,
-                &Style::new(t.text_px(TypeStep::Footnote), t.text()),
-                row.w - t.px(70.0),
-            ),
-            None,
-            Some(&e.hotkey),
-            state,
+            (env.x + t.px(14.0), env.y + t.px(19.0)),
+            "ENVIRONMENT",
         );
-        shell.hotspots_mut().push(row, hot);
+        let envs = shell.environments.clone();
+        for (i, e) in envs.iter().enumerate().take(3) {
+            let row = Rect::new(
+                env.x + t.px(6.0),
+                env.y + label_h + env_row_h * i as f32,
+                env.w - t.px(12.0),
+                env_row_h,
+            );
+            let hot = Hot::QuickEnvironment(i as u8);
+            let state = if e.active {
+                State::Selected
+            } else if shell.is_highlighted(hot) {
+                State::Hover
+            } else {
+                State::Normal
+            };
+            ui::list_item(
+                canvas,
+                &t,
+                row,
+                None,
+                &ui::elide(
+                    &e.title,
+                    &Style::new(t.text_px(TypeStep::Footnote), t.text()),
+                    row.w - t.px(70.0),
+                ),
+                None,
+                Some(&e.hotkey),
+                state,
+            );
+            shell.hotspots_mut().push(row, hot);
+        }
     }
     canvas.set_clip(saved);
 }
