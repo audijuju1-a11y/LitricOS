@@ -266,6 +266,27 @@ kv "drm.cards" "$(ls -1 /dev/dri/card* 2>/dev/null | tr '
 ' ' ' || echo none)"
 kv "drm.modules" "$(lsmod 2>/dev/null | awk '/^(bochs|virtio_gpu|simpledrm|drm)/{printf "%s ", $1}' || echo none)"
 
+# --- litric-browser: is the engine actually in this image? ------------------
+#
+# The broker can be installed and the socket enabled while the engine package
+# is absent; that combination is a browser window that can only say "no
+# Chromium". These lines make the difference visible from the serial console.
+if [[ -x /usr/bin/litric-browserd ]]; then
+    kv "browser.broker" "present"
+else
+    kv "browser.broker" "absent"
+fi
+if [[ -x /usr/bin/chromium ]]; then
+    kv "browser.chromium" "present version=$(/usr/bin/chromium --version 2>/dev/null | head -1 || echo unknown)"
+else
+    kv "browser.chromium" "absent"
+fi
+if [[ -f /usr/lib/systemd/system/litric-browser.socket ]]; then
+    kv "browser.socket_unit" "present state=$(systemctl is-active litric-browser.socket 2>/dev/null || echo inactive)"
+else
+    kv "browser.socket_unit" "absent"
+fi
+
 # --- litric-shell: did a desktop actually get drawn? ------------------------
 if [[ -x /usr/bin/litric-shell ]]; then
     kv "shell.binary" "present"

@@ -101,7 +101,9 @@ fn build() -> Rig {
     // would photograph a refusal instead of a lock screen.
     shell.facts.auth_available = Some("unix-chkpwd".to_owned());
     shell.facts.auth_lock = Some(false);
-    shell.facts.session_user = Some("root".to_owned());
+    shell.facts.auth_account = Some("litric".to_owned());
+    shell.facts.auth_password = Some("set".to_owned());
+    shell.facts.session_user = Some("litric".to_owned());
     shell.facts.source = "frame-dump fixture".to_owned();
     // The system monitor's own data. Fixed numbers, so the frame is
     // reproducible; the point of the fixture is that the monitor shows every

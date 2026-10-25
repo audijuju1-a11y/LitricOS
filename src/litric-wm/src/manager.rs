@@ -317,6 +317,27 @@ impl WindowManager {
         id
     }
 
+    /// Change what the title bar says.
+    ///
+    /// Applications name their own windows, and a title bar that keeps the
+    /// name from launch time is a title bar that lies after the first page
+    /// load. Returns whether the title is different from the one it had.
+    pub fn set_title(&mut self, id: WindowId, title: &str) -> bool {
+        let Some(pos) = self.windows.iter().position(|w| w.id == id) else {
+            return false;
+        };
+        let Some(win) = self.windows.get_mut(pos) else {
+            return false;
+        };
+        if win.title == title {
+            return false;
+        }
+        win.title = title.to_owned();
+        let frame = win.frame;
+        self.damage(frame);
+        true
+    }
+
     /// Close a window.
     pub fn close(&mut self, id: WindowId) -> bool {
         let Some(pos) = self.windows.iter().position(|w| w.id == id) else {

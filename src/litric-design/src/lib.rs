@@ -642,10 +642,24 @@ mod elevation_tests {
     fn higher_elevation_never_casts_less_shadow() {
         let levels = Elevation::all();
         for pair in levels.windows(2) {
-            let (lo, hi) = (pair[0], pair[1]);
-            assert!(hi.blur_px() >= lo.blur_px(), "{lo:?} -> {hi:?} blur shrinks");
-            assert!(hi.offset_y_px() >= lo.offset_y_px(), "{lo:?} -> {hi:?} offset shrinks");
-            assert!(hi.shadow_alpha_pct() >= lo.shadow_alpha_pct(), "{lo:?} -> {hi:?} alpha shrinks");
+            // `windows(2)` always hands over a slice of exactly two, but the
+            // type is a slice: take them by position rather than by indexing,
+            // which clippy cannot distinguish from a panicking access.
+            let (Some(lo), Some(hi)) = (pair.first(), pair.get(1)) else {
+                continue;
+            };
+            assert!(
+                hi.blur_px() >= lo.blur_px(),
+                "{lo:?} -> {hi:?} blur shrinks"
+            );
+            assert!(
+                hi.offset_y_px() >= lo.offset_y_px(),
+                "{lo:?} -> {hi:?} offset shrinks"
+            );
+            assert!(
+                hi.shadow_alpha_pct() >= lo.shadow_alpha_pct(),
+                "{lo:?} -> {hi:?} alpha shrinks"
+            );
         }
         assert_eq!(Elevation::Z0.shadow_alpha_pct(), 0);
     }

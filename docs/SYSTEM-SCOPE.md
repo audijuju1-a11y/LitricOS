@@ -65,6 +65,29 @@ component, our UI and policy on top
 > into that desktop. It is the output half of a compositor. Rows 880 and 1004
 > stay at `T`.
 
+> **2026-10-25: a foreign application can draw into that desktop.** The
+> sentence above that said "no client application can draw into that desktop"
+> is no longer true, and this note is here rather than a quiet edit to the
+> history above it. `litric-compositor` is a real Wayland server inside the
+> shell's process (ADR-0024): `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`
+> and `xdg_wm_base`, a socket at `$XDG_RUNTIME_DIR/wayland-0`, and client
+> surfaces hosted as ordinary windows with LitricOS title bars.
+> `weston-simple-shm` — a C client from outside this repository — opens a
+> window, draws, resizes, survives input and closes, in
+> `artifacts/foreign-client-window.png` and in two test suites that skip
+> loudly when the client binary is absent.
+>
+> The rows are unchanged, and that is deliberate rather than an oversight.
+> Row 880 is guest *VM* surface compositing, which is still `T`: a virtual
+> machine's framebuffer is not a Wayland client. Row 1004 is native compositor
+> frame rate, still `P`. The tally does not move because a capability arrived
+> that these rows never described — the scope table's granularity is the
+> problem, and inventing a row to move the percentage would be the kind of
+> number-keeping this document exists to prevent. What is still absent in the
+> same area, and is listed in ADR-0024 rather than implied here: XWayland,
+> clipboard and drag-and-drop, input methods, `.desktop` launching, dmabuf and
+> any GPU path.
+
 > **2026-09-14: the platform contract widens.** Part K records three architecture decisions from the unified-compatibility and deep-recovery requirement set: one desktop with three application runtimes (ADR-0020), deep recovery with user data as an independent domain (ADR-0021), and the Defender engine whose Phase 0 policy core now exists as `src/litric-defender` (ADR-0022). Ten rows are `P` because a decision function with passing tests exists; the executables that act on those decisions do not, and the statuses say so.
 
 > **2026-08-29 (later): the desktop responds.** Keyboard and mouse reach it

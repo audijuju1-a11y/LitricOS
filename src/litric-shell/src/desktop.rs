@@ -29,8 +29,8 @@ use litric_design::{Glass, Rgb, Theme, ThemeKind};
 use crate::canvas::{blend, luminance, rgb, rgba, with_alpha, Canvas, Rect, Repaint};
 use crate::font::{self, Style};
 use crate::shell::Shell;
-use litric_input::event::Point;
 use crate::views;
+use litric_input::event::Point;
 
 /// WCAG AA for body text. The target the glass solver must meet.
 const AA: f64 = 4.5;
@@ -1180,7 +1180,11 @@ mod tests {
                 seen.insert(c.get(gx * 20 + 10, gy * 20 + 10).unwrap_or(0));
             }
         }
-        assert!(seen.len() > 8, "wallpaper is nearly flat: {} colours", seen.len());
+        assert!(
+            seen.len() > 8,
+            "wallpaper is nearly flat: {} colours",
+            seen.len()
+        );
     }
 
     #[test]

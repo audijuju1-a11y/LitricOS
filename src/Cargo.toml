@@ -46,6 +46,7 @@ members = [
     "litric-browser",
 
     # --- native ecosystem: the desktop itself ---------------------------------
+    "litric-compositor",
     "litric-shell",
     "litric-text",
 

@@ -878,3 +878,183 @@ The unit change is one line plus its comment; reverting
 `image/mkosi.extra/usr/lib/systemd/system/litric-sysd.service` and rebuilding
 restores the previous (broken wizard) behaviour. The previous image is kept by
 `tools/build.sh` as `litric.last-good`.
+
+---
+
+## 2026-10-25 — client surfaces: a foreign Wayland application gets a window
+
+**Stage result:** the capability is real and tested. **Workspace gate: 23 PASS,
+3 FAIL, 4 SKIP.** All three failures are in code this stage did not write, and
+all three were already red at `c28ec35`; they are recorded here because this is
+the first run of `ci/verify.sh` in this tree that was not reading cargo's cache
+instead of the code (see "Why the previous green was not a reading").
+
+### What was built
+
+| Piece | What it is |
+|---|---|
+| `src/litric-compositor/` | A real Wayland server (ADR-0024): `wl_compositor`, `wl_shm`, `wl_seat`, `wl_output`, `xdg_wm_base`, on its own thread, `#![forbid(unsafe_code)]` |
+| `src/litric-compositor/src/keymap.xkb` | A resolved `us` keymap, shipped with the crate and handed to every keyboard |
+| `src/litric-shell/src/clients.rs` | Surfaces become `litric-wm` windows: LitricOS title bar, client pixels in the body, input forwarded in z-order |
+| `docs/adr/0024-client-surfaces.md` | The decision, the advertised globals, and the list of what is deliberately absent |
+
+### Evidence — a client from outside this repository
+
+The client is `weston-simple-shm` from the Weston tree: C, `libwayland-client`,
+`wl_shm` + `xdg-shell`. Nothing in this path is two halves of the same Rust code
+agreeing with each other.
+
+| Test | Assertion | Result |
+|---|---|---|
+| `litric-compositor --test client` (`LITRIC_WAYLAND_CLIENT` set) | maps a window, commits frames with real content, honours a configure to 320×200, survives pointer and key events, exits when the toplevel is closed | PASS (4 tests) |
+| same binary, no `LITRIC_WAYLAND_CLIENT` | the foreign-client test prints its `SKIP` line and returns; the three server-only tests (relative runtime dir refused, second bind refused, killed client) run | PASS (3 real, 1 skip) |
+| `litric-compositor` unit tests | stride walk, pool bounds, `XRGB` opacity, buffer scale, XKB modifier bits | PASS (6 tests) |
+| `litric-shell --test foreign_clients` | the desktop hosts that client as a window with a LitricOS title bar, paints its pixels, forwards click and keystroke, closing the window ends the process; a typed command launches a GUI application | PASS (3 tests) |
+| `litric-shell --lib` | every shell test, including the new broker/protocol ones | PASS (438 tests) |
+| `cargo test --offline` (workspace) | all core crates | PASS |
+
+The rendered frame is `artifacts/foreign-client-window.png`: the client's
+concentric-ring drawing inside a LitricOS window titled `simple-shm`, on the
+LitricOS desktop, with the dock and top bar drawn by the shell around it.
+
+The keymap was checked with libxkbcommon itself — the same call a toolkit makes
+(`xkb_keymap_new_from_string`), not a string comparison:
+
+| Check | Result |
+|---|---|
+| `xkb_keymap_new_from_string(keymap.xkb)` | compiles |
+| layouts | 1 — `English (US)` |
+| evdev 16/30/2/57/28 (+8, as a client counts) | `q`, `a`, `1`, space, Return |
+| the same with Shift held | `!`, `A` |
+
+### Why the previous green was not a reading
+
+`cargo build`, `cargo clippy` and `cargo fmt --check` print diagnostics only for
+targets they actually recompile. The [5] entry of the 2026-10-14 run and the
+"gate green" claim inside `c28ec35` were made against a warm `target/`: nothing
+was recompiled, so nothing was reported. `touch src/litric-shell/src/shell.rs`
+and rebuild, and seven private helpers in `shell.rs` are reported as never used
+(`set_overlay`, `same_overlay_kind`, `set_context_menu`, `set_desktop_dialog`,
+`retire_banner`, `dismiss_notification`, `clear_notifications`). Those are the
+overlay, context-menu, dialog and notification *exit* animations: the 2026-10-23
+redesign replaced the call sites with direct field writes, so the springs are
+computed nowhere. That is a real gap in the shell, not a lint annoyance, and it
+is why this entry says the gate is red rather than quoting the old green.
+
+### The three failures
+
+| Item | Site | Why it is red |
+|---|---|---|
+| [3d] documentation citations | `docs/DESKTOP-2.0.md:96` | the frame-dump example is cited with its path missing the `src/litric-shell/` prefix, so the cited file does not exist |
+| [5] `cargo build` emits zero warnings | `src/litric-shell/src/shell.rs` | the seven unused exit-animation helpers above |
+| [5] `cargo clippy --all-targets -- -D warnings` | `src/litric-design/src/lib.rs:645`, `src/litric-sysd/src/platform/input.rs:138, 237, 241, 269, 289, 304` | `pair[0]`/`pair[1]` in a design test, `bit / 64` in the sysd capability reader, and fixture `devices[0]`/`devices[1]` indexing in six sysd tests |
+
+Nothing was suppressed to arrive at this number. This stage's own code is clean
+under the same gate: `litric-compositor` (lib and tests) and the new
+`litric-shell` modules and tests produce no diagnostics, the formatting check
+passes, and the 12 deletion sites the new code adds are recorded with a reason in
+`ci/lint-file-safety.py`, which now passes (44 sites reviewed).
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that a client window appears on a booted image | no image was built or booted: mkosi, qemu and the Latin face the golden-frame dump needs are absent on this host |
+| that X11 applications run | no XWayland, and none is advertised |
+| clipboard, drag-and-drop, IME, Thai typing into a client | `wl_data_device_manager` and `zwp_text_input_v3` are not implemented; the keymap is a fixed `us` layout, so switching the shell's layout does not switch a client's |
+| that a client repaints at display rate | frames are copies through the CPU (`pread` after each commit); no dmabuf import |
+| that a menu near the screen edge flips | popups are anchored at the positioner's rect origin; constraint adjustment is recorded but unused |
+
+### Rollback
+
+The stage is additive: delete `src/litric-compositor/`,
+`src/litric-shell/src/clients.rs`, `src/litric-shell/tests/foreign_clients.rs`
+and the `clients`/`compositor` wiring in `src/litric-shell/src/shell.rs`, and the
+desktop is the 2026-10-23 software desktop again, with no window for a foreign
+application.
+## 2026-10-25 — the three red rows closed: exits animate, citations and lints fixed
+
+- **Result:** PASS_WITH_LIMITATIONS
+- **Command:** `ci/verify.sh` (Linux x86_64, cargo +stable; no mkosi, qemu or pytest on this host)
+- **Raw:** **26 pass, 0 fail, 4 skipped** — the entry above recorded 23/3/4 on the
+  same tree. The three failing rows are the three fixed below; nothing else moved.
+- **Scope:** the exit animations the previous entry called "a real gap in the
+  shell", plus the two lint rows. No new feature, no suppressed diagnostic.
+
+### The exit animations were missing, not just unused
+
+The seven helpers the compiler reported were the *shell half* of the exit
+animations: `set_overlay`, `same_overlay_kind`, `set_context_menu`,
+`set_desktop_dialog`, `retire_banner`, `dismiss_notification`,
+`clear_notifications`. The drawing half did not exist either — `views.rs` never
+read `retiring_overlay`, `retiring_context_menu`, `retiring_desktop_dialog` or
+`retiring_banners`, and the `switcher`, `overview` and `dialog` springs were
+stepped every frame and read by nothing. The 2026-10-23 redesign had written the
+fields directly, so a closed surface disappeared in one frame. Restoring the
+call sites alone would have kept the dead routines alive and changed no pixel.
+
+| Layer | Change |
+|---|---|
+| `src/litric-shell/src/shell.rs` | Every overlay, menu, dialog and notification close goes through the exit-aware setter; `set_overlay` keeps a snapshot only when the revealed spring can actually fall (the launcher's dock morph and the three top-bar panels that share one spring replace each other with nothing to animate). `tick` drops each snapshot when its spring reaches zero, not on a timer. `retire_banner` now retires the id that was dismissed; it used to read the last snapshot's id, so dismissing a second banner left the first one's exit running. |
+| `src/litric-shell/src/views.rs` | Retiring overlays, menus and dialogs draw beneath the surface that replaced them, through the same reveal spring, inside `Shell::draw_retired`: hotspots go to a scratch table and hover answers false, so a panel on its way out is pixels, never a target. Switcher and dialog unfold from the middle; Mission Control's dim follows its slow spring; banners slide from the screen edge. |
+| `src/litric-shell/src/anim.rs` | Unchanged. The springs were already stepped, bounded and reduced-motion aware; what was missing was a caller and a reader. |
+
+The canvas has no compositing layer, so these exits are clip and travel, not
+alpha fades. A fade needs a layer that does not exist, and adding one for four
+surfaces was a larger change than the gate row asked for.
+
+### The two lint rows
+
+| Row | Fix |
+|---|---|
+| `[3d]` citation | `docs/DESKTOP-2.0.md:96` now names `src/litric-shell/examples/frame_dump.rs`, the file that exists. |
+| `[5]` clippy | `src/litric-design/src/lib.rs` takes `windows(2)` elements with `first`/`get` instead of `[0]`/`[1]`; `src/litric-sysd/src/platform/input.rs` reads word `bit >> 6` and bit `bit & 63` instead of dividing by 64, and its fixtures use `first`/`get` instead of indexing; the dock assertion in `src/litric-shell/src/e2e.rs` uses a range `contains`; the setup drawing in `src/litric-shell/src/views.rs` moved above the test module it had been appended after. |
+
+While in `draw_notification_list`, an early return for an empty queue that never
+restored its clip was fixed: it leaked a small clip into every surface drawn
+after it on that frame. It was not what the gate reported; it was on the path
+being edited.
+
+### Evidence
+
+`cargo test --offline -p litric-shell --tests`, all from a recompiled tree:
+
+| Target | Result |
+|---|---|
+| lib | 444 passed (438 before this change; 6 new) |
+| `src/litric-shell/src/main.rs` | 31 passed |
+| `src/litric-shell/tests/design_lint.rs` | 4 passed |
+| `src/litric-shell/tests/font_standards.rs` | 10 passed |
+| `src/litric-shell/tests/foreign_clients.rs` | 3 passed |
+| `src/litric-shell/tests/overflow_audit.rs` | 3 passed |
+| `src/litric-shell/tests/text_layout_audit.rs` | 9 passed |
+
+The six new tests, in `src/litric-shell/src/shell.rs`:
+
+| Test | What it would catch |
+|---|---|
+| `a_closed_panel_is_kept_exactly_while_its_exit_spring_has_pixels` | a close that is still a cut (snapshot dropped in one frame) or a snapshot that outlives its settle budget |
+| `reopening_a_panel_reverses_its_spring_instead_of_drawing_two_copies` | a reopen that leaves the old panel fading under the new one |
+| `swapping_between_panels_that_share_a_spring_does_not_keep_a_ghost` | a power menu that keeps a quick-settings ghost because both read one spring |
+| `a_retired_menu_is_still_painted_but_registers_no_click_target` | an exit that draws nothing, or one whose rows can be clicked after the menu closed |
+| `a_dismissed_dialog_keeps_its_panel_but_not_its_buttons` | a fading dialog that repeats a confirmation |
+| `a_dismissed_banner_keeps_its_pixels_until_its_spring_lands` | a banner dropped before its spring reaches zero |
+
+`ci/verify.sh` then reported, for `[5]`: `cargo build`, `cargo test`, **zero
+warnings**, `cargo fmt --check` and `clippy --all-targets -- -D warnings` all
+PASS. The four SKIPs are unchanged and named: image build, boot smoke test,
+idle measurement (no mkosi/qemu/pytest) and golden frames (no Latin face on this
+host).
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the exits look right on a real framebuffer | no image was built or booted; the evidence is composed frames (`views::draw`) and state assertions, not a photograph of a screen. `artifacts/foreign-client-window.png` is still the only rendered frame from this tree |
+| that an exit is perceptually smooth at 60 Hz | the springs are bounded by their tokens (tested in `src/litric-shell/src/anim.rs`) and the shell damages what moved, but no frame-timing measurement was taken on hardware |
+| that every animated surface is covered | the launcher's dock morph is unchanged and the three top-bar panels still replace each other without an exit, deliberately and stated above |
+
+### Rollback
+
+Revert this commit. The surfaces close in one frame again, the three gate rows
+go back red, and the six tests above fail — which is the point of the tests.

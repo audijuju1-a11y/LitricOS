@@ -872,6 +872,15 @@ pub struct SystemFacts {
     /// same thing to a lock screen: without a verifier there is nothing to
     /// unlock with, so [`Shell::can_lock`] refuses in both cases.
     pub auth_lock: Option<bool>,
+    /// The desktop account a lock checks (`auth.account`), not whichever
+    /// logind session happens to be listed first: the diagnostic serial
+    /// console autologins as root, and checking root's locked password
+    /// against the password first-run set for `litric` can never unlock.
+    pub auth_account: Option<String>,
+    /// `set`, `locked`, `absent` or `unknown` (`auth.password`).
+    pub auth_password: Option<String>,
+    /// Why the daemon refuses the lock (`auth.reason`).
+    pub auth_reason: Option<String>,
     /// The user logged in on this machine, from logind's session record.
     pub session_user: Option<String>,
     /// Keyboards, pointers and tablets the kernel is actually driving.
@@ -1295,8 +1304,13 @@ impl Shell {
         self.notify("Defender", &title, &body, priority, Some(8_000));
     }
 
-    /// Drain the browser link's inbox: frames become the pending framebuffer,
-    /// closed links are torn down and the page area explains why.
+    /// Drain the browser link's inbox.
+    ///
+    /// `TAB` lines update the tab they name, a `FRAME` payload becomes the
+    /// pending framebuffer, `ERR` lines become the status the page area shows,
+    /// and a closed link is torn down with its reason. A frame for a tab that
+    /// is not on screen is dropped: drawing one tab's pixels under another
+    /// tab's address bar is the stale-frame bug, not a rendering nicety.
     pub fn pump_browser(&mut self) {
         use crate::link::Incoming;
         let Some(link) = &self.browser_session else {
@@ -1306,36 +1320,17 @@ impl Shell {
         if messages.is_empty() {
             return;
         }
-        let mut closed = false;
+        let mut closed = None;
         for m in messages {
             match m {
-                Incoming::Payload { header, bytes } => {
-                    if header.starts_with("FRAME ") {
-                        if let Some(rest) = header.strip_prefix("FRAME ") {
-                            if let Some((w, h)) = parse_frame_dims(rest) {
-                                let expected = u64::from(w)
-                                    .checked_mul(u64::from(h))
-                                    .and_then(|n| n.checked_mul(4))
-                                    .and_then(|n| usize::try_from(n).ok());
-                                if expected.is_some_and(|n| n == bytes.len()) {
-                                    self.browser_frame = Some(Arc::from(bytes.into_boxed_slice()));
-                                    self.browser.last_frame = Some((w, h));
-                                    self.request_full_redraw();
-                                }
-                            }
-                        }
-                    }
-                }
+                Incoming::Payload { header, bytes } => self.accept_frame(&header, bytes),
                 Incoming::Line(line) => {
-                    if let Some(rest) = line.strip_prefix("TITLE ") {
-                        if let Some(t) = self.browser.tabs.get_mut(self.browser.active) {
-                            t.title = rest.to_owned();
-                        }
-                    } else if line.starts_with("ERR ") {
-                        if let Some(t) = self.browser.tabs.get_mut(self.browser.active) {
-                            t.error = true;
-                        }
-                        self.browser.status = line;
+                    if let Some(update) = parse_tab_line(&line) {
+                        self.apply_tab_update(&update);
+                    } else if let Some(rest) = line.strip_prefix("HELLO ") {
+                        self.browser.status = format!("engine ready: {rest}");
+                    } else if let Some(rest) = line.strip_prefix("ERR ") {
+                        self.apply_engine_error(rest);
                     } else if line.starts_with("DOWNLOADS ") {
                         let total = line
                             .split_whitespace()
@@ -1360,13 +1355,101 @@ impl Shell {
                         }
                     }
                 }
-                Incoming::Closed(_) => closed = true,
+                Incoming::Closed(why) => closed = Some(why),
             }
         }
-        if closed {
+        if let Some(why) = closed {
             self.browser_session = None;
-            self.browser.status = "engine session ended".to_owned();
+            self.browser.status = format!("engine session ended ({why})");
+            self.request_full_redraw();
         }
+    }
+
+    /// Take one `FRAME <tab> <w> <h> <len>` payload and its pixels.
+    fn accept_frame(&mut self, header: &str, bytes: Vec<u8>) {
+        let Some(tab) = frame_tab(header) else {
+            return;
+        };
+        if Some(tab) != self.browser.active_engine_tab() {
+            return;
+        }
+        let Some((w, h)) = parse_frame_dims(header) else {
+            self.browser.status = "engine sent a frame with nonsense dimensions".to_owned();
+            return;
+        };
+        let expected = u64::from(w)
+            .checked_mul(u64::from(h))
+            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| usize::try_from(n).ok());
+        if expected != Some(bytes.len()) {
+            // Never scale a short buffer over the page: the bytes that are
+            // missing would be read as another row's pixels.
+            self.browser.status = format!("engine sent {} bytes for a {w}x{h} frame", bytes.len());
+            return;
+        }
+        self.browser_frame = Some(Arc::from(bytes.into_boxed_slice()));
+        self.browser.last_frame = Some((w, h));
+        self.browser.status = "page loaded".to_owned();
+        self.request_full_redraw();
+    }
+
+    /// Apply one `TAB` line to the tab whose engine id it names.
+    fn apply_tab_update(&mut self, update: &TabUpdate) {
+        let Some(index) = self
+            .browser
+            .tabs
+            .iter()
+            .position(|tab| tab.engine_tab == update.tab)
+        else {
+            return;
+        };
+        let active = index == self.browser.active;
+        let url = update.url.clone();
+        if let Some(tab) = self.browser.tabs.get_mut(index) {
+            if !update.url.is_empty() {
+                tab.url.clone_from(&url);
+            }
+            if !update.title.is_empty() {
+                tab.title.clone_from(&update.title);
+            }
+            tab.error = update.state == "failed";
+        }
+        if active {
+            if !self.browser.omnibox_focus {
+                self.browser.omnibox.clone_from(&url);
+            }
+            let title = self
+                .browser
+                .tabs
+                .get(index)
+                .map(|tab| tab.title.clone())
+                .unwrap_or_default();
+            self.browser.status = if update.state.is_empty() {
+                title
+            } else {
+                format!("{} — {title}", update.state)
+            };
+            if update.state == "loaded" && !url.is_empty() {
+                self.browser.record_visit(&url);
+            }
+        }
+        self.request_full_redraw();
+    }
+
+    /// Put the engine's reason for refusing on the browser's status line.
+    fn apply_engine_error(&mut self, rest: &str) {
+        let (code, detail) = rest.split_once(' ').unwrap_or((rest, ""));
+        let detail = litric_core::pct::decode(detail).unwrap_or_else(|_| detail.to_owned());
+        if let Some(tab) = self.browser.tabs.get_mut(self.browser.active) {
+            tab.error = true;
+        }
+        self.browser.status = match code {
+            "engine-unavailable" => format!("the browser engine is not available: {detail}"),
+            "engine-failed" => format!("the page could not be shown: {detail}"),
+            "bad-request" => format!("the engine rejected a command: {detail}"),
+            _ => format!("the engine reported: {detail}"),
+        };
+        self.request_full_redraw();
     }
 
     /// Start (or reuse) the browser engine session over its socket.
@@ -1383,14 +1466,18 @@ impl Shell {
                     .map(str::to_owned)
             },
         };
-        match crate::link::Link::connect(
-            std::path::Path::new("/run/litric/browser.sock"),
-            framing,
-            Box::new(|| {}),
-        ) {
+        let socket = self.browser_socket.clone();
+        match crate::link::Link::connect(&socket, framing, Box::new(|| {})) {
             Ok(link) => {
                 self.browser_session = Some(link);
-                self.browser.status = "engine session started".to_owned();
+                self.browser.wants_engine = true;
+                self.browser.status = format!("engine session started ({})", socket.display());
+                // Handshake before the first navigation: the broker says which
+                // engine it owns, and an image without Chromium says so here
+                // instead of after a URL has been typed.
+                let (w, h) = self.browser_viewport;
+                self.send_line("HELLO 1");
+                self.send_line(&format!("VIEWPORT {w} {h}"));
                 // The session exists to show something: navigate the active
                 // tab right away, the way a browser loads its start page.
                 if let Some(url) = self.browser.navigate_active() {
@@ -1400,10 +1487,28 @@ impl Shell {
             }
             Err(e) => {
                 self.browser.status = format!(
-                    "engine not reachable ({e}); start litric-browserd, or use the menu's Start"
+                    "browser engine not reachable at {} ({e}); the image needs litric-browserd and its socket",
+                    socket.display()
                 );
                 self.request_full_redraw();
                 Vec::new()
+            }
+        }
+    }
+
+    /// Send one LBP/1 line. A write failure tears the session down: a link whose
+    /// commands cannot be written must not keep drawing itself as connected.
+    fn send_line(&mut self, line: &str) -> bool {
+        let Some(link) = self.browser_session.as_mut() else {
+            return false;
+        };
+        match link.send_line(line) {
+            Ok(()) => true,
+            Err(e) => {
+                self.browser.status = format!("engine write failed: {e}");
+                self.browser_session = None;
+                self.request_full_redraw();
+                false
             }
         }
     }
@@ -1413,13 +1518,19 @@ impl Shell {
     /// This is the line a search or an address commit has to produce; a
     /// navigation that stops at the model never lights a pixel of the web.
     fn send_go(&mut self, url: &str) {
-        let tab = self.browser.active.saturating_add(1);
+        let Some(tab) = self.browser.active_engine_tab() else {
+            return;
+        };
         let pct = litric_core::pct::encode(url);
-        if let Some(link) = self.browser_session.as_mut() {
-            match link.send_line(&format!("GO {tab} {pct}")) {
-                Ok(()) => self.browser.status = format!("loading {url}"),
-                Err(e) => self.browser.status = format!("send failed: {e}"),
-            }
+        // A navigation invalidates the previous picture at once: keeping the
+        // old page under the new address is exactly the stale frame this
+        // browser must never show.
+        self.browser_frame = None;
+        self.browser.last_frame = None;
+        self.browser_pointer_sent = None;
+        if self.send_line(&format!("GO {tab} {pct}")) {
+            self.browser.status = format!("loading {url}");
+            self.request_full_redraw();
         }
     }
 
@@ -1427,12 +1538,208 @@ impl Shell {
     pub fn browser_navigate(&mut self, url: &str) {
         if self.browser_session.is_none() {
             self.browser_start_session();
-            // A successful start already navigated the active tab; a failed
-            // one left its reason in the status line.
+            // A successful start already navigated the tab it found; when the
+            // caller asked for a different address, that address has to be
+            // sent after all, or the first navigation of a session is ignored.
+            if self.browser_session.is_some() && self.browser.tab().is_none_or(|tab| tab.url != url)
+            {
+                self.send_go(url);
+            }
+            self.request_full_redraw();
             return;
         }
         self.send_go(url);
         self.request_full_redraw();
+    }
+
+    /// Where the engine frame was drawn, once the renderer has placed one.
+    pub fn set_browser_engine_area(&mut self, area: Option<Rect>) {
+        self.browser_engine_area = area;
+    }
+
+    /// Whether the browser's page surface owns the keyboard right now.
+    fn browser_page_focused(&self) -> bool {
+        if self.overlay.is_open() || self.desktop_dialog.is_some() || self.browser.omnibox_focus {
+            return false;
+        }
+        if self.browser.panel != crate::apps::BrowserPanel::Page {
+            return false;
+        }
+        let Some(focused) = self.wm.focused() else {
+            return false;
+        };
+        self.wm
+            .all()
+            .iter()
+            .any(|w| w.id == focused && w.app_id == App::Browser.app_id())
+    }
+
+    /// Whether a key is the page's rather than the shell's.
+    fn engine_takes_key(&self, key: Key, mods: Modifiers) -> bool {
+        if mods.meta {
+            return false;
+        }
+        // Alt+Tab is the window switcher even while a page is focused.
+        if mods.alt && key == Key::Tab {
+            return false;
+        }
+        self.browser_page_focused()
+    }
+
+    /// A pointer position on the desktop as a pixel in the page Chromium is
+    /// rendering, when the browser owns the pointer and a frame defines the
+    /// mapping.
+    fn browser_page_point(&self, at: Point) -> Option<(f64, f64)> {
+        if !self.browser_page_focused() {
+            return None;
+        }
+        let area = self.browser_engine_area?;
+        let (w, h) = self.browser.last_frame?;
+        if area.w <= 0.0 || area.h <= 0.0 || w == 0 || h == 0 {
+            return None;
+        }
+        if !area.contains(at.x, at.y) {
+            return None;
+        }
+        let x = f64::from((at.x - area.x) / area.w) * f64::from(w);
+        let y = f64::from((at.y - area.y) / area.h) * f64::from(h);
+        Some((
+            x.clamp(0.0, f64::from(w.saturating_sub(1))),
+            y.clamp(0.0, f64::from(h.saturating_sub(1))),
+        ))
+    }
+
+    /// Forward a pointer move, coalesced to whole page pixels.
+    fn browser_engine_move(&mut self, at: Point) {
+        let Some((x, y)) = self.browser_page_point(at) else {
+            self.browser_pointer_sent = None;
+            return;
+        };
+        let Some(tab) = self.browser.active_engine_tab() else {
+            return;
+        };
+        if let Some((px, py)) = self.browser_pointer_sent {
+            if (px - x).abs() < 2.0 && (py - y).abs() < 2.0 {
+                return;
+            }
+        }
+        if self.send_line(&format!("MOUSE {tab} move {x:.1} {y:.1} none 0 0")) {
+            self.browser_pointer_sent = Some((x, y));
+        }
+    }
+
+    /// Forward a press or release, then ask for the frame that shows it.
+    fn browser_engine_button(
+        &mut self,
+        button: PointerButton,
+        pressed: bool,
+        at: Point,
+        clicks: u8,
+        mods: Modifiers,
+    ) {
+        let Some((x, y)) = self.browser_page_point(at) else {
+            return;
+        };
+        let Some(tab) = self.browser.active_engine_tab() else {
+            return;
+        };
+        let name = match button {
+            PointerButton::Primary => "left",
+            PointerButton::Secondary => "right",
+            PointerButton::Middle => "middle",
+            // Forward/back and any future button are not part of the engine's
+            // mouse model here; they are the shell's to interpret, not a click
+            // to invent.
+            _ => return,
+        };
+        let kind = if pressed { "down" } else { "up" };
+        let clicks = if pressed { clicks.max(1) } else { 1 };
+        let line = format!(
+            "MOUSE {tab} {kind} {x:.1} {y:.1} {name} {clicks} {}",
+            modifier_bits(mods)
+        );
+        if self.send_line(&line) {
+            self.browser_pointer_sent = Some((x, y));
+            if !pressed {
+                self.browser_refresh();
+            }
+        }
+    }
+
+    /// Forward a wheel notch (positive `dy` scrolls down).
+    fn browser_engine_wheel(&mut self, dy: f32, at: Point) {
+        let Some((x, y)) = self.browser_page_point(at) else {
+            return;
+        };
+        let Some(tab) = self.browser.active_engine_tab() else {
+            return;
+        };
+        // Chromium counts wheel deltas in pixels, the shell in lines.
+        let delta = f64::from(dy) * 60.0;
+        if self.send_line(&format!("WHEEL {tab} {x:.1} {y:.1} 0 {delta:.1}")) {
+            self.browser_refresh();
+        }
+    }
+
+    /// Forward one key event. Text arrives separately, as `TEXT`, so a key that
+    /// produces a character is never typed twice.
+    fn browser_engine_key(&mut self, key: Key, down: bool, mods: Modifiers) {
+        if key.is_modifier() {
+            return;
+        }
+        let Some(tab) = self.browser.active_engine_tab() else {
+            return;
+        };
+        let (name, code, vk, text) = engine_key(key);
+        if name.is_empty() {
+            return;
+        }
+        let kind = if down { "down" } else { "up" };
+        let line = format!(
+            "KEY {tab} {kind} {} {} {vk} {} {}",
+            litric_core::pct::encode(&name),
+            litric_core::pct::encode(&code),
+            modifier_bits(mods),
+            litric_core::pct::encode(if down { text.as_str() } else { "" })
+        );
+        if self.send_line(&line) && down {
+            self.browser_refresh();
+        }
+    }
+
+    /// Forward typed text, including anything an input method committed.
+    fn browser_engine_text(&mut self, text: &str) {
+        let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+        if clean.is_empty() {
+            return;
+        }
+        let Some(tab) = self.browser.active_engine_tab() else {
+            return;
+        };
+        if self.send_line(&format!("TEXT {tab} {}", litric_core::pct::encode(&clean))) {
+            self.browser_refresh();
+        }
+    }
+
+    /// Ask for a fresh frame, at most every 50 ms: a held key or a spin of the
+    /// wheel must not queue a screenshot each time.
+    fn browser_refresh(&mut self) {
+        const MIN_GAP_MS: u64 = 50;
+        // The start page is the shell's own surface; there is nothing for the
+        // engine to capture on it.
+        if !self.browser.active_tab_has_page() {
+            return;
+        }
+        if self.browser_refresh_ms != 0
+            && self.now_ms.saturating_sub(self.browser_refresh_ms) < MIN_GAP_MS
+        {
+            return;
+        }
+        let Some(tab) = self.browser.active_engine_tab() else {
+            return;
+        };
+        self.browser_refresh_ms = self.now_ms.max(1);
+        self.send_line(&format!("ACTIVATE {tab}"));
     }
 
     /// A dock click: open the app, focus it if backgrounded, minimize it if
@@ -1477,11 +1784,17 @@ impl Shell {
             let (tx, rx) = std::sync::mpsc::channel::<String>();
             self.terminal.busy = true;
             self.terminal_job = Some(rx);
+            // A command run from the Terminal is a real application launch,
+            // so it gets the session's display environment. Without this a GUI
+            // program started here would look for a server that is running
+            // right next to it and find nothing.
+            let envs = self.application_env();
             let spawn = std::thread::Builder::new()
                 .name("litric-terminal".to_owned())
                 .spawn(move || {
                     let out = std::process::Command::new("timeout")
                         .args(["30", "/bin/sh", "-c", &cmd])
+                        .envs(envs)
                         .output();
                     match out {
                         Ok(o) => {
@@ -1615,13 +1928,19 @@ impl Shell {
         };
         match out {
             Ok(msg) => {
-                self.files.listed = None;
                 self.notify("Files", "Done", &msg, Priority::Low, Some(4_000));
             }
             Err(e) => {
+                // Keep the dialog up with the real reason, and force the table
+                // to be read from disk again: a failed delete/move may still
+                // have changed something, and a table that keeps showing the
+                // old rows while claiming nothing happened is a lie either way.
                 self.files.dialog = Some(crate::apps::DialogKind::Error(e.to_string()));
             }
         }
+        // Both outcomes re-read the directory. Success because it changed;
+        // failure because the interface must show what is actually there.
+        self.files.listed = None;
         self.request_full_redraw();
     }
 
@@ -1678,13 +1997,15 @@ impl Shell {
         match result {
             Ok(what) => {
                 self.files.dialog = None;
-                self.files.listed = None;
                 self.notify("Files", "Done", &what, Priority::Low, Some(3_000));
             }
             Err(e) => {
+                // The dialog stays open with the cause rather than closing as
+                // though the name had been accepted.
                 self.files.dialog = Some(DialogKind::Error(e.to_string()));
             }
         }
+        self.files.listed = None;
         self.request_full_redraw();
     }
 
@@ -1702,7 +2023,7 @@ impl Shell {
                 if in_files {
                     self.files.ask_new_folder();
                 } else {
-                    self.desktop_dialog = Some(crate::apps::DesktopDialog::NewFolder);
+                    self.set_desktop_dialog(Some(crate::apps::DesktopDialog::NewFolder));
                     self.desktop_dialog_field.clear();
                     self.desktop_dialog_selection = None;
                 }
@@ -1742,14 +2063,23 @@ impl Shell {
             MA::ScanNow => return self.start_scan(),
             MA::BrowserStart => return self.browser_start_session(),
             MA::BrowserReload => {
-                if let Some(t) = self.browser.tabs.get(self.browser.active) {
-                    let url = t.url.clone();
-                    self.browser.status = format!("reloading {url}");
-                    let _ = self.browser.navigate_active();
+                let _ = self.browser.navigate_active();
+                self.browser_frame = None;
+                self.browser.last_frame = None;
+                if self.browser.active_tab_has_page() {
+                    if let Some(tab) = self.browser.active_engine_tab() {
+                        self.browser.status = "reloading".to_owned();
+                        self.send_line(&format!("RELOAD {tab}"));
+                    }
                 }
             }
             MA::BrowserCloseTab => {
                 let i = self.browser.active;
+                if let Some(tab) = self.browser.tabs.get(i).map(|t| t.engine_tab) {
+                    self.send_line(&format!("CLOSE {tab}"));
+                }
+                self.browser_frame = None;
+                self.browser.last_frame = None;
                 self.browser.close(i);
             }
             MA::DisplaySettings => {
@@ -1961,14 +2291,14 @@ impl Shell {
             let name = self.desktop_dialog_field.clone();
             let zone = self.regional.zone.clone();
             let Ok(bridge) = self.try_files_bridge(zone) else {
-                self.desktop_dialog = Some(DesktopDialog::Error(
+                self.set_desktop_dialog(Some(DesktopDialog::Error(
                     "the file service is not available on this platform".to_owned(),
-                ));
+                )));
                 return Vec::new();
             };
             match bridge.mkdir("/Documents", &name) {
                 Ok(()) => {
-                    self.desktop_dialog = None;
+                    self.set_desktop_dialog(None);
                     self.files.listed = None;
                     self.notify(
                         "Files",
@@ -1979,7 +2309,7 @@ impl Shell {
                     );
                 }
                 Err(e) => {
-                    self.desktop_dialog = Some(DesktopDialog::Error(e.to_string()));
+                    self.set_desktop_dialog(Some(DesktopDialog::Error(e.to_string())));
                 }
             }
             self.request_full_redraw();
@@ -1989,7 +2319,7 @@ impl Shell {
             Some(DesktopDialog::PowerConfirm { command }) => Some(command),
             _ => None,
         };
-        self.desktop_dialog = None;
+        self.set_desktop_dialog(None);
         self.request_full_redraw();
         confirmed.map_or_else(Vec::new, |command| vec![Effect::Power(command)])
     }
@@ -2068,10 +2398,30 @@ pub struct Shell {
     pub desktop_dialog_selection: Option<(usize, usize)>,
     /// The browser engine session, when one has been started.
     pub browser_session: Option<crate::link::Link>,
+    /// Foreign applications: the Wayland server, their surfaces and their
+    /// windows. `None` when no runtime directory was available, which is a
+    /// desktop that hosts only its own applications — reported, never silent.
+    pub clients: Option<crate::clients::Host>,
     /// The last frame the engine produced: RGBA8 pixels plus dimensions.
     /// One frame only — a newer frame replaces an undrawn older one, which is
     /// what bounds the memory a fast page can make the compositor hold.
     pub browser_frame: Option<Arc<[u8]>>,
+    /// The screen rectangle the last engine frame was drawn into. Pointer
+    /// positions are mapped through it before Chromium sees a coordinate, so a
+    /// click lands on the pixel the user aimed at rather than on the window
+    /// edge.
+    pub browser_engine_area: Option<Rect>,
+    /// The viewport the broker was last asked to render at, in engine pixels.
+    browser_viewport: (u32, u32),
+    /// The last pointer position already sent, so a 1 kHz mouse does not turn
+    /// into a 1 kHz CDP stream.
+    browser_pointer_sent: Option<(f64, f64)>,
+    /// When a fresh frame was last requested, in shell milliseconds.
+    browser_refresh_ms: u64,
+    /// The socket the browser broker is reached through. A field rather than a
+    /// constant so a test (or a hand-run broker) can point the shell at its own
+    /// socket instead of the system one.
+    pub browser_socket: std::path::PathBuf,
     /// Whether the diagnostic overlay is showing.
     pub diagnostics: bool,
     /// When to go idle.
@@ -2100,7 +2450,7 @@ pub struct Shell {
     pressed: Option<Hot>,
     meta_tap: MetaTap,
     last_input_ms: u64,
-    now_ms: u64,
+    pub(crate) now_ms: u64,
     /// The time [`Shell::tick`] last stepped the animation springs from, or
     /// `None` before the first tick.
     ///
@@ -2120,6 +2470,13 @@ pub struct Shell {
     /// notification queue remains authoritative; this is drawing data only and
     /// is bounded by the queue's capacity plus at most one short exit per item.
     retiring_banners: Vec<Notification>,
+    /// Whether the frame being drawn belongs to a surface that is leaving.
+    /// Its controls are pixels, not targets, so they must not take a click
+    /// from whatever replaced them.
+    drawing_retired: bool,
+    /// Hotspots registered by a leaving surface. Thrown away when it is done,
+    /// which is what keeps an exit from leaving invisible buttons behind.
+    retired_hot: Hotspots<Hot>,
     /// Whether Alt is still held while the switcher is open.
     switcher_holding: bool,
     /// The focused window when damage was last taken. A focus change repaints
@@ -2247,7 +2604,16 @@ impl Shell {
             desktop_dialog_field: String::new(),
             desktop_dialog_selection: None,
             browser_session: None,
+            clients: None,
             browser_frame: None,
+            browser_engine_area: None,
+            browser_viewport: (1280, 800),
+            browser_pointer_sent: None,
+            browser_refresh_ms: 0,
+            browser_socket: std::env::var_os("LITRIC_BROWSER_SOCK").map_or_else(
+                || std::path::PathBuf::from(BROWSER_SOCKET),
+                std::path::PathBuf::from,
+            ),
             diagnostics: false,
             idle_policy: IdlePolicy::default(),
             lock: crate::lock::LockState::default(),
@@ -2267,6 +2633,8 @@ impl Shell {
             frames: 0,
             anims: crate::anim::ShellAnims::new(),
             retiring_banners: Vec::new(),
+            drawing_retired: false,
+            retired_hot: Hotspots::default(),
             switcher_holding: false,
             drawn_focus: None,
             dock_settled: None,
@@ -2327,7 +2695,7 @@ impl Shell {
         if let Some(id) = ids.get(index).copied() {
             self.wm.reveal(id);
         }
-        self.overlay = Overlay::None;
+        self.set_overlay(Overlay::None);
         self.overlay_damage();
     }
 
@@ -2344,10 +2712,15 @@ impl Shell {
     }
 
     /// Whether a control is under the pointer or has keyboard focus.
+    ///
+    /// A surface that is leaving never highlights: it is a picture of a
+    /// control, not one, and a hover that followed the pointer into an exit
+    /// would suggest a click that cannot land.
     #[must_use]
     pub fn is_highlighted(&self, hot: Hot) -> bool {
-        matches!(self.hovered, Some(h) if h == hot)
-            || matches!(self.keyboard_focus, Some(h) if h == hot)
+        !self.drawing_retired
+            && (matches!(self.hovered, Some(h) if h == hot)
+                || matches!(self.keyboard_focus, Some(h) if h == hot))
     }
 
     /// The current keyboard target, primarily for diagnostics and tests.
@@ -2401,9 +2774,31 @@ impl Shell {
     }
 
     /// The hotspot table, for the renderer to fill in during layout.
+    ///
+    /// While a leaving surface is being drawn this is a scratch table, so its
+    /// controls are drawn but cannot be clicked: the input path only ever
+    /// consults `hot`, and the scratch table is cleared when the draw ends.
     #[must_use]
     pub fn hotspots_mut(&mut self) -> &mut Hotspots<Hot> {
-        &mut self.hot
+        if self.drawing_retired {
+            &mut self.retired_hot
+        } else {
+            &mut self.hot
+        }
+    }
+
+    /// Draw a surface that has already left, for the pixels and nothing else.
+    ///
+    /// The closure runs with [`Self::hotspots_mut`] diverted to a scratch
+    /// table and [`Self::is_highlighted`] answered false, so a menu or dialog
+    /// on its way out cannot answer a click or repeat an action.
+    pub fn draw_retired<R>(&mut self, draw: impl FnOnce(&mut Self) -> R) -> R {
+        self.retired_hot.clear();
+        self.drawing_retired = true;
+        let out = draw(self);
+        self.drawing_retired = false;
+        self.retired_hot.clear();
+        out
     }
 
     /// The hotspot table.
@@ -2457,9 +2852,14 @@ impl Shell {
     }
 
     /// Replace the logical overlay while allowing its visual predecessor to
-    /// complete a short, non-interactive exit. The dock/launcher is the one
-    /// exception: it owns its own persistent surface and can close in place,
-    /// so duplicating it as an overlay would be visually wrong.
+    /// complete a short, non-interactive exit.
+    ///
+    /// A surface is only kept as an exit snapshot when the spring its reveal
+    /// reads is going to fall. The launcher owns the dock, whose morph already
+    /// closes in place, and the panels that share one reveal spring (quick
+    /// settings, power and the LitricOS menu) replace each other with no
+    /// spring left to fall. Keeping a snapshot in either case would draw two
+    /// panels over each other until something else moved, so it is not kept.
     fn set_overlay(&mut self, next: Overlay) {
         if self.overlay == next {
             return;
@@ -2467,23 +2867,51 @@ impl Shell {
         if self
             .retiring_overlay
             .as_ref()
-            .is_some_and(|old| Self::same_overlay_kind(old, &next))
+            .is_some_and(|old| Self::same_overlay_family(old, &next))
         {
-            // Reopening the same surface reverses the same spring instead of
-            // drawing two copies of a panel over each other.
+            // Reopening the same surface, or swapping between panels that
+            // share a spring, reverses that spring instead of drawing two
+            // copies of a panel over each other.
             self.retiring_overlay = None;
         }
         let old = std::mem::replace(&mut self.overlay, next);
-        if old.is_open() && !matches!(old, Overlay::Launcher { .. }) {
+        if old.is_open()
+            && !matches!(old, Overlay::Launcher { .. })
+            && !Self::same_overlay_family(&old, &self.overlay)
+        {
             self.retiring_overlay = Some(old);
         }
         self.overlay_damage();
     }
 
-    /// Whether two overlay values draw the same kind of surface. Their query
-    /// or keyboard-selection payload does not alter that visual ownership.
-    fn same_overlay_kind(left: &Overlay, right: &Overlay) -> bool {
+    /// Whether two overlay values draw the same kind of surface, or read the
+    /// same reveal spring. Their query or keyboard-selection payload does not
+    /// alter that visual ownership.
+    fn same_overlay_family(left: &Overlay, right: &Overlay) -> bool {
         std::mem::discriminant(left) == std::mem::discriminant(right)
+            || matches!(
+                (left, right),
+                (
+                    Overlay::QuickSettings | Overlay::Power | Overlay::Litro,
+                    Overlay::QuickSettings | Overlay::Power | Overlay::Litro
+                )
+            )
+    }
+
+    /// The spring that decides how much of `overlay` is on screen. It is the
+    /// same value the draw side reads, so a snapshot can be dropped exactly
+    /// when its last pixel is.
+    fn overlay_reveal(&self, overlay: &Overlay) -> f32 {
+        match overlay {
+            Overlay::Launcher { .. } => self.anims.launcher_morph.value(),
+            Overlay::QuickSettings | Overlay::Power | Overlay::Litro => {
+                self.anims.quick_settings.value()
+            }
+            Overlay::Notifications => self.anims.notifications.value(),
+            Overlay::Switcher { .. } => self.anims.switcher.value(),
+            Overlay::Overview { .. } => self.anims.overview.value(),
+            Overlay::None => 0.0,
+        }
     }
 
     /// Replace a context menu and preserve only the outgoing pixels needed for
@@ -2524,21 +2952,18 @@ impl Shell {
     /// This keeps Do Not Disturb-suppressed notifications from allocating a
     /// redundant visual snapshot.
     fn retire_banner(&mut self, notification: Notification) {
-        if self.anims.banner_reveal(notification.id) <= 0.0 {
+        let id = notification.id;
+        if self.anims.banner_reveal(id) <= 0.0 {
             return;
         }
-        if !self
-            .retiring_banners
-            .iter()
-            .any(|old| old.id == notification.id)
-        {
+        if !self.retiring_banners.iter().any(|old| old.id == id) {
             self.retiring_banners.push(notification);
         }
-        self.anims.retire_banner(
-            self.retiring_banners
-                .last()
-                .map_or(0, |banner| banner.id),
-        );
+        // Retire the id that was actually dismissed. This used to read the
+        // id of the last snapshot pushed, which is a different banner as soon
+        // as one is already retiring: dismissing a second notification left
+        // the first one's exit running and this one never leaving.
+        self.anims.retire_banner(id);
     }
 
     /// Dismiss one notification while preserving a banner exit when needed.
@@ -2737,19 +3162,75 @@ impl Shell {
         self.verifier()
             .is_some_and(litric_sysd::platform::session::Verifier::can_lock)
             && self.facts.auth_lock == Some(false)
+            && self
+                .facts
+                .auth_account
+                .as_deref()
+                .is_some_and(|account| !account.is_empty() && account != "-")
+            && self.facts.auth_password.as_deref() == Some("set")
     }
 
-    /// Why locking is refused, in the daemon's own words.
+    /// Why locking is refused, in a sentence that names the next action.
+    ///
+    /// The daemon reports a reason token rather than a sentence because the
+    /// same refusal has to be usable in the facts protocol and in the
+    /// interface: "the account has no password" and "the helper is missing"
+    /// need different actions, and a single "locking is unavailable" hides
+    /// which one the person is looking at.
     #[must_use]
     pub fn lock_refusal(&self) -> String {
-        self.verifier().map_or_else(
-            || {
-                "The system daemon did not answer, so this session cannot check a \
-                 password and will not pretend to lock the screen."
-                    .to_owned()
-            },
-            |v| v.refusal().to_owned(),
-        )
+        let Some(verifier) = self.verifier() else {
+            return "The system daemon did not answer, so this session cannot check a \
+                    password and will not pretend to lock the screen."
+                .to_owned();
+        };
+        let account = self
+            .facts
+            .auth_account
+            .as_deref()
+            .filter(|a| !a.is_empty() && *a != "-");
+        match self.facts.auth_reason.as_deref() {
+            Some("helper-missing") => "No password checker is installed in this image, so \
+                 the screen could not be unlocked. Locking is refused rather than shown \
+                 working."
+                .to_owned(),
+            Some("account-missing") => "This image has no desktop account to check a \
+                 password for. Create the desktop account and set its password before \
+                 using the lock."
+                .to_owned(),
+            Some("password-locked") => format!(
+                "The desktop account {} has no usable password (it is locked), so this \
+                 screen could not be unlocked. Set a password with `passwd {}` on a \
+                 console, then start the session again.",
+                account.unwrap_or("for this session"),
+                account.unwrap_or("<account>"),
+            ),
+            Some("password-unset") => format!(
+                "The desktop account {} has no password set, so this screen could not be \
+                 unlocked. Set one with `passwd {}` on a console, then start the session \
+                 again.",
+                account.unwrap_or("for this session"),
+                account.unwrap_or("<account>"),
+            ),
+            Some("password-unknown") => format!(
+                "The password state of the desktop account {} could not be read, so \
+                 locking is refused rather than risk a screen that cannot unlock. Check \
+                 it with `passwd -S {}` on a console before trying again.",
+                account.unwrap_or("for this session"),
+                account.unwrap_or("<account>"),
+            ),
+            Some(_) => "The system daemon refuses locking on this machine, so the screen \
+                 was not locked."
+                .to_owned(),
+            None if self.facts.auth_lock == Some(true) => "The system daemon refuses \
+                 locking on this machine, so the screen was not locked."
+                .to_owned(),
+            None if self.facts.auth_password.as_deref() != Some("set") => "The desktop \
+                 account's password could not be confirmed, so locking is refused rather \
+                 than risk a screen that cannot unlock."
+                .to_owned(),
+            None => verifier.refusal().to_owned(),
+        }
     }
 
     /// Lock the session. Returns whether the lock was taken.
@@ -2757,20 +3238,17 @@ impl Shell {
     /// While locked the shell draws one surface and refuses input to everything
     /// else; the content that was on the screen is gone from the frame buffer on
     /// the next frame, because the lock surface starts by clearing it. The
-    /// account the password is checked against is the one logind says is logged
-    /// in. The single-user image has no PAM/logind desktop session yet, so its
-    /// configured desktop account (`litric`) is the fallback.
+    /// account the password is checked against is the one the daemon names as
+    /// the desktop account, not whichever logind session is listed first: the
+    /// diagnostic serial console autologins as root on this image.
     pub fn lock_now(&mut self) -> bool {
         if !self.can_lock() {
             return false;
         }
         self.lock.locked = true;
         self.lock.verdict = crate::lock::Verdict::Idle;
-        self.lock.user = self
-            .facts
-            .session_user
-            .clone()
-            .unwrap_or_else(|| "litric".to_owned());
+        // `can_lock` has already checked that this is present and not `-`.
+        self.lock.user = self.facts.auth_account.clone().unwrap_or_default();
         // The password field is immediately visible. Requiring an extra
         // Space/Enter press hid the only useful lock action behind a hint.
         self.lock.wake();
@@ -2778,8 +3256,15 @@ impl Shell {
         self.pointer = Point::new(self.wm.screen().w / 2.0, self.wm.screen().h / 2.0);
         // Every overlay is a surface the lock does not draw, so an open menu
         // must not still be on the shell's mind when the session comes back.
-        self.overlay = Overlay::None;
-        self.context_menu = None;
+        self.set_overlay(Overlay::None);
+        self.set_context_menu(None);
+        // The lock replaces the frame wholesale rather than fading it: a
+        // departing panel drawn over a locked session would be exactly the
+        // leak the line above is about, one frame later.
+        self.retiring_overlay = None;
+        self.retiring_context_menu = None;
+        self.retiring_desktop_dialog = None;
+        self.retiring_banners.clear();
         self.request_full_redraw();
         true
     }
@@ -2969,6 +3454,13 @@ impl Shell {
     }
 
     /// Ask the caller to check the typed password.
+    ///
+    /// The gate is the same one that raised the lock: a verifier and a daemon
+    /// that did not refuse. If the facts have gone away since — the daemon
+    /// missed a poll — there is nothing on the screen this session could use to
+    /// check a password, and it says so instead of collecting one it could not
+    /// use. It never unlocks on its own; the screen stays up and the attempt is
+    /// simply not made.
     fn submit_unlock(&mut self) -> Vec<Effect> {
         if !self.lock.locked || self.lock.stage != crate::lock::Stage::Entry {
             return Vec::new();
@@ -3064,6 +3556,9 @@ impl Shell {
         if self.terminal_pump() {
             self.request_full_redraw();
         }
+        // Client surfaces: mapping, titles, frames, a dead application and a
+        // window the user closed all arrive here, not through input.
+        self.pump_clients();
         // The overlay springs follow the overlay state and advance one step.
         // sync() is idempotent, so doing it here means no call site that
         // opens or closes an overlay has to remember the animation exists.
@@ -3110,6 +3605,32 @@ impl Shell {
         // an animation looks the same at every pace.
         let dt = self.animation_step_ms(now_ms);
         let moved = self.anims.step(dt);
+        // A surface that has finished leaving stops being pixels. The springs
+        // are the clock, so a snapshot lives exactly as long as its reveal is
+        // non-zero; holding one longer would keep a drawn panel on screen after
+        // its animation had ended, and dropping it earlier would cut the exit.
+        if self
+            .retiring_overlay
+            .as_ref()
+            .is_some_and(|old| self.overlay_reveal(old) <= 0.0)
+        {
+            self.retiring_overlay = None;
+        }
+        if self.anims.context_menu.settled() && self.context_menu.is_none() {
+            self.retiring_context_menu = None;
+        }
+        if self.anims.dialog.settled() && self.desktop_dialog.is_none() {
+            self.retiring_desktop_dialog = None;
+        }
+        let live_banners: Vec<u32> = self.notifications.items().iter().map(|n| n.id).collect();
+        let keep: Vec<u32> = self
+            .retiring_banners
+            .iter()
+            .map(|banner| banner.id)
+            .filter(|id| !live_banners.contains(id) && self.anims.banner_reveal(*id) > 0.0)
+            .collect();
+        self.retiring_banners
+            .retain(|banner| keep.contains(&banner.id));
         if moved.dock {
             // A spring that moved is damage (BUG-0019). `step` reports whether
             // the value changed, not whether it is still going, so a spring
@@ -3356,16 +3877,55 @@ impl Shell {
         }
 
         match ev {
+            // The page owns the keyboard while its window is focused: Meta
+            // combinations stay with the shell, everything else is Chromium's.
             InputEvent::KeyDown {
-                key, mods, repeat, ..
-            } => self.key_down(*key, *mods, *repeat),
-            InputEvent::KeyUp { key, mods, .. } => self.key_up(*key, *mods),
+                key,
+                code,
+                mods,
+                repeat,
+            } => {
+                if self.engine_takes_key(*key, *mods) {
+                    self.browser_engine_key(*key, true, *mods);
+                    return Vec::new();
+                }
+                if self.client_takes_key(*key, *mods) {
+                    // The key goes to the application and stops there: a
+                    // keystroke must not both type into a window and trigger
+                    // the shell's own shortcut for the same letter.
+                    self.client_key(u32::from(*code), *key, true, now_ms);
+                    return Vec::new();
+                }
+                self.key_down(*key, *mods, *repeat)
+            }
+            InputEvent::KeyUp { key, code, mods } => {
+                if self.engine_takes_key(*key, *mods) {
+                    self.browser_engine_key(*key, false, *mods);
+                    return Vec::new();
+                }
+                if self.client_takes_key(*key, *mods) {
+                    self.client_key(u32::from(*code), *key, false, now_ms);
+                    return Vec::new();
+                }
+                self.key_up(*key, *mods)
+            }
             InputEvent::TextInput { text } => {
-                self.text_input(text);
+                if self.browser_page_focused() {
+                    self.browser_engine_text(text);
+                } else if self.client_focused().is_none() {
+                    // A client is typing from the key events above; sending
+                    // the pre-composed text as well would double every letter.
+                    self.text_input(text);
+                }
                 Vec::new()
             }
             InputEvent::PointerMove { at, .. } => {
+                self.browser_engine_move(*at);
                 self.pointer_move(*at);
+                let over = self.client_under(*at);
+                if let Some(host) = self.clients.as_mut() {
+                    host.pointer(over, (at.x, at.y));
+                }
                 Vec::new()
             }
             InputEvent::PointerButton {
@@ -3376,7 +3936,14 @@ impl Shell {
                 mods,
             } => self.pointer_button(*button, *pressed, *at, *clicks, *mods),
             InputEvent::Scroll { dy, at, .. } => {
-                self.scroll(*dy, *at);
+                let over = self.client_under(*at);
+                let took = self
+                    .clients
+                    .as_mut()
+                    .is_some_and(|host| host.scroll(over, (at.x, at.y), *dy));
+                if !took {
+                    self.scroll(*dy, *at);
+                }
                 Vec::new()
             }
             // InputEvent is non-exhaustive: a backend that gains touch or a
@@ -3468,7 +4035,7 @@ impl Shell {
                     self.wm.unminimize(id);
                 }
             }
-            self.overlay = Overlay::None;
+            self.set_overlay(Overlay::None);
             self.overlay_damage();
         }
         Vec::new()
@@ -3493,7 +4060,7 @@ impl Shell {
             };
             match key {
                 Key::Escape => {
-                    self.overlay = Overlay::None;
+                    self.set_overlay(Overlay::None);
                     self.overlay_damage();
                 }
                 Key::Down => {
@@ -3502,10 +4069,10 @@ impl Shell {
                     } else {
                         selected.saturating_add(1).checked_rem(count).unwrap_or(0)
                     };
-                    self.overlay = Overlay::Launcher {
+                    self.set_overlay(Overlay::Launcher {
                         query,
                         selected: next,
-                    };
+                    });
                     self.overlay_damage();
                 }
                 Key::Up => {
@@ -3514,10 +4081,10 @@ impl Shell {
                     } else {
                         selected.checked_sub(1).unwrap_or(count.saturating_sub(1))
                     };
-                    self.overlay = Overlay::Launcher {
+                    self.set_overlay(Overlay::Launcher {
                         query,
                         selected: next,
-                    };
+                    });
                     self.overlay_damage();
                 }
                 Key::Enter => {
@@ -3528,17 +4095,17 @@ impl Shell {
                     } else {
                         App::ALL.get(selected).copied().map(crate::seek::Hit::App)
                     };
-                    self.overlay = Overlay::None;
+                    self.set_overlay(Overlay::None);
                     self.overlay_damage();
                     return Some(hit.map_or_else(Vec::new, |hit| self.seek_open(hit)));
                 }
                 Key::Backspace => {
                     let mut shorter = query;
                     shorter.pop();
-                    self.overlay = Overlay::Launcher {
+                    self.set_overlay(Overlay::Launcher {
                         query: shorter,
                         selected: 0,
-                    };
+                    });
                     self.overlay_damage();
                 }
                 _ => return None,
@@ -3555,7 +4122,7 @@ impl Shell {
             let cols = crate::overview::columns(count);
             match key {
                 Key::Escape => {
-                    self.overlay = Overlay::None;
+                    self.set_overlay(Overlay::None);
                     self.overlay_damage();
                 }
                 Key::Enter => {
@@ -3569,30 +4136,34 @@ impl Shell {
                         _ => crate::overview::Step::Down,
                     };
                     selected = crate::overview::step(selected, count, cols, step);
-                    self.overlay = Overlay::Overview { selected };
+                    self.set_overlay(Overlay::Overview { selected });
                     self.overlay_damage();
                 }
                 _ => return None,
             }
             return Some(Vec::new());
         }
-        match &mut self.overlay {
+        // The match takes a copy: an arm that closes its overlay calls
+        // `set_overlay`, which needs the whole shell, and a live borrow of the
+        // field would forbid that.
+        match self.overlay.clone() {
             // Handled before the mutable match for the same reason as Mission
             // Control: searching the system needs to read the window list.
             Overlay::Launcher { .. } => None,
             Overlay::Switcher { selected } => match key {
                 Key::Tab => {
                     let n = self.wm.switcher_order().len();
-                    if n > 0 {
-                        *selected = selected.saturating_add(1).checked_rem(n).unwrap_or(0);
-                    }
-                    self.overlay_damage();
+                    let selected = if n > 0 {
+                        selected.saturating_add(1).checked_rem(n).unwrap_or(0)
+                    } else {
+                        selected
+                    };
+                    self.set_overlay(Overlay::Switcher { selected });
                     Some(Vec::new())
                 }
                 Key::Escape => {
-                    self.overlay = Overlay::None;
+                    self.set_overlay(Overlay::None);
                     self.switcher_holding = false;
-                    self.overlay_damage();
                     Some(Vec::new())
                 }
                 _ => None,
@@ -3601,8 +4172,7 @@ impl Shell {
             Overlay::Overview { .. } => None,
             Overlay::QuickSettings | Overlay::Notifications | Overlay::Power | Overlay::Litro => {
                 if key == Key::Escape {
-                    self.overlay = Overlay::None;
-                    self.overlay_damage();
+                    self.set_overlay(Overlay::None);
                     Some(Vec::new())
                 } else {
                     None
@@ -4066,7 +4636,8 @@ impl Shell {
         // The cursor itself: repaint where it was left and where it is now.
         let s = self.tokens.scale;
         let from = origin.unwrap_or(before);
-        self.damage.push(crate::ui::cursor_bounds(from.x, from.y, s));
+        self.damage
+            .push(crate::ui::cursor_bounds(from.x, from.y, s));
         self.damage.push(crate::ui::cursor_bounds(at.x, at.y, s));
         self.cursor_step = if only_cursor { Some((from, at)) } else { None };
     }
@@ -4113,9 +4684,27 @@ impl Shell {
         pressed: bool,
         at: Point,
         clicks: u8,
-        _mods: Modifiers,
+        mods: Modifiers,
     ) -> Vec<Effect> {
         self.pointer = at;
+        // A click on a client's window belongs to that application. It is
+        // forwarded *and* the window manager still sees it, because a click
+        // must also focus and raise the window it lands on.
+        let over = self.client_under(at);
+        if let Some(host) = self.clients.as_mut() {
+            host.button(
+                over,
+                (at.x, at.y),
+                Self::pointer_button_code(button),
+                pressed,
+            );
+        }
+        // A button inside the page belongs to the web page, not to the shell:
+        // forwarding it and stopping here is what makes a link clickable.
+        if self.browser_page_point(at).is_some() {
+            self.browser_engine_button(button, pressed, at, clicks, mods);
+            return Vec::new();
+        }
         if !pressed {
             let released_on = self.hot.hit(at.x, at.y);
             let was = self.pressed.take();
@@ -4139,7 +4728,7 @@ impl Shell {
             // pointer is on: wallpaper, Files, Browser, Trash. Menus are the
             // shell's own actions, so a row can never exist that does nothing.
             if self.overlay.is_open() {
-                self.overlay = Overlay::None;
+                self.set_overlay(Overlay::None);
                 self.overlay_damage();
             }
             if pressed {
@@ -4153,8 +4742,10 @@ impl Shell {
                         self.files.select_row(i);
                     }
                 }
-                self.context_menu =
-                    Some(crate::apps::ContextMenu::for_surface(surface, (at.x, at.y)));
+                self.set_context_menu(Some(crate::apps::ContextMenu::for_surface(
+                    surface,
+                    (at.x, at.y),
+                )));
                 self.request_full_redraw();
             }
             return Vec::new();
@@ -4189,7 +4780,7 @@ impl Shell {
         // Clicking outside an open overlay dismisses it, which is what every
         // menu everywhere does.
         if self.overlay.is_open() {
-            self.overlay = Overlay::None;
+            self.set_overlay(Overlay::None);
             self.overlay_damage();
             return Vec::new();
         }
@@ -4226,10 +4817,38 @@ impl Shell {
     }
 
     fn scroll(&mut self, dy: f32, at: Point) {
+        if self.browser_page_point(at).is_some() {
+            self.browser_engine_wheel(dy, at);
+            return;
+        }
         // Scrolling over the top bar's workspace area moves between workspaces,
         // which is a gesture people expect and costs nothing to support.
         if self.top_bar().contains(at.x, at.y) && self.wm.cycle_workspace(dy > 0.0) {
             self.request_full_redraw();
+        }
+    }
+
+    /// The client window under a point, if the topmost thing there is one.
+    ///
+    /// The window manager answers with z-order and workspace already applied,
+    /// so a client window buried under another window correctly yields `None`
+    /// and the click does not reach the buried application.
+    fn client_under(&self, at: Point) -> Option<WindowId> {
+        let hit = self.wm.hit_test(at.x, at.y)?;
+        if !matches!(hit.zone, HitZone::Content) {
+            return None;
+        }
+        let hosts = self.clients.as_ref().is_some_and(|h| h.hosts(hit.window));
+        hosts.then_some(hit.window)
+    }
+
+    /// Wayland's button numbering for the shell's own pointer buttons.
+    const fn pointer_button_code(button: PointerButton) -> u8 {
+        match button {
+            PointerButton::Primary => 1,
+            PointerButton::Middle => 2,
+            PointerButton::Secondary => 3,
+            _ => 1,
         }
     }
 
@@ -4329,15 +4948,14 @@ impl Shell {
                 // did, because a menu row that powers a machine off on one
                 // click is exactly what the live-consent rule forbids.
                 self.overlay_damage();
-                self.overlay = Overlay::None;
+                self.set_overlay(Overlay::None);
                 let command = match n {
                     0 => return vec![Effect::RequestLock],
                     1 => PowerCommand::Suspend,
                     2 => PowerCommand::PowerOff,
                     _ => PowerCommand::Restart,
                 };
-                self.desktop_dialog =
-                    Some(crate::apps::DesktopDialog::PowerConfirm { command });
+                self.set_desktop_dialog(Some(crate::apps::DesktopDialog::PowerConfirm { command }));
                 self.desktop_dialog_field.clear();
                 self.desktop_dialog_selection = None;
                 self.request_full_redraw();
@@ -4345,12 +4963,12 @@ impl Shell {
             }
             Hot::LitroSession => {
                 self.overlay_damage();
-                self.overlay = Overlay::None;
+                self.set_overlay(Overlay::None);
                 self.perform(Action::Open(App::Settings))
             }
             Hot::LitroLock => {
                 self.overlay_damage();
-                self.overlay = Overlay::None;
+                self.set_overlay(Overlay::None);
                 vec![Effect::RequestLock]
             }
             Hot::LauncherSearch => Vec::new(),
@@ -4411,11 +5029,11 @@ impl Shell {
                         .get(i)
                         .map(|result| result.hit)
                 };
-                self.overlay = Overlay::None;
+                self.set_overlay(Overlay::None);
                 hit.map_or_else(Vec::new, |hit| self.seek_open(hit))
             }
             Hot::OverviewBackdrop => {
-                self.overlay = Overlay::None;
+                self.set_overlay(Overlay::None);
                 self.overlay_damage();
                 Vec::new()
             }
@@ -4429,7 +5047,7 @@ impl Shell {
                     self.wm.unminimize(id);
                     self.wm.focus_window(id);
                 }
-                self.overlay = Overlay::None;
+                self.set_overlay(Overlay::None);
                 self.switcher_holding = false;
                 Vec::new()
             }
@@ -4458,9 +5076,10 @@ impl Shell {
                 // rule exists to prevent.
                 if let Some(command) = PowerCommand::ALL.get(usize::from(n)).copied() {
                     self.overlay_damage();
-                    self.overlay = Overlay::None;
-                    self.desktop_dialog =
-                        Some(crate::apps::DesktopDialog::PowerConfirm { command });
+                    self.set_overlay(Overlay::None);
+                    self.set_desktop_dialog(Some(crate::apps::DesktopDialog::PowerConfirm {
+                        command,
+                    }));
                     self.desktop_dialog_field.clear();
                     self.desktop_dialog_selection = None;
                     self.request_full_redraw();
@@ -4542,8 +5161,49 @@ impl Shell {
                 }
                 Vec::new()
             }
-            Hot::BrowserNewTab | Hot::BrowserTab(_) | Hot::BrowserCloseTab(_) => {
+            // Tabs are the engine's tabs: the model and the broker are told
+            // about every open, close and focus, or one of them ends up with a
+            // tab the other has never heard of.
+            Hot::BrowserNewTab => {
+                self.browser.new_tab();
+                self.browser_frame = None;
+                self.browser.last_frame = None;
+                if let Some(tab) = self.browser.active_engine_tab() {
+                    self.send_line(&format!("NEW {tab}"));
+                }
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::BrowserTab(i) => {
+                if i != self.browser.active {
+                    // The new tab's page has not been seen yet: keeping the old
+                    // picture would put one site's pixels under another's URL.
+                    self.browser_frame = None;
+                    self.browser.last_frame = None;
+                }
                 let _ = crate::apps::browser_action(&mut self.browser, hot);
+                if self.browser.active_tab_has_page() {
+                    if let Some(tab) = self.browser.active_engine_tab() {
+                        self.send_line(&format!("ACTIVATE {tab}"));
+                    }
+                }
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::BrowserCloseTab(i) => {
+                let engine = self.browser.tabs.get(i).map(|tab| tab.engine_tab);
+                if let Some(tab) = engine {
+                    self.send_line(&format!("CLOSE {tab}"));
+                }
+                self.browser_frame = None;
+                self.browser.last_frame = None;
+                let _ = crate::apps::browser_action(&mut self.browser, hot);
+                if self.browser.active_tab_has_page() {
+                    if let Some(tab) = self.browser.active_engine_tab() {
+                        self.send_line(&format!("ACTIVATE {tab}"));
+                    }
+                }
+                self.request_full_redraw();
                 Vec::new()
             }
             Hot::BrowserOmnibox => {
@@ -4570,12 +5230,12 @@ impl Shell {
             Hot::NotificationItem(i) => {
                 let id = self.notifications.items().get(i).map(|n| n.id);
                 if let Some(id) = id {
-                    self.notifications.dismiss(id);
+                    self.dismiss_notification(id);
                 }
                 Vec::new()
             }
             Hot::NotificationsClear => {
-                self.notifications.clear();
+                self.clear_notifications();
                 Vec::new()
             }
             Hot::Desktop => {
@@ -4584,12 +5244,12 @@ impl Shell {
                 self.desktop_icons.select(None);
                 self.files.selected = None;
                 self.files.selected_rows.clear();
-                self.context_menu = None;
+                self.set_context_menu(None);
                 Vec::new()
             }
             Hot::DesktopIcon(i) => self.open_desktop_icon(i),
             Hot::MenuRow(action) => {
-                self.context_menu = None;
+                self.set_context_menu(None);
                 self.request_full_redraw();
                 self.perform_menu(action)
             }
@@ -4624,7 +5284,7 @@ impl Shell {
             }
             Hot::DialogCancel => {
                 if self.desktop_dialog.is_some() {
-                    self.desktop_dialog = None;
+                    self.set_desktop_dialog(None);
                     self.request_full_redraw();
                 } else {
                     self.files.close_dialog();
@@ -4684,21 +5344,22 @@ impl Shell {
         match action {
             Action::ToggleLauncher => {
                 self.overlay_damage();
-                self.overlay = if matches!(self.overlay, Overlay::Launcher { .. }) {
+                let open = matches!(self.overlay, Overlay::Launcher { .. });
+                self.set_overlay(if open {
                     Overlay::None
                 } else {
                     Overlay::Launcher {
                         query: String::new(),
                         selected: 0,
                     }
-                };
+                });
                 Vec::new()
             }
             Action::CloseOverlay => {
                 if self.overlay.is_open() {
                     self.overlay_damage();
                 }
-                self.overlay = Overlay::None;
+                self.set_overlay(Overlay::None);
                 self.switcher_holding = false;
                 Vec::new()
             }
@@ -4723,7 +5384,7 @@ impl Shell {
                     _ if forward => 1usize.checked_rem(n).unwrap_or(0),
                     _ => n.saturating_sub(1),
                 };
-                self.overlay = Overlay::Switcher { selected };
+                self.set_overlay(Overlay::Switcher { selected });
                 self.switcher_holding = true;
                 Vec::new()
             }
@@ -4791,7 +5452,8 @@ impl Shell {
             }
             Action::ToggleOverview => {
                 self.overlay_damage();
-                self.overlay = if matches!(self.overlay, Overlay::Overview { .. }) {
+                let open = matches!(self.overlay, Overlay::Overview { .. });
+                let next = if open {
                     Overlay::None
                 } else {
                     let selected = self
@@ -4801,6 +5463,7 @@ impl Shell {
                         .unwrap_or(0);
                     Overlay::Overview { selected }
                 };
+                self.set_overlay(next);
                 Vec::new()
             }
             Action::CenterWindow => {
@@ -4837,38 +5500,42 @@ impl Shell {
             Action::Open(app) => self.open_app(app),
             Action::ToggleQuickSettings => {
                 self.overlay_damage();
-                self.overlay = if self.overlay == Overlay::QuickSettings {
+                let next = if self.overlay == Overlay::QuickSettings {
                     Overlay::None
                 } else {
                     Overlay::QuickSettings
                 };
+                self.set_overlay(next);
                 Vec::new()
             }
             Action::TogglePowerMenu => {
                 self.overlay_damage();
-                self.overlay = if self.overlay == Overlay::Power {
+                let next = if self.overlay == Overlay::Power {
                     Overlay::None
                 } else {
                     Overlay::Power
                 };
+                self.set_overlay(next);
                 Vec::new()
             }
             Action::ToggleLitroMenu => {
                 self.overlay_damage();
-                self.overlay = if self.overlay == Overlay::Litro {
+                let next = if self.overlay == Overlay::Litro {
                     Overlay::None
                 } else {
                     Overlay::Litro
                 };
+                self.set_overlay(next);
                 Vec::new()
             }
             Action::ToggleNotifications => {
                 self.overlay_damage();
-                self.overlay = if self.overlay == Overlay::Notifications {
+                let next = if self.overlay == Overlay::Notifications {
                     Overlay::None
                 } else {
                     Overlay::Notifications
                 };
+                self.set_overlay(next);
                 Vec::new()
             }
             Action::ToggleDiagnostics => {
@@ -4976,7 +5643,7 @@ impl Shell {
     /// only an overlay that closes on the way repaints the whole screen.
     pub fn open_app(&mut self, app: App) -> Vec<Effect> {
         if self.overlay.is_open() {
-            self.overlay = Overlay::None;
+            self.set_overlay(Overlay::None);
             self.overlay_damage();
         }
         if let Some(existing) = self
@@ -5185,33 +5852,177 @@ pub fn eicar_denylist() -> litric_defender::denylist::Denylist {
     list
 }
 
-/// `"tab 1280 800"` in a FRAME header to `(1280, 800)`.
+/// The socket the browser broker listens on, when the shell has no override.
+const BROWSER_SOCKET: &str = "/run/litric/browser.sock";
+
+/// The tab a `FRAME <tab> <w> <h> <len>` header belongs to.
 #[must_use]
-fn parse_frame_dims(rest: &str) -> Option<(u32, u32)> {
-    let mut it = rest.split(' ').filter_map(|v| v.parse::<u32>().ok());
-    let w = it.next()?;
-    let h = it.next()?;
+fn frame_tab(header: &str) -> Option<u32> {
+    header
+        .strip_prefix("FRAME ")?
+        .split(' ')
+        .next()?
+        .parse::<u32>()
+        .ok()
+}
+
+/// `FRAME <tab> <w> <h> <len>` to `(w, h)`.
+///
+/// The header used to be `FRAME <tab> <len>`, and the two numeric fields were
+/// read as width and height: every real frame was rejected as the wrong size
+/// and the page stayed on its placeholder. The tab is skipped explicitly here
+/// so the shape cannot drift back without a test failing.
+#[must_use]
+fn parse_frame_dims(header: &str) -> Option<(u32, u32)> {
+    let mut it = header.strip_prefix("FRAME ")?.split(' ');
+    it.next()?;
+    let w = it.next()?.parse::<u32>().ok()?;
+    let h = it.next()?.parse::<u32>().ok()?;
     if w == 0 || h == 0 || w > 8192 || h > 8192 {
         return None;
     }
     Some((w, h))
 }
 
-/// The FRAME header length rule for the browser link: `FRAME <key> <len>`.
+/// The FRAME header length rule for the browser link: `FRAME <tab> <w> <h> <len>`.
+///
+/// Every reply that is not a frame — `HELLO`, `PONG`, `OK`, `TAB`, `ERR` — has
+/// no payload and must return `0`. Returning an error for them (which this
+/// function used to do for any line at all) closed the browser session on the
+/// first reply the broker sent, which made the handshake itself fatal.
 fn browser_frame_len(header: &str) -> Result<usize, String> {
-    header
-        .strip_prefix("FRAME ")
-        .and_then(|r| r.split(' ').nth(1))
+    let Some(rest) = header.strip_prefix("FRAME ") else {
+        return Ok(0);
+    };
+    let fields: Vec<&str> = rest.split(' ').collect();
+    let len = fields
+        .get(3)
         .ok_or_else(|| "bad FRAME header".to_owned())?
         .parse::<usize>()
-        .map_err(|_| "bad FRAME length".to_owned())
-        .and_then(|n| {
-            if n <= 1920 * 1080 * 4 {
-                Ok(n)
-            } else {
-                Err("frame too large".to_owned())
+        .map_err(|_| "bad FRAME length".to_owned())?;
+    // Bounded before allocating: a broken or hostile broker cannot make the
+    // shell reserve more than one 1920x1080 BGRA frame.
+    if len == 0 || len > 1920 * 1080 * 4 {
+        return Err("frame too large".to_owned());
+    }
+    Ok(len)
+}
+
+/// One `TAB` line: what the engine says about a tab it owns.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct TabUpdate {
+    /// The engine's stable tab id.
+    tab: u32,
+    /// `empty`, `loading`, `loaded` or `failed`.
+    state: String,
+    /// The address the engine actually has, percent-decoded.
+    url: String,
+    /// The document title, percent-decoded.
+    title: String,
+}
+
+/// Parse `TAB <tab> state=<s> url=<pct> title=<pct> back=<0|1> fwd=<0|1> secure=<0|1>`.
+///
+/// Unknown fields are ignored rather than rejected: the broker may add one, and
+/// a tab strip that stops updating because of a new key would be worse than the
+/// missing feature.
+#[must_use]
+fn parse_tab_line(line: &str) -> Option<TabUpdate> {
+    let mut fields = line.split_whitespace();
+    if fields.next()? != "TAB" {
+        return None;
+    }
+    let mut update = TabUpdate {
+        tab: fields.next()?.parse::<u32>().ok()?,
+        ..TabUpdate::default()
+    };
+    for field in fields {
+        let Some((key, value)) = field.split_once('=') else {
+            continue;
+        };
+        match key {
+            "state" => value.clone_into(&mut update.state),
+            "url" => {
+                update.url = litric_core::pct::decode(value).unwrap_or_else(|_| value.to_owned())
             }
-        })
+            "title" => {
+                update.title = litric_core::pct::decode(value).unwrap_or_else(|_| value.to_owned());
+            }
+            _ => {}
+        }
+    }
+    Some(update)
+}
+
+/// CDP's modifier bitmask: Alt = 1, Ctrl = 2, Meta = 4, Shift = 8.
+fn modifier_bits(mods: Modifiers) -> u32 {
+    let mut bits = 0;
+    if mods.alt || mods.altgr {
+        bits |= 1;
+    }
+    if mods.ctrl || mods.altgr {
+        bits |= 2;
+    }
+    if mods.meta {
+        bits |= 4;
+    }
+    if mods.shift {
+        bits |= 8;
+    }
+    bits
+}
+
+/// `(key, code, windowsVirtualKeyCode, text)` for `Input.dispatchKeyEvent`.
+///
+/// `text` is only filled for keys whose character Chromium needs to see as part
+/// of the key event (Enter and Tab); printable characters arrive through
+/// `Input.insertText` instead, so nothing is typed twice.
+fn engine_key(key: Key) -> (String, String, i64, String) {
+    fn named(name: &str, vk: i64) -> (String, String, i64, String) {
+        (name.to_owned(), name.to_owned(), vk, String::new())
+    }
+    match key {
+        Key::Char(c) => {
+            let (code, vk) = if c.is_ascii_alphabetic() {
+                (format!("Key{}", c.to_ascii_uppercase()), {
+                    i64::from(c.to_ascii_uppercase() as u8)
+                })
+            } else if c.is_ascii_digit() {
+                let digit = i64::from(c.to_digit(10).unwrap_or(0));
+                (format!("Digit{c}"), 48i64.saturating_add(digit))
+            } else if c == ' ' {
+                ("Space".to_owned(), 32)
+            } else {
+                (String::new(), 0)
+            };
+            (c.to_string(), code, vk, String::new())
+        }
+        Key::Enter => ("Enter".to_owned(), "Enter".to_owned(), 13, "\r".to_owned()),
+        Key::Tab => ("Tab".to_owned(), "Tab".to_owned(), 9, "\t".to_owned()),
+        Key::Escape => named("Escape", 27),
+        Key::Backspace => named("Backspace", 8),
+        Key::Delete => named("Delete", 46),
+        Key::Insert => named("Insert", 45),
+        Key::Home => named("Home", 36),
+        Key::End => named("End", 35),
+        Key::PageUp => named("PageUp", 33),
+        Key::PageDown => named("PageDown", 34),
+        Key::Left => named("ArrowLeft", 37),
+        Key::Up => named("ArrowUp", 38),
+        Key::Right => named("ArrowRight", 39),
+        Key::Down => named("ArrowDown", 40),
+        Key::CapsLock => named("CapsLock", 20),
+        Key::Function(n) if (1..=12).contains(&n) => {
+            let name = format!("F{n}");
+            (
+                name.clone(),
+                name,
+                111i64.saturating_add(i64::from(n)),
+                String::new(),
+            )
+        }
+        _ => (String::new(), String::new(), 0, String::new()),
+    }
 }
 
 /// Depth-limited file collection for the Defender's queue.
@@ -5534,6 +6345,253 @@ mod tests {
         s
     }
 
+    #[test]
+    fn a_frame_header_is_read_as_tab_width_height_and_length() {
+        let header = "FRAME 7 1280 800 4096000";
+        assert_eq!(frame_tab(header), Some(7));
+        assert_eq!(parse_frame_dims(header), Some((1280, 800)));
+        assert_eq!(browser_frame_len(header), Ok(1280 * 800 * 4));
+        // The shape the broker used to write, `FRAME <tab> <len>`, must not be
+        // read as a 7-pixel-wide frame: that mismatch silently dropped every
+        // real frame and left the page on its placeholder.
+        assert_eq!(parse_frame_dims("FRAME 7 4096000"), None);
+        assert!(browser_frame_len("FRAME 7 4096000").is_err());
+        // A length the shell would allocate is bounded before it allocates.
+        assert!(browser_frame_len("FRAME 7 1280 800 999999999").is_err());
+        assert!(browser_frame_len("FRAME 7 1280 800 0").is_err());
+        // Every non-frame reply has no payload. Treating one as a broken frame
+        // header closed the session on the broker's first reply.
+        for line in [
+            "HELLO 1 engine=chromium",
+            "OK viewport=1280x800",
+            "PONG",
+            "TAB 1 state=loaded",
+            "ERR engine-failed x",
+        ] {
+            assert_eq!(browser_frame_len(line), Ok(0), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_tab_line_carries_the_address_and_title_a_tab_shows() {
+        let line = "TAB 3 state=loaded \
+             url=https%3A%2F%2Fexample.com%2Fa%20b \
+             title=Example%20%E0%B8%97%E0%B8%94%E0%B8%AA%E0%B8%AD%E0%B8%9A \
+             back=1 fwd=0 secure=1";
+        let update = parse_tab_line(line).expect("a TAB line");
+        assert_eq!(update.tab, 3);
+        assert_eq!(update.state, "loaded");
+        assert_eq!(update.url, "https://example.com/a b");
+        assert_eq!(update.title, "Example ทดสอบ");
+        assert!(parse_tab_line("PONG").is_none());
+        assert!(parse_tab_line("TAB").is_none());
+    }
+
+    #[test]
+    fn a_key_event_does_not_also_carry_printable_text() {
+        // Printable characters arrive through TEXT. If the key event carried
+        // the character too, every letter typed into a page would arrive twice.
+        let (name, code, vk, text) = engine_key(Key::Char('a'));
+        assert_eq!(
+            (name.as_str(), code.as_str(), vk, text.as_str()),
+            ("a", "KeyA", 65, "")
+        );
+        let (_, _, vk, text) = engine_key(Key::Enter);
+        assert_eq!((vk, text.as_str()), (13, "\r"));
+        assert_eq!(
+            modifier_bits(Modifiers {
+                shift: true,
+                ctrl: true,
+                ..Modifiers::NONE
+            }),
+            10
+        );
+        let (name, code, _, _) = engine_key(Key::Left);
+        assert_eq!((name.as_str(), code.as_str()), ("ArrowLeft", "ArrowLeft"));
+    }
+
+    /// A broker stand-in that speaks LBP/1 over a real Unix socket and reports
+    /// every command it receives. The point of the test is the wire: the shell's
+    /// framing, its TAB handling and the lines its input path writes.
+    #[cfg(unix)]
+    fn fake_broker(path: &std::path::Path) -> std::sync::mpsc::Receiver<String> {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+
+        let listener = UnixListener::bind(path).expect("bind the fake broker");
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut line = String::new();
+            let (w, h, tab) = (4u32, 2u32, 1u32);
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                let cmd = line.trim_end().to_owned();
+                let _ = tx.send(cmd.clone());
+                if cmd.starts_with("HELLO") {
+                    let _ = writeln!(stream, "HELLO 1 engine=chromium version=test");
+                } else if cmd.starts_with("VIEWPORT") {
+                    let _ = writeln!(stream, "OK viewport=1280x800");
+                } else if cmd.starts_with("GO ")
+                    || cmd.starts_with("NEW ")
+                    || cmd.starts_with("ACTIVATE ")
+                {
+                    let _ = writeln!(
+                        stream,
+                        "TAB {tab} state=loaded url=https%3A%2F%2Fexample.com%2F \
+                         title=Example back=0 fwd=0 secure=1"
+                    );
+                    let mut pixels = vec![0u8; (w * h * 4) as usize];
+                    // The shell reads this payload's length and its alpha, so
+                    // one opaque byte stands for the whole buffer.
+                    if let Some(alpha) = pixels.get_mut(3) {
+                        *alpha = 0xFF;
+                    }
+                    let _ = writeln!(stream, "FRAME {tab} {w} {h} {}", pixels.len());
+                    let _ = stream.write_all(&pixels);
+                } else if cmd.starts_with("QUIT") {
+                    break;
+                }
+                let _ = stream.flush();
+                line.clear();
+            }
+        });
+        rx
+    }
+
+    #[cfg(unix)]
+    fn wait_for_browser_frame(s: &mut Shell) {
+        for _ in 0..200 {
+            s.pump_browser();
+            if s.browser_frame.is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_shell_shows_the_frame_a_broker_sends_and_forwards_a_click() {
+        let dir = std::env::temp_dir().join(format!(
+            "litric-shell-broker-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("browser.sock");
+        let commands = fake_broker(&path);
+
+        let mut s = shell();
+        s.browser_socket = path.clone();
+        s.open_app(App::Browser);
+        s.browser_navigate("https://example.com/");
+        wait_for_browser_frame(&mut s);
+
+        let frame = s.browser_frame.as_ref().expect("a frame reached the shell");
+        assert_eq!(frame.len(), 4 * 2 * 4, "the payload length is the header's");
+        assert_eq!(s.browser.last_frame, Some((4, 2)));
+        let tab = s.browser.tabs.first().expect("a tab was opened");
+        assert_eq!(tab.url, "https://example.com/");
+        assert_eq!(tab.title, "Example");
+
+        // Where the view drew the frame is the mapping the pointer uses.
+        s.set_browser_engine_area(Some(Rect::new(100.0, 100.0, 800.0, 400.0)));
+        let at = Point::new(500.0, 300.0); // centre of the area -> (2, 1)
+        for (pressed, now) in [(true, 1_000u64), (false, 1_016)] {
+            s.handle(
+                &InputEvent::PointerButton {
+                    button: PointerButton::Primary,
+                    pressed,
+                    at,
+                    clicks: 1,
+                    mods: Modifiers::NONE,
+                },
+                now,
+            );
+        }
+        s.handle(
+            &InputEvent::KeyDown {
+                key: Key::Enter,
+                code: 28,
+                mods: Modifiers::NONE,
+                repeat: false,
+            },
+            1_032,
+        );
+        s.handle(
+            &InputEvent::TextInput {
+                text: "hi".to_owned(),
+            },
+            1_040,
+        );
+
+        let mut seen = Vec::new();
+        while let Ok(cmd) = commands.recv_timeout(std::time::Duration::from_millis(500)) {
+            seen.push(cmd);
+            if seen.iter().any(|c| c.starts_with("TEXT ")) {
+                break;
+            }
+        }
+        assert!(seen.iter().any(|c| c == "HELLO 1"), "{seen:?}");
+        assert!(
+            seen.iter()
+                .any(|c| c.starts_with("GO 1 https%3A%2F%2Fexample.com%2F")),
+            "the navigation never reached the broker: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|c| c == "MOUSE 1 down 2.0 1.0 left 1 0"),
+            "the press was not forwarded at the page pixel: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|c| c == "MOUSE 1 up 2.0 1.0 left 1 0"),
+            "the release was not forwarded: {seen:?}"
+        );
+        // Enter carries its character in the key event; typed text goes as TEXT.
+        assert!(
+            seen.iter().any(|c| c == "KEY 1 down Enter Enter 13 0 %0D"),
+            "{seen:?}"
+        );
+        assert!(seen.iter().any(|c| c == "TEXT 1 hi"), "{seen:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_shell_says_why_a_missing_engine_cannot_show_a_page() {
+        let dir = std::env::temp_dir().join(format!(
+            "litric-shell-noengine-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("browser.sock");
+        let commands = fake_broker(&path);
+        // A broker that answers, then refuses the load by name.
+        let mut s = shell();
+        s.browser_socket = path.clone();
+        s.open_app(App::Browser);
+        s.browser_navigate("https://example.com/");
+        // Replace the status the fake broker left with the refusal the real one
+        // writes, and check the shell turns it into a sentence.
+        s.apply_engine_error("engine-unavailable No%20Chromium%20binary%20is%20present");
+        assert!(
+            s.browser
+                .status
+                .contains("the browser engine is not available: No Chromium binary is present"),
+            "{}",
+            s.browser.status
+        );
+        assert!(
+            s.browser.tabs.first().is_some_and(|tab| tab.error),
+            "a failed tab is marked as failed"
+        );
+        drop(commands);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn key(k: Key, mods: Modifiers) -> InputEvent {
         InputEvent::KeyDown {
             key: k,
@@ -5837,7 +6895,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(mismatched, 0, "{mismatched} pixels differ from a full composition");
+        assert_eq!(
+            mismatched, 0,
+            "{mismatched} pixels differ from a full composition"
+        );
     }
 
     #[test]
@@ -6634,6 +7695,193 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Effect::PersistPreferences(p) if p.onboarded)),
             "finishing setup persists onboarded=true"
+        );
+    }
+
+    // ---- exit animations ---------------------------------------------------
+    //
+    // A surface that closes is not gone the frame it stops accepting input.
+    // Its reveal spring has to fall, and the snapshot that keeps its pixels
+    // alive is dropped by that spring rather than by a timer.
+
+    #[test]
+    fn a_closed_panel_is_kept_exactly_while_its_exit_spring_has_pixels() {
+        let mut s = shell();
+        s.perform(Action::ToggleQuickSettings);
+        s.tick_after(16);
+        assert!(
+            s.overlay_reveal(&s.overlay) > 0.05,
+            "fixture: the panel is open enough to have pixels to lose"
+        );
+
+        s.perform(Action::CloseOverlay);
+        let old = s
+            .retiring_overlay()
+            .cloned()
+            .expect("a closing panel must keep its pixels");
+        assert_eq!(old, Overlay::QuickSettings);
+        assert!(s.overlay_reveal(&old) > 0.0);
+
+        let mut frames = 0;
+        while s.retiring_overlay().is_some() {
+            s.tick_after(16);
+            frames += 1;
+            assert!(frames < 60, "the snapshot outlived its settle budget");
+        }
+        assert!(
+            frames > 1,
+            "the panel vanished in one frame, which is the defect this fixes"
+        );
+    }
+
+    #[test]
+    fn reopening_a_panel_reverses_its_spring_instead_of_drawing_two_copies() {
+        let mut s = shell();
+        s.perform(Action::ToggleQuickSettings);
+        s.tick_after(16);
+        s.perform(Action::CloseOverlay);
+        assert!(s.retiring_overlay().is_some());
+        s.perform(Action::ToggleQuickSettings);
+        assert!(
+            s.retiring_overlay().is_none(),
+            "reopening the same panel must not leave a second copy on screen"
+        );
+    }
+
+    #[test]
+    fn swapping_between_panels_that_share_a_spring_does_not_keep_a_ghost() {
+        let mut s = shell();
+        s.perform(Action::ToggleQuickSettings);
+        s.tick_after(16);
+        s.perform(Action::TogglePowerMenu);
+        assert_eq!(s.overlay, Overlay::Power);
+        assert!(
+            s.retiring_overlay().is_none(),
+            "quick settings and the power menu share one reveal spring, so \
+             there is no exit to animate between them"
+        );
+    }
+
+    #[test]
+    fn a_retired_menu_is_still_painted_but_registers_no_click_target() {
+        let mut s = shell();
+        s.set_context_menu(Some(crate::apps::ContextMenu::for_surface(
+            crate::apps::MenuSurface::Desktop,
+            (40.0, 40.0),
+        )));
+        s.tick_after(16);
+
+        // Fixture: while it is open the row is both drawn and clickable.
+        let mut open = crate::canvas::Canvas::new(1280, 800, 0);
+        crate::views::draw(&mut open, &mut s);
+        assert!(s
+            .hotspots()
+            .rect_of(Hot::MenuRow(crate::apps::MenuAction::NewFolder))
+            .is_some());
+
+        s.set_context_menu(None);
+        assert!(s.retiring_context_menu().is_some());
+        // One frame of the exit, so the retiring menu is drawn smaller than
+        // the open one instead of at exactly the value it was left at.
+        s.tick_after(16);
+        let mut leaving = crate::canvas::Canvas::new(1280, 800, 0);
+        crate::views::draw(&mut leaving, &mut s);
+        assert!(
+            s.hotspots()
+                .rect_of(Hot::MenuRow(crate::apps::MenuAction::NewFolder))
+                .is_none(),
+            "a menu on its way out must not answer the next click"
+        );
+        assert!(
+            open.pixels() != leaving.pixels(),
+            "the retiring menu drew nothing: the close is still a cut"
+        );
+
+        // Once its spring lands, the last copy is gone too: the same corner
+        // of the screen carries strictly less ink once the menu has left.
+        let ink = |c: &crate::canvas::Canvas| {
+            let mut n = 0;
+            for y in 30i64..220 {
+                for x in 30i64..250 {
+                    if c.get(x, y).unwrap_or(0) != 0 {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        let while_leaving = ink(&leaving);
+        for _ in 0..40 {
+            s.tick_after(16);
+        }
+        assert!(s.retiring_context_menu().is_none());
+        let mut settled = crate::canvas::Canvas::new(1280, 800, 0);
+        crate::views::draw(&mut settled, &mut s);
+        assert!(
+            while_leaving > ink(&settled),
+            "the retired menu painted no pixels: {while_leaving} then, {} after",
+            ink(&settled)
+        );
+    }
+
+    #[test]
+    fn a_dismissed_dialog_keeps_its_panel_but_not_its_buttons() {
+        let mut s = shell();
+        s.set_desktop_dialog(Some(crate::apps::DesktopDialog::NewFolder));
+        s.tick_after(16);
+        assert!(
+            s.anims.dialog.value() > 0.05,
+            "fixture: the dialog is opening"
+        );
+
+        s.set_desktop_dialog(None);
+        assert!(s.retiring_desktop_dialog().is_some());
+        let mut c = crate::canvas::Canvas::new(1280, 800, 0);
+        crate::views::draw(&mut c, &mut s);
+        assert!(
+            s.hotspots().rect_of(Hot::DialogConfirm).is_none(),
+            "a fading dialog must not offer its button again"
+        );
+
+        for _ in 0..80 {
+            s.tick_after(16);
+        }
+        assert!(
+            s.retiring_desktop_dialog().is_none(),
+            "the dialog snapshot outlived its exit"
+        );
+    }
+
+    #[test]
+    fn a_dismissed_banner_keeps_its_pixels_until_its_spring_lands() {
+        let mut s = shell();
+        let id = s.notify(
+            "test",
+            "Disk almost full",
+            "12% remaining",
+            Priority::High,
+            Some(5_000),
+        );
+        s.tick_after(16);
+        assert!(
+            s.anims.banner_reveal(id) > 0.0,
+            "fixture: the banner is entering"
+        );
+
+        assert!(s.dismiss_notification(id));
+        assert!(s.retiring_banners().iter().any(|b| b.id == id));
+        s.tick_after(16);
+        assert!(
+            s.retiring_banners().iter().any(|b| b.id == id),
+            "the banner was dropped before it could leave"
+        );
+
+        for _ in 0..40 {
+            s.tick_after(16);
+        }
+        assert!(
+            s.retiring_banners().is_empty(),
+            "a banner outlived its exit spring"
         );
     }
 }

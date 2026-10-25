@@ -427,7 +427,9 @@ fn main() -> ExitCode {
     let mut locked = build();
     locked.shell.facts.auth_available = Some("unix-chkpwd".to_owned());
     locked.shell.facts.auth_lock = Some(false);
-    locked.shell.facts.session_user = Some("root".to_owned());
+    locked.shell.facts.auth_account = Some("litric".to_owned());
+    locked.shell.facts.auth_password = Some("set".to_owned());
+    locked.shell.facts.session_user = Some("litric".to_owned());
     if !locked.shell.lock_now() {
         eprintln!("render_bench: the fixture cannot check a password, so it cannot lock");
         return ExitCode::FAILURE;

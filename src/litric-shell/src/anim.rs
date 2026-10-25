@@ -145,7 +145,8 @@ impl ShellAnims {
     ) {
         self.set_reduced_motion(reduce_motion);
         self.launcher.set_target(f32::from(launcher_open));
-        self.quick_settings.set_target(f32::from(quick_settings_open));
+        self.quick_settings
+            .set_target(f32::from(quick_settings_open));
         self.notifications.set_target(f32::from(notifications_open));
         self.context_menu.set_target(f32::from(menu_open));
         self.launcher_morph.set_target(f32::from(launcher_open));
@@ -354,9 +355,8 @@ impl BannerAnims {
                 spring.set_target(0.0);
             }
         }
-        self.springs.retain(|id, spring| {
-            active.contains(id) || retiring.contains(id) || !spring.settled()
-        });
+        self.springs
+            .retain(|id, spring| active.contains(id) || retiring.contains(id) || !spring.settled());
     }
 
     /// Step all entries and report whether any pixels changed.

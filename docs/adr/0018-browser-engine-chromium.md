@@ -13,7 +13,11 @@
 `litric-browser` has a URL parser, a tab/history model and a privacy policy, and its
 only engine was `NoEngine`, which refuses every load. `SYSTEM-SCOPE.md` §0 already
 decided that the engine is integrated, never written. The shell draws everything
-itself on `/dev/fb0`; there is no Wayland server and no client surfaces.
+itself on `/dev/fb0`; when this was written there was no Wayland server and no
+client surfaces. **Amended by ADR-0024:** the shell now hosts a Wayland server and
+a foreign application's surface becomes a LitricOS window. The browser is
+unchanged by that: it still renders through its broker, not into a client
+surface of its own.
 
 ## Decision
 
@@ -71,7 +75,7 @@ header is followed immediately by its binary payload.
 |---|---|
 | `HELLO 1` | Must be first. Reply `HELLO 1 engine=<pct> version=<pct> sandbox=<on\|off>` or `ERR engine-unavailable <pct-msg>`. |
 | `VIEWPORT <w> <h>` | Content size in pixels, 64–4096 each. Applies to every tab. |
-| `NEW <url-pct\|->` | Open a tab, optionally navigating (input goes through `url::interpret` and the policy). Replies with a `TAB` event. |
+| `NEW <tab> <url-pct\|->` | Open a tab under the client's id, optionally navigating (input goes through `url::interpret` and the policy). Replies with a `TAB` event. The client chooses the id, as it does for every other tab command: a broker-chosen id made the two tab lists disagree from the second tab onward. |
 | `CLOSE <tab>` | Close a tab. Event `CLOSED <tab>`. |
 | `ACTIVATE <tab>` | Stream frames for this tab only; the previous tab's screencast stops. A fresh frame is sent. |
 | `GO <tab> <input-pct>` | Address-bar input: `url::interpret` → `Policy::check_navigation` → navigate. |
@@ -97,20 +101,30 @@ never reused within a connection. At most 16 tabs.
 | `ERR <kind> <pct-msg>` | `bad-request`, `no-such-tab`, `limit`, `too-long`, `engine-unavailable`, `engine-crashed`. |
 | `PONG` | — |
 
-Back-pressure: the broker acknowledges a screencast frame to Chromium only after the
-frame has been written to the socket, so a slow shell slows the engine instead of
-growing a queue.
+Frames today are **screenshot-per-command**, not a screencast: `GO`, `RELOAD`,
+`BACK`, `FORWARD` and `ACTIVATE` answer with one `TAB` line and one `FRAME`. The
+shell asks for a fresh frame (`ACTIVATE`) after input, at most every 50 ms, and
+`link::Framing::coalesce_key` keeps at most one undrawn frame per tab in the
+queue — a fast page cannot grow the shell's memory. `Page.startScreencast` with
+per-frame acknowledgement and back-pressure remains the planned Phase B; it is
+**not** what this code does, and nothing in the interface claims otherwise.
 
-## Policy enforcement — what each setting actually does
+## Policy enforcement — what the code actually does
 
-| `litric_browser::Policy` field | Enforced by | Scope |
+| Claim | Enforced by | Scope |
 |---|---|---|
-| `https_only` | `check_navigation` refuses typed `http:` and offers the `https:` address. | Address bar only; in-page `http:` links are Chromium's default behaviour. |
-| `block_trackers` | `Network.setBlockedURLs` with `*://host/*` and `*://*.host/*` per list entry, on every tab session. | All subresources and navigations. The built-in list is short and is **not** a comprehensive blocker. |
-| `javascript` | `Emulation.setScriptExecutionDisabled`. | Per tab. |
-| Site permissions (camera, microphone, location, notifications, clipboard read) | `Browser.setPermission … denied` at start-up. There is no prompt UI yet, so `Ask` behaves as `Deny`. | Browser-wide. |
-| Downloads | `Browser.setDownloadBehavior`: `allow` into the configured Downloads directory, otherwise `deny` with a `NOTICE`. | Browser-wide. |
-| JavaScript dialogs | Dismissed automatically with a `NOTICE`, so a page cannot wedge the tab. | Per tab. |
+| HTTPS only | `Broker::handle_go` parses with `litric_browser::url::Url` and refuses anything that is not `https:`. Plain `http:` is refused with the reason shown in the page area. | Every `GO`/`NEW` the shell sends. |
+| No filesystem access | `file:` is refused before the engine is asked; the broker has no grant to the user's files (see the unit's `ProtectHome=yes`, `ProtectSystem=strict` and the single `ReadWritePaths`). | Every navigation. |
+| No arbitrary schemes | Anything that is not `http`/`https`/`about:` is refused, so `javascript:`, `data:` and external protocols never reach the engine. | Every navigation. |
+| TLS is real | Chromium's own verification runs with its own trust store; the broker passes no `--ignore-certificate-errors` and refuses to add one. | All HTTPS. |
+| Downloads | `Browser.setDownloadBehavior` points at the broker's private directory (`--downloads`), and `DOWNLOADS` lists what is there. Without that argument downloads are not configured and the shell says so. | Browser-wide. |
+| Site permissions | Not surfaced. Headless Chromium has no prompt UI, so a page asking for camera, microphone or location gets nothing; LitricOS does not grant them on the user's behalf. | Browser-wide. |
+| Remote debugging | `--remote-debugging-pipe` only. No TCP debugging port is ever opened. | Process-wide. |
+| Engine sandbox | Chromium's sandbox is left ON. The unit runs the broker as `litric`, does not set `RestrictNamespaces`, and a Chromium that cannot start its sandbox is reported as an engine failure rather than silently downgraded with `--no-sandbox`. | Process-wide. |
+
+Tracker blocking, a JavaScript switch, dialog dismissal and a permission prompt
+UI are **not implemented**. The broker does not pretend they are: no command
+claims to change them, and the site-controls panel says so on screen.
 
 ## Known limitations (true on the day this was written)
 
@@ -124,3 +138,33 @@ growing a queue.
 ## Verification record
 
 Filled in from executed evidence only. Anything not listed here is **NOT VERIFIED**.
+
+**2026-10-25 — broker ⇄ Chromium ⇄ frames, executed (`tools/browser-e2e.py`).**
+Chromium 156.0.8078.47 (Chrome for Testing) on Ubuntu 24.04, broker built with
+`cargo build -p litric-browser --features broker`. Twelve stages passed:
+
+```text
+PASS start       broker listening on /tmp/litric-browser-e2e.sock
+PASS handshake   HELLO 1 engine=chromium version=0.2.0 sandbox=on
+PASS keepalive   PONG
+PASS policy      file:, http: and unknown commands refused by name
+PASS start page  TAB 1 state=empty url=about%3Ablank title=New%20Tab
+PASS navigation  https://example.com/ title='Example Domain'
+PASS rendering   1280x800 BGRA, 264 sampled colours, page.png
+PASS link        clicked through to https://www.iana.org/help/example-domains
+PASS scroll      the page moved in response to the wheel
+PASS input       click and typed text were accepted
+PASS tabs        opened, loaded and closed a second tab
+PASS shutdown    the broker exited on QUIT
+```
+
+The click-through is the load-bearing line: a pointer event the test dispatched
+at the link's own pixels navigated the tab, which means input, CDP dispatch and
+the tab's address all agree. `tools/browser-e2e.py` writes `page.png`,
+`scrolled.png` and `after-input.png` next to its log so the picture can be
+looked at rather than inferred.
+
+**Not verified by that run:** the image itself (no mkosi/QEMU on this host), the
+systemd socket and `--stdio` instance path, and Chromium's sandbox inside the
+signed image. Those need `tools/build.sh --profile desktop` and a boot on a
+Linux host with mkosi and QEMU.

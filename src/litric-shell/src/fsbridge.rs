@@ -44,6 +44,10 @@ pub enum FsError {
     Exists,
     /// The OS refused.
     Denied,
+    /// The filesystem does not allow writes at all.
+    ReadOnly,
+    /// The filesystem has no room left.
+    Full,
     /// The name breaks the naming rules.
     BadName,
     /// The path is not a directory where one was needed.
@@ -59,6 +63,10 @@ impl core::fmt::Display for FsError {
             Self::NotFound => f.write_str("no such item"),
             Self::Exists => f.write_str("an item with that name already exists"),
             Self::Denied => f.write_str("permission denied"),
+            Self::ReadOnly => {
+                f.write_str("the filesystem is read-only, so nothing can be written there")
+            }
+            Self::Full => f.write_str("the storage is full, so nothing more can be written"),
             Self::BadName => f.write_str("that name is not allowed"),
             Self::NotADirectory => f.write_str("that item is not a folder"),
             Self::Io(m) => f.write_str(m),
@@ -111,8 +119,93 @@ fn map_err(op: &str, e: &std::io::Error) -> FsError {
         std::io::ErrorKind::NotFound => FsError::NotFound,
         std::io::ErrorKind::AlreadyExists => FsError::Exists,
         std::io::ErrorKind::PermissionDenied => FsError::Denied,
+        // A component of the path is a file. The raw sentence for this is "Not
+        // a directory (os error 20)", which says nothing a person can act on;
+        // the storage path is included by the caller.
+        std::io::ErrorKind::NotADirectory => FsError::NotADirectory,
+        std::io::ErrorKind::ReadOnlyFilesystem => FsError::ReadOnly,
+        std::io::ErrorKind::StorageFull => FsError::Full,
         std::io::ErrorKind::InvalidInput => FsError::BadName,
+        // The raw operating-system sentence is the only diagnosis left (torn
+        // filesystem, I/O error, quota, an unreadable parent), and dropping it
+        // would leave "could not create the folder" with no cause at all.
         _ => FsError::Io(format!("{op}: {e}")),
+    }
+}
+
+/// The directories every user storage starts with.
+///
+/// These are the places the Files window and the desktop icons name, plus
+/// `Projects`, which is in `FilesApp::DEFAULT_PLACES`. Creating one that exists
+/// is a no-op: the first-run initialiser is run on every boot, so it must never
+/// delete or replace anything.
+pub const DEFAULT_STORAGE_DIRS: [&str; 7] = [
+    "Documents",
+    "Downloads",
+    "Desktop",
+    "Pictures",
+    "Music",
+    "Videos",
+    "Projects",
+];
+
+/// Create `host` and the standard folders inside it, without disturbing what is
+/// already there.
+///
+/// This is what makes a first boot work: the Files application opens in
+/// `/Documents`, and a storage root that exists but has no `Documents` would
+/// make the first thing the user sees an empty folder with no way to tell
+/// whether it is empty or broken. Running it again after a restart changes
+/// nothing.
+///
+/// # Errors
+/// `NotADirectory` when the root or a standard name exists as something else;
+/// otherwise the OS error mapped to a sentence a person can act on.
+pub fn ensure_storage(host: &std::path::Path) -> Result<(), FsError> {
+    #[cfg(not(unix))]
+    {
+        let _ = host;
+        Err(FsError::Unsupported)
+    }
+    #[cfg(unix)]
+    {
+        match std::fs::symlink_metadata(host) {
+            Ok(meta) if !meta.is_dir() => return Err(FsError::NotADirectory),
+            // A link is not a directory here even when it points at one: the
+            // storage root is a real directory the systemd sandbox opened.
+            Ok(meta) if meta.file_type().is_symlink() => return Err(FsError::NotADirectory),
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir_all(host).map_err(|e| map_err("create storage", &e))?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    // Private by default. Only this process writes the user's
+                    // documents, and the browser's download directory is opened
+                    // separately (see the unit file) rather than by widening
+                    // every folder in the tree.
+                    std::fs::set_permissions(host, std::fs::Permissions::from_mode(0o700))
+                        .map_err(|e| map_err("secure storage", &e))?;
+                }
+            }
+            Err(e) => return Err(map_err("open storage", &e)),
+        }
+        for name in DEFAULT_STORAGE_DIRS {
+            let dir = host.join(name);
+            match std::fs::symlink_metadata(&dir) {
+                Ok(meta) if meta.file_type().is_dir() && !meta.file_type().is_symlink() => {}
+                Ok(_) => {
+                    return Err(FsError::Io(format!(
+                        "{name} in the file storage exists but is not a folder"
+                    )))
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    std::fs::create_dir(&dir).map_err(|e| map_err("create folder", &e))?;
+                }
+                Err(e) => return Err(map_err("create folder", &e)),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -141,13 +234,19 @@ impl FsBridge {
         }
     }
 
-    /// The host path of a logical path such as `/Documents`, refusing `..`
-    /// and separators that would escape the root. On non-Unix this always
-    /// fails with [`FsError::Unsupported`]; the caller reports it.
+    /// The host path of a logical path such as `/Documents`, refusing `..`,
+    /// `.` and any path whose **parent** is a symbolic link. On non-Unix this
+    /// always fails with [`FsError::Unsupported`]; the caller reports it.
+    ///
+    /// Rejecting `..` alone was not enough: `/Documents/link/file` is lexically
+    /// inside the storage root while `link` may point at `/etc`, and the old
+    /// implementation happily returned that path. Every existing component is
+    /// checked with `symlink_metadata`, so a link in the middle of a path is a
+    /// refusal rather than a route out of the share (ADR-0019).
     ///
     /// # Errors
     /// [`FsError::Unsupported`] on non-Unix; [`FsError::BadName`] for a path
-    /// that would escape the root.
+    /// that would escape the root; [`FsError::Denied`] when a parent is a link.
     pub fn host_path(&self, logical: &str) -> Result<std::path::PathBuf, FsError> {
         #[cfg(not(unix))]
         {
@@ -156,18 +255,65 @@ impl FsBridge {
         }
         #[cfg(unix)]
         {
-            let mut out = self.host_root.clone();
-            for seg in logical.split('/') {
-                if seg.is_empty() {
-                    continue;
-                }
-                if seg == ".." {
-                    return Err(FsError::BadName);
-                }
-                out.push(seg);
-            }
-            Ok(out)
+            self.checked_path(logical, false)
         }
+    }
+
+    /// The host path with the final component checked too: a path that names a
+    /// symbolic link is refused. Used by the operations that *read through* a
+    /// path, where the kernel would follow it (`read_dir`, `read`).
+    #[cfg(unix)]
+    fn checked_path(
+        &self,
+        logical: &str,
+        include_last: bool,
+    ) -> Result<std::path::PathBuf, FsError> {
+        let mut out = self.host_root.clone();
+        let segments: Vec<&str> = logical.split('/').filter(|s| !s.is_empty()).collect();
+        let mut missing = false;
+        for (index, seg) in segments.iter().enumerate() {
+            // `.` addresses the same directory and `..` names a parent. Neither
+            // is a name this bridge accepts, even when the result would still
+            // be inside the root: a logical path is a sequence of names.
+            if *seg == ".." || *seg == "." || seg.contains('\0') {
+                return Err(FsError::BadName);
+            }
+            out.push(seg);
+            if missing {
+                continue;
+            }
+            let last = index.saturating_add(1) == segments.len();
+            if last && !include_last {
+                continue;
+            }
+            match std::fs::symlink_metadata(&out) {
+                Ok(meta) => {
+                    if meta.file_type().is_symlink() {
+                        return Err(FsError::Denied);
+                    }
+                }
+                // A component that does not exist cannot be a link, and the
+                // operation itself will report `NotFound` where that matters.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => missing = true,
+                Err(e) => return Err(map_err("resolve", &e)),
+            }
+        }
+        Ok(out)
+    }
+
+    /// A path whose final component must not be a symbolic link either.
+    #[cfg(unix)]
+    fn read_path(&self, logical: &str) -> Result<std::path::PathBuf, FsError> {
+        self.checked_path(logical, true)
+    }
+
+    /// An internal storage directory (the trash), created if absent and refused
+    /// if a link stands where one of its components should be.
+    #[cfg(unix)]
+    fn storage_dir(&self, logical: &str) -> Result<std::path::PathBuf, FsError> {
+        let path = self.checked_path(logical, true)?;
+        std::fs::create_dir_all(&path).map_err(|e| map_err("create storage folder", &e))?;
+        Ok(path)
     }
 
     /// Read one directory, hidden files excluded, sorted name-first.
@@ -182,7 +328,7 @@ impl FsBridge {
         }
         #[cfg(unix)]
         {
-            let dir = self.host_path(logical)?;
+            let dir = self.read_path(logical)?;
             let meta = std::fs::symlink_metadata(&dir).map_err(|e| map_err("list", &e))?;
             if !meta.is_dir() {
                 return Err(FsError::NotADirectory);
@@ -257,8 +403,13 @@ impl FsBridge {
         }
         #[cfg(unix)]
         {
-            let dir = self.host_path(parent)?;
-            std::fs::create_dir(dir.join(name)).map_err(|e| map_err("mkdir", &e))
+            // The parent is a *directory the operation acts through*, so its
+            // own final component has to be a real directory too. Checking only
+            // the components above it would let `/Documents/link` (a link to
+            // anywhere) receive the new folder.
+            let dir = self.checked_path(parent, true)?;
+            let target = dir.join(name);
+            std::fs::create_dir(&target).map_err(|e| map_err("mkdir", &e))
         }
     }
 
@@ -277,11 +428,12 @@ impl FsBridge {
         }
         #[cfg(unix)]
         {
-            let dir = self.host_path(parent)?;
+            let dir = self.checked_path(parent, true)?;
+            let target = dir.join(name);
             std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(dir.join(name))
+                .open(&target)
                 .map(|_| ())
                 .map_err(|e| map_err("new file", &e))
         }
@@ -292,17 +444,24 @@ impl FsBridge {
     /// # Errors
     /// [`FsError::Exists`] when the destination name is taken.
     pub fn rename(&self, parent: &str, old: &str, new: &str) -> Result<(), FsError> {
+        // Both names are final segments. `old` was only checked by the caller, and
+        // a bridge method that trusts its caller with a path is a bridge whose
+        // confinement is a promise: `rename(dir, "/etc/passwd", ...)` used to
+        // join an absolute path over the directory and leave the storage root.
+        if !valid_name(old) {
+            return reject(old);
+        }
         if !valid_name(new) {
             return reject(new);
         }
         #[cfg(not(unix))]
         {
-            let _ = (parent, old);
+            let _ = parent;
             Err(FsError::Unsupported)
         }
         #[cfg(unix)]
         {
-            let dir = self.host_path(parent)?;
+            let dir = self.checked_path(parent, true)?;
             let dest = dir.join(new);
             if std::fs::symlink_metadata(&dest).is_ok() {
                 return Err(FsError::Exists);
@@ -327,7 +486,13 @@ impl FsBridge {
             let src = self.host_path(from)?;
             let _ = std::fs::symlink_metadata(&src).map_err(|e| map_err("copy", &e))?;
             let name = from.rsplit('/').next().unwrap_or_default().to_owned();
-            let dest = self.host_path(dest_dir)?;
+            if !valid_name(&name) {
+                return Err(FsError::BadName);
+            }
+            let dest = self.checked_path(dest_dir, true)?;
+            if !dest.is_dir() {
+                return Err(FsError::NotADirectory);
+            }
             let final_name = if dest.join(&name).exists() {
                 crate::fsbridge::copy_of_name(&name, &|n| dest.join(n).exists())
             } else {
@@ -353,7 +518,13 @@ impl FsBridge {
             let src = self.host_path(from)?;
             let _meta = std::fs::symlink_metadata(&src).map_err(|e| map_err("move", &e))?;
             let name = from.rsplit('/').next().unwrap_or_default().to_owned();
-            let dest = self.host_path(dest_dir)?;
+            if !valid_name(&name) {
+                return Err(FsError::BadName);
+            }
+            let dest = self.checked_path(dest_dir, true)?;
+            if !dest.is_dir() {
+                return Err(FsError::NotADirectory);
+            }
             let final_name = if dest.join(&name).exists() {
                 crate::fsbridge::copy_of_name(&name, &|n| dest.join(n).exists())
             } else {
@@ -417,14 +588,8 @@ impl FsBridge {
             // Existence first: a missing source must fail here, before any
             // record exists, not after it has been reserved.
             let _ = std::fs::symlink_metadata(&src).map_err(|e| map_err("trash", &e))?;
-            let base = self.host_root.join(".local/share/Trash");
-            let files = base.join("files");
-            let info = base.join("info");
-            for d in [&files, &info] {
-                if let Err(e) = std::fs::create_dir_all(d) {
-                    return Err(map_err("trash dirs", &e));
-                }
-            }
+            let files = self.storage_dir("/.local/share/Trash/files")?;
+            let info = self.storage_dir("/.local/share/Trash/info")?;
             let name = logical.rsplit('/').next().unwrap_or_default().to_owned();
             let stamp = self.zone.local(i64::try_from(now_secs).unwrap_or(0));
             let deleted_iso = format!(
@@ -471,9 +636,8 @@ impl FsBridge {
         }
         #[cfg(unix)]
         {
-            let base = self.host_root.join(".local/share/Trash");
-            let info = base.join("info");
-            let files = base.join("files");
+            let info = self.checked_path("/.local/share/Trash/info", true)?;
+            let files = self.checked_path("/.local/share/Trash/files", true)?;
             if !info.is_dir() {
                 return Ok(Vec::new());
             }
@@ -571,15 +735,20 @@ impl FsBridge {
         }
         #[cfg(unix)]
         {
-            let base = self.host_root.join(".local/share/Trash");
-            let src = base.join("files").join(name);
-            let dest_dir = self.host_path(&entry.restore_dir)?;
+            let src = self
+                .checked_path("/.local/share/Trash/files", true)?
+                .join(name);
+            let dest_dir = self.checked_path(&entry.restore_dir, true)?;
+            if !dest_dir.is_dir() {
+                return Err(FsError::NotADirectory);
+            }
             let dest = dest_dir.join(name);
             if std::fs::symlink_metadata(&dest).is_ok() {
                 return Err(FsError::Exists);
             }
             std::fs::rename(&src, &dest).map_err(|e| map_err("restore", &e))?;
-            let _ = std::fs::remove_file(base.join("info").join(format!("{name}.trashinfo")));
+            let info = self.checked_path("/.local/share/Trash/info", true)?;
+            let _ = std::fs::remove_file(info.join(format!("{name}.trashinfo")));
             Ok(entry.restore_dir.clone())
         }
     }
@@ -624,8 +793,11 @@ impl FsBridge {
         #[cfg(unix)]
         {
             const MAX: u64 = 512 * 1024;
-            let p = self.host_path(logical)?;
+            let p = self.read_path(logical)?;
             let meta = std::fs::symlink_metadata(&p).map_err(|e| map_err("read", &e))?;
+            if !meta.is_file() {
+                return Err(FsError::NotADirectory);
+            }
             if meta.len() > MAX {
                 return Err(FsError::Io("file is too large to show".to_owned()));
             }
@@ -650,12 +822,13 @@ impl FsBridge {
         }
         #[cfg(unix)]
         {
-            let dir = self.host_path(parent)?;
+            let dir = self.checked_path(parent, true)?;
+            let target = dir.join(name);
             use std::io::Write;
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(dir.join(name))
+                .open(&target)
                 .map_err(|e| map_err("write", &e))?;
             f.write_all(content.as_bytes())
                 .map_err(|e| map_err("write", &e))
@@ -728,7 +901,7 @@ impl FsBridge {
         #[cfg(unix)]
         {
             use std::io::Read as _;
-            let dest_path = self.host_path(dest)?;
+            let dest_path = self.checked_path(dest, true)?;
             if std::fs::symlink_metadata(&dest_path).is_ok() {
                 return Err(FsError::Exists);
             }
@@ -809,7 +982,7 @@ impl FsBridge {
         #[cfg(unix)]
         {
             use std::io::Read as _;
-            let p = self.host_path(archive)?;
+            let p = self.read_path(archive)?;
             let mut bytes = Vec::new();
             std::fs::File::open(&p)
                 .and_then(|mut f| f.read_to_end(&mut bytes))
@@ -833,8 +1006,8 @@ impl FsBridge {
             } else {
                 format!("{parent}/{stem}")
             };
-            let out_host = self.host_path(&out_dir)?;
-            if out_host.exists() {
+            let out_host = self.checked_path(&out_dir, true)?;
+            if std::fs::symlink_metadata(&out_host).is_ok() {
                 return Err(FsError::Exists);
             }
             std::fs::create_dir(&out_host).map_err(|e| map_err("extract", &e))?;
@@ -1077,6 +1250,22 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn rename_refuses_an_existing_destination_and_keeps_both_files() {
+        let root = temp_root("rename-exists");
+        let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).unwrap();
+        b.write_text("/", "old.txt", "old").unwrap();
+        b.write_text("/", "new.txt", "new").unwrap();
+        assert!(matches!(
+            b.rename("/", "old.txt", "new.txt"),
+            Err(FsError::Exists)
+        ));
+        assert_eq!(b.read_text("/old.txt").as_deref(), Ok("old"));
+        assert_eq!(b.read_text("/new.txt").as_deref(), Ok("new"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn copy_keeps_both_and_numbers_the_next_clash() {
         let root = temp_root("cp");
         let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).unwrap();
@@ -1231,5 +1420,207 @@ mod tests {
         let b = FsBridge::open(&dir, litric_locale::TimeZone::utc("test"))
             .expect_err("non-unix must refuse to open");
         assert!(matches!(b, FsError::Unsupported));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn storage_initialisation_is_idempotent_and_never_removes_anything() {
+        let root = temp_root("init");
+        let storage = root.join("var/lib/litric-files/root");
+        ensure_storage(&storage).expect("first boot creates the share");
+        for name in DEFAULT_STORAGE_DIRS {
+            assert!(
+                storage.join(name).is_dir(),
+                "{name} is created for the Files application"
+            );
+        }
+        // The first boot must leave a usable file alone, and a restart must not
+        // recreate an empty share over it.
+        std::fs::write(storage.join("Documents/notes.txt"), "keep me").expect("user file");
+        ensure_storage(&storage).expect("second boot is a no-op");
+        assert_eq!(
+            std::fs::read_to_string(storage.join("Documents/notes.txt")).expect("readable"),
+            "keep me"
+        );
+        // A root that exists as a file is reported, not replaced.
+        let not_a_dir = root.join("not-a-dir");
+        std::fs::write(&not_a_dir, "x").expect("fixture");
+        assert!(matches!(
+            ensure_storage(&not_a_dir),
+            Err(FsError::NotADirectory)
+        ));
+        // A quick check of the mode: the share itself is private.
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&storage)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "the file share is not readable by others");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_in_a_parent_is_refused_and_nothing_is_written_through_it() {
+        let root = temp_root("symlink-parent");
+        let outside = temp_root("symlink-outside");
+        ensure_storage(&root).expect("storage");
+        std::os::unix::fs::symlink(&outside, root.join("Documents/link")).expect("fixture link");
+        let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).unwrap();
+
+        assert!(
+            matches!(b.mkdir("/Documents/link", "escape"), Err(FsError::Denied)),
+            "a folder cannot be created through a link"
+        );
+        assert!(
+            matches!(
+                b.write_text("/Documents/link", "escape.txt", "x"),
+                Err(FsError::Denied)
+            ),
+            "a file cannot be written through a link"
+        );
+        assert!(
+            matches!(b.list_dir("/Documents/link"), Err(FsError::Denied)),
+            "a link is not listed through"
+        );
+        assert!(!outside.join("escape").exists());
+        assert!(!outside.join("escape.txt").exists());
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_file_cannot_be_read_through() {
+        let root = temp_root("symlink-read");
+        let outside = temp_root("symlink-secret");
+        std::fs::write(outside.join("secret.txt"), "not yours").expect("fixture");
+        let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("passwd.txt"))
+            .expect("fixture link");
+        assert!(matches!(b.read_text("/passwd.txt"), Err(FsError::Denied)));
+        // Deleting the link itself is still possible: that changes no file the
+        // link names, and a user must be able to remove a link they can see.
+        b.delete("/passwd.txt")
+            .expect("the link itself is removable");
+        assert!(outside.join("secret.txt").exists());
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_storage_root_that_is_a_link_is_refused() {
+        let parent = temp_root("symlink-root");
+        let real = temp_root("symlink-root-real");
+        let linked = parent.join("root");
+        std::os::unix::fs::symlink(&real, &linked).expect("fixture link");
+        assert!(matches!(
+            ensure_storage(&linked),
+            Err(FsError::NotADirectory)
+        ));
+        assert!(matches!(
+            FsBridge::open(&linked, litric_locale::TimeZone::utc("test")),
+            Err(FsError::NotADirectory)
+        ));
+        std::fs::remove_dir_all(&parent).ok();
+        std::fs::remove_dir_all(&real).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_trash_directory_replaced_by_a_link_is_not_written_through() {
+        let root = temp_root("trash-link");
+        let outside = temp_root("trash-outside");
+        ensure_storage(&root).expect("storage");
+        std::fs::create_dir_all(root.join(".local/share")).expect("fixture");
+        std::os::unix::fs::symlink(&outside, root.join(".local/share/Trash"))
+            .expect("fixture link");
+        let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).unwrap();
+        b.write_text("/Documents", "gone.txt", "bye").expect("file");
+        assert!(
+            matches!(
+                b.trash("/Documents/gone.txt", 1_900_000_000),
+                Err(FsError::Denied)
+            ),
+            "a trashed item is not moved through a link"
+        );
+        assert!(
+            root.join("Documents/gone.txt").exists(),
+            "the item stayed put"
+        );
+        assert!(std::fs::read_dir(&outside)
+            .expect("outside")
+            .next()
+            .is_none());
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_traversing_or_absolute_old_name_is_refused_by_rename() {
+        let root = temp_root("rename-escape");
+        let outside = temp_root("rename-outside");
+        std::fs::write(outside.join("secret.txt"), "x").expect("fixture");
+        std::fs::write(root.join("ok.txt"), "ok").expect("fixture");
+        let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).unwrap();
+        assert!(matches!(
+            b.rename(
+                "/",
+                outside.join("secret.txt").to_str().unwrap_or(""),
+                "stolen.txt"
+            ),
+            Err(FsError::BadName)
+        ));
+        assert!(outside.join("secret.txt").exists());
+        assert!(matches!(
+            b.rename("/", "ok.txt", "../moved.txt"),
+            Err(FsError::BadName)
+        ));
+        assert!(root.join("ok.txt").exists());
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn dot_segments_and_traversal_are_refused() {
+        let root = std::env::temp_dir().join("litric-fsbridge-dots");
+        std::fs::create_dir_all(&root).expect("fixture");
+        let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test"));
+        #[cfg(unix)]
+        {
+            let b = b.expect("bridge");
+            assert!(matches!(b.host_path("/a/../b"), Err(FsError::BadName)));
+            assert!(matches!(b.host_path("/./a"), Err(FsError::BadName)));
+            assert!(matches!(b.host_path(".."), Err(FsError::BadName)));
+        }
+        #[cfg(not(unix))]
+        assert!(b.is_err());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_error_for_a_full_or_read_only_disk_is_a_sentence() {
+        // Constructing the operating-system error directly is how both cases can
+        // be tested without mounting a read-only filesystem or filling a disk.
+        assert_eq!(
+            map_err("write", &std::io::Error::from_raw_os_error(30)),
+            FsError::ReadOnly
+        );
+        assert_eq!(
+            map_err("write", &std::io::Error::from_raw_os_error(28)),
+            FsError::Full
+        );
+        assert_eq!(
+            FsError::ReadOnly.to_string(),
+            "the filesystem is read-only, so nothing can be written there"
+        );
+        assert!(
+            FsError::Full.to_string().contains("storage is full"),
+            "a full disk says so"
+        );
     }
 }

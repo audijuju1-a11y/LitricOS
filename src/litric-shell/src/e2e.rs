@@ -195,7 +195,10 @@ fn journey_the_desktop_is_bare_and_applications_open_from_the_launcher() {
     // Clicking the bare wallpaper does nothing rather than selecting a ghost.
     click(&mut s, 900.0, 700.0);
     assert!(s.desktop_icons.selected.is_none());
-    assert!(s.wm.all().is_empty(), "a click on the wallpaper opened something");
+    assert!(
+        s.wm.all().is_empty(),
+        "a click on the wallpaper opened something"
+    );
 
     // The bar's own icons open applications without opening the launcher first.
     let tile = s
@@ -912,7 +915,7 @@ fn journey_the_bars_height_is_a_strip_and_its_width_is_wider_than_a_shelf() {
     );
     // The row is centred, 24 px above the edge, so its bottom is near 800-24.
     assert!(
-        bottom <= 800.0 - 20.0 && bottom >= 800.0 - 60.0,
+        (800.0 - 60.0..=800.0 - 20.0).contains(&bottom),
         "the bar sits {} px above the bottom edge",
         800.0 - bottom
     );
@@ -1421,7 +1424,9 @@ fn lockable_shell() -> Shell {
     let mut s = shell();
     s.facts.auth_available = Some("unix-chkpwd".to_owned());
     s.facts.auth_lock = Some(false);
-    s.facts.session_user = Some("root".to_owned());
+    s.facts.auth_account = Some("litric".to_owned());
+    s.facts.auth_password = Some("set".to_owned());
+    s.facts.session_user = Some("litric".to_owned());
     s
 }
 
@@ -1461,6 +1466,30 @@ fn journey_a_machine_that_cannot_check_a_password_refuses_to_lock() {
     refused.facts.auth_lock = Some(true);
     assert!(!refused.can_lock());
     assert!(!refused.lock_now());
+
+    // A helper being present is not the same as the account being able to
+    // accept a password. A skipped first run leaves `litric` locked; raising
+    // the screen there would trap the user with no password that can open it.
+    for (password, reason, expected) in [
+        ("locked", "password-locked", "no usable password"),
+        ("absent", "password-unset", "no password set"),
+        ("unknown", "password-unknown", "could not be read"),
+    ] {
+        let mut unavailable = lockable_shell();
+        unavailable.facts.auth_password = Some(password.to_owned());
+        unavailable.facts.auth_reason = Some(reason.to_owned());
+        unavailable.facts.auth_lock = Some(true);
+        assert!(!unavailable.can_lock(), "{password}");
+        assert!(!unavailable.lock_now(), "{password}");
+        let sentence = unavailable.lock_refusal();
+        assert!(
+            sentence.contains("litric") && sentence.contains(expected),
+            "{password}: {sentence}"
+        );
+        // The actionable half: a locked or unset password names the command
+        // that gives the account one.
+        assert!(sentence.contains("passwd"), "{password}: {sentence}");
+    }
 
     // And a machine that can check one, and whose daemon agrees, locks.
     let mut ok = lockable_shell();
@@ -1519,7 +1548,10 @@ fn journey_locking_hides_the_session_and_only_a_password_brings_it_back() {
     for e in &effects {
         if let Effect::VerifyPassword { user, secret } = e {
             seen = seen.saturating_add(1);
-            assert_eq!(user, "root", "the account logind reported");
+            assert_eq!(
+                user, "litric",
+                "the desktop account, not the serial console"
+            );
             assert_eq!(secret.hex(), "68756e74657232");
             let printed = format!("{secret:?}");
             assert!(!printed.contains("hunter2"), "{printed}");

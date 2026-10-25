@@ -88,6 +88,28 @@ ALLOWED = {
     "src/litric-sysd/src/providers.rs": {
         "apply_file": "removes one Wi-Fi credential; the path is refused unless it is a direct child of iwd's state directory under the daemon root, and the network name was validated by `valid_ssid` before the path was built",
     },
+    "src/litric-compositor/src/keymap.rs": {
+        "load": "unlinks the keymap file it has just written into the session runtime directory, after the descriptor is open and before any client is given it: the path is built from the runtime directory the caller supplied, never a user path, and the open descriptor is what clients receive",
+    },
+    "src/litric-compositor/src/lib.rs": {
+        "drop": "unlinks this server's own Wayland socket when the server is dropped; the path was built by `Server::start`, which refuses a runtime directory that is not absolute (asserted by `a_relative_runtime_directory_is_refused`), so it cannot name a user path",
+    },
+    "src/litric-compositor/src/tests.rs": {
+        "a_frame_is_read_row_by_row_through_a_stride": "removes the single scratch pool file `scratch_file` created for this test, named with this process's id and a nanosecond stamp under the system temp directory",
+        "an_offset_into_the_pool_is_honoured": "removes the single scratch pool file `scratch_file` created for this test, named with this process's id and a nanosecond stamp under the system temp directory",
+        "a_buffer_that_names_memory_outside_the_pool_is_refused": "removes the single scratch pool file `scratch_file` created for this test, named with this process's id and a nanosecond stamp under the system temp directory",
+    },
+    "src/litric-compositor/tests/client.rs": {
+        "scratch": "removes and recreates the per-test runtime directory it just named with this process's id, a nanosecond stamp and the test's own tag under the system temp directory",
+        "a_foreign_client_maps_a_window_and_goes_away_cleanly": "removes the `scratch` runtime directory this test created, after asserting its foreign client mapped, painted, resized and exited",
+        "a_client_that_vanishes_does_not_take_the_server_with_it": "removes the `scratch` runtime directory this test created, after asserting a killed client is reported as gone and the server still answers",
+        "two_servers_refuse_the_same_socket": "removes the `scratch` runtime directory this test created, after asserting a second bind on the same socket is refused",
+    },
+    "src/litric-shell/tests/foreign_clients.rs": {
+        "scratch": "removes and recreates the per-test session directory it just named with this process's id, a nanosecond stamp and the test's own tag under the system temp directory",
+        "a_linux_application_opens_a_window_on_the_litric_desktop": "removes the `scratch` session directory this test created, after asserting the client it launched became a window and closing that window ended it",
+        "a_command_typed_into_the_terminal_launches_a_graphical_application": "removes the `scratch` session directory this test created, after asserting the command typed into the Terminal reached it",
+    },
     "src/litric-shell/src/main.rs": {
         "store_browser_data": "removes the `browser-data.conf.tmp.<pid>` file it created in the same call, and only on the failure path: the rename to the real path is what commits it, so the removal cannot touch anything but the temp file this process just made (BUG-0011 shape)",
         "store_preferences": "removes the `settings.conf.tmp.<pid>` file it created in the same call, and only when the commit rename failed, so the removal cannot touch anything but the temp file this process just made (BUG-0011 shape)",

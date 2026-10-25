@@ -774,6 +774,65 @@ impl Canvas {
         }
     }
 
+    /// Paint a client's buffer into `dst`, scaling it to fit.
+    ///
+    /// `pixels` is what a Wayland client committed: rows tightly packed, four
+    /// bytes a pixel, ordered `B, G, R, A` in memory (little-endian
+    /// `0xAARRGGBB`). `src_w`/`src_h` are the buffer's logical size, so a
+    /// client that renders at twice the density is drawn at the size it asked
+    /// for rather than at the size of its allocation.
+    ///
+    /// `opaque` is for `XRGB8888`, where the fourth byte is padding the client
+    /// is allowed to leave at zero: honouring it would make a whole window
+    /// invisible.
+    ///
+    /// The mapping is nearest-neighbour. A window that is resized faster than
+    /// its client repaints is shown stretched rather than blank, and the cost
+    /// of a frame is bounded by the window's area on screen — never by the
+    /// client's buffer, which can be far larger.
+    pub fn blit_bgra(&mut self, dst: Rect, pixels: &[u8], src_w: u32, src_h: u32, opaque: bool) {
+        if src_w == 0 || src_h == 0 || dst.w <= 0.0 || dst.h <= 0.0 {
+            return;
+        }
+        let (x0, y0, x1, y1) = self.span(&dst);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let sw = i64::from(src_w);
+        let dw = f64::from(dst.w);
+        let dh = f64::from(dst.h);
+        let mut drawn: u64 = 0;
+        for y in y0..y1 {
+            // Pixel centres, so a 2x downscale is not biased a whole pixel up.
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            let sy = (((y as f64 + 0.5 - f64::from(dst.y)) / dh) * f64::from(src_h))
+                .max(0.0)
+                .min(f64::from(src_h.saturating_sub(1))) as i64;
+            let row = sy.saturating_mul(sw);
+            for x in x0..x1 {
+                #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+                let sx = (((x as f64 + 0.5 - f64::from(dst.x)) / dw) * f64::from(src_w))
+                    .max(0.0)
+                    .min(f64::from(src_w.saturating_sub(1))) as i64;
+                let at = row.saturating_add(sx).saturating_mul(4);
+                let at = usize::try_from(at).unwrap_or(usize::MAX);
+                let Some(px) = pixels
+                    .get(at..at.saturating_add(4))
+                    .and_then(|quad| quad.first_chunk::<4>())
+                else {
+                    continue;
+                };
+                let mut word = u32::from_le_bytes(*px);
+                if opaque {
+                    word |= 0xFF00_0000;
+                }
+                self.put_in(x, y, word);
+                drawn = drawn.saturating_add(1);
+            }
+        }
+        self.count_px(Site::Draw, drawn);
+    }
+
     /// Copy the pixels inside `r` out of the canvas, ignoring the clip.
     ///
     /// A software cursor is drawn into the frame itself, so moving it has to put
@@ -788,7 +847,8 @@ impl Canvas {
         }
         let w = self.width as usize;
         let cols = usize::try_from(x1.saturating_sub(x0)).ok()?;
-        let mut px = Vec::with_capacity(cols.saturating_mul(usize::try_from(y1.saturating_sub(y0)).ok()?));
+        let mut px =
+            Vec::with_capacity(cols.saturating_mul(usize::try_from(y1.saturating_sub(y0)).ok()?));
         for y in y0..y1 {
             let row = (y as usize).saturating_mul(w);
             let range = row.saturating_add(x0 as usize)..row.saturating_add(x1 as usize);
@@ -2142,5 +2202,50 @@ mod tests {
             Repaint::Full.rects(1280, 800),
             vec![Rect::new(0.0, 0.0, 1280.0, 800.0)]
         );
+    }
+
+    #[test]
+    fn a_client_frame_is_scaled_to_the_window_and_xrgb_is_made_opaque() {
+        let mut canvas = Canvas::new(8, 8, 0);
+        // A 2x2 client frame: one red, one green, one blue, one white.
+        let pixels = [
+            0, 0, 255, 0, // blue, alpha 0 (padding in XRGB)
+            0, 255, 0, 0, // green
+            255, 0, 0, 0, // red
+            255, 255, 255, 0,
+        ];
+        canvas.blit_bgra(Rect::new(0.0, 0.0, 8.0, 8.0), &pixels, 2, 2, true);
+        assert_eq!(
+            canvas.get(0, 0),
+            Some(0xFFFF_0000),
+            "top-left is blue, opaque"
+        );
+        assert_eq!(canvas.get(7, 0), Some(0xFF00_FF00), "top-right is green");
+        assert_eq!(canvas.get(0, 7), Some(0xFF00_00FF), "bottom-left is red");
+        assert_eq!(canvas.get(7, 7), Some(0xFFFF_FFFF));
+        // Every pixel is opaque even though the client sent zeros.
+        assert!(
+            (0..8).all(|y| (0..8).all(|x| canvas.get(x, y).is_some_and(|p| p >> 24 == 0xFF))),
+            "XRGB alpha is forced opaque"
+        );
+    }
+
+    #[test]
+    fn a_client_frame_never_paints_outside_its_window() {
+        let mut canvas = Canvas::new(16, 16, 0);
+        let pixels = [0u8, 0, 255, 255];
+        canvas.blit_bgra(Rect::new(4.0, 4.0, 4.0, 4.0), &pixels, 1, 1, false);
+        assert_eq!(canvas.get(3, 4), Some(0), "left of the window is untouched");
+        assert_eq!(canvas.get(4, 4), Some(0xFFFF_0000));
+        assert_eq!(canvas.get(7, 7), Some(0xFFFF_0000));
+        assert_eq!(
+            canvas.get(8, 8),
+            Some(0),
+            "right of the window is untouched"
+        );
+        // A zero-sized or oversized mapping is not a crash.
+        canvas.blit_bgra(Rect::new(0.0, 0.0, 0.0, 0.0), &pixels, 1, 1, false);
+        canvas.blit_bgra(Rect::new(0.0, 0.0, 4.0, 4.0), &[], 0, 0, false);
+        assert_eq!(canvas.get(0, 0), Some(0));
     }
 }

@@ -14,17 +14,24 @@
 //! panel, and writes the frame to the display. Everything on screen is drawn by
 //! this code from numbers measured by the system.
 //!
-//! It is **not** yet a Wayland compositor: there are no client surfaces, no
-//! protocol and therefore no third-party applications drawing into it. What it
-//! does have is its own desktop: input decoding, a tested window manager with
-//! focus, workspaces, snapping and multi-window cycling, a system-wide search,
-//! a lock surface, built-in applications and a mission-control overview. The
-//! compositor protocol is the next layer, and the shell is where it plugs in.
+//! It **is** a Wayland compositor, in the sense that matters: a real server —
+//! the litric-compositor crate, ADR-0024 — listens on the session's
+//! wayland-0 socket, and a foreign process that connects gets a LitricOS
+//! window: the title bar is the shell's, the pixels are the client's, and input
+//! reaches it through the window manager's z-order. What it is not is XWayland,
+//! clipboard or drag-and-drop, an input method, or a GPU import path; those are
+//! listed in the ADR rather than implied here.
+//!
+//! On top of that it has its own desktop: input decoding, a tested window
+//! manager with focus, workspaces, snapping and multi-window cycling, a
+//! system-wide search, a lock surface, built-in applications and a
+//! mission-control overview.
 //!
 //! ```text
 //!   fb       find the framebuffer, encode a frame, write it
 //!   canvas   anti-aliased software raster: shapes, gradients, blur
 //!   font     LitricOS Sans, a stroke typeface rendered at any size
+//!   clients  a client's shared-memory surface as a window, frame by frame
 //!   desktop  the composition, filled with measured system state
 //! ```
 
@@ -34,6 +41,7 @@ pub mod activity;
 pub mod anim;
 pub mod apps;
 pub mod canvas;
+pub mod clients;
 pub mod desktop;
 pub mod domkey;
 pub mod fb;

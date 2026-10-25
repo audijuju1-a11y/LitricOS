@@ -144,6 +144,42 @@ pub struct Session {
     pub leader: Option<u32>,
 }
 
+/// What `/etc/shadow` says about the account a lock would check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PasswordState {
+    /// The account has a password hash a verifier can check.
+    Set,
+    /// The hash is empty or begins with `!`/`*`: the account cannot log in.
+    Locked,
+    /// The account has no shadow entry at all.
+    Absent,
+    /// The shadow file could not be read, or its shape was not understood.
+    ///
+    /// This is not [`PasswordState::Set`]: an unknown answer must not raise a
+    /// screen that cannot be unlocked.
+    #[default]
+    Unknown,
+}
+
+impl PasswordState {
+    /// The word the fact line carries.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Set => "set",
+            Self::Locked => "locked",
+            Self::Absent => "absent",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Whether a password is known to be present and usable.
+    #[must_use]
+    pub const fn is_set(self) -> bool {
+        matches!(self, Self::Set)
+    }
+}
+
 /// Everything this module reports about sessions and authentication.
 #[derive(Debug, Clone)]
 pub struct SessionFacts {
@@ -153,6 +189,11 @@ pub struct SessionFacts {
     pub logind_present: bool,
     /// The credential verifier, defaulting to [`Verifier::None`].
     pub verifier: Verifier,
+    /// The account a lock would check: the image's desktop user (uid 1000), or
+    /// the active logind user when there is no uid-1000 account.
+    pub account: Option<String>,
+    /// What is known about that account's password.
+    pub password: PasswordState,
 }
 
 impl Default for SessionFacts {
@@ -163,6 +204,34 @@ impl Default for SessionFacts {
             // Default is `None`: a build that has not been told about a
             // verifier has not got one. Fail closed, at the type level.
             verifier: Verifier::None,
+            account: None,
+            password: PasswordState::Unknown,
+        }
+    }
+}
+
+impl SessionFacts {
+    /// Why locking must be refused, as a token the shell can turn into a
+    /// sentence of its own.
+    ///
+    /// The reason is about the *image*, not about a password. "The account is
+    /// locked" and "the helper is missing" need different actions from the
+    /// person reading the screen, and a single "locking is unavailable" would
+    /// hide which one they are looking at.
+    #[must_use]
+    pub fn refusal_reason(&self) -> Option<&'static str> {
+        if !self.verifier.can_verify() {
+            return Some("helper-missing");
+        }
+        let Some(account) = self.account.as_deref().filter(|a| !a.is_empty()) else {
+            return Some("account-missing");
+        };
+        let _ = account;
+        match self.password {
+            PasswordState::Set => None,
+            PasswordState::Locked => Some("password-locked"),
+            PasswordState::Absent => Some("password-unset"),
+            PasswordState::Unknown => Some("password-unknown"),
         }
     }
 }
@@ -197,9 +266,12 @@ impl SessionFacts {
                 }
             ),
             format!("auth.available={}", self.verifier.token()),
+            format!("auth.account={}", self.account.as_deref().unwrap_or("-")),
+            format!("auth.password={}", self.password.token()),
         ];
-        if !self.verifier.can_lock() {
+        if let Some(reason) = self.refusal_reason() {
             out.push("auth.lock=refused".to_owned());
+            out.push(format!("auth.reason={reason}"));
         }
         for s in &self.sessions {
             out.push(format!(
@@ -239,24 +311,122 @@ pub fn read(root: &Path) -> SessionFacts {
             sessions.push(parse_session_record(&name, &text));
         }
     }
+    // Sorted by id: `read_dir` has no order, and a caller that takes the first
+    // session must not get a different machine on each boot.
+    sessions.sort_by(|a, b| a.id.cmp(&b.id));
+
+    // Find the helper by looking at it, not only for its name. A directory
+    // called `/usr/bin/unix_chkpwd` is not a program, and a file without an
+    // execute bit cannot check anything. Both are reported as "no verifier",
+    // because a lock screen must not appear on the strength of a filename.
+    let verifier = if is_executable_file(root, "usr/bin/unix_chkpwd") {
+        Verifier::UnixChkpwd
+    } else if is_executable_file(root, "usr/lib/litric/litric-authd") {
+        Verifier::PamHelper
+    } else {
+        Verifier::None
+    };
+
+    let account = desktop_account(root, &sessions);
+    let password = account
+        .as_deref()
+        .map_or(PasswordState::Unknown, |user| password_state(root, user));
+
     SessionFacts {
         sessions,
         logind_present,
-        // Nothing on this image can verify a credential. When the helper
-        // exists it will report itself the same way `bluetoothd` is reported —
-        // by being found on the filesystem — rather than by a build-time
-        // constant that can drift from the image.
-        // The distribution's helper first, because that is what this build
-        // actually runs; ours (which does not exist) is the fallback name so a
-        // future change that adds it does not have to touch this function.
-        verifier: if root.join("usr/bin/unix_chkpwd").exists() {
-            Verifier::UnixChkpwd
-        } else if root.join("usr/lib/litric/litric-authd").exists() {
-            Verifier::PamHelper
-        } else {
-            Verifier::None
-        },
+        verifier,
+        account,
+        password,
     }
+}
+
+/// Whether `relative` names a regular file that can execute.
+///
+/// `symlink_metadata` is deliberate: a link is not a program here. The image's
+/// helper is a real file; a link in its place is something else and is refused.
+fn is_executable_file(root: &Path, relative: &str) -> bool {
+    let path = root.join(relative);
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// The account a lock would check.
+///
+/// The first human account is the desktop user (`litric`, uid 1000, created by
+/// `image/mkosi.extra/usr/lib/sysusers.d/litric.conf`), and that is the account
+/// `first-run.sh` gives a password to. Picking the first logind session instead
+/// was wrong on the real image: the diagnostic serial console autologins as
+/// `root`, so a boot with that console enabled offered a lock that checked
+/// *root's* (locked) password against a password set for `litric`.
+///
+/// The logind session is the fallback for an image whose account numbering is
+/// different, and it prefers an active session so the serial console cannot
+/// outrank the desktop.
+fn desktop_account(root: &Path, sessions: &[Session]) -> Option<String> {
+    if let Some(passwd) = read_file(root, "etc/passwd") {
+        let uid_1000 = passwd.lines().find_map(|line| {
+            let mut fields = line.split(':');
+            let name = fields.next()?;
+            let _password = fields.next()?;
+            let uid = fields.next()?;
+            let _gid = fields.next()?;
+            let _gecos = fields.next()?;
+            let _home = fields.next()?;
+            let shell = fields.next().unwrap_or("/bin/sh");
+            if uid == "1000" && !shell.ends_with("nologin") && !shell.ends_with("false") {
+                Some(name.to_owned())
+            } else {
+                None
+            }
+        });
+        if uid_1000.is_some() {
+            return uid_1000;
+        }
+    }
+    sessions
+        .iter()
+        .find(|s| s.state == "active")
+        .or_else(|| sessions.first())
+        .and_then(|s| s.user.clone())
+        .filter(|user| !user.is_empty())
+}
+
+/// What `/etc/shadow` says about `user`, without copying the hash anywhere.
+fn password_state(root: &Path, user: &str) -> PasswordState {
+    let Some(shadow) = read_file(root, "etc/shadow") else {
+        return PasswordState::Unknown;
+    };
+    for line in shadow.lines() {
+        let mut fields = line.split(':');
+        if fields.next() != Some(user) {
+            continue;
+        }
+        let Some(hash) = fields.next() else {
+            return PasswordState::Unknown;
+        };
+        if hash.is_empty() {
+            return PasswordState::Absent;
+        }
+        if hash.starts_with('!') || hash.starts_with('*') {
+            return PasswordState::Locked;
+        }
+        return PasswordState::Set;
+    }
+    PasswordState::Absent
 }
 
 /// Parse one `/run/systemd/sessions/<id>` record.
@@ -365,6 +535,30 @@ SERVICE=login
         assert_eq!(s.state, "unknown");
     }
 
+    /// A root whose image has the helper, the desktop account and a password.
+    #[cfg(unix)]
+    fn ready_auth_root(tag: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = std::env::temp_dir().join(format!("litric-auth-ready-{tag}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("usr/bin")).expect("mkdir");
+        std::fs::create_dir_all(root.join("etc")).expect("mkdir");
+        std::fs::write(
+            root.join("etc/passwd"),
+            "root:x:0:0:root:/root:/usr/bin/bash\nlitric:x:1000:1000:LitricOS user:/var/home/litric:/usr/bin/bash\n",
+        )
+        .expect("passwd");
+        std::fs::write(
+            root.join("etc/shadow"),
+            "root:!:19000::::::\nlitric:$y$j9T$abcdefghijklmnop$0123456789abcdefghijklmnopqrstuv:19000:0:99999:7:::\n",
+        )
+        .expect("shadow");
+        let helper = root.join("usr/bin/unix_chkpwd");
+        std::fs::write(&helper, "").expect("helper");
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        root
+    }
+
     #[test]
     fn a_lock_is_offered_exactly_when_a_password_can_be_verified() {
         // The security-critical assertion of this file. It is checked in both
@@ -382,29 +576,111 @@ SERVICE=login
         let text = facts.to_lines().join("\n");
         assert!(text.contains("auth.available=none"), "{text}");
         assert!(text.contains("auth.lock=refused"), "{text}");
+        assert!(text.contains("auth.reason=helper-missing"), "{text}");
 
-        for v in [Verifier::UnixChkpwd, Verifier::PamHelper] {
-            assert!(v.can_verify(), "{v:?} is a verifier");
-            assert!(
-                v.can_lock(),
-                "{v:?} can verify a password, so the lock must be available: the \
-                 shell's lock surface is unlocked by exactly that verification"
-            );
-            // The fact and the refusal move together: with the lock available
-            // there is no refusal to report, and a reply that carried one would
-            // tell the desktop to lock something it could not unlock.
-            let lines = SessionFacts {
-                verifier: v,
-                ..SessionFacts::default()
-            }
-            .to_lines();
-            assert!(!lines.iter().any(|l| l == "auth.lock=refused"), "{v:?}");
-            assert!(!v.refusal().is_empty());
-        }
         assert_eq!(Verifier::parse("unix-chkpwd"), Verifier::UnixChkpwd);
         assert_eq!(Verifier::parse("pam-helper"), Verifier::PamHelper);
         assert_eq!(Verifier::parse(""), Verifier::None);
         assert_eq!(Verifier::parse("yes"), Verifier::None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_ready_image_reports_the_account_and_no_refusal() {
+        let root = ready_auth_root("ready");
+        let facts = read(&root);
+        assert_eq!(facts.verifier, Verifier::UnixChkpwd);
+        assert_eq!(facts.account.as_deref(), Some("litric"));
+        assert_eq!(facts.password, PasswordState::Set);
+        assert_eq!(facts.refusal_reason(), None);
+        let text = facts.to_lines().join("\n");
+        assert!(text.contains("auth.available=unix-chkpwd"), "{text}");
+        assert!(text.contains("auth.account=litric"), "{text}");
+        assert!(text.contains("auth.password=set"), "{text}");
+        assert!(!text.contains("auth.lock=refused"), "{text}");
+        assert!(!text.contains("auth.reason="), "{text}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_helper_that_exists_but_cannot_execute_is_not_a_verifier() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = ready_auth_root("not-exec");
+        let helper = root.join("usr/bin/unix_chkpwd");
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o644)).expect("mode");
+        let facts = read(&root);
+        assert_eq!(facts.verifier, Verifier::None);
+        assert_eq!(facts.refusal_reason(), Some("helper-missing"));
+        let text = facts.to_lines().join("\n");
+        assert!(text.contains("auth.lock=refused"), "{text}");
+        assert!(text.contains("auth.reason=helper-missing"), "{text}");
+        std::fs::remove_file(&helper).expect("remove");
+        std::fs::create_dir_all(&helper).expect("replace with a directory");
+        assert_eq!(
+            read(&root).verifier,
+            Verifier::None,
+            "a directory is not a program"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_locked_unset_or_unknown_password_refuses_the_lock() {
+        let root = ready_auth_root("states");
+        let shadow = root.join("etc/shadow");
+        for (hash, state, reason) in [
+            ("!locked", PasswordState::Locked, "password-locked"),
+            ("", PasswordState::Absent, "password-unset"),
+        ] {
+            std::fs::write(
+                &shadow,
+                format!("root:!:19000::::::\nlitric:{hash}:19000:0:99999:7:::\n"),
+            )
+            .expect("shadow");
+            let facts = read(&root);
+            assert_eq!(facts.password, state);
+            assert_eq!(facts.refusal_reason(), Some(reason));
+            assert!(facts.to_lines().contains(&"auth.lock=refused".to_owned()));
+        }
+        // The shadow file is gone entirely: an unreadable answer is refused,
+        // never treated as "the password is set".
+        std::fs::remove_file(&shadow).expect("remove shadow");
+        let facts = read(&root);
+        assert_eq!(facts.password, PasswordState::Unknown);
+        assert_eq!(facts.refusal_reason(), Some("password-unknown"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_desktop_account_beats_a_root_serial_session() {
+        let root = ready_auth_root("account");
+        let sessions = root.join("run/systemd/sessions");
+        std::fs::create_dir_all(&sessions).expect("mkdir");
+        // The diagnostic serial console autologins as root; the desktop account
+        // is still the one first-run set a password on.
+        std::fs::write(
+            sessions.join("1"),
+            "UID=0\nUSER=root\nACTIVE=1\nSTATE=active\nTYPE=tty\n",
+        )
+        .expect("session");
+        let facts = read(&root);
+        assert_eq!(facts.account.as_deref(), Some("litric"));
+        assert_eq!(facts.password, PasswordState::Set);
+        assert_eq!(facts.refusal_reason(), None);
+        // With no uid-1000 account, the active session is the fallback.
+        std::fs::write(
+            root.join("etc/passwd"),
+            "root:x:0:0:root:/root:/usr/bin/bash\n",
+        )
+        .expect("passwd");
+        let facts = read(&root);
+        assert_eq!(facts.account.as_deref(), Some("root"));
+        assert_eq!(facts.password, PasswordState::Locked);
+        assert_eq!(facts.refusal_reason(), Some("password-locked"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -414,14 +690,14 @@ SERVICE=login
         let facts = SessionFacts {
             sessions: vec![a.clone()],
             logind_present: true,
-            verifier: Verifier::None,
+            ..SessionFacts::default()
         };
         assert_eq!(facts.active().map(|s| s.id.as_str()), Some("1"));
 
         let facts = SessionFacts {
             sessions: vec![a, b],
             logind_present: true,
-            verifier: Verifier::None,
+            ..SessionFacts::default()
         };
         // "Which session is the user in" answered by picking one of two is a
         // guess, and a guess here locks the wrong session.
@@ -460,17 +736,33 @@ SERVICE=login
         let _ = std::fs::remove_dir_all(&empty);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_verifier_is_found_on_the_filesystem_not_assumed() {
+        use std::os::unix::fs::PermissionsExt as _;
         let root = std::env::temp_dir().join("litric-auth-fixture");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("mkdir");
         assert_eq!(read(&root).verifier, Verifier::None);
 
         // This build's verifier: the distribution's helper, found by being
-        // there. With it present the lock is *not* refused — see `can_lock`.
+        // there and executable. With it present the lock is *not* refused —
+        // see `refusal_reason`.
         std::fs::create_dir_all(root.join("usr/bin")).expect("mkdir");
-        std::fs::write(root.join("usr/bin/unix_chkpwd"), "").expect("write");
+        let helper = root.join("usr/bin/unix_chkpwd");
+        std::fs::write(&helper, "").expect("write");
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        std::fs::create_dir_all(root.join("etc")).expect("mkdir");
+        std::fs::write(
+            root.join("etc/passwd"),
+            "litric:x:1000:1000:LitricOS user:/var/home/litric:/usr/bin/bash\n",
+        )
+        .expect("passwd");
+        std::fs::write(
+            root.join("etc/shadow"),
+            "litric:$6$salt$hash:19000:0:99999:7:::\n",
+        )
+        .expect("shadow");
         let with_helper = read(&root);
         assert_eq!(with_helper.verifier, Verifier::UnixChkpwd);
         let text = with_helper.to_lines().join("\n");
@@ -478,9 +770,11 @@ SERVICE=login
         assert!(!text.contains("auth.lock=refused"), "{text}");
 
         // Ours, if it ever exists, is the second name for the same job.
-        std::fs::remove_file(root.join("usr/bin/unix_chkpwd")).expect("remove");
+        std::fs::remove_file(&helper).expect("remove");
         std::fs::create_dir_all(root.join("usr/lib/litric")).expect("mkdir");
-        std::fs::write(root.join("usr/lib/litric/litric-authd"), "").expect("write");
+        let own = root.join("usr/lib/litric/litric-authd");
+        std::fs::write(&own, "").expect("write");
+        std::fs::set_permissions(&own, std::fs::Permissions::from_mode(0o755)).expect("mode");
         assert_eq!(read(&root).verifier, Verifier::PamHelper);
         let _ = std::fs::remove_dir_all(&root);
     }

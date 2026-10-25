@@ -176,6 +176,16 @@ if command -v cargo >/dev/null 2>&1; then
     ( cd "${PROJECT_ROOT}/src" && cargo build --release --locked 2>&1 | tail -5 ) \
         || die "the native workspace failed to build"
 
+    # `litric-browserd` has `required-features = ["broker"]`, so a plain
+    # workspace build deliberately skips it. Before this line existed the image
+    # build reported success, staged no broker, enabled litric-browser.socket,
+    # and the shell could never reach an engine. Build the one target whose
+    # feature is not the default, and fail here rather than shipping a browser
+    # whose daemon is absent.
+    log "building litric-browserd (broker feature)"
+    ( cd "${PROJECT_ROOT}/src" && cargo build --release --locked -p litric-browser --features broker 2>&1 | tail -5 ) \
+        || die "litric-browserd failed to build with the broker feature"
+
     # Stage any binaries the workspace produced into the image tree.
     #
     # HONEST STATE, 2026-08-28: litric-sysd exists and is staged. litric-shell,
@@ -190,6 +200,8 @@ if command -v cargo >/dev/null 2>&1; then
     # src/target would silently stage nothing. Unset, both cargo and this line
     # fall back to src/target, so they can never disagree.
     TARGET_DIR="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/src/target}"
+    REQUIRE_BROWSER=0
+    [[ "$PROFILE" == "desktop" || "$PROFILE" == "gaming" ]] && REQUIRE_BROWSER=1
     for bin in litric-sysd litric-envd litric-shell litric-browserd litric-filesd litric-capd litric-defender litricctl; do
         src="${TARGET_DIR}/release/${bin}"
         if [[ -x "$src" ]]; then
@@ -197,8 +209,21 @@ if command -v cargo >/dev/null 2>&1; then
             install -Dm0755 "$src" "${STAGE}/${bin}"
             log "staged ${bin}"
             staged=$((staged + 1))
+        elif [[ "$bin" == "litric-browserd" && $REQUIRE_BROWSER -eq 1 ]]; then
+            die "refusing to build '${PROFILE}': ${src} is missing, so the image
+  would enable litric-browser.socket with no broker behind it. The browser
+  profile must ship a working engine broker."
         fi
     done
+    if [[ $REQUIRE_BROWSER -eq 1 && ! -x "${STAGE}/litric-browserd" ]]; then
+        die "refusing to build '${PROFILE}': litric-browserd was not staged."
+    fi
+    # The desktop profile promises an engine. Check the declaration here as
+    # well as the built image: a profile that dropped `chromium` would still
+    # build a broker that can only say the engine is missing.
+    if [[ $REQUIRE_BROWSER -eq 1 ]] && ! grep -qE '^[[:space:]]*chromium([[:space:]]|$)' "${IMAGE_DIR}/mkosi.profiles/desktop.conf"; then
+        die "refusing to build '${PROFILE}': the desktop profile does not declare the chromium package."
+    fi
     # QEMU's DRM fbdev bridge can accept write(2) without publishing those
     # pixels to the visible scanout. Keep the one necessary mmap boundary in a
     # standalone helper; the Rust shell sends it fixed-size frames through stdin

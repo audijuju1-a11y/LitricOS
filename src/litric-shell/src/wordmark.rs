@@ -323,7 +323,10 @@ mod tests {
     fn the_pen_moves_left_to_right() {
         // The reveal is a left-to-right write, so each letter's first point
         // must start to the right of the one before it.
-        let starts: Vec<f32> = strokes().iter().filter_map(|s| s.first().map(|p| p.0)).collect();
+        let starts: Vec<f32> = strokes()
+            .iter()
+            .filter_map(|s| s.first().map(|p| p.0))
+            .collect();
         let mut last = f32::MIN;
         for x in starts {
             assert!(x >= last - 0.2, "stroke starts {x} before {last}");
@@ -372,7 +375,10 @@ mod tests {
         let quarter = ink(0.25);
         let full = ink(1.0);
         assert!(quarter > 0, "a quarter of the write drew nothing");
-        assert!(quarter < full, "quarter {quarter} is not less than full {full}");
+        assert!(
+            quarter < full,
+            "quarter {quarter} is not less than full {full}"
+        );
     }
 
     fn intro_shell(reduce_motion: bool) -> crate::shell::Shell {
@@ -411,18 +417,30 @@ mod tests {
 
         // At the start the field is plain: the dock the desktop would draw
         // at this point is not on screen.
-        assert_eq!(frame(&mut s).get(640, 740), Some(field), "the desktop showed through");
+        assert_eq!(
+            frame(&mut s).get(640, 740),
+            Some(field),
+            "the desktop showed through"
+        );
 
         // Mid-write, ink has reached the screen.
         // Half-way through the 1.9 s pen write.
         s.tick(1_000 + 950);
-        let inked = frame(&mut s).pixels().iter().filter(|&&p| p != field).count();
+        let inked = frame(&mut s)
+            .pixels()
+            .iter()
+            .filter(|&&p| p != field)
+            .count();
         assert!(inked > 0, "nothing was written mid-intro");
 
         // Once the intro has run its course, the desktop is back.
         s.tick(1_000 + BOOT_INTRO_MS);
         assert_eq!(s.boot_intro_now(), None);
-        assert_ne!(frame(&mut s).get(640, 740), Some(field), "the desktop did not return");
+        assert_ne!(
+            frame(&mut s).get(640, 740),
+            Some(field),
+            "the desktop did not return"
+        );
     }
 
     #[test]
@@ -433,7 +451,11 @@ mod tests {
         s.tick(10);
         assert_eq!(s.boot_intro_now(), Some(1.0));
         s.tick(BOOT_INTRO_MS);
-        assert_eq!(s.boot_intro_now(), None, "reduced motion never ended the intro");
+        assert_eq!(
+            s.boot_intro_now(),
+            None,
+            "reduced motion never ended the intro"
+        );
     }
 
     #[test]
@@ -441,7 +463,10 @@ mod tests {
         let mut s = intro_shell(false);
         s.start_boot_intro(0);
         s.tick(0);
-        assert!(s.wake_after_ms(100) <= 33, "the intro would stall at idle pace");
+        assert!(
+            s.wake_after_ms(100) <= 33,
+            "the intro would stall at idle pace"
+        );
     }
 
     #[test]

@@ -151,4 +151,24 @@ for prog in /usr/lib/litric/* /usr/bin/litric-*; do
     [[ -f "$prog" ]] && chmod 0755 "$prog"
 done
 
+# The desktop profile declares chromium; if the package installed nothing
+# executable, shipping the image would still satisfy every unit file and every
+# config line while the browser could never start. Fail the build here, inside
+# the image, rather than discovering it after a boot.
+if pacman -Q chromium >/dev/null 2>&1; then
+    [[ -x /usr/bin/chromium ]] \
+        || die "chromium is installed but /usr/bin/chromium is not executable"
+    say "chromium present: $(/usr/bin/chromium --version 2>/dev/null | head -1 || echo version-unknown)"
+else
+    say "chromium not installed (this profile does not ship the browser engine)"
+fi
+
+# litric-browserd is staged by tools/build.sh. The socket unit is enabled for
+# every profile; without the broker, an enabled socket is a promise with no
+# implementation behind it.
+if [[ -f /usr/lib/systemd/system/litric-browser.socket ]]; then
+    [[ -x /usr/bin/litric-browserd ]] \
+        || say "WARNING: litric-browser.socket is present without /usr/bin/litric-browserd"
+fi
+
 say "done"

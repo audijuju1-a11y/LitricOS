@@ -77,6 +77,10 @@ const CURSOR_INTERVAL_MS: u64 = 8;
 
 struct Args {
     root: PathBuf,
+    /// Where the Files application's persistent storage lives. `None` means
+    /// `<root>/var/lib/litric-files/root`, so a fixture root keeps its files in
+    /// the fixture and the real system uses the unit's StateDirectory.
+    files_root: Option<PathBuf>,
     socket: PathBuf,
     status: PathBuf,
     png: Option<PathBuf>,
@@ -94,6 +98,7 @@ impl Default for Args {
     fn default() -> Self {
         Self {
             root: PathBuf::from("/"),
+            files_root: None,
             socket: PathBuf::from(SYSD_SOCKET),
             status: PathBuf::from(STATUS_PATH),
             png: None,
@@ -127,6 +132,8 @@ OPTIONS:
     --socket PATH     litric-sysd socket (default /run/litric/sysd.sock).
     --status PATH     Where to write the status report.
     --root DIR        Where /proc, /sys and /dev are rooted. For testing.
+    --files-root DIR  Where the Files application keeps user files. Defaults to
+                      <root>/var/lib/litric-files/root.
     --once            Draw a single frame and exit.
     --seconds N       Exit after N seconds. For automated boot tests.
     -h, --help        This text.
@@ -179,6 +186,7 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
             "--socket" => a.socket = PathBuf::from(need("--socket")?),
             "--status" => a.status = PathBuf::from(need("--status")?),
             "--root" => a.root = PathBuf::from(need("--root")?),
+            "--files-root" => a.files_root = Some(PathBuf::from(need("--files-root")?)),
             "--once" => a.once = true,
             "--seconds" => {
                 let v = need("--seconds")?;
@@ -215,6 +223,25 @@ fn field<'a>(lines: &'a [&'a str], key: &str) -> Option<&'a str> {
     lines
         .iter()
         .find_map(|l| l.strip_prefix(key).and_then(|r| r.strip_prefix('=')))
+}
+
+/// Whether a daemon reply actually confirms a password verification.
+///
+/// `OK n` is a transport frame, not an answer: without `applied=true` for
+/// `auth.verify` there is no evidence that the helper ran and accepted the
+/// password. Anything else — an empty body, a changed action name, a truncated
+/// reply — is a refusal, because fail-closed is the only useful direction for a
+/// lock screen.
+fn reply_confirms_verification(reply: &str) -> bool {
+    let lines: Vec<&str> = reply.lines().collect();
+    field(&lines, "applied") == Some("true") && field(&lines, "action") == Some("auth.verify")
+}
+
+/// Whether an account name can be placed in a request line unmodified.
+fn usable_lock_account(user: &str) -> bool {
+    !user.is_empty()
+        && !user.chars().any(char::is_whitespace)
+        && !user.chars().any(char::is_control)
 }
 
 /// Read the system's state, preferring the daemon and falling back to `/proc`.
@@ -287,15 +314,33 @@ fn gather_facts(args: &Args) -> SystemFacts {
         // The line is written only while locking is refused, so its presence is
         // the refusal — the shell reads whether the daemon said anything.
         f.auth_lock = Some(field(&lines, "auth.lock").is_some());
-        f.session_user = lines
-            .iter()
-            .find_map(|l| l.strip_prefix("session.id "))
-            .and_then(|rest| {
-                rest.split_whitespace()
-                    .find_map(|kv| kv.strip_prefix("user="))
-                    .filter(|u| *u != "-")
-                    .map(str::to_owned)
-            });
+        // The account a lock would check, and whether that account has a usable
+        // password. Without the second fact a machine whose `litric` account is
+        // locked (a skipped first run) would still offer a lock screen that no
+        // password could open.
+        f.auth_account = field(&lines, "auth.account")
+            .filter(|account| *account != "-" && !account.is_empty())
+            .map(str::to_owned);
+        f.auth_password = field(&lines, "auth.password").map(str::to_owned);
+        f.auth_reason = field(&lines, "auth.reason").map(str::to_owned);
+        // Display only. The lock does *not* use this: an active serial console
+        // session as root is not the desktop account. Prefer an active record,
+        // and fall back to the first so a machine with only an online session
+        // still shows who it belongs to.
+        let session_user = |want_active: bool| {
+            lines
+                .iter()
+                .filter(|l| l.strip_prefix("session.id ").is_some())
+                .find(|l| !want_active || l.split_whitespace().any(|kv| kv == "state=active"))
+                .and_then(|l| l.strip_prefix("session.id "))
+                .and_then(|rest| {
+                    rest.split_whitespace()
+                        .find_map(|kv| kv.strip_prefix("user="))
+                        .filter(|u| *u != "-")
+                        .map(str::to_owned)
+                })
+        };
+        f.session_user = session_user(true).or_else(|| session_user(false));
         f.source = "litric-sysd".to_owned();
     }
 
@@ -901,6 +946,31 @@ fn take_console(root: &Path) -> String {
     }
 }
 
+/// Where the Wayland socket lives.
+///
+/// `XDG_RUNTIME_DIR` when the session set one (systemd always does). The
+/// fallback exists so a developer running the shell from a terminal still gets
+/// a socket, and it is made 0700 explicitly: a Wayland socket is an
+/// unauthenticated door to the compositor, and the directory is the only lock
+/// on it.
+fn shell_runtime_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let path = PathBuf::from(dir);
+        if path.is_absolute() && path.is_dir() {
+            return path;
+        }
+    }
+    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let dir = home.join(".litric").join("run");
+    let _ = fs::create_dir_all(&dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+    }
+    dir
+}
+
 fn report(path: &Path, lines: &[String]) {
     for l in lines {
         println!("litric.shell.{l}");
@@ -940,6 +1010,11 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
             Effect::PersistBrowserData => {
                 let history = shell.browser.history.iter().cloned().collect::<Vec<_>>();
                 if let Err(error) = store_browser_data(args, &history, &shell.browser.bookmarks) {
+                    // The in-memory list is kept: a failed write must not erase
+                    // what the user just did. The browser's own status line says
+                    // the save failed too, because "bookmark added" next to a
+                    // save error is the interface contradicting itself.
+                    shell.browser.status = format!("not saved: {error}");
                     shell.notify(
                         "Browser",
                         "Could not save history or bookmarks",
@@ -947,6 +1022,8 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
                         Priority::High,
                         Some(8_000),
                     );
+                } else if shell.browser.status.starts_with("not saved:") {
+                    shell.browser.status = "saved".to_owned();
                 }
             }
             Effect::SwitchEnvironment(n) => {
@@ -1024,6 +1101,17 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
             // live-consent capability and the password the user just typed is
             // the answer to that prompt.
             Effect::VerifyPassword { user, secret } => {
+                // The account comes from the daemon's own facts. A name with a
+                // space or a newline in it would turn the request line into a
+                // different request, so it is refused here as well as by the
+                // daemon's parser.
+                if !usable_lock_account(user) {
+                    shell.lock_failed(
+                        "The account to check could not be determined, so the password \
+                         was not sent. The screen stays locked.",
+                    );
+                    continue;
+                }
                 let request = format!("AUTH VERIFY {user} {} CONFIRM", secret.hex());
                 match ask(&args.socket, &request) {
                     Some(reply) if reply.starts_with("ERR ") => {
@@ -1033,7 +1121,20 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
                         // does this: what is shown is the daemon's line, trimmed.
                         shell.lock_failed(reply.trim());
                     }
-                    Some(_) => shell.unlock(),
+                    // Only an explicit `applied=true` for `auth.verify` unlocks.
+                    // A truncated, empty or unrecognised reply is not a "yes":
+                    // the previous code unlocked on *any* non-error line, which
+                    // made a protocol change or a garbled answer a bypass.
+                    Some(reply) => {
+                        if reply_confirms_verification(&reply) {
+                            shell.unlock();
+                        } else {
+                            shell.lock_failed(
+                                "The system daemon's answer did not confirm the password, \
+                                 so the screen stays locked.",
+                            );
+                        }
+                    }
                     None => shell.lock_failed(
                         "The system daemon did not answer, so this password could \
                          not be checked. The screen stays locked.",
@@ -1213,21 +1314,65 @@ fn preference_path(args: &Args) -> PathBuf {
     args.root.join("var/lib/litric-shell/settings.conf")
 }
 
+/// Where the Files application's user files live.
+///
+/// `--files-root` names it outright; otherwise it is the `litric-files` state
+/// directory the shell unit declares, under whatever root this process was
+/// started against. A fixture root therefore keeps its files inside the fixture
+/// instead of writing to the real `/var`.
+fn files_storage_root(args: &Args) -> PathBuf {
+    args.files_root
+        .clone()
+        .unwrap_or_else(|| args.root.join("var/lib/litric-files/root"))
+}
+
 fn browser_data_path(args: &Args) -> PathBuf {
+    // The same directory the unit's `StateDirectory=litric-browser` opens for
+    // writing. It used to be a path no unit declared, so under
+    // `ProtectSystem=strict` every save was EROFS and the history was lost on
+    // the next restart while the interface said nothing about it.
     args.root.join("var/lib/litric-browser/browser-data.conf")
 }
 
-fn load_browser_data(args: &Args) -> (Vec<String>, Vec<String>) {
+/// Read the history and bookmarks, and say when the file could not be read.
+///
+/// The old version returned an empty list for *every* error, so a permission
+/// denial, a corrupt file and a first run were indistinguishable. They are
+/// three different states: a missing file is a normal first run; a read error
+/// must be reported; a malformed line must not throw away the lines that did
+/// parse, and must not delete the file.
+fn load_browser_data(args: &Args) -> (Vec<String>, Vec<String>, Option<String>) {
+    let path = browser_data_path(args);
     let mut history = Vec::new();
     let mut bookmarks = Vec::new();
-    let Ok(content) = fs::read_to_string(browser_data_path(args)) else {
-        return (history, bookmarks);
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return (history, bookmarks, None);
+        }
+        Err(e) => {
+            return (
+                history,
+                bookmarks,
+                Some(format!(
+                    "Browser data at {} could not be read ({e}); the file was left in \
+                     place and this session starts with empty history and bookmarks.",
+                    path.display()
+                )),
+            );
+        }
     };
+    let mut unreadable = 0usize;
     for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
         let Some((key, value)) = line.split_once('=') else {
+            unreadable = unreadable.saturating_add(1);
             continue;
         };
         let Ok(value) = litric_core::pct::decode(value) else {
+            unreadable = unreadable.saturating_add(1);
             continue;
         };
         if value.len() > 4096 || value.is_empty() || value == "litric://about" {
@@ -1244,7 +1389,14 @@ fn load_browser_data(args: &Args) -> (Vec<String>, Vec<String>) {
     }
     history.truncate(200);
     bookmarks.truncate(200);
-    (history, bookmarks)
+    let warning = (unreadable > 0).then(|| {
+        format!(
+            "{unreadable} line(s) in {} could not be understood. The readable entries \
+             were kept and the file was left as it was.",
+            path.display()
+        )
+    });
+    (history, bookmarks, warning)
 }
 
 fn store_browser_data(args: &Args, history: &[String], bookmarks: &[String]) -> Result<(), String> {
@@ -1254,16 +1406,36 @@ fn store_browser_data(args: &Args, history: &[String], bookmarks: &[String]) -> 
     let parent = path
         .parent()
         .ok_or_else(|| "browser data path has no parent directory".to_owned())?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("cannot create browser data directory: {error}"))?;
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "cannot create the browser data directory {}: {error}",
+            parent.display()
+        )
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
-            .map_err(|error| format!("cannot secure browser data directory: {error}"))?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).map_err(|error| {
+            format!(
+                "cannot secure the browser data directory {}: {error}",
+                parent.display()
+            )
+        })?;
     }
 
-    let temp = parent.join(format!("browser-data.conf.tmp.{}", std::process::id()));
+    // A unique suffix, not just the pid. A process killed between creating its
+    // temporary file and renaming it leaves the name behind; with only the pid,
+    // a recycled pid would collide with that leftover and every later save would
+    // fail with `AlreadyExists` -- a permanent loss caused by one crash. The
+    // timestamp makes the chance of collision negligible without deleting any
+    // file this run did not create.
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let temp = parent.join(format!(
+        "browser-data.conf.tmp.{}.{stamp}",
+        std::process::id()
+    ));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -1272,9 +1444,12 @@ fn store_browser_data(args: &Args, history: &[String], bookmarks: &[String]) -> 
         options.mode(0o600);
     }
     let result = (|| -> Result<(), String> {
-        let mut file = options
-            .open(&temp)
-            .map_err(|error| format!("cannot create temporary browser data: {error}"))?;
+        let mut file = options.open(&temp).map_err(|error| {
+            format!(
+                "cannot create temporary browser data {}: {error}",
+                temp.display()
+            )
+        })?;
         for url in history.iter().take(200) {
             writeln!(file, "history={}", litric_core::pct::encode(url))
                 .map_err(|error| format!("cannot write browser history: {error}"))?;
@@ -1285,7 +1460,16 @@ fn store_browser_data(args: &Args, history: &[String], bookmarks: &[String]) -> 
         }
         file.sync_all()
             .map_err(|error| format!("cannot sync browser data: {error}"))?;
-        fs::rename(&temp, &path).map_err(|error| format!("cannot commit browser data: {error}"))?;
+        fs::rename(&temp, &path).map_err(|error| {
+            format!("cannot commit browser data to {}: {error}", path.display())
+        })?;
+        // The rename is what makes the new file visible; the directory sync is
+        // what makes it survive a power cut. A filesystem that refuses to sync a
+        // directory has still committed the rename, so its complaint is not
+        // turned into a failed save.
+        if let Ok(dir) = fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
         Ok(())
     })();
     if result.is_err() {
@@ -1418,13 +1602,48 @@ fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
     let tokens = Tokens::new(theme, scale);
     let mut shell = Shell::new(tokens, width as f32, height as f32, regional);
     shell.load_preferences(preferences);
-    let (history, bookmarks) = load_browser_data(args);
+    let (history, bookmarks, browser_warning) = load_browser_data(args);
     shell.browser.history = history.into();
     shell.browser.bookmarks = bookmarks;
-    // The same root the facts, the framebuffer and the input devices are read
-    // through, so a shell started against a fixture tree reads its files
-    // there too instead of reaching into the machine's real root.
-    shell.files_root = args.root.clone();
+    if let Some(warning) = browser_warning {
+        // Reported once, at startup, rather than swallowed: a broken store read
+        // as a first run is how history disappears without anyone noticing.
+        shell.notify(
+            "Browser",
+            "Saved browser data could not be read completely",
+            &warning,
+            Priority::High,
+            None,
+        );
+    }
+    // The user's files live in a dedicated persistent directory. The old code
+    // used the boot root itself, so `/Documents` meant the real root filesystem:
+    // read-only erofs on the image, and outside the shell unit's writable paths
+    // even on a test host.
+    let files_root = files_storage_root(args);
+    shell.files_root = files_root.clone();
+    if !args.root.is_dir() {
+        // A fixture root that was never created is a root with nothing in it,
+        // not an invitation to create `no-such-root/var/...` in the caller's
+        // working directory.
+        shell.files.error = Some(format!(
+            "the configured root {} does not exist, so no file storage was opened",
+            args.root.display()
+        ));
+    } else if let Err(error) = litric_shell::fsbridge::ensure_storage(&files_root) {
+        let message = format!(
+            "the file storage at {} is not ready: {error}",
+            files_root.display()
+        );
+        shell.files.error = Some(message.clone());
+        shell.notify(
+            "Files",
+            "Files storage unavailable",
+            &message,
+            Priority::High,
+            None,
+        );
+    }
 
     shell.sample(gather_facts(args));
     shell.environments = gather_environments(args);
@@ -1548,6 +1767,26 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
         .push(format!("fb={}", display.info().summary()));
     session.lines.push(format!("fb.sysfs={}", sys.display()));
     session.lines.extend(report_in.lines());
+    // External applications need a Wayland socket in the session's runtime
+    // directory. The desktop is complete without one — its own windows are
+    // drawn by this process — so a failure is a status line, not an exit.
+    let runtime = shell_runtime_dir();
+    match session.shell.attach_clients(&runtime) {
+        Ok(()) => {
+            let name = session
+                .shell
+                .clients
+                .as_ref()
+                .map(|c| c.display_name().to_owned())
+                .unwrap_or_default();
+            session.lines.push(format!("wayland.display={name}"));
+            session.lines.push(format!(
+                "wayland.socket={}",
+                runtime.join("wayland-0").display()
+            ));
+        }
+        Err(why) => session.lines.push(format!("wayland=unavailable ({why})")),
+    }
     session
         .lines
         .push(format!("mode={}", session.shell.mode.token()));
@@ -1892,7 +2131,9 @@ mod tests {
         ];
         let bookmarks = vec!["https://docs.example/ไทย?a=1&b=2".to_owned()];
         store_browser_data(&args, &history, &bookmarks).expect("browser data saves");
-        assert_eq!(load_browser_data(&args), (history, bookmarks));
+        let (loaded_history, loaded_bookmarks, warning) = load_browser_data(&args);
+        assert_eq!((loaded_history, loaded_bookmarks), (history, bookmarks));
+        assert!(warning.is_none(), "a healthy file reports nothing");
         let contents = fs::read_to_string(browser_data_path(&args)).expect("saved data");
         assert!(
             !contents.contains("ไทย"),
@@ -2381,5 +2622,235 @@ mod tests {
             "a new user should see the desktop and choose what to open"
         );
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn files_live_in_their_own_state_directory_not_at_the_boot_root() {
+        let production = Args::default();
+        assert_eq!(
+            files_storage_root(&production),
+            PathBuf::from("/var/lib/litric-files/root"),
+            "the unit's StateDirectory, not /"
+        );
+
+        let fixture = Args {
+            root: PathBuf::from("/tmp/litric-fixture"),
+            ..Args::default()
+        };
+        assert_eq!(
+            files_storage_root(&fixture),
+            PathBuf::from("/tmp/litric-fixture/var/lib/litric-files/root"),
+            "a fixture root keeps its files inside the fixture"
+        );
+
+        let explicit = Args {
+            files_root: Some(PathBuf::from("/srv/litric-files")),
+            ..Args::default()
+        };
+        assert_eq!(
+            files_storage_root(&explicit),
+            PathBuf::from("/srv/litric-files"),
+            "an explicit --files-root wins"
+        );
+        // The option exists so a test or an installer can name the store without
+        // also moving /proc and /sys.
+        let parsed = args(&["--files-root", "/srv/files"]).expect("parses");
+        assert_eq!(parsed.files_root, Some(PathBuf::from("/srv/files")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_prepares_the_file_share_before_the_files_app_opens() {
+        let dir = std::env::temp_dir().join(format!("litric-shell-files-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("fixture root");
+        let args = Args {
+            root: dir.clone(),
+            socket: dir.join("missing.sock"),
+            status: dir.join("status"),
+            ..Args::default()
+        };
+        let session = start(&args, 1280, 800, 1.0);
+        let storage = dir.join("var/lib/litric-files/root");
+        assert_eq!(session.shell.files_root, storage);
+        for name in litric_shell::fsbridge::DEFAULT_STORAGE_DIRS {
+            assert!(
+                storage.join(name).is_dir(),
+                "{name} is ready before the Files window opens"
+            );
+        }
+        assert!(
+            session.shell.files.error.is_none(),
+            "{:?}",
+            session.shell.files.error
+        );
+        // The store is not the root the /proc and /sys fixtures are read from.
+        assert_ne!(session.shell.files_root, dir);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn start_reports_file_storage_that_cannot_be_opened_instead_of_an_empty_folder() {
+        let dir =
+            std::env::temp_dir().join(format!("litric-shell-files-broken-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("var/lib")).expect("fixture root");
+        // The state path exists, but as a file: systemd cannot create a state
+        // directory there, and neither can the shell. The point of the test is
+        // that startup says so rather than opening a window on an empty folder.
+        fs::write(dir.join("var/lib/litric-files"), "not a folder").expect("fixture file");
+        let args = Args {
+            root: dir.clone(),
+            socket: dir.join("missing.sock"),
+            status: dir.join("status"),
+            ..Args::default()
+        };
+        let session = start(&args, 1280, 800, 1.0);
+        let error = session
+            .shell
+            .files
+            .error
+            .as_deref()
+            .expect("the Files window must say why it has no storage");
+        assert!(error.contains("not ready"), "{error}");
+        assert!(error.contains("not a folder"), "{error}");
+        assert!(
+            session
+                .shell
+                .notifications
+                .items()
+                .iter()
+                .any(|n| n.title.contains("Files storage unavailable")),
+            "a startup storage failure is also a notification"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn browser_data_lives_in_the_directory_the_unit_opens_for_writing() {
+        let args = Args {
+            root: PathBuf::from("/tmp/litric-fixture"),
+            ..Args::default()
+        };
+        assert_eq!(
+            browser_data_path(&args),
+            PathBuf::from("/tmp/litric-fixture/var/lib/litric-browser/browser-data.conf")
+        );
+    }
+
+    #[test]
+    fn a_corrupt_browser_file_keeps_its_readable_entries_and_is_reported() {
+        let root =
+            std::env::temp_dir().join(format!("litric-browser-corrupt-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let args = Args {
+            root: root.clone(),
+            socket: root.join("missing.sock"),
+            ..Args::default()
+        };
+        let path = browser_data_path(&args);
+        fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+        let original = "not-a-key-value\nhistory=https%3A%2F%2Fkept.example%2F\nbookmark=\n";
+        fs::write(&path, original).expect("fixture");
+        let (history, bookmarks, warning) = load_browser_data(&args);
+        assert_eq!(history, vec!["https://kept.example/".to_owned()]);
+        assert!(bookmarks.is_empty());
+        assert!(
+            warning.as_deref().is_some_and(|w| w.contains("1 line(s)")),
+            "{warning:?}"
+        );
+        // Loading never edits the file: the malformed bytes are still there for a
+        // person (or a later recovery) to look at.
+        assert_eq!(fs::read_to_string(&path).expect("still readable"), original);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_browser_file_is_reported_rather_than_called_a_first_run() {
+        let root =
+            std::env::temp_dir().join(format!("litric-browser-unreadable-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let args = Args {
+            root: root.clone(),
+            socket: root.join("missing.sock"),
+            ..Args::default()
+        };
+        let path = browser_data_path(&args);
+        fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+        // Invalid UTF-8 is an error on every host, including one where the test
+        // happens to run as root and can read through a mode change.
+        fs::write(&path, [0xFF, 0xFE, b'\n']).expect("fixture");
+        let (history, bookmarks, warning) = load_browser_data(&args);
+        assert!(history.is_empty() && bookmarks.is_empty());
+        assert!(
+            warning
+                .as_deref()
+                .is_some_and(|w| w.contains("could not be read")),
+            "{warning:?}"
+        );
+        assert!(path.is_file(), "the unreadable file is not deleted");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_temporary_file_left_by_a_crash_does_not_block_the_next_save() {
+        let root = std::env::temp_dir().join(format!("litric-browser-temp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let args = Args {
+            root: root.clone(),
+            socket: root.join("missing.sock"),
+            ..Args::default()
+        };
+        let path = browser_data_path(&args);
+        fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+        // The old temporary name was pid-only; a recycled pid would collide with
+        // this leftover and every save would fail.
+        let stale = path
+            .parent()
+            .expect("parent")
+            .join(format!("browser-data.conf.tmp.{}", std::process::id()));
+        fs::write(&stale, "crashed").expect("stale temp");
+        store_browser_data(&args, &["https://one.example/".to_owned()], &[])
+            .expect("a stale temp is not a reason to lose the save");
+        assert!(stale.is_file(), "the other process's file is left alone");
+        assert_eq!(
+            load_browser_data(&args).0,
+            vec!["https://one.example/".to_owned()]
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn only_an_explicit_verified_reply_unlocks() {
+        assert!(reply_confirms_verification(
+            "OK 5\naction=auth.verify\ncommand=/usr/bin/unix_chkpwd alice nonull\n\
+             user=alice\ninput=stdin\napplied=true\n"
+        ));
+        for reply in [
+            "",
+            "OK 0\n",
+            "OK 2\naction=auth.verify\napplied=false\n",
+            "OK 1\napplied=true\n",
+            "OK 2\naction=auth.remote\napplied=true\n",
+            "ERR action-failed unix_chkpwd exited 7\n",
+            "garbage\n",
+        ] {
+            assert!(
+                !reply_confirms_verification(reply),
+                "a reply that is not an explicit verification must not unlock: {reply:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_account_name_that_would_change_the_request_line_is_refused() {
+        assert!(usable_lock_account("litric"));
+        assert!(!usable_lock_account(""));
+        assert!(!usable_lock_account("litric CONFIRM"));
+        assert!(!usable_lock_account("litric\nAUTH VERIFY root"));
+        assert!(!usable_lock_account("litric\u{0}"));
     }
 }

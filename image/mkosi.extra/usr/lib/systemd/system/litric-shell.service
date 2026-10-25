@@ -10,13 +10,15 @@ Slice=litric-shell.slice
 # None of that existed, and the unit could not start; it was a description of an
 # intention wearing the clothes of a service.
 #
-# What exists now is the display half plus a real input stack: litric-shell
-# discovers the framebuffer and the input devices, renders the desktop in
-# software, routes keyboard and pointer events through a window manager, and
-# writes only the rows that changed. It still hosts no client windows, so it
-# needs no seat and no PAM session and is given neither. The unit grows back
-# toward the one above one capability at a time, each because something needs
-# it -- input devices were added when there was something to read them.
+# What exists now is the display half, a real input stack and client windows:
+# litric-shell discovers the framebuffer and the input devices, renders the
+# desktop in software, routes keyboard and pointer events through a window
+# manager, writes only the rows that changed, and serves Wayland from inside
+# its own process so that an ordinary Linux application can open a window on
+# this desktop (ADR-0024). It still needs no seat and no PAM session: the
+# framebuffer and evdev are opened directly, and the Wayland socket lives in
+# this unit's own runtime directory. The unit grows toward the compositor of
+# ADR-0009 one capability at a time, each because something needs it.
 
 After=basic.target litric-sysd.service litric-first-run.service
 Requires=litric-first-run.service
@@ -37,16 +39,36 @@ Type=simple
 # only what changed. An idle desktop presents nothing at all, which is where
 # Adaptive Idle's saving actually comes from.
 ExecStart=/usr/bin/litric-shell
+# The session's runtime directory. Without it the shell falls back to a private
+# directory under $HOME, which this unit's ProtectHome=yes makes unreachable --
+# so the variable is set explicitly rather than left to the environment.
+Environment=XDG_RUNTIME_DIR=/run/litric
 
-# A single root-owned preference file stores the shell's language, theme and
-# reduced-motion choice on the persistent /var filesystem. Systemd creates this
-# directory with mode 0700 and opens only this state directory through the
-# ProtectSystem=strict boundary below.
-StateDirectory=litric-shell
+# Persistent state, one directory per owner, all under /var so a reboot does
+# not take them with it. Systemd creates each with mode 0700 and opens exactly
+# these through the ProtectSystem=strict boundary below:
+#
+#   litric-shell    settings.conf (language, theme, reduced motion)
+#   litric-browser  browser-data.conf (history and bookmarks)
+#   litric-files    root/ -- the Files application's user files
+#
+# `litric-browser` was missing here while main.rs wrote
+# /var/lib/litric-browser/browser-data.conf. With ProtectSystem=strict that
+# directory is on a read-only mount inside this unit, so every save was EROFS
+# and the file never existed after a restart. `litric-files` is the dedicated
+# store for the Files app: `/` itself is read-only erofs on the image and
+# outside this unit's writable paths, which is why creating a folder in
+# /Documents could never work. Neither directory is opened at a wider path:
+# / remains read-only for this service.
+StateDirectory=litric-shell litric-browser litric-files
 StateDirectoryMode=0700
 
 RuntimeDirectory=litric
-RuntimeDirectoryMode=0755
+# 0700, not 0755. The Wayland socket for client applications lives here, and a
+# Wayland socket is an unauthenticated door to the compositor: whoever can open
+# it can read another application's window and send it input. The directory is
+# the lock, so it is closed to every other user on the machine.
+RuntimeDirectoryMode=0700
 # Both litric-sysd and litric-shell declare /run/litric. Without this, systemd
 # deletes the directory when EITHER unit stops -- taking the other one's socket
 # or status file with it, and producing a shell that cannot reach a daemon that

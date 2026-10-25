@@ -528,6 +528,20 @@ impl FilesApp {
         self.error = None;
     }
 
+    /// Record that the directory could not be read, and drop the rows.
+    ///
+    /// Keeping the previous rows behind an error banner shows a listing that is
+    /// no longer what is on disk. The window draws the reason in place of the
+    /// table instead, which is the difference between "this folder is broken"
+    /// and "this folder is empty".
+    pub fn apply_error(&mut self, message: String) {
+        self.rows.clear();
+        self.selected = None;
+        self.selected_rows.clear();
+        self.selected_name = None;
+        self.error = Some(message);
+    }
+
     /// The selected row, if any.
     #[must_use]
     pub fn selection(&self) -> Option<&FileRow> {
@@ -745,6 +759,11 @@ impl FilesApp {
 /// One tab in the browser window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserTab {
+    /// The engine's stable id for this tab. It used to be `active + 1` on every
+    /// command, so closing a tab before the focused one re-pointed the shell at
+    /// a different engine target: frames from one page appeared under another
+    /// page's address bar. An id is assigned once and never moves.
+    pub engine_tab: u32,
     /// The address shown in the omnibox when this tab is focused.
     pub url: String,
     /// The page title (or the status line until one exists).
@@ -862,12 +881,16 @@ pub struct BrowserApp {
     pub downloads: Vec<BrowserDownload>,
     /// Current download-list request status.
     pub downloads_status: Option<String>,
+    /// The next stable engine tab id to hand out. Monotonic: an id is never
+    /// reused, so a late frame can never land on a newer tab.
+    next_engine_tab: u32,
 }
 
 impl Default for BrowserApp {
     fn default() -> Self {
         Self {
             tabs: vec![BrowserTab {
+                engine_tab: 1,
                 url: "litric://about".to_owned(),
                 title: "New Tab".to_owned(),
                 error: false,
@@ -887,6 +910,7 @@ impl Default for BrowserApp {
             panel: BrowserPanel::Page,
             downloads: Vec::new(),
             downloads_status: None,
+            next_engine_tab: 2,
         }
     }
 }
@@ -896,6 +920,22 @@ impl BrowserApp {
     #[must_use]
     pub fn tab(&self) -> Option<&BrowserTab> {
         self.tabs.get(self.active)
+    }
+
+    /// The focused tab's stable engine id, if there is a tab.
+    #[must_use]
+    pub fn active_engine_tab(&self) -> Option<u32> {
+        self.tab().map(|tab| tab.engine_tab)
+    }
+
+    /// Whether the focused tab has a page the engine has rendered.
+    ///
+    /// The start page is the shell's own surface: asking the engine to
+    /// re-capture it would replace a designed start page with Chromium's
+    /// `about:blank`.
+    #[must_use]
+    pub fn active_tab_has_page(&self) -> bool {
+        self.tab().is_some_and(|tab| tab.url != "litric://about")
     }
 
     /// Select a tab; the omnibox shows its address.
@@ -916,7 +956,9 @@ impl BrowserApp {
         }
         self.tabs.remove(i);
         if self.tabs.is_empty() {
+            let engine_tab = self.take_engine_tab();
             self.tabs.push(BrowserTab {
+                engine_tab,
                 url: "litric://about".to_owned(),
                 title: "New Tab".to_owned(),
                 error: false,
@@ -934,9 +976,18 @@ impl BrowserApp {
         }
     }
 
+    /// Hand out the next stable engine tab id.
+    fn take_engine_tab(&mut self) -> u32 {
+        let id = self.next_engine_tab;
+        self.next_engine_tab = self.next_engine_tab.saturating_add(1);
+        id
+    }
+
     /// Open a new tab and focus it.
     pub fn new_tab(&mut self) {
+        let engine_tab = self.take_engine_tab();
         self.tabs.push(BrowserTab {
+            engine_tab,
             url: "litric://about".to_owned(),
             title: "New Tab".to_owned(),
             error: false,
@@ -1918,6 +1969,20 @@ mod tests {
         assert_eq!(names, ["Album", "Work", "doc.txt"]);
         let kinds: Vec<FileKind> = f.rows.iter().map(|r| r.kind).collect();
         assert!(kinds.contains(&FileKind::Dir));
+    }
+
+    #[test]
+    fn a_failed_directory_read_replaces_the_rows_with_the_reason() {
+        // The old window kept the previous listing behind an error banner, so a
+        // folder that had become unreadable still looked like a folder whose
+        // contents were the rows from before. The rows are dropped: "empty" and
+        // "could not be read" must not look the same.
+        let mut f = listing();
+        assert!(f.error.is_none());
+        f.apply_error("permission denied".to_owned());
+        assert!(f.rows.is_empty(), "stale rows survived a failed read");
+        assert_eq!(f.error.as_deref(), Some("permission denied"));
+        assert!(f.selection().is_none());
     }
 
     #[test]

@@ -54,6 +54,9 @@ pub fn draw(canvas: &mut Canvas, shell: &mut Shell) {
     let overview = matches!(shell.overlay, Overlay::Overview { .. });
     if !overview {
         draw_windows(canvas, shell);
+        // Menus and tooltips from client applications sit above every window
+        // and below the shell's own overlays, which is where a popup belongs.
+        shell.draw_client_popups(canvas);
     }
     draw_top_bar(canvas, shell);
     // The launcher is the dock's expanded state and the only state it has left:
@@ -65,7 +68,15 @@ pub fn draw(canvas: &mut Canvas, shell: &mut Shell) {
     // collided with. Tagging them as their own surface lets the layout audit say
     // so instead of reporting a menu over a window as a defect.
     let surface = canvas.set_surface(u32::MAX);
-    draw_overlay(canvas, shell);
+    // A surface that just closed is still pixels: draw it beneath whatever
+    // replaced it, through the same reveal spring, for as long as that spring
+    // has anything left to show. `draw_retired` diverts its hotspots to a
+    // scratch table, so a menu on its way out cannot take the click.
+    if let Some(old) = shell.retiring_overlay().cloned() {
+        shell.draw_retired(|sh| draw_overlay(canvas, sh, &old));
+    }
+    let live = shell.overlay.clone();
+    draw_overlay(canvas, shell, &live);
     canvas.set_surface(surface);
     draw_banners(canvas, shell);
     draw_context_menu(canvas, shell);
@@ -128,9 +139,22 @@ fn draw_lock(canvas: &mut Canvas, shell: &mut Shell) {
 
 /// The open context menu, if any. Drawn above everything but the pointer.
 fn draw_context_menu(canvas: &mut Canvas, shell: &mut Shell) {
-    let Some(menu) = shell.context_menu.clone() else {
-        return;
-    };
+    // The menu that is leaving draws first, beneath the one that replaced it.
+    if let Some(old) = shell.retiring_context_menu().cloned() {
+        shell.draw_retired(|sh| draw_context_menu_panel(canvas, sh, &old));
+    }
+    if let Some(menu) = shell.context_menu.clone() {
+        draw_context_menu_panel(canvas, shell, &menu);
+    }
+}
+
+/// One context menu at its resting place. Its reveal spring is the same one
+/// that retires it, which is what makes a close visible.
+fn draw_context_menu_panel(
+    canvas: &mut Canvas,
+    shell: &mut Shell,
+    menu: &crate::apps::ContextMenu,
+) {
     let t = shell.tokens.clone();
     let screen = shell.wm.screen();
     let row_h = t.px(26.0);
@@ -200,19 +224,39 @@ fn draw_context_menu(canvas: &mut Canvas, shell: &mut Shell) {
 /// The desktop's own modal dialog: New folder from the wallpaper menu, the
 /// confirmation for a power transition, or an error to acknowledge.
 fn draw_desktop_dialog(canvas: &mut Canvas, shell: &mut Shell) {
+    if let Some(old) = shell.retiring_desktop_dialog().cloned() {
+        shell.draw_retired(|sh| draw_desktop_dialog_panel(canvas, sh, &old, true));
+    }
+    if let Some(dialog) = shell.desktop_dialog.clone() {
+        draw_desktop_dialog_panel(canvas, shell, &dialog, false);
+    }
+}
+
+/// One dialog panel. `leaving` suppresses the scrim: a dialog on its way out
+/// lets the desktop show while its panel collapses, rather than holding a
+/// full-screen dim until the exit ends and then dropping it in one frame.
+fn draw_desktop_dialog_panel(
+    canvas: &mut Canvas,
+    shell: &mut Shell,
+    dialog: &crate::apps::DesktopDialog,
+    leaving: bool,
+) {
     use crate::apps::DesktopDialog;
-    let Some(dialog) = shell.desktop_dialog.clone() else {
-        return;
-    };
     let t = shell.tokens.clone();
     let screen = shell.wm.screen();
-    ui::surface(
-        canvas,
-        &t,
-        Rect::new(0.0, 0.0, screen.w, screen.h),
-        0.0,
-        Material::Scrim,
-    );
+    let reveal = shell.anims().dialog.value();
+    if reveal <= 0.01 {
+        return;
+    }
+    if !leaving {
+        ui::surface(
+            canvas,
+            &t,
+            Rect::new(0.0, 0.0, screen.w, screen.h),
+            0.0,
+            Material::Scrim,
+        );
+    }
     // The title, the detail line, whether there is a text field, the word on
     // the affirmative button, and its tone. One table, so a dialog cannot be
     // drawn with a button that has nothing behind it.
@@ -253,6 +297,15 @@ fn draw_desktop_dialog(canvas: &mut Canvas, shell: &mut Shell) {
         t.px(170.0)
     };
     let panel = Rect::new((screen.w - w) / 2.0, (screen.h - h) / 2.0, w, h);
+    // It opens and closes from the middle, like the switcher. The clip is the
+    // spring: at zero there is no panel and no hotspot to click.
+    let shown_h = panel.h * reveal;
+    let saved = canvas.push_clip(Rect::new(
+        panel.x,
+        panel.y + (panel.h - shown_h) / 2.0,
+        panel.w,
+        shown_h,
+    ));
     ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
     // The click-away hotspot goes in FIRST so the buttons, registered later,
     // win the hit test (`hit` picks the last registration). Clicking away
@@ -298,6 +351,7 @@ fn draw_desktop_dialog(canvas: &mut Canvas, shell: &mut Shell) {
     let no = Rect::new(ok.x - t.px(108.0), ok.y, t.px(100.0), t.px(28.0));
     ui::button(canvas, &t, no, "Cancel", ui::State::Normal, Tone::Neutral);
     shell.hotspots_mut().push(no, Hot::DialogCancel);
+    canvas.set_clip(saved);
 }
 
 // ---------------------------------------------------------------------------
@@ -752,6 +806,14 @@ fn to_wm(r: Rect) -> litric_wm::Rect {
 }
 
 fn draw_window_body(canvas: &mut Canvas, shell: &mut Shell, id: u32, body: Rect) {
+    // A foreign application's window is somebody else's pixels. It is painted
+    // (and its frame callback answered) before any built-in view is considered,
+    // because the window manager cannot tell the two apart by design.
+    if let Some(host) = shell.clients.as_mut() {
+        if host.draw_window(canvas, id, body) {
+            return;
+        }
+    }
     let app_id = shell
         .wm
         .window(id)
@@ -783,7 +845,7 @@ fn refresh_files(shell: &mut Shell) {
     let bridge = match crate::fsbridge::FsBridge::open(&root, zone) {
         Ok(b) => b,
         Err(e) => {
-            shell.files.error = Some(e.to_string());
+            shell.files.apply_error(e.to_string());
             shell.files.listed = Some(shell.files.path.clone());
             return;
         }
@@ -801,7 +863,7 @@ fn refresh_files(shell: &mut Shell) {
                 .collect();
             shell.files.apply_entries(rows);
         }
-        Err(e) => shell.files.error = Some(e.to_string()),
+        Err(e) => shell.files.apply_error(e.to_string()),
     }
     shell.files.listed = Some(shell.files.path.clone());
 }
@@ -1490,10 +1552,19 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
                 ui::Material::Flat
             },
         );
-        let shown = if tab.url.len() > 20 {
-            format!("{}…", &tab.url[..17])
-        } else {
+        // A tab strip shows titles, falling back to the address only while a
+        // page has none: `https://` in every tab tells the user nothing about
+        // which of six pages is which.
+        let label = if tab.title.is_empty() || tab.title == tab.url {
             tab.url.clone()
+        } else {
+            tab.title.clone()
+        };
+        let shown = if label.chars().count() > 20 {
+            let head: String = label.chars().take(17).collect();
+            format!("{head}…")
+        } else {
+            label
         };
         font::draw(canvas, &shown, r.x + t.px(8.0), r.y + t.px(14.0), &s_tab);
         shell.hotspots_mut().push(r, Hot::BrowserTab(i));
@@ -1718,7 +1789,10 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         crate::apps::BrowserPanel::Downloads => {
             font::draw(
                 canvas,
-                "Downloads",
+                // These files live in the broker's /run directory, which is
+                // tmpfs: they survive a window close and disappear at reboot.
+                // Calling the panel just "Downloads" made that look permanent.
+                "Downloads (this session)",
                 page.x + t.sp(Space::Md),
                 page.y + t.px(28.0),
                 &s_head,
@@ -1786,11 +1860,15 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         crate::apps::BrowserPanel::Page => {}
     }
 
-    // A frame from the engine session replaces the placeholder entirely.
+    // A frame from the engine session replaces the placeholder entirely. Where
+    // it was drawn is published to the shell: pointer positions are mapped
+    // through that rectangle, so a click lands on the pixel aimed at.
     if let (Some(frame), Some((w, h))) = (shell.browser_frame.as_ref(), app.last_frame) {
-        blit_engine_frame(canvas, frame, w, h, page);
+        let placed = blit_engine_frame(canvas, frame, w, h, page);
+        shell.set_browser_engine_area(placed);
         return;
     }
+    shell.set_browser_engine_area(None);
 
     let cy = page.center().1;
     if tab.url == "litric://about" {
@@ -1980,14 +2058,20 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
 /// scaled down only when the page does not match the frame. Pixel work is
 /// bounded by the clip: a frame larger than the page never costs more than
 /// the page area.
-fn blit_engine_frame(canvas: &mut Canvas, frame: &[u8], w: u32, h: u32, page: Rect) {
+fn blit_engine_frame(
+    canvas: &mut Canvas,
+    frame: &[u8],
+    w: u32,
+    h: u32,
+    page: Rect,
+) -> Option<Rect> {
     let needed = u64::from(w)
         .checked_mul(u64::from(h))
         .and_then(|n| n.checked_mul(4))
         .and_then(|n| usize::try_from(n).ok())
         .unwrap_or(usize::MAX);
     if frame.len() < needed || w == 0 || h == 0 {
-        return;
+        return None;
     }
     let saved = canvas.push_clip(page);
     let fw = w as f32;
@@ -2048,6 +2132,7 @@ fn blit_engine_frame(canvas: &mut Canvas, frame: &[u8], w: u32, h: u32, page: Re
         py += 1.0;
     }
     canvas.set_clip(saved);
+    Some(Rect::new(x0, y0, dw, dh))
 }
 
 /// The system monitor, filled from measured values only.
@@ -2733,7 +2818,7 @@ fn draw_settings_page(
                 ),
                 (
                     "File access".to_owned(),
-                    "Uses the user's home sandbox".to_owned(),
+                    format!("Persistent store: {}", shell.files_root.display()),
                 ),
             ],
         ),
@@ -2743,25 +2828,33 @@ fn draw_settings_page(
             pane,
             &[
                 (
-                    "Current user".to_owned(),
+                    "Desktop account".to_owned(),
                     facts
-                        .session_user
+                        .auth_account
+                        .clone()
+                        .or_else(|| facts.session_user.clone())
                         .unwrap_or_else(|| "Unavailable".to_owned()),
                 ),
                 (
                     "Password verification".to_owned(),
-                    facts
-                        .auth_available
-                        .unwrap_or_else(|| "Unavailable".to_owned()),
+                    format!(
+                        "{} / account password: {}",
+                        facts.auth_available.as_deref().unwrap_or("Unavailable"),
+                        facts.auth_password.as_deref().unwrap_or("unknown")
+                    ),
                 ),
                 (
                     "Lock status".to_owned(),
-                    if facts.auth_lock == Some(true) {
-                        "Refused"
+                    if shell.can_lock() {
+                        "Available".to_owned()
+                    } else if facts.auth_lock == Some(true) {
+                        format!(
+                            "Refused: {}",
+                            facts.auth_reason.as_deref().unwrap_or("no reason given")
+                        )
                     } else {
-                        "Enabled when a verifier is available"
-                    }
-                    .to_owned(),
+                        "Unavailable until a verifier and an account password are ready".to_owned()
+                    },
                 ),
             ],
         ),
@@ -2911,16 +3004,16 @@ fn draw_not_implemented(canvas: &mut Canvas, shell: &mut Shell, body: Rect, app_
 // Overlays
 // ---------------------------------------------------------------------------
 
-fn draw_overlay(canvas: &mut Canvas, shell: &mut Shell) {
-    match shell.overlay.clone() {
+fn draw_overlay(canvas: &mut Canvas, shell: &mut Shell, overlay: &Overlay) {
+    match overlay {
         Overlay::None => {}
         // The launcher is not drawn here: it *is* the dock, expanded. One
         // surface morphs from the pill at the bottom edge into the panel, so
         // there is one thing on screen rather than two that cross-fade -- which
         // is the whole point of the design (`screens/desktop/b-dock-morph`).
         Overlay::Launcher { .. } => {}
-        Overlay::Switcher { selected } => draw_switcher(canvas, shell, selected),
-        Overlay::Overview { .. } => draw_overview(canvas, shell),
+        Overlay::Switcher { selected } => draw_switcher(canvas, shell, *selected),
+        Overlay::Overview { selected } => draw_overview(canvas, shell, *selected),
         Overlay::QuickSettings => draw_quick_settings(canvas, shell),
         Overlay::Power => draw_power_menu(canvas, shell),
         Overlay::Litro => draw_litro_menu(canvas, shell),
@@ -3217,7 +3310,9 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
         // Every pinned app sits on its own rounded tile, as in the design.
         canvas.fill_round_rect(
             r,
-            r.w * 0.42,
+            // The tile is a squircle proportioned to its own side, not a corner
+            // token: the pill's radius must not follow the theme scale here.
+            r.w * 0.42, // lint-exempt: proportional tile radius
             with_alpha(rgb(0xFFFFFF), if hovered { 0.16 } else { 0.09 }),
         );
         if hovered {
@@ -3324,7 +3419,8 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
             Rect::new(caret, bubble.center().1 - t.px(7.0), t.px(1.5), t.px(14.0)),
             t.px(0.75),
             t.accent(),
-        );        let close = Rect::new(
+        );
+        let close = Rect::new(
             bubble.right() - t.px(24.0),
             bubble.y + t.px(2.0),
             t.px(18.0),
@@ -4003,18 +4099,25 @@ fn refresh_trash_view(shell: &mut Shell) {
 /// definition, waiting for the user to choose. What the card does carry is
 /// everything a person needs to choose: which application, what it is called,
 /// which workspace it is on, and whether it is minimized.
-fn draw_overview(canvas: &mut Canvas, shell: &mut Shell) {
+fn draw_overview(canvas: &mut Canvas, shell: &mut Shell, selected: usize) {
     let t = shell.tokens.clone();
     let wm_screen = shell.wm.screen();
     let screen = Rect::new(wm_screen.x, wm_screen.y, wm_screen.w, wm_screen.h);
-    let selected = match shell.overlay {
-        Overlay::Overview { selected } => selected,
-        _ => return,
-    };
+    // Mission Control is a place, but it arrives and leaves like a panel: the
+    // dim follows the same spring, so closing it fades the desktop back in
+    // instead of cutting to it.
+    let reveal = shell.anims().overview.value();
+    if reveal <= 0.01 {
+        return;
+    }
 
     // The desktop stays visible under the dim, so the overview reads as a layer
     // over the session rather than a different screen.
-    canvas.fill_round_rect(screen, 0.0, with_alpha(rgb(0x000000), 0.74));
+    canvas.fill_round_rect(
+        screen,
+        0.0,
+        with_alpha(rgb(0x000000), 0.74 * reveal.clamp(0.0, 1.0)),
+    );
     shell.hotspots_mut().push(screen, Hot::OverviewBackdrop);
 
     let ids = shell.overview_ids();
@@ -4242,6 +4345,19 @@ fn draw_switcher(canvas: &mut Canvas, shell: &mut Shell, selected: usize) {
     let w = t.px(420.0).min(screen.w * 0.7);
     let h = (windows.len() as f32) * row_h + t.px(52.0);
     let panel = Rect::new((screen.w - w) / 2.0, (screen.h - h) / 2.0, w, h);
+    // The switcher unfolds from its middle and closes the same way: the spring
+    // decides how much of the panel its clip shows.
+    let reveal = shell.anims().switcher.value();
+    if reveal <= 0.01 {
+        return;
+    }
+    let shown_h = panel.h * reveal;
+    let saved = canvas.push_clip(Rect::new(
+        panel.x,
+        panel.y + (panel.h - shown_h) / 2.0,
+        panel.w,
+        shown_h,
+    ));
     ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
 
     ui::section_label(
@@ -4278,8 +4394,8 @@ fn draw_switcher(canvas: &mut Canvas, shell: &mut Shell, selected: usize) {
         );
         shell.hotspots_mut().push(row, hot);
     }
+    canvas.set_clip(saved);
 }
-
 fn icon_for_app_id(app_id: &str) -> Icon {
     App::ALL
         .iter()
@@ -4661,6 +4777,7 @@ fn draw_notification_list(canvas: &mut Canvas, shell: &mut Shell) {
             col.cursor + t.px(22.0),
             &s,
         );
+        canvas.set_clip(saved);
         return;
     }
     for (i, (_, title, source, priority)) in items.iter().enumerate() {
@@ -4702,7 +4819,7 @@ fn draw_banners(canvas: &mut Canvas, shell: &mut Shell) {
     }
     let t = shell.tokens.clone();
     let screen = shell.wm.screen();
-    let recent: Vec<(String, String, Priority)> = shell
+    let mut rows: Vec<(u32, String, String, Priority)> = shell
         .notifications
         .items()
         .iter()
@@ -4712,13 +4829,39 @@ fn draw_banners(canvas: &mut Canvas, shell: &mut Shell) {
         // does not stop being wrong five seconds later.
         .filter(|n| n.expires_ms.is_some() || n.priority == Priority::Critical)
         .take(3)
-        .map(|n| (n.title.clone(), n.body.clone(), n.priority))
+        .map(|n| (n.id, n.title.clone(), n.body.clone(), n.priority))
         .collect();
+    // A dismissed banner keeps its pixels for the length of its exit spring.
+    // The live queue is authoritative for everything else, which is why this
+    // only adds ids it no longer holds.
+    for banner in shell.retiring_banners() {
+        if !rows.iter().any(|(id, ..)| *id == banner.id) {
+            rows.push((
+                banner.id,
+                banner.title.clone(),
+                banner.body.clone(),
+                banner.priority,
+            ));
+        }
+    }
 
     let w = t.px(300.0).min(screen.w * 0.6);
     let mut y = shell.top_bar().h + t.px(10.0);
-    for (title, body, priority) in recent {
-        let r = Rect::new(screen.w - w - t.px(12.0), y, w, t.px(60.0));
+    for (id, title, body, priority) in rows {
+        let reveal = shell.anims().banner_reveal(id).clamp(0.0, 1.0);
+        if reveal <= 0.0 {
+            continue;
+        }
+        // The banner slides in from the screen edge and leaves the same way.
+        // The software canvas has no compositing alpha, so travel is the
+        // honest exit, and the spring says how far it has come: at reveal 0 it
+        // sits entirely past the edge it belongs to.
+        let r = Rect::new(
+            screen.w - w - t.px(12.0) + (1.0 - reveal) * (w + t.px(12.0)),
+            y,
+            w,
+            t.px(60.0),
+        );
         ui::surface(canvas, &t, r, t.radius(Radius::Md), Material::Popover);
         let tone = match priority {
             Priority::Critical => Tone::Bad,
@@ -4783,6 +4926,94 @@ fn draw_diagnostics(canvas: &mut Canvas, shell: &mut Shell) {
         );
         y += line_h;
     }
+}
+
+/// First-run setup: language, theme and motion, then Finish. Every control is
+/// a hotspot, so the same pointer and keyboard path as the lock screen works.
+fn draw_setup(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    let screen = shell.wm.screen();
+    let pane_w = t.px(460.0).min(screen.w - t.sp(Space::Lg) * 2.0);
+    let pane = Rect::new(
+        (screen.w - pane_w) / 2.0,
+        screen.h * 0.22,
+        pane_w,
+        t.px(360.0),
+    );
+    ui::surface(
+        canvas,
+        &t,
+        pane,
+        t.radius(Radius::Lg),
+        ui::Material::Elevated,
+    );
+
+    let x = pane.x + t.sp(Space::Lg);
+    let mut y = pane.y + t.px(32.0);
+    let title = crate::i18n::text("Welcome to LitricOS");
+    font::draw(canvas, &title, x, y, &t.style_bold(TypeStep::Title1));
+    y += t.line_px(TypeStep::Title1) + t.px(8.0);
+    let intro =
+        crate::i18n::text("Choose your language and theme. You can change both later in Settings.");
+    let body = t.style(TypeStep::Footnote);
+    for line in ui::wrap(&intro, &body, pane.w - t.sp(Space::Lg) * 2.0, 3) {
+        font::draw(canvas, &line, x, y, &body);
+        y += t.line_px(TypeStep::Footnote);
+    }
+    y += t.px(24.0);
+
+    let theme = shell.settings.preferences.theme;
+    let label = format!("{}: {}", crate::i18n::text("Theme"), theme_name(theme));
+    setup_button(canvas, shell, &t, pane, y, &label, Hot::SettingsTheme);
+    y += t.px(40.0);
+    let label = format!(
+        "{}: {}",
+        crate::i18n::text("Language"),
+        shell.settings.preferences.language.label()
+    );
+    setup_button(canvas, shell, &t, pane, y, &label, Hot::SettingsLanguage);
+    y += t.px(40.0);
+    let state = if shell.settings.preferences.reduce_motion {
+        crate::i18n::text("On")
+    } else {
+        crate::i18n::text("Off")
+    };
+    let label = format!("{}: {}", crate::i18n::text("Reduce motion"), state);
+    setup_button(canvas, shell, &t, pane, y, &label, Hot::SettingsMotion);
+    y += t.px(56.0);
+    setup_button(
+        canvas,
+        shell,
+        &t,
+        pane,
+        y,
+        &crate::i18n::text("Finish setup"),
+        Hot::SetupDone,
+    );
+}
+
+fn setup_button(
+    canvas: &mut Canvas,
+    shell: &mut Shell,
+    t: &Tokens,
+    pane: Rect,
+    y: f32,
+    label: &str,
+    hot: Hot,
+) {
+    let r = Rect::new(
+        pane.x + t.sp(Space::Lg),
+        y,
+        pane.w - t.sp(Space::Lg) * 2.0,
+        t.px(32.0),
+    );
+    let state = if shell.is_highlighted(hot) {
+        State::Hover
+    } else {
+        State::Normal
+    };
+    ui::button(canvas, t, r, label, state, Tone::Accent);
+    shell.hotspots_mut().push(r, hot);
 }
 
 #[cfg(test)]
@@ -4971,7 +5202,10 @@ mod tests {
         let runs: Vec<String> = c.text_runs().iter().map(|r| r.text.clone()).collect();
         for label in ["Lock", "Sleep", "Shut down", "Restart"] {
             let want = crate::i18n::text(label).into_owned();
-            assert!(runs.contains(&want), "{label} is not in the power menu: {runs:?}");
+            assert!(
+                runs.contains(&want),
+                "{label} is not in the power menu: {runs:?}"
+            );
         }
         for i in 0..4u8 {
             let r = s
@@ -5208,6 +5442,10 @@ mod tests {
         s.open_app(App::Activity);
         s.open_app(App::Files);
         s.perform(Action::NextWindow);
+        // The switcher unfolds from its middle now, so the first frame of the
+        // spring is genuinely empty. The loop ticks before it draws, and so
+        // does this test.
+        s.tick_after(16);
         let mut c = canvas();
         draw(&mut c, &mut s);
         assert!(s.hotspots().rect_of(Hot::SwitcherItem(0)).is_some());
@@ -5325,92 +5563,4 @@ mod tests {
         draw(&mut c, &mut s);
         assert_eq!(c.width(), 320);
     }
-}
-
-/// First-run setup: language, theme and motion, then Finish. Every control is
-/// a hotspot, so the same pointer and keyboard path as the lock screen works.
-fn draw_setup(canvas: &mut Canvas, shell: &mut Shell) {
-    let t = shell.tokens.clone();
-    let screen = shell.wm.screen();
-    let pane_w = t.px(460.0).min(screen.w - t.sp(Space::Lg) * 2.0);
-    let pane = Rect::new(
-        (screen.w - pane_w) / 2.0,
-        screen.h * 0.22,
-        pane_w,
-        t.px(360.0),
-    );
-    ui::surface(
-        canvas,
-        &t,
-        pane,
-        t.radius(Radius::Lg),
-        ui::Material::Elevated,
-    );
-
-    let x = pane.x + t.sp(Space::Lg);
-    let mut y = pane.y + t.px(32.0);
-    let title = crate::i18n::text("Welcome to LitricOS");
-    font::draw(canvas, &title, x, y, &t.style_bold(TypeStep::Title1));
-    y += t.line_px(TypeStep::Title1) + t.px(8.0);
-    let intro =
-        crate::i18n::text("Choose your language and theme. You can change both later in Settings.");
-    let body = t.style(TypeStep::Footnote);
-    for line in ui::wrap(&intro, &body, pane.w - t.sp(Space::Lg) * 2.0, 3) {
-        font::draw(canvas, &line, x, y, &body);
-        y += t.line_px(TypeStep::Footnote);
-    }
-    y += t.px(24.0);
-
-    let theme = shell.settings.preferences.theme;
-    let label = format!("{}: {}", crate::i18n::text("Theme"), theme_name(theme));
-    setup_button(canvas, shell, &t, pane, y, &label, Hot::SettingsTheme);
-    y += t.px(40.0);
-    let label = format!(
-        "{}: {}",
-        crate::i18n::text("Language"),
-        shell.settings.preferences.language.label()
-    );
-    setup_button(canvas, shell, &t, pane, y, &label, Hot::SettingsLanguage);
-    y += t.px(40.0);
-    let state = if shell.settings.preferences.reduce_motion {
-        crate::i18n::text("On")
-    } else {
-        crate::i18n::text("Off")
-    };
-    let label = format!("{}: {}", crate::i18n::text("Reduce motion"), state);
-    setup_button(canvas, shell, &t, pane, y, &label, Hot::SettingsMotion);
-    y += t.px(56.0);
-    setup_button(
-        canvas,
-        shell,
-        &t,
-        pane,
-        y,
-        &crate::i18n::text("Finish setup"),
-        Hot::SetupDone,
-    );
-}
-
-fn setup_button(
-    canvas: &mut Canvas,
-    shell: &mut Shell,
-    t: &Tokens,
-    pane: Rect,
-    y: f32,
-    label: &str,
-    hot: Hot,
-) {
-    let r = Rect::new(
-        pane.x + t.sp(Space::Lg),
-        y,
-        pane.w - t.sp(Space::Lg) * 2.0,
-        t.px(32.0),
-    );
-    let state = if shell.is_highlighted(hot) {
-        State::Hover
-    } else {
-        State::Normal
-    };
-    ui::button(canvas, t, r, label, state, Tone::Accent);
-    shell.hotspots_mut().push(r, hot);
 }

@@ -93,7 +93,7 @@ Files: `src/litric-shell/src/shortcuts.rs`,
 | `cargo test -p litric-wm` | 48 tests. |
 | `cargo clippy -p litric-shell -p litric-wm --all-targets` | No warnings in either crate (one pre-existing warning in `litric-sysd`). |
 | `cargo fmt --all` | Clean. |
-| Frame dump | `21-mission-control` and `15-search` are written by `examples/frame_dump.rs`; the text-layout audit reports no overlap on the Mission Control frame (`overlaps=none (15 runs checked)`). |
+| Frame dump | `21-mission-control` and `15-search` are written by `src/litric-shell/examples/frame_dump.rs`; the text-layout audit reports no overlap on the Mission Control frame (`overlaps=none (15 runs checked)`). |
 
 Frames were produced with substituted Thai faces (the development host does not
 carry Noto Sans Thai). The Latin faces were the image's Noto Sans and JetBrains

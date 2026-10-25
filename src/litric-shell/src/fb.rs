@@ -303,7 +303,9 @@ impl Framebuffer {
             return;
         }
         for x in 0..cols {
-            let px = canvas.get(i64::from(x), i64::from(y)).unwrap_or(0xFF00_0000);
+            let px = canvas
+                .get(i64::from(x), i64::from(y))
+                .unwrap_or(0xFF00_0000);
             let off = (x as usize).saturating_mul(bytes);
             if let Some(slot) = self.row.get_mut(off..off.saturating_add(bytes)) {
                 self.info.format.encode(px, slot);

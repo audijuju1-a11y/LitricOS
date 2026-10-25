@@ -1,0 +1,23 @@
+[package]
+name        = "litric-compositor"
+description = "LitricOS Wayland server: client surfaces, xdg-shell, shared memory and seat, the protocol half of the desktop"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# ADR-0005: the compositor foundation is upstream Smithay. This crate uses its
+# `wayland-server` half only: the part that speaks the wire protocol and passes
+# file descriptors. Rendering, scene graph and window management stay ours, in
+# `litric-shell` and `litric-wm`. No unsafe is written here; the `wayland-backend`
+# crate owns the audited `sendmsg`/`SCM_RIGHTS` path.
+wayland-server    = "0.31"
+wayland-protocols = { version = "0.31", features = ["server", "staging"] }
+# poll(2). Already in the tree as a dependency of `wayland-server`; the audited
+# event loop is worth naming explicitly rather than calling `poll` through a
+# library that does not expose it.
+rustix = { version = "1", features = ["event"] }

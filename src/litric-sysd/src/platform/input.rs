@@ -135,14 +135,16 @@ const ABS_Y: u32 = 1;
 /// pointer, whose button codes are all above 255.
 #[must_use]
 fn has_bit(bitmap: &str, bit: u32) -> bool {
-    let word = usize::try_from(bit / 64).unwrap_or(usize::MAX);
+    // Words are 64 bits, so the shift and the mask are exact and there is no
+    // division to round: bit 64 is word 1 bit 0, and bit 63 is word 0's top.
+    let word = usize::try_from(bit >> 6).unwrap_or(usize::MAX);
     let Some(text) = bitmap.split_whitespace().nth(word) else {
         return false;
     };
     let Ok(value) = u64::from_str_radix(text, 16) else {
         return false;
     };
-    value & (1u64 << (bit % 64)) != 0
+    value & (1u64 << (bit & 63)) != 0
 }
 
 /// Decide what a node is from its capability bitmaps.
@@ -234,11 +236,17 @@ mod tests {
         assert_eq!(facts.keyboards(), 1);
         assert_eq!(facts.pointers(), 0);
         assert_eq!(
-            facts.devices[0].name.as_deref(),
+            facts
+                .devices
+                .first()
+                .and_then(|device| device.name.as_deref()),
             Some("QEMU USB Keyboard"),
             "devices are in node order"
         );
-        assert_eq!(facts.devices[1].kind, Kind::Other);
+        assert_eq!(
+            facts.devices.get(1).map(|device| device.kind),
+            Some(Kind::Other)
+        );
         let text = facts.to_lines().join("\n");
         assert!(
             text.contains("input.device event0 kind=keyboard name=QEMU USB Keyboard"),
@@ -266,7 +274,10 @@ mod tests {
         );
         let facts = read(&root);
         assert_eq!(facts.devices.len(), 1);
-        assert_eq!(facts.devices[0].kind, Kind::Tablet);
+        assert_eq!(
+            facts.devices.first().map(|device| device.kind),
+            Some(Kind::Tablet)
+        );
         assert_eq!(facts.pointers(), 1);
         assert_eq!(facts.keyboards(), 0);
         let _ = std::fs::remove_dir_all(&root);
@@ -286,7 +297,10 @@ mod tests {
             ],
         );
         let facts = read(&root);
-        assert_eq!(facts.devices[0].kind, Kind::Mouse);
+        assert_eq!(
+            facts.devices.first().map(|device| device.kind),
+            Some(Kind::Mouse)
+        );
         assert_eq!(facts.pointers(), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -301,7 +315,13 @@ mod tests {
         );
         let facts = read(&root);
         assert_eq!(facts.devices.len(), 1);
-        assert_eq!(facts.devices[0].name, None);
+        assert_eq!(
+            facts
+                .devices
+                .first()
+                .and_then(|device| device.name.as_deref()),
+            None
+        );
         assert!(facts
             .to_lines()
             .iter()
