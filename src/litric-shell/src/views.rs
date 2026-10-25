@@ -11,7 +11,7 @@ use litric_design::{Radius, Space, TypeStep};
 use litric_wm::WindowState;
 
 use crate::apps::{FileKind, FilesHot, SortKey};
-use crate::appicons;
+use crate::appicons::{self, Glyph};
 use crate::canvas::{rgb, with_alpha, Canvas, Rect};
 use crate::chrome;
 use crate::font::{self, Style};
@@ -409,12 +409,24 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
     } else {
         None
     };
-    // Left to right. Battery and network appear only when there is something
-    // to say: an icon that means "nothing was measured" is noise, and the
-    // quick settings panel is one click away for everything.
-    let mut icons_row: Vec<(Icon, Hot, Option<Tone>)> = vec![(Icon::Audio, Hot::StatusAudio, None)];
-    if shell.facts.network.as_deref() == Some("offline") {
-        icons_row.push((Icon::Network, Hot::StatusNetwork, Some(Tone::Warning)));
+    // Left to right: what the machine is doing, then what to reach for, then
+    // the one thing people look at the bar for. Battery and network appear only
+    // when there is something to say: a glyph that means "nothing was measured"
+    // is noise.
+    let icon = t.px(chrome::TOP_BAR_ICON);
+    let step = t.px(chrome::TOP_BAR_STEP);
+    let level_style = Style::new(t.text_px(TypeStep::Caption), t.text());
+    let mut items: Vec<BarItem> = vec![
+        BarItem::new(Glyph::Shield, Hot::MenuRow(crate::apps::MenuAction::ScanNow), shield_tone),
+        BarItem::new(Glyph::Volume, Hot::StatusAudio, None),
+    ];
+    if let Some(net) = shell.facts.network.as_deref() {
+        let offline = net == "offline";
+        items.push(BarItem::new(
+            if offline { Glyph::WifiOff } else { Glyph::Wifi },
+            Hot::StatusNetwork,
+            offline.then_some(Tone::Warning),
+        ));
     }
     if let Some(percent) = shell.facts.battery_percent {
         let tone = if percent <= 10 {
@@ -424,23 +436,18 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
         } else {
             None
         };
-        icons_row.push((Icon::Battery, Hot::StatusBattery, tone));
+        let mut item = BarItem::new(Glyph::Battery, Hot::StatusBattery, tone);
+        let label = format!("{percent}%");
+        item.extra = font::measure(&label, &level_style) + t.px(4.0);
+        item.level = Some((percent, label));
+        items.push(item);
     }
-    icons_row.push((
-        Icon::Shield,
-        Hot::MenuRow(crate::apps::MenuAction::ScanNow),
-        shield_tone,
-    ));
-    icons_row.push((Icon::Power, Hot::StatusPower, None));
-    icons_row.push((Icon::Notifications, Hot::StatusNotifications, bell_tone));
+    items.push(BarItem::new(Glyph::Controls, Hot::StatusPower, None));
+    items.push(BarItem::new(Glyph::Bell, Hot::StatusNotifications, bell_tone));
 
-    let user_w = t.px(18.0);
-    let step = t.px(chrome::TOP_BAR_STEP);
-    let icons_w = step * icons_row.len() as f32;
+    let icons_w: f32 = items.iter().map(|i| step + i.extra).sum();
     let right_w = |with_date: bool| -> f32 {
-        user_w
-            + t.px(14.0)
-            + clock_w
+        clock_w
             + if with_date { t.px(8.0) + date_w } else { 0.0 }
             + t.px(14.0)
             + icons_w
@@ -523,21 +530,10 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
     let left_end = x;
 
     // --- right: laid out from the edge inwards ----------------------------
-    let mut rx = bar.w - pad;
-    rx -= user_w;
-    let user_r = Rect::new(rx, (h - user_w) / 2.0, user_w, user_w);
-    canvas.fill_circle(
-        user_r.center().0,
-        user_r.center().1,
-        user_w / 2.0,
-        with_alpha(t.text(), 0.14),
-    );
-    icons::draw(canvas, Icon::User, user_r.inflate(-user_w * 0.2), t.text(), 1.0);
-    shell
-        .hotspots_mut()
-        .push(user_r.inflate(t.px(5.0)), Hot::StatusUser);
-
-    rx -= t.px(14.0) + clock_w;
+    // The clock is the far edge, where the eye goes for it; the date sits
+    // before it, dimmer; then the glyphs, nearest the clock the ones reached
+    // for most.
+    let mut rx = bar.w - pad - clock_w;
     bar_text(canvas, &clock, rx, baseline, &clock_style, shadow);
     shell.hotspots_mut().push(
         Rect::new(rx - t.px(6.0), 0.0, clock_w + t.px(12.0), h),
@@ -547,62 +543,55 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
         rx -= t.px(8.0) + date_w;
         bar_text(canvas, &date, rx, baseline, &menu_style, shadow);
     }
-
     rx -= t.px(14.0);
-    let icon = t.px(chrome::TOP_BAR_ICON);
-    // The status icons share one capsule: they are one control, the place the
-    // quick settings open from, and a capsule says so where a loose row of
-    // glyphs would not.
-    let capsule = Rect::new(
-        rx - icons_w - t.px(2.0),
-        (h - t.px(22.0)) / 2.0,
-        icons_w - (step - icon) + t.px(12.0),
-        t.px(22.0),
-    );
-    canvas.fill_round_rect(capsule, capsule.h / 2.0, with_alpha(t.text(), 0.10));
     let mut bell: Option<Rect> = None;
-    for (glyph, hot, tone) in icons_row.iter().rev() {
-        rx -= step;
-        let r = Rect::new(rx, (h - icon) / 2.0, icon, icon);
-        if shell.is_highlighted(*hot) {
-            canvas.fill_round_rect(
-                r.inflate(t.px(5.0)),
-                t.radius(Radius::Sm),
-                with_alpha(t.text(), 0.12),
+    for item in items.iter().rev() {
+        let slot_w = step + item.extra;
+        rx -= slot_w;
+        let slot = Rect::new(rx, (h - t.px(22.0)) / 2.0, slot_w, t.px(22.0));
+        let lit = shell.is_highlighted(item.hot);
+        if lit {
+            canvas.fill_round_rect(slot, t.px(7.0), with_alpha(t.text(), 0.14));
+        }
+        let color = item.tone.map_or_else(|| t.text(), |x| t.tone(x));
+        let r = Rect::new(slot.x + (step - icon) / 2.0, (h - icon) / 2.0, icon, icon);
+        appicons::draw_tinted(canvas, appicons::Slot::Glyph(item.glyph), r, color);
+        if let Some((percent, label)) = &item.level {
+            // The battery's fill is its own level, drawn inside the outline.
+            let inner = Rect::new(
+                r.x + r.w * 0.185,
+                r.y + r.h * 0.37,
+                r.w * 0.55 * (f32::from(*percent).min(100.0) / 100.0),
+                r.h * 0.26,
+            );
+            canvas.fill_round_rect(inner, inner.h / 2.0, color);
+            font::draw(
+                canvas,
+                label,
+                slot.x + step - t.px(4.0),
+                baseline,
+                &level_style,
             );
         }
-        let color = tone.map_or_else(
-            || {
-                if shell.is_highlighted(*hot) {
-                    t.text()
-                } else {
-                    t.text_dim()
-                }
-            },
-            |x| t.tone(x),
-        );
-        icons::draw(canvas, *glyph, r, color, 1.0);
-        shell.hotspots_mut().push(r.inflate(t.px(5.0)), *hot);
-        if *glyph == Icon::Notifications {
+        shell.hotspots_mut().push(slot.inflate(t.px(2.0)), item.hot);
+        if item.glyph == Glyph::Bell {
             bell = Some(r);
         }
     }
     if let (true, Some(bell)) = (count > 0, bell) {
         // A count badge, not just a coloured bell: the number is the
-        // information and colour alone cannot carry it. It grows leftwards
-        // from the bell's right edge, because nothing is drawn to the right of
-        // the bell but the gap before the clock.
+        // information and colour alone cannot carry it.
         let label = if count > 9 {
             "9+".to_owned()
         } else {
             count.to_string()
         };
-        let s = Style::bold(t.text_px(TypeStep::Caption) * 0.85, rgb(0xFFFFFF));
+        let s = Style::bold(t.text_px(TypeStep::Caption) * 0.85, chrome::WHITE);
         let w = font::measure(&label, &s);
-        let bw = w + t.px(8.0);
-        let br = Rect::new(bell.right() - bw + t.px(3.0), bell.y - t.px(3.0), bw, t.px(12.0));
+        let bw = (w + t.px(8.0)).max(t.px(12.0));
+        let br = Rect::new(bell.right() - bw + t.px(5.0), bell.y - t.px(4.0), bw, t.px(12.0));
         canvas.fill_round_rect(br, br.h / 2.0, t.tone(bell_tone.unwrap_or(Tone::Accent)));
-        font::draw(canvas, &label, br.x + t.px(4.0), br.y + br.h * 0.76, &s);
+        font::draw(canvas, &label, br.x + (bw - w) / 2.0, br.y + br.h * 0.76, &s);
     }
 
     // --- workspace pips, beside the status group --------------------------
@@ -613,26 +602,50 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
     let active_ws = shell.wm.active_workspace();
     let pip = t.px(chrome::TOP_BAR_PIP);
     let gap = t.px(7.0);
-    let pips_w = (ws_count as f32) * pip + (ws_count.saturating_sub(1) as f32) * gap;
+    let wide = pip * 2.6;
+    let pips_w = (ws_count.saturating_sub(1) as f32) * (pip + gap) + wide;
     let pips_x = rx - t.px(18.0) - pips_w;
     if ws_count > 1 && pips_x >= left_end + t.px(24.0) {
         let mut px = pips_x;
         for i in 0..ws_count {
-            let r = Rect::new(px, (h - pip) / 2.0, pip, pip);
             let on = i == active_ws;
+            let r = Rect::new(px, (h - pip) / 2.0, if on { wide } else { pip }, pip);
             canvas.fill_round_rect(
                 r,
                 pip / 2.0,
                 if on {
-                    t.accent()
+                    t.text()
                 } else {
-                    with_alpha(t.text(), 0.28)
+                    with_alpha(t.text(), 0.34)
                 },
             );
             shell
                 .hotspots_mut()
                 .push(r.inflate(t.px(5.0)), Hot::Workspace(i as u8));
-            px += pip + gap;
+            px += r.w + gap;
+        }
+    }
+}
+
+/// One glyph on the bar's right-hand side.
+struct BarItem {
+    glyph: Glyph,
+    hot: Hot,
+    tone: Option<Tone>,
+    /// Room the glyph needs beyond its own slot, for a label beside it.
+    extra: f32,
+    /// A battery's level and its label.
+    level: Option<(u8, String)>,
+}
+
+impl BarItem {
+    const fn new(glyph: Glyph, hot: Hot, tone: Option<Tone>) -> Self {
+        Self {
+            glyph,
+            hot,
+            tone,
+            extra: 0.0,
+            level: None,
         }
     }
 }
@@ -5425,7 +5438,8 @@ mod tests {
             Hot::MenuEnvironment,
             Hot::StatusClock,
             Hot::StatusNotifications,
-            Hot::StatusUser,
+            Hot::StatusAudio,
+            Hot::StatusPower,
         ] {
             assert!(
                 s.hotspots().rect_of(hot).is_some(),

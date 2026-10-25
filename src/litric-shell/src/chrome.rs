@@ -21,10 +21,10 @@ pub const TOP_BAR_SURFACE_ALPHA: f32 = 0.78;
 pub const TOP_BAR_PAD: f32 = 14.0;
 
 /// The size a status icon is drawn at.
-pub const TOP_BAR_ICON: f32 = 16.0;
+pub const TOP_BAR_ICON: f32 = 18.0;
 
 /// The distance between the left edges of two neighbouring status icons.
-pub const TOP_BAR_STEP: f32 = 26.0;
+pub const TOP_BAR_STEP: f32 = 30.0;
 
 /// The distance between the mark and the application name, and between a menu
 /// and the next one.
