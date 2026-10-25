@@ -112,6 +112,8 @@ fn build() -> Rig {
     shell.facts.cpu_fraction = Some(0.07);
     shell.facts.root_fs = Some("erofs".to_owned());
     shell.facts.verity = Some(true);
+    shell.facts.network = Some("online".to_owned());
+    shell.facts.battery_percent = Some(82);
     // The same three auth facts the daemon reports on a machine whose image has
     // `/usr/bin/unix_chkpwd`: a password can be checked, the lock is not
     // refused, and root is the account logged in. Without them the lock scenes

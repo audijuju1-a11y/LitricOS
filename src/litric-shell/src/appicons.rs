@@ -25,10 +25,46 @@ pub enum Slot {
     App(App),
     /// The LitricOS mark: white on transparent, to be tinted.
     Mark,
+    /// A status glyph for the top bar: white on transparent, to be tinted.
+    Glyph(Glyph),
+}
+
+/// The top bar's status glyphs, painted by `tools/gen_status_icons.py`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Glyph {
+    /// Connected.
+    Wifi,
+    /// No connection.
+    WifiOff,
+    /// A speaker with its waves.
+    Volume,
+    /// A speaker, muted.
+    VolumeMuted,
+    /// A battery outline; the level is drawn by the caller.
+    Battery,
+    /// The Defender's shield.
+    Shield,
+    /// Two switches: the control centre.
+    Controls,
+    /// A bell: notifications.
+    Bell,
+    /// A magnifier.
+    Search,
 }
 
 const fn bytes(slot: Slot) -> &'static [u8] {
     match slot {
+        Slot::Glyph(Glyph::Wifi) => include_bytes!("../../../assets/icons/status/wifi.png"),
+        Slot::Glyph(Glyph::WifiOff) => include_bytes!("../../../assets/icons/status/wifi_off.png"),
+        Slot::Glyph(Glyph::Volume) => include_bytes!("../../../assets/icons/status/volume.png"),
+        Slot::Glyph(Glyph::VolumeMuted) => {
+            include_bytes!("../../../assets/icons/status/volume_muted.png")
+        }
+        Slot::Glyph(Glyph::Battery) => include_bytes!("../../../assets/icons/status/battery.png"),
+        Slot::Glyph(Glyph::Shield) => include_bytes!("../../../assets/icons/status/shield.png"),
+        Slot::Glyph(Glyph::Controls) => include_bytes!("../../../assets/icons/status/controls.png"),
+        Slot::Glyph(Glyph::Bell) => include_bytes!("../../../assets/icons/status/bell.png"),
+        Slot::Glyph(Glyph::Search) => include_bytes!("../../../assets/icons/status/search.png"),
         Slot::Mark => include_bytes!("../../../assets/brand/litric-mark.png"),
         Slot::Launcher => include_bytes!("../../../assets/icons/dock/launcher.png"),
         Slot::App(App::Files) => include_bytes!("../../../assets/icons/dock/files.png"),
@@ -177,11 +213,26 @@ mod tests {
     use crate::canvas::rgb;
 
     #[test]
-    fn every_icon_decodes_as_256_square_rgba() {
-        let all = [Slot::Launcher, Slot::Mark].into_iter().chain(App::ALL.iter().map(|a| Slot::App(*a)));
+    fn every_icon_decodes_as_a_square_rgba_bitmap() {
+        let glyphs = [
+            Glyph::Wifi,
+            Glyph::WifiOff,
+            Glyph::Volume,
+            Glyph::VolumeMuted,
+            Glyph::Battery,
+            Glyph::Shield,
+            Glyph::Controls,
+            Glyph::Bell,
+            Glyph::Search,
+        ];
+        let all = [Slot::Launcher, Slot::Mark]
+            .into_iter()
+            .chain(glyphs.into_iter().map(Slot::Glyph)).chain(App::ALL.iter().map(|a| Slot::App(*a)));
         for slot in all {
             let b = decode(bytes(slot)).unwrap_or_else(|| panic!("{slot:?} did not decode"));
-            assert_eq!((b.w, b.h), (256, 256), "{slot:?}");
+            // Tiles and the mark are painted at 256, the status glyphs at 128.
+            assert_eq!(b.w, b.h, "{slot:?} is not square");
+            assert!(b.w == 256 || b.w == 128, "{slot:?} is {} px", b.w);
         }
     }
 
