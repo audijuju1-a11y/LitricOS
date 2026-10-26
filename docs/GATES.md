@@ -1513,3 +1513,74 @@ depends on the daemon), `src/litric-notifyd/` and its unit disappear, the
 `litric.notifyd` lines leave the boot log, and the ledger rows go back to
 `WA.07.01`–`WA.07.04` being absent and `WB.01.03` naming only the shell. A
 `queue.conf` left behind is inert: nothing reads it once the unit is gone.
+
+## 2026-10-26 — the V6 desktop, merged into the line that carries the daemons
+
+The interface in this tree is now the one drawn by the `litricos-shell-v6`
+bundle (`redesign/shell-v4`, head `7030ce1`) — glass top bar, floating dock with
+the original icon artwork, pen-drawn mark, Control Centre of measured cards,
+lock screen on the same tokens — merged into the line that grew the daemons and
+the research registers. The two halves had not met before: the design branch
+stopped at `c28ec35`, and every daemon, ADR and ledger row since was written on
+the other side.
+
+### What changed
+
+* **The merge**, five conflicted files. `views.rs`: V6's card sheet, dock lift
+  and top-bar chrome, with this line's NETWORK, BLUETOOTH and VOLUME cards
+  carried onto the sheet (they read `litric-sysd`, which the design branch never
+  had). `shell.rs`: V6's boot timings and cross-fade cover, `TOP_BAR_LOGICAL`
+  from `chrome::TOP_BAR_H`. `lib.rs`: both halves' modules. `e2e.rs`: the dock
+  contract is V6's — 46-px tiles in a 62-px strip, eight measured hotspots.
+  `frame_dump.rs`: `--size` and `--theme`.
+* **The lint debt the design branch owed this one.** V6 was written before
+  `[workspace.lints]` denied `indexing_slicing`, so 31 sites had to go: the
+  quick-settings sheet now walks the cards and their rectangles with one
+  iterator (a card's label is the label it was measured from), the icon scaler
+  destructures the four channels it asked for, the blend test samples its table
+  with `get`. 26 `arithmetic_side_effects` warnings became `saturating_add`,
+  except the per-channel lerp in `mix_from`, which keeps plain arithmetic under
+  an `#[allow]` that states the bound (255·256 + 255·256 + 128, far inside
+  `u32`). Plus `clone_on_copy`, `manual_range_contains`, `type_complexity`, two
+  missing doc lines and a dead `radius` parameter that the new pill made dead.
+* **The ledger batch.** 84 new rows, all `WA` (Windows 11 shell and system UI),
+  which is the chapter this tree has the most surfaces for. The ledger is now
+  129 rows over the 400 citable research items: 67 `ADAPT`, 43 `DEFER`, 15
+  `REJECT`, 4 `ADOPT`. The rows that name a backend name one that exists; the
+  ones that do not are `DEFER` or `REJECT` with the reason.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo check --workspace --all-targets --locked` | 0 errors, 0 warnings |
+| `cargo clippy --workspace --all-targets --locked` | clean |
+| `cargo fmt --all -- --check` | clean |
+| `cargo test --workspace --locked` | **1560 passed, 0 failed** |
+| `bash ci/verify.sh` | **29 pass, 0 fail, 3 skipped** (image build, boot, idle: no `mkosi`, no QEMU, no `pytest`) |
+| `python3 ci/check-golden-frames.py --frames build/frames` | PASS — 24 frames, every one within threshold of the re-recorded set |
+| `python3 ci/lint-parity.py` | PASS — 129 rows, 0 problems |
+| `cargo run --example frame_dump -- --fonts ../build/fonts` | 24 scenes, dark; 24 more with `--theme light` |
+
+The frames are in [`docs/evidence/2026-10-26/`](evidence/2026-10-26/README.md) —
+six scenes in both themes, PNGs from the dump, not retouched — and the golden set
+in `docs/evidence/golden/` was re-recorded against them, which is why the stale-set
+note that was in that README is gone.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the V6 interface renders on a real display | the frames are `frame_dump`'s composition with a fixed fixture of facts. No framebuffer, no scanout, no boot |
+| that the merged daemons and the new chrome coexist in a session | the shell is tested against fixtures and in-process clients; no guest ran the two together |
+| that the image builds with this tree | no `mkosi` on this host. `verify.sh` reported the image step SKIP, not pass |
+| that the remaining 271 citable research items are decided | the batch covered `WA` only. `WB` (143), `MC` (64), `MD` (39), `G` (19), `WC` (14), `CH00` (12) and `MG` (11) still carry partial coverage |
+
+### Rollback
+
+Revert the merge commit. The branch returns to its pre-merge shell (no glass top
+bar, the older dock, the boot without a cross-fade), the ledger returns to 45
+rows, and the golden fingerprints go back to the stale set that could not be
+checked on a host without the image's fonts. Delete
+`docs/evidence/2026-10-26/` with it: it documents a tree that would no longer
+exist.

@@ -910,15 +910,17 @@ fn journey_launcher_click_opens_focuses_then_minimizes() {
 
 #[test]
 fn journey_the_bars_height_is_a_strip_and_its_width_is_wider_than_a_shelf() {
-    // The bar stays on the resting desktop, but it is a strip: 48 logical
-    // pixels tall rather than 76, and it stretches wider than it was so the
-    // icons and the search bubble are not pressed together.
+    // The dock stays on the resting desktop, and it is low and wide: a 62-px
+    // strip carrying 46-px icons, floating 12 px above the edge, and a large
+    // share of the screen's width. (The earlier contract -- tiles under 32 px
+    // in a 30-px strip -- is superseded by docs/design/2026-10-24-shell-v4-plan.md
+    // section 3.2: at that size the icons were glyph-sized specks.)
     let mut s = shell();
     move_pointer(&mut s, 640.0, 300.0); // nowhere near the bottom edge
     let _frame = draw_frame(&mut s);
     let mut top = f32::MAX;
     let mut bottom = 0.0_f32;
-    for i in [3u8, 4, 5, 2] {
+    for i in [3u8, 4, 5, 2, 0, 7, 1, 6] {
         let r = s
             .hotspots()
             .rect_of(Hot::DockItem(i))
@@ -926,26 +928,26 @@ fn journey_the_bars_height_is_a_strip_and_its_width_is_wider_than_a_shelf() {
         top = top.min(r.y);
         bottom = bottom.max(r.bottom());
     }
-    // The icons are 22 pixels tall inside a 30-pixel bar: the 48-pixel strip
-    // was still a shelf, and this is 1.6 times shorter than it.
+    // 46-px icons plus the 2-px margin each hotspot carries.
     assert!(
-        (bottom - top) < 32.0,
-        "the bar's icons are {} px tall, so the bar is not a 30-px strip",
+        (bottom - top) <= 50.5,
+        "the bar's tiles are {} px tall, so the bar is not a strip",
         bottom - top
     );
-    // The row is centred, 24 px above the edge, so its bottom is near 800-24.
+    // 12 px of float and 8 px of padding under the icon: its bottom is about
+    // 20 px above the edge, and never as far as the old 24-px float.
     assert!(
-        (800.0 - 60.0..=800.0 - 20.0).contains(&bottom),
+        (800.0 - 40.0..=800.0 - 8.0).contains(&bottom),
         "the bar sits {} px above the bottom edge",
         800.0 - bottom
     );
-    // Stretched, not merely measured: the strip is a large share of the width
-    // rather than a pill sized by its contents.
+    // Wide, not merely measured: a large share of the screen rather than a
+    // pill sized by a few icons.
     let toggle = s.hotspots().rect_of(Hot::DockToggle).unwrap();
     let field = s.hotspots().rect_of(Hot::DockSearch).unwrap();
     let span = field.right() - toggle.x;
     assert!(
-        span > 0.5 * 1280.0,
+        span > 0.40 * 1280.0,
         "the bar spans {span} px of a 1280-px screen"
     );
     assert!(matches!(s.overlay, Overlay::None));

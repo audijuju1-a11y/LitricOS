@@ -41,7 +41,10 @@
 
 use std::rc::Rc;
 
+use litric_design::TypeStep;
+
 use crate::canvas::{rgb, with_alpha, Canvas, Rect};
+use crate::chrome;
 use crate::font::{self, Style};
 use crate::shell::Hot;
 use crate::ui::{self, State, Tokens, Tone};
@@ -1265,7 +1268,8 @@ pub fn draw(canvas: &mut Canvas, v: &View<'_>, cache: &mut Cache, hits: &mut Vec
     clock(canvas, v, size, accent, tw);
 
     // 5. The widgets, at the height the clock size leaves.
-    let widgets_y = (t.px(84.0) + size + t.px(8.0)).min(widget_top_limit(t, v.h));
+    let widgets_y = (t.px(84.0) + size * 0.89 + t.px(chrome::LOCK_CLOCK_TO_CHIPS))
+        .min(widget_top_limit(t, v.h));
     widgets(canvas, v, tw, widgets_y, radius, cache, key);
 
     // 6. The customize sheet, or the hint and the submit pill.
@@ -1283,7 +1287,7 @@ pub fn draw(canvas: &mut Canvas, v: &View<'_>, cache: &mut Cache, hits: &mut Vec
         if v.verifier.is_some() {
             // Keep the account and next action visible at rest. The card
             // becomes a live password field after the first click or keypress.
-            entry(canvas, v, tw, radius, cache, key, hits);
+            entry(canvas, v, tw, cache, key, hits);
         } else if v.state.stage == Stage::Entry {
             // The daemon went away, or was never there. Collecting a password
             // that nothing can check is the failure this surface avoids.
@@ -1327,7 +1331,12 @@ fn fit_clock(t: &Tokens, v: &View<'_>, size: f32, tw: Tweaks) -> f32 {
 
 /// Where the widget row may not go past: the hint's own band at the bottom.
 fn widget_top_limit(t: &Tokens, height: f32) -> f32 {
-    height - t.px(200.0)
+    // Above the avatar, with a breath between: the avatar is the top of the
+    // account block, which is anchored to the bottom edge.
+    height
+        - t.px(chrome::LOCK_FIELD_FROM_BOTTOM + chrome::LOCK_FIELD_H + 117.0)
+        - t.px(chrome::LOCK_CHIP_H)
+        - t.px(24.0)
 }
 
 /// One drifting colour field.
@@ -1547,9 +1556,9 @@ fn widgets(
     key: Key,
 ) {
     let t = v.t;
-    let card_w = t.px(300.0);
-    let card_h = t.px(88.0);
-    let gap = t.px(16.0);
+    let card_w = t.px(chrome::LOCK_CHIP_W);
+    let card_h = t.px(chrome::LOCK_CHIP_H);
+    let gap = t.px(14.0);
 
     // Which cards are on, in the order of the switch indices.
     let shown: Vec<usize> = (0..WIDGETS)
@@ -1562,30 +1571,30 @@ fn widgets(
     let mut x = v.w / 2.0 - total / 2.0;
     for index in shown {
         let r = Rect::new(x, y, card_w, card_h);
-        liquid(canvas, t, r, radius, tw, cache, key);
+        liquid(canvas, t, r, radius.min(card_h / 2.0), tw, cache, key);
         let (icon, label, value) = widget_content(v, index);
-        let chip = Rect::new(r.x + t.px(18.0), r.y + t.px(20.0), t.px(48.0), t.px(48.0));
+        let side = t.px(36.0);
+        let chip = Rect::new(r.x + t.px(10.0), r.y + (card_h - side) / 2.0, side, side);
         let accent = rgb(tw.accent_color() & 0x00FF_FFFF);
         match index {
-            // First card: the accent disc with a dark glyph, as the music
-            // card in the design.
+            // First card: the accent disc with a dark glyph.
             0 => {
                 canvas.fill_circle(chip.center().0, chip.center().1, chip.w / 2.0, accent);
                 crate::icons::draw(
                     canvas,
                     icon,
-                    chip.inflate(-t.px(13.0)),
+                    chip.inflate(-t.px(9.0)),
                     with_alpha(rgb(0x000000), 0.85),
                     1.0,
                 );
             }
-            // Second card: a quiet glass tile, as the calendar card.
+            // Second card: a quiet glass tile.
             1 => {
-                canvas.fill_round_rect(chip, t.px(12.0), with_alpha(rgb(0xFFFFFF), 0.18));
+                canvas.fill_round_rect(chip, t.px(10.0), with_alpha(rgb(0xFFFFFF), 0.18));
                 crate::icons::draw(
                     canvas,
                     icon,
-                    chip.inflate(-t.px(12.0)),
+                    chip.inflate(-t.px(8.0)),
                     with_alpha(rgb(0xFFFFFF), 0.95),
                     1.0,
                 );
@@ -1597,28 +1606,18 @@ fn widgets(
                 None => crate::icons::draw(
                     canvas,
                     icon,
-                    chip.inflate(-t.px(8.0)),
+                    chip.inflate(-t.px(6.0)),
                     with_alpha(rgb(0xFFFFFF), 0.92),
                     1.0,
                 ),
             },
         }
-        let label_style = Style::new(t.px(13.0), with_alpha(rgb(0xFFFFFF), 0.7));
-        font::draw(
-            canvas,
-            label,
-            r.x + t.px(82.0),
-            r.y + t.px(36.0),
-            &label_style,
-        );
-        let value_style = Style::new(t.px(22.0), rgb(0xFFFFFF));
-        font::draw(
-            canvas,
-            &value,
-            r.x + t.px(82.0),
-            r.y + t.px(64.0),
-            &value_style,
-        );
+        let text_x = chip.right() + t.px(12.0);
+        let label_style = Style::new(t.text_px(TypeStep::Caption), with_alpha(rgb(0xFFFFFF), 0.7));
+        font::draw(canvas, label, text_x, r.y + t.px(22.0), &label_style);
+        let value_style = Style::new(t.text_px(TypeStep::Headline), rgb(0xFFFFFF));
+        let shown_value = ui::elide(&value, &value_style, r.right() - t.px(12.0) - text_x);
+        font::draw(canvas, &shown_value, text_x, r.y + t.px(46.0), &value_style);
         x += card_w + gap;
     }
 }
@@ -1832,56 +1831,74 @@ fn entry(
     canvas: &mut Canvas,
     v: &View<'_>,
     tw: Tweaks,
-    radius: f32,
     cache: &mut Cache,
     key: Key,
     hits: &mut Vec<(Rect, Hot)>,
 ) {
     let t = v.t;
     let accent = tw.accent_color();
-    let w = t.px(460.0).min(v.w - t.px(32.0));
-    let h = t.px(80.0);
-    let r = Rect::new(v.w / 2.0 - w / 2.0, v.h * 0.70 - h / 2.0, w, h);
-    liquid(canvas, t, r, t.px(radius).min(h / 2.0), tw, cache, key);
-
-    let avatar = Rect::new(r.x + t.px(12.0), r.y + t.px(16.0), t.px(48.0), t.px(48.0));
-    canvas.fill_circle(
-        avatar.center().0,
-        avatar.center().1,
-        avatar.h / 2.0,
-        rgb(accent & 0x00FF_FFFF),
+    let ink = rgb(accent & 0x00FF_FFFF);
+    let w = t.px(chrome::LOCK_FIELD_W).min(v.w - t.px(32.0));
+    let h = t.px(chrome::LOCK_FIELD_H);
+    let r = Rect::new(
+        v.w / 2.0 - w / 2.0,
+        v.h - t.px(chrome::LOCK_FIELD_FROM_BOTTOM) - h,
+        w,
+        h,
     );
+
+    // The account, above its field: the avatar, then the name. Read top to
+    // bottom it is who, then what to do -- the order the eye takes it in.
+    let cx = v.w / 2.0;
+    let name_style = Style::bold(t.text_px(TypeStep::Headline), rgb(0xFFFFFF));
+    let name_base = r.y - t.px(16.0);
+    let diameter = t.px(chrome::LOCK_AVATAR);
+    let avatar = Rect::new(
+        cx - diameter / 2.0,
+        name_base - t.text_px(TypeStep::Headline) - t.px(14.0) - diameter,
+        diameter,
+        diameter,
+    );
+    canvas.fill_circle(avatar.center().0, avatar.center().1, diameter / 2.0, ink);
     crate::icons::draw(
         canvas,
         crate::icons::Icon::User,
-        avatar.inflate(-t.px(11.0)),
+        avatar.inflate(-diameter * 0.26),
         with_alpha(rgb(0x000000), 0.8),
         1.0,
     );
+    centred(canvas, &v.state.user, cx, name_base, &name_style);
 
-    // The account is named above the password line so the unlock action is
-    // discoverable without another keypress and the password stays masked.
-    let field_x = avatar.right() + t.px(16.0);
-    let account_style = Style::new(t.px(13.0), with_alpha(rgb(0xFFFFFF), 0.78));
-    let account = format!("{} {}", crate::i18n::text("Unlock"), v.state.user);
-    font::draw(canvas, &account, field_x, r.y + t.px(31.0), &account_style);
+    liquid(canvas, t, r, h / 2.0, tw, cache, key);
+    let text_x = r.x + t.px(18.0);
+    let base = r.center().1 + t.text_px(TypeStep::Footnote) * 0.36;
 
     // One dot per character typed, and an explicit placeholder when empty.
     if v.state.typed() == 0 {
-        let style = Style::new(t.px(16.0), with_alpha(rgb(0xFFFFFF), 0.64));
+        let style = Style::new(
+            t.text_px(TypeStep::Footnote),
+            with_alpha(rgb(0xFFFFFF), 0.64),
+        );
         let prompt = if v.state.stage == Stage::Idle {
             "Click or press Enter to unlock"
         } else {
             "Enter password"
         };
-        font::draw(canvas, prompt, field_x, r.y + t.px(59.0), &style);
+        let room = r.w - t.px(18.0) - t.px(46.0);
+        font::draw(
+            canvas,
+            &ui::elide(prompt, &style, room),
+            text_x,
+            base,
+            &style,
+        );
     } else {
-        let dot = t.px(5.0);
-        let step = t.px(14.0);
-        for i in 0..v.state.typed().min(28) {
+        let dot = t.px(4.0);
+        let step = t.px(12.0);
+        for i in 0..v.state.typed().min(16) {
             canvas.fill_circle(
-                field_x + t.px(6.0) + step * i as f32,
-                r.y + t.px(55.0),
+                text_x + dot + step * i as f32,
+                r.center().1,
                 dot,
                 rgb(0xFFFFFF),
             );
@@ -1890,28 +1907,27 @@ fn entry(
 
     // The lock opens directly into this focused field. A steady insertion
     // marker makes that state visible with both the keyboard and pointer.
-    let caret_x = if v.state.typed() == 0 {
-        field_x - t.px(2.0)
-    } else {
-        field_x + t.px(6.0) + t.px(14.0) * v.state.typed().min(28) as f32
-    };
     if v.state.stage == Stage::Entry {
+        let caret_x = if v.state.typed() == 0 {
+            text_x - t.px(3.0)
+        } else {
+            text_x
+                + t.px(4.0) * 2.0
+                + t.px(12.0) * (v.state.typed().min(16) as f32 - 1.0)
+                + t.px(6.0)
+        };
         canvas.stroke_line(
             caret_x,
-            r.y + t.px(44.0),
+            r.center().1 - t.px(8.0),
             caret_x,
-            r.y + t.px(63.0),
+            r.center().1 + t.px(8.0),
             t.px(1.0),
-            rgb(accent & 0x00FF_FFFF),
+            ink,
         );
     }
 
-    let submit = Rect::new(
-        r.right() - t.px(57.0),
-        r.center().1 - t.px(24.0),
-        t.px(46.0),
-        t.px(46.0),
-    );
+    let side = h - t.px(10.0);
+    let submit = Rect::new(r.right() - t.px(5.0) - side, r.y + t.px(5.0), side, side);
     // The submit is the one action on this surface, so it is the accent: the
     // same colour as the avatar and the digits' tint, and never a second hue.
     let state = if v.state.verdict == Verdict::Checking {
@@ -1925,10 +1941,7 @@ fn entry(
         submit.center().0,
         submit.center().1,
         submit.h / 2.0,
-        with_alpha(
-            rgb(accent & 0x00FF_FFFF),
-            if state == State::Error { 0.5 } else { 1.0 },
-        ),
+        with_alpha(ink, if state == State::Error { 0.5 } else { 1.0 }),
     );
     crate::icons::draw(
         canvas,
@@ -1937,7 +1950,7 @@ fn entry(
         } else {
             crate::icons::Icon::ChevronRight
         },
-        submit.inflate(-t.px(13.0)),
+        submit.inflate(-side * 0.28),
         with_alpha(rgb(0x000000), 0.85),
         1.0,
     );
@@ -1946,12 +1959,16 @@ fn entry(
         hits.push((submit, Hot::LockSubmit));
     }
 
-    // What the last attempt did, above the pill. A refusal is named in the
+    // What the last attempt did, under the field. A refusal is named in the
     // daemon's own words, and this machine having no verifier is named as
     // itself rather than as a wrong password.
     if let Some(message) = v.state.message() {
-        let style = Style::new(t.px(14.0), with_alpha(rgb(0xFFFFFF), 0.85));
-        centred(canvas, message, v.w / 2.0, r.y - t.px(16.0), &style);
+        let style = Style::new(
+            t.text_px(TypeStep::Footnote),
+            with_alpha(rgb(0xFFFFFF), 0.85),
+        );
+        let shown = ui::elide(message, &style, v.w - t.px(40.0));
+        centred(canvas, &shown, cx, r.bottom() + t.px(22.0), &style);
     }
 }
 

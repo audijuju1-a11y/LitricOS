@@ -15,15 +15,19 @@ same thing. Without either, step 5b is a SKIP and the set is not checked at all.
 
 ## State of the committed set (2026-10-26)
 
-**The set is stale, and no longer matches this tree.** With the image's faces
-installed, the gate reports 17 of 20 frames changed by more than its threshold:
-the recorded frames predate the wallpaper, the dock, the move of the session rows
-out of the control centre and the Thai-locale scenes, and 17-control-centre also
-carries the network and Bluetooth rows added in WP-05. It is not a regression
-introduced by one change; it is a gate that could not run on any host without the
-fonts, so nothing noticed while the interface changed.
+**Re-recorded, and it matches this tree.** The set that had gone stale was
+replaced while merging the V6 design branch: the dump now carries 24 scenes
+rather than 20 (`22-power-menu`, `23-litro-menu` and `24-boot-intro` were drawn
+by that branch and had never been recorded), and every frame in it was composed
+from the merged code. `ci/check-golden-frames.py --frames build/frames` reports
+24 frames unchanged against the recorded fingerprints.
 
-Re-recording is a review, not a rebuild: dump the frames, look at them, then
+The review that justifies it is in [`../2026-10-26/`](../2026-10-26/): the six
+scenes that carry the redesign — desktop, Control Centre, lock, launcher, boot,
+windows — in both themes, as PNGs straight from the dump.
+
+Recording again, when the interface next changes, is a review and not a rebuild:
+dump the frames, look at them, then
 
 ```
 cd src && cargo run --offline -p litric-shell --example frame_dump -- --fonts ../build/fonts ../build/frames
