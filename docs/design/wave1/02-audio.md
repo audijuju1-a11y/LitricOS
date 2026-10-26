@@ -64,7 +64,16 @@ audio.card        index=<n> id=<str> name=<str> driver=<str>
 audio.pcm         card=<n> device=<n> name=<str> playback=<0|1> capture=<0|1>
 audio.state       server=running|none|unknown socket=<path|->
 audio.control     wpctl|none
+audio.level       volume=<0-100> muted=<0|1>
 ```
+
+`audio.level` is the one fact here that is not read from a file: it is the answer
+to `AUDIO LEVEL`, which runs `wpctl get-volume` and parses it. It is *cached*,
+because `FACTS` is polled twice a second and a poll must not spawn a process; the
+daemon refreshes the cache when it is asked directly and after every audio action
+it applies. It is absent until something has been measured — `volume=0` over a
+machine nobody has asked is a mute machine this daemon invented — and a tool that
+cannot be run is `ERR audio-unavailable` with the reason, never a zero.
 
 `audio.state` is *presence*: whether `/run/user/<uid>/pipewire-0` exists. The
 socket is never opened, so "running" means the socket is there and says nothing
@@ -85,6 +94,7 @@ reporting a volume that did not move.
 | Action | Capability | Note | State |
 |---|---|---|---|
 | Change output volume or mute | `AudioSet @ audio://default-sink` | the sink this machine plays through unless told otherwise | **implemented** (`AUDIO VOLUME <0-100>`, `AUDIO MUTE ON\|OFF`) |
+| Read the output level and mute flag | none — a question | changes nothing, so it needs no capability, the same rule `FACTS` follows | **implemented** (`AUDIO LEVEL` → `audio.level volume= muted=`); after an applied change the level is read back from the sink rather than echoed from the request |
 | Change capture (microphone) level | `AudioSet @ capture://<card>` | separate from output, because the abuse case is different | not implemented |
 | Open a capture stream | `Microphone` | already exists, already live-consented | unchanged |
 | Play audio | `AudioOutput` | already exists | unchanged |

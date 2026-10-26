@@ -4705,6 +4705,122 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
     col.space(t.px(8.0));
     ui::separator(canvas, &t, col.row(1.0));
     col.space(t.px(8.0));
+
+    // --- volume: a measured level, and the three things you can do to it ---
+    // The reading is the sound server's, not this panel's: with no answer yet it
+    // says so instead of drawing a zero, and the note underneath says what the
+    // last change did.
+    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "VOLUME");
+    col.space(t.px(18.0));
+    {
+        let row = col.row(t.px(34.0));
+        let s_value = Style::bold(t.text_px(TypeStep::Body), t.text());
+        let reading = match shell.quick.volume {
+            Some(v) if shell.quick.muted => format!("{v}%  muted"),
+            Some(v) => format!("{v}%"),
+            None => "unavailable".to_owned(),
+        };
+        font::draw(
+            canvas,
+            &reading,
+            row.x + t.px(8.0),
+            row.y + row.h / 2.0 + s_value.size * 0.36,
+            &s_value,
+        );
+        if shell.quick.volume.is_none() {
+            let n = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            font::draw(
+                canvas,
+                "the sound server has not answered",
+                row.x + t.px(8.0),
+                row.y + row.h - t.px(2.0),
+                &n,
+            );
+        }
+        // Two step buttons and a mute switch, right-aligned. Each one is
+        // disabled when there is no measured level to step from: a control that
+        // would send a number nobody measured is not offered.
+        let known = shell.quick.volume.is_some();
+        let bw = t.px(34.0);
+        let mute = Rect::new(
+            row.right() - t.px(58.0),
+            row.y + t.px(6.0),
+            t.px(50.0),
+            t.px(22.0),
+        );
+        let up = Rect::new(mute.x - bw - t.px(6.0), mute.y, bw, t.px(22.0));
+        let down = Rect::new(up.x - bw - t.px(6.0), mute.y, bw, t.px(22.0));
+        ui::button(
+            canvas,
+            &t,
+            down,
+            "-",
+            if !known {
+                State::Disabled
+            } else if shell.is_highlighted(Hot::QuickVolumeDown) {
+                State::Hover
+            } else {
+                State::Normal
+            },
+            Tone::Neutral,
+        );
+        ui::button(
+            canvas,
+            &t,
+            up,
+            "+",
+            if !known {
+                State::Disabled
+            } else if shell.is_highlighted(Hot::QuickVolumeUp) {
+                State::Hover
+            } else {
+                State::Normal
+            },
+            Tone::Neutral,
+        );
+        ui::button(
+            canvas,
+            &t,
+            mute,
+            if shell.quick.muted { "Unmute" } else { "Mute" },
+            if !known {
+                State::Disabled
+            } else if shell.is_highlighted(Hot::QuickVolumeMute) {
+                State::Hover
+            } else {
+                State::Normal
+            },
+            if shell.quick.muted {
+                Tone::Accent
+            } else {
+                Tone::Neutral
+            },
+        );
+        if known {
+            shell.hotspots_mut().push(down, Hot::QuickVolumeDown);
+            shell.hotspots_mut().push(up, Hot::QuickVolumeUp);
+            shell.hotspots_mut().push(mute, Hot::QuickVolumeMute);
+        }
+        let note = if shell.quick.audio_note.is_empty() {
+            "Set through litric-sysd, which asks the sound server and reads the level back."
+        } else {
+            shell.quick.audio_note.as_str()
+        };
+        let n = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        col.space(t.px(16.0));
+        let note_row = col.row(t.px(16.0));
+        font::draw(
+            canvas,
+            &ui::elide(note, &n, note_row.w - t.px(12.0)),
+            note_row.x + t.px(8.0),
+            note_row.y + t.px(11.0),
+            &n,
+        );
+    }
+
+    col.space(t.px(8.0));
+    ui::separator(canvas, &t, col.row(1.0));
+    col.space(t.px(8.0));
     ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "ENVIRONMENT");
     col.space(t.px(16.0));
 

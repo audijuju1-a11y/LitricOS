@@ -35,8 +35,9 @@
 
 use core::fmt;
 use std::io;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use litric_caps::{Capability, CapabilityId, Scope};
@@ -172,7 +173,29 @@ pub trait Runner: fmt::Debug + Send + Sync {
         stdin: Option<&[u8]>,
         timeout_secs: u32,
     ) -> io::Result<i32>;
+
+    /// Run `program` and this time keep what it printed.
+    ///
+    /// A second method rather than a flag on the first: [`Runner::run`] throws
+    /// standard output away on purpose, and every action is written against
+    /// that. The one caller of this is a *question* (`wpctl get-volume`), where
+    /// the exit status says only that the tool ran and the answer is the text.
+    /// The timeout is the same bounded wait, and the output is capped, so a tool
+    /// that streams forever cannot grow the daemon's heap.
+    ///
+    /// # Errors
+    /// The same three as [`Runner::run`]: a spawn or wait error, or
+    /// [`io::ErrorKind::TimedOut`] when the program was killed.
+    fn capture(&self, program: &str, args: &[&str], timeout_secs: u32)
+        -> io::Result<(i32, String)>;
 }
+
+/// The most standard output [`Runner::capture`] will keep, in bytes.
+///
+/// The tools this is used for answer in one short line (`Volume: 0.40`). A cap
+/// exists so that a tool printing without end costs a fixed amount of memory
+/// rather than all of it.
+pub const CAPTURE_LIMIT: u64 = 4096;
 
 /// The runner that spawns a real process.
 #[derive(Debug)]
@@ -234,6 +257,56 @@ impl Runner for SystemRunner {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    fn capture(
+        &self,
+        program: &str,
+        args: &[&str],
+        timeout_secs: u32,
+    ) -> io::Result<(i32, String)> {
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        // Read on another thread, before waiting: a tool that fills the pipe
+        // and a daemon that waits for it to exit would wait forever.
+        let reader = child.stdout.take().map(|out| {
+            thread::Builder::new()
+                .name("litric-sysd-capture".to_owned())
+                .spawn(move || {
+                    let mut kept = Vec::new();
+                    let _ = io::Read::take(out, CAPTURE_LIMIT)
+                        .read_to_end(&mut kept)
+                        .map(|_| ());
+                    kept
+                })
+        });
+        let budget = Duration::from_secs(u64::from(timeout_secs));
+        let started = Instant::now();
+        let code = loop {
+            if let Some(status) = child.try_wait()? {
+                break status.code().unwrap_or(-1);
+            }
+            if Instant::now().saturating_duration_since(started) >= budget {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("{program} did not exit within {timeout_secs}s"),
+                ));
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+        let printed = reader
+            .and_then(Result::ok)
+            .and_then(|handle| handle.join().ok())
+            .map_or_else(String::new, |bytes| {
+                String::from_utf8_lossy(&bytes).into_owned()
+            });
+        Ok((code, printed))
     }
 }
 
@@ -333,6 +406,12 @@ pub(crate) mod testing {
         stdin: Arc<Mutex<Option<usize>>>,
         /// The deadline the last call was given.
         timeout: Arc<Mutex<Option<u32>>>,
+        /// What [`Runner::capture`] answers with: `(exit status, stdout)`.
+        ///
+        /// `None` means no answer was set, and a capture then fails the way a
+        /// missing tool does — so a test that forgets to set one cannot quietly
+        /// pass by reading an empty string as a real measurement.
+        capture: Arc<Mutex<Option<(i32, String)>>>,
     }
 
     impl RecordingRunner {
@@ -344,6 +423,7 @@ pub(crate) mod testing {
                 result: Arc::new(Mutex::new(Some(Ok(code)))),
                 stdin: Arc::new(Mutex::new(None)),
                 timeout: Arc::new(Mutex::new(None)),
+                capture: Arc::new(Mutex::new(None)),
             }
         }
 
@@ -355,7 +435,16 @@ pub(crate) mod testing {
                 result: Arc::new(Mutex::new(Some(Err(io::Error::new(kind, what.to_owned()))))),
                 stdin: Arc::new(Mutex::new(None)),
                 timeout: Arc::new(Mutex::new(None)),
+                capture: Arc::new(Mutex::new(None)),
             }
+        }
+
+        /// The exit status and standard output the next [`Runner::capture`]
+        /// answers with.
+        #[must_use]
+        pub fn answering(mut self, code: i32, stdout: &str) -> Self {
+            self.capture = Arc::new(Mutex::new(Some((code, stdout.to_owned()))));
+            self
         }
 
         /// Every call made, as `(program, args)`.
@@ -422,6 +511,24 @@ pub(crate) mod testing {
             // for a bounded wait rather than an unbounded one.
             self.record(program, args, stdin.map(<[u8]>::len), timeout_secs)
         }
+
+        fn capture(
+            &self,
+            program: &str,
+            args: &[&str],
+            timeout_secs: u32,
+        ) -> io::Result<(i32, String)> {
+            self.record(program, args, None, timeout_secs)?;
+            match self.capture.lock() {
+                Ok(mut slot) => slot.take().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "this test set no captured output".to_owned(),
+                    )
+                }),
+                Err(_) => Err(io::Error::other("runner lock poisoned")),
+            }
+        }
     }
 }
 
@@ -432,6 +539,31 @@ mod tests {
 
     fn line<'a>(out: &'a Outcome, prefix: &str) -> Option<&'a String> {
         out.lines.iter().find(|l| l.starts_with(prefix))
+    }
+
+    /// The capturing call keeps what the program printed, and reports a status
+    /// a caller can act on. It runs a real program because that is the half the
+    /// recorder cannot prove: a pipe, a reader thread and a bounded wait.
+    #[cfg(unix)]
+    #[test]
+    fn a_captured_call_returns_the_printed_answer_and_the_status() {
+        let echo = ["/bin/echo", "/usr/bin/echo"]
+            .into_iter()
+            .find(|p| std::path::Path::new(p).is_file());
+        let Some(echo) = echo else {
+            // No `echo` on this host: nothing to prove here, and a test that
+            // pretended otherwise would be measuring nothing.
+            return;
+        };
+        let runner = SystemRunner;
+        let (code, printed) = runner.capture(echo, &["Volume: 0.40"], 5).expect("runs");
+        assert_eq!(code, 0);
+        assert_eq!(printed.trim(), "Volume: 0.40");
+
+        // A program that is not there is an error, not an empty answer: the
+        // difference is what stops "no sound server" reading as "volume zero".
+        let missing = runner.capture("/nonexistent/litric-no-such-tool", &[], 5);
+        assert!(missing.is_err(), "{missing:?}");
     }
 
     #[test]

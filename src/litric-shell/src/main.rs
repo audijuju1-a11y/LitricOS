@@ -339,6 +339,22 @@ fn gather_facts(args: &Args) -> SystemFacts {
                 .and_then(|rest| rest.split_whitespace().next())
                 .map(str::to_owned)
         });
+        // The level the sound server reported. Absent means nobody has measured
+        // it — the panel says so rather than showing a zero it made up.
+        if let Some(rest) = lines.iter().find_map(|l| l.strip_prefix("audio.level ")) {
+            for kv in rest.split_whitespace() {
+                if let Some(v) = kv.strip_prefix("volume=") {
+                    f.audio_volume = v.parse::<u8>().ok().filter(|v| *v <= 100);
+                } else if let Some(v) = kv.strip_prefix("muted=") {
+                    f.audio_muted = match v {
+                        "1" => Some(true),
+                        "0" => Some(false),
+                        // A third value is not a mute state, so nothing is kept.
+                        _ => None,
+                    };
+                }
+            }
+        }
         // Authentication, and who is logged in. Three facts from the platform
         // half of the reply that the lock screen cannot do without: what can
         // check a password, whether the daemon refuses the lock, and the account
@@ -1027,6 +1043,88 @@ fn report(path: &Path, lines: &[String]) {
 /// is the difference between a shortcut that appears to work and one that is
 /// honest: pressing the key does something visible either way, and only one of
 /// them is a lie.
+/// How much one volume step changes, in percent.
+///
+/// Five, the step a keyboard key and a panel button both take. It is applied to
+/// the *measured* level, so repeated presses track the machine rather than a
+/// number this process accumulated on its own.
+const VOLUME_STEP: i16 = 5;
+
+/// The level one step from `current` lands on, clamped to what a sink accepts.
+fn stepped_level(current: u8, step: i8) -> u8 {
+    let delta = VOLUME_STEP.saturating_mul(i16::from(step));
+    let next = i16::from(current).saturating_add(delta).clamp(0, 100);
+    u8::try_from(next).unwrap_or(current)
+}
+
+/// Ask the system daemon to change the volume, and say what it answered.
+///
+/// Three outcomes, three sentences: the daemon applied it (the panel shows the
+/// new level, and the next facts poll replaces it with the level the sound
+/// server read back), the daemon refused it (its own reason is shown), or the
+/// daemon could not be reached at all. There is no fourth case where the
+/// interface claims a change it did not make.
+fn apply_volume(args: &Args, shell: &mut Shell, step: i8) {
+    let known = shell.quick.volume;
+    let request = if step == 0 {
+        format!(
+            "AUDIO MUTE {}",
+            if shell.quick.muted { "off" } else { "on" }
+        )
+    } else {
+        // No measurement yet: the buttons are disabled in the panel, and a
+        // keyboard shortcut that arrives anyway starts from half, which is
+        // stated in the note rather than silently assumed.
+        format!("AUDIO VOLUME {}", stepped_level(known.unwrap_or(50), step))
+    };
+    let Some(reply) = ask(&args.socket, &request) else {
+        shell.quick.audio_note = "litric-sysd did not answer: nothing was changed.".to_owned();
+        shell.notify(
+            "Audio",
+            "The system service did not answer",
+            "The volume was not changed.",
+            Priority::High,
+            Some(6_000),
+        );
+        return;
+    };
+    let lines: Vec<&str> = reply.lines().collect();
+    if field(&lines, "applied") == Some("true") {
+        if step == 0 {
+            shell.quick.muted = !shell.quick.muted;
+            shell.quick.audio_note = if shell.quick.muted {
+                "Muted, as the sound server confirmed.".to_owned()
+            } else {
+                "Unmuted, as the sound server confirmed.".to_owned()
+            };
+        } else if let Some(next) = field(&lines, "percent") {
+            shell.quick.audio_note = format!(
+                "Asked the sound server for {next}%; the level it reads back is what the                  panel shows."
+            );
+        } else {
+            shell.quick.audio_note = "Changed, and the level is being read back.".to_owned();
+        }
+        // Show the requested level at once and let the next sample correct it.
+        // A panel that kept the old number until the poll would look like the
+        // button had done nothing.
+        if step != 0 {
+            if let Some(current) = known {
+                shell.quick.volume = Some(stepped_level(current, step));
+            }
+        }
+    } else {
+        let detail = field(&lines, "detail").unwrap_or("the action did not happen");
+        shell.quick.audio_note = format!("Refused: {detail}");
+        shell.notify(
+            "Audio",
+            "The volume was not changed",
+            detail,
+            Priority::High,
+            Some(6_000),
+        );
+    }
+}
+
 fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
     for e in effects {
         match e {
@@ -1221,15 +1319,7 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
                     }
                 }
             }
-            Effect::Volume(_) => {
-                shell.notify(
-                    "Audio",
-                    "No audio device",
-                    "Not implemented: the audio stack is a later layer.",
-                    Priority::Low,
-                    Some(4_000),
-                );
-            }
+            Effect::Volume(step) => apply_volume(args, shell, *step),
             Effect::Brightness(_) => {
                 shell.notify(
                     "Display",

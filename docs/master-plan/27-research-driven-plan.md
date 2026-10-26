@@ -349,6 +349,8 @@ its checklist status is final and its rows carry evidence tiers.
 | 1 — ledger and checker | **done** (2026-10-26): 41 seeded rows, `ci/lint-parity.py` with a 16-case self-test, wired into `ci/verify.sh`; the three stale gate-matrix rows corrected | `docs/parity/ledger.csv`, `ci/lint-parity.py` |
 | 2 — registry, search, deep links | **done**: 7 rows, a two-way test against the store, `litric://settings/<page>/<key>`, and the launcher search reaches rows as well as pages | `src/litric-shell/src/registry.rs` |
 | 3 — appearance family | **partial**: the automatic light/dark schedule is in (`theme_schedule`, resolved on every tick); wallpaper sources, slideshow, accent-from-wallpaper and dock size remain `DEFER` in the ledger | `src/litric-shell/src/settings.rs` |
+| 4 — browser controls | **done**: Stop and Reload are in the toolbar over the engine's own `STOP`/`RELOAD`, each disabled when it would act on nothing; the broker reports `stopped` instead of `loaded` when a stop interrupted a page | `src/litric-shell/src/views.rs`, `src/litric-browser/src/bin/browserd.rs` |
+| 5 — quick settings volume | **done** (WP-05, first control): the panel reads the sink's level through `litric-sysd` (`AUDIO LEVEL`, read back after every change) and offers quieter/louder/mute; the two `DEFER` rows it answers (`WB.01.02`, `WA.06`) are `ADAPT` with the constraint written down | `src/litric-sysd/src/providers.rs`, `src/litric-shell/src/main.rs` |
 
 Session 3 is partial on purpose: the three rows it deferred are deferred for a
 reason the ledger records, not because there was no time. Slideshow and

@@ -75,6 +75,12 @@ pub enum Request {
     TrashPlanEmpty,
     /// The capability audit log.
     CapsAudit,
+    /// Where the default sound sink's volume is, as the sound server reports it.
+    ///
+    /// A question, so it needs no capability and is allowed to the local client
+    /// the way [`Request::Facts`] is: it changes nothing and reveals nothing
+    /// that is not already on the screen behind the panel that asks.
+    AudioLevel,
     /// Ask the machine for a power transition.
     ///
     /// `consent` is the UI's report that the user answered a prompt naming
@@ -312,6 +318,10 @@ impl Request {
                 }),
             },
             "audio" => match arg(0).to_ascii_lowercase().as_str() {
+                "level" => {
+                    arity("AUDIO LEVEL", 1)?;
+                    Ok(Self::AudioLevel)
+                }
                 "volume" => {
                     arity("AUDIO VOLUME", 2)?;
                     let percent = arg(1).parse::<u8>().map_err(|_| ProtoError::BadArgument {

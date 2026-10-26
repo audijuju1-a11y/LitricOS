@@ -92,6 +92,14 @@ pub struct Sysd {
     client: Option<AppId>,
     /// How a program is run. Real spawning in production, a recorder in tests.
     runner: Box<dyn Runner>,
+    /// The default sink's volume and mute flag, as the sound server last
+    /// answered, or `None` before it has been asked.
+    ///
+    /// Cached because the question costs a process: `FACTS` is polled twice a
+    /// second and must not spawn anything, while the value is only needed after
+    /// a change or when a panel opens. `None` is not zero — nothing has been
+    /// measured, and the interface says so.
+    audio: Option<(u8, bool)>,
 }
 
 impl Sysd {
@@ -111,6 +119,7 @@ impl Sysd {
             trash: Trash::new(Retention::default()),
             caps,
             storage: StorageBroker::new(Layout::for_home(home)),
+            audio: None,
             root: root.to_path_buf(),
             client,
             runner: Box::new(SystemRunner),
@@ -187,7 +196,20 @@ impl Sysd {
         match req {
             Request::Ping => Response::ok(vec!["pong".to_owned()]),
             Request::Quit => Response::ok(Vec::new()),
-            Request::Facts => Response::ok(self.facts().to_lines()),
+            Request::Facts => {
+                let mut lines = self.facts().to_lines();
+                // Only when a measurement exists. A machine whose sound server
+                // has never answered has no level, and a line saying `volume=0`
+                // would be this daemon inventing one.
+                if let Some((volume, muted)) = self.audio {
+                    lines.push(format!(
+                        "audio.level volume={volume} muted={}",
+                        u8::from(muted)
+                    ));
+                }
+                Response::ok(lines)
+            }
+            Request::AudioLevel => self.audio_level(),
             Request::EnvList => Response::ok(self.env_list()),
             Request::EnvPlan(token) => self.env_plan(token),
             Request::EnvSwitch(token) => self.env_switch(token),
@@ -197,6 +219,25 @@ impl Sysd {
             Request::Power { action, consent } => self.power(*action, *consent, now),
             Request::Action { action, consent } => self.action(action, *consent, now),
             Request::Resolve { app, uri, access } => self.resolve(app, uri, *access, now),
+        }
+    }
+
+    /// Ask the sound server where the volume is, and remember the answer.
+    ///
+    /// Allowed to anyone who can reach the socket, like [`Request::Facts`]: it
+    /// is a question about the machine this process is running on, it changes
+    /// nothing, and the shell is the only client that can reach the socket at
+    /// all (mode 0600, owner root).
+    fn audio_level(&mut self) -> Response {
+        match providers::audio_level(self.runner.as_ref()) {
+            Ok((volume, muted)) => {
+                self.audio = Some((volume, muted));
+                Response::ok(vec![format!(
+                    "audio.level volume={volume} muted={}",
+                    u8::from(muted)
+                )])
+            }
+            Err(reason) => Response::err("audio-unavailable", reason),
         }
     }
 
@@ -275,6 +316,16 @@ impl Sysd {
         // credential file `iwd` is told about.
         let outcome = providers::perform(action, self.runner.as_ref(), &self.root);
         if outcome.applied {
+            // The level that was just set is read back rather than assumed: the
+            // tool accepting a number is not the same as the sink taking it, and
+            // a panel showing the number somebody typed is not showing the
+            // machine. A failed readback leaves the previous measurement in
+            // place instead of replacing it with a guess.
+            if matches!(action, SystemAction::Audio(_)) {
+                if let Ok(level) = providers::audio_level(self.runner.as_ref()) {
+                    self.audio = Some(level);
+                }
+            }
             return Response::ok(outcome.lines);
         }
         let reason = outcome
@@ -526,6 +577,87 @@ mod tests {
 
     fn line<'a>(r: &'a Response, prefix: &str) -> Option<&'a String> {
         r.lines().iter().find(|l| l.starts_with(prefix))
+    }
+
+    #[test]
+    fn the_audio_level_is_a_measurement_and_not_a_default() {
+        // Nothing has been asked yet, so FACTS carries no level at all: a
+        // `volume=0` line here would be this daemon inventing a mute machine.
+        let runner = RecordingRunner::succeeding(0).answering(0, "Volume: 0.60\n");
+        let mut s = sysd_with(&runner);
+        let before = s.handle(&Request::Facts, NOW);
+        assert!(
+            line(&before, "audio.level").is_none(),
+            "{:?}",
+            before.lines()
+        );
+
+        let asked = s.handle(&Request::AudioLevel, NOW);
+        assert!(asked.is_ok(), "{}", asked.encode());
+        assert_eq!(
+            line(&asked, "audio.level"),
+            Some(&"audio.level volume=60 muted=0".to_owned())
+        );
+        // And from then on the twice-a-second facts poll carries it without
+        // asking anything: the question costs a process.
+        let calls = runner.calls().len();
+        let after = s.handle(&Request::Facts, NOW);
+        assert_eq!(
+            line(&after, "audio.level"),
+            Some(&"audio.level volume=60 muted=0".to_owned()),
+            "{:?}",
+            after.lines()
+        );
+        assert_eq!(
+            runner.calls().len(),
+            calls,
+            "a facts poll must not run a tool"
+        );
+    }
+
+    #[test]
+    fn a_sound_server_that_cannot_be_asked_says_so() {
+        let runner = RecordingRunner::failing(std::io::ErrorKind::NotFound, "no wpctl here");
+        let mut s = sysd_with(&runner);
+        let reply = s.handle(&Request::AudioLevel, NOW);
+        assert!(!reply.is_ok());
+        assert!(
+            reply.encode().starts_with("ERR audio-unavailable"),
+            "{}",
+            reply.encode()
+        );
+        assert!(
+            line(&reply, "audio.level").is_none(),
+            "an unanswerable question must not produce a number"
+        );
+        // And no level appears in the facts either.
+        let facts = s.handle(&Request::Facts, NOW);
+        assert!(line(&facts, "audio.level").is_none());
+    }
+
+    #[test]
+    fn a_volume_change_is_read_back_rather_than_assumed() {
+        use crate::providers::AudioAction;
+        // The tool accepts the number, and then the sink reports something
+        // else: the panel must show the sink's answer.
+        let runner = RecordingRunner::succeeding(0)
+            .answering(0, "Volume: 0.35\n")
+            .answering(0, "Volume: 0.35 [MUTED]\n");
+        let mut s = sysd_with(&runner);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Audio(AudioAction::Volume(35)),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        let facts = s.handle(&Request::Facts, NOW);
+        assert_eq!(
+            line(&facts, "audio.level"),
+            Some(&"audio.level volume=35 muted=1".to_owned()),
+            "the readback is the measurement, not the requested number"
+        );
     }
 
     #[test]
@@ -843,7 +975,17 @@ mod tests {
             NOW,
         );
         assert!(reply.is_ok(), "{}", reply.encode());
-        assert_eq!(r.calls().len(), 1);
+        // Two calls, and they are the two halves of one change: the set, and
+        // the read-back that says what the sink actually holds. A test that
+        // accepted one call would pass while the panel showed the number
+        // somebody requested rather than the machine's.
+        let calls = r.calls();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        let first = calls.first().expect("the set");
+        let second = calls.get(1).expect("the read-back");
+        assert_eq!(first.0, "/usr/bin/wpctl");
+        assert_eq!(first.1.first().map(String::as_str), Some("set-volume"));
+        assert_eq!(second.1.first().map(String::as_str), Some("get-volume"));
         assert!(
             line(&reply, "command=/usr/bin/wpctl").is_some(),
             "{:?}",

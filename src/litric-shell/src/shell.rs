@@ -311,6 +311,12 @@ pub enum Hot {
     QuickToggle(u8),
     /// The power-profile selector in quick settings.
     QuickPower(u8),
+    /// Quieter, by one step.
+    QuickVolumeDown,
+    /// Louder, by one step.
+    QuickVolumeUp,
+    /// Mute or unmute the default sink.
+    QuickVolumeMute,
     /// An environment row in quick settings.
     QuickEnvironment(u8),
     /// The browser's new-tab button.
@@ -763,6 +769,17 @@ pub struct QuickSettings {
     pub reduce_transparency: bool,
     /// Reduce motion.
     pub reduce_motion: bool,
+    /// The default sink's volume, 0 to 100.
+    ///
+    /// It starts as the value the sound server reported and, between a change
+    /// and the next reading (the facts are polled every two seconds), it is the
+    /// value that was asked for. `None` is "nobody has measured it", which the
+    /// panel says in words rather than drawing a zero.
+    pub volume: Option<u8>,
+    /// Whether the default sink is muted.
+    pub muted: bool,
+    /// What the last volume change did, in the interface's own words.
+    pub audio_note: String,
     /// Which of these have actually been applied to the system, rather than
     /// only recorded here.
     pub applied: Vec<String>,
@@ -776,6 +793,9 @@ impl Default for QuickSettings {
             adaptive_idle: true,
             reduce_transparency: false,
             reduce_motion: false,
+            volume: None,
+            muted: false,
+            audio_note: String::new(),
             applied: vec![
                 "adaptive_idle".to_owned(),
                 "reduce_motion".to_owned(),
@@ -964,6 +984,14 @@ pub struct SystemFacts {
     pub audio_cards: Vec<String>,
     /// Whether a sound server is running, as the platform reports it.
     pub audio_server: Option<String>,
+    /// The default sink's volume, 0 to 100, as the sound server last reported it.
+    ///
+    /// `None` until the daemon has been able to ask: a machine with no sound
+    /// server, or one that has not answered yet, has no level, and showing zero
+    /// would be inventing a muted machine.
+    pub audio_volume: Option<u8>,
+    /// Whether the default sink is muted, on the same terms.
+    pub audio_muted: Option<bool>,
 }
 
 /// One input node, as Settings shows it.
@@ -1155,6 +1183,15 @@ impl Shell {
         }
         self.facts.observe(fresh);
         self.activity.observe(&self.facts);
+        // A measurement replaces whatever the panel was showing: the two-second
+        // poll is what turns "the level I asked for" back into "the level the
+        // sound server holds".
+        if let Some(volume) = self.facts.audio_volume {
+            self.quick.volume = Some(volume);
+        }
+        if let Some(muted) = self.facts.audio_muted {
+            self.quick.muted = muted;
+        }
     }
 }
 
@@ -5386,6 +5423,9 @@ impl Shell {
                 self.notifications.do_not_disturb = self.quick.do_not_disturb;
                 Vec::new()
             }
+            Hot::QuickVolumeUp => vec![Effect::Volume(1)],
+            Hot::QuickVolumeDown => vec![Effect::Volume(-1)],
+            Hot::QuickVolumeMute => vec![Effect::Volume(0)],
             Hot::QuickPower(n) => {
                 let profile = PowerProfile::ALL
                     .get(usize::from(n))
@@ -7693,6 +7733,39 @@ mod tests {
             out.push(line);
         }
         out
+    }
+
+    #[test]
+    fn the_volume_controls_ask_for_steps_and_the_panel_follows_the_measurement() {
+        let mut s = shell();
+        assert_eq!(s.activate(Hot::QuickVolumeUp), vec![Effect::Volume(1)]);
+        assert_eq!(s.activate(Hot::QuickVolumeDown), vec![Effect::Volume(-1)]);
+        assert_eq!(s.activate(Hot::QuickVolumeMute), vec![Effect::Volume(0)]);
+
+        // No measurement has arrived, so the panel has nothing to show and
+        // nothing to step from.
+        assert_eq!(s.quick.volume, None);
+
+        // A sample carrying a level fills the panel in.
+        s.sample(crate::shell::SystemFacts {
+            audio_volume: Some(40),
+            audio_muted: Some(false),
+            ..crate::shell::SystemFacts::default()
+        });
+        assert_eq!(s.quick.volume, Some(40));
+        assert!(!s.quick.muted);
+
+        // A later sample that says nothing about the volume leaves the last
+        // measurement standing rather than blanking the panel.
+        s.sample(crate::shell::SystemFacts::default());
+        assert_eq!(s.quick.volume, Some(40));
+
+        s.sample(crate::shell::SystemFacts {
+            audio_volume: Some(40),
+            audio_muted: Some(true),
+            ..crate::shell::SystemFacts::default()
+        });
+        assert!(s.quick.muted);
     }
 
     #[cfg(unix)]

@@ -994,6 +994,76 @@ pub fn perform(action: &SystemAction, runner: &dyn Runner, root: &Path) -> Outco
     }
 }
 
+/// The command that asks the sound server what the default sink is set to.
+///
+/// A question, not an action: it changes nothing, needs no capability and writes
+/// no file. It is here rather than in `platform::audio` because the sound server
+/// has no file interface — the answer comes from WirePlumber's own client,
+/// exactly as the changes do.
+#[must_use]
+pub fn audio_level_plan() -> Plan {
+    Plan {
+        program: WPCTL,
+        args: vec!["get-volume".to_owned(), "@DEFAULT_AUDIO_SINK@".to_owned()],
+        stdin: None,
+        files: Vec::new(),
+        notes: vec!["query=audio.level".to_owned()],
+        timeout_secs: SOCKET_ROUND_TRIP_SECS,
+    }
+}
+
+/// What `wpctl get-volume` prints, read as a percentage and a mute flag.
+///
+/// One shape, from WirePlumber's own client: `Volume: 0.40`, and `Volume: 0.40
+/// [MUTED]` when the sink is muted. A line that does not carry a number this can
+/// read is `None` — an unreadable answer is not "volume zero". A level above 1.0
+/// is clamped, because the action that sets one is limited to 1.0 and a reading
+/// past it would be a value this daemon could not produce.
+#[must_use]
+pub fn parse_audio_level(printed: &str) -> Option<(u8, bool)> {
+    let line = printed
+        .lines()
+        .find(|l| l.trim_start().starts_with("Volume:"))?;
+    let number = line.split_whitespace().nth(1)?;
+    let fraction: f32 = number.parse().ok()?;
+    if !fraction.is_finite() || fraction < 0.0 {
+        return None;
+    }
+    let percent = (fraction * 100.0).round().clamp(0.0, 100.0);
+    let muted = line.contains("[MUTED]");
+    Some((percent as u8, muted))
+}
+
+/// Ask the sound server where the volume is.
+///
+/// # Errors
+/// A sentence naming what happened: no control tool in this image, a tool that
+/// failed, or output that is not a level. The daemon turns this into a reply the
+/// interface can show; it never guesses a number.
+pub fn audio_level(runner: &dyn Runner) -> Result<(u8, bool), String> {
+    let plan = audio_level_plan();
+    let args: Vec<&str> = plan.args.iter().map(String::as_str).collect();
+    let (code, printed) = runner
+        .capture(plan.program, &args, plan.timeout_secs)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::TimedOut {
+                format!("{} did not answer in time", plan.program)
+            } else {
+                format!("{} could not be run: {e}", plan.program)
+            }
+        })?;
+    if code != 0 {
+        return Err(format!("{} exited {code}", plan.program));
+    }
+    parse_audio_level(&printed).ok_or_else(|| {
+        format!(
+            "{} answered with something that is not a level: {}",
+            plan.program,
+            printed.trim()
+        )
+    })
+}
+
 /// The reply lines that describe the plan, without the verdict.
 fn describe(action: &SystemAction, plan: &Plan) -> Vec<String> {
     let mut lines = vec![
@@ -1028,6 +1098,55 @@ mod tests {
 
     fn line<'a>(out: &'a Outcome, prefix: &str) -> Option<&'a String> {
         out.lines.iter().find(|l| l.starts_with(prefix))
+    }
+
+    #[test]
+    fn a_level_is_read_from_what_wireplumber_prints() {
+        assert_eq!(parse_audio_level("Volume: 0.40\n"), Some((40, false)));
+        assert_eq!(parse_audio_level("Volume: 1.00\n"), Some((100, false)));
+        assert_eq!(parse_audio_level("Volume: 0.00\n"), Some((0, false)));
+        assert_eq!(
+            parse_audio_level("Volume: 0.75 [MUTED]\n"),
+            Some((75, true)),
+            "the flag is on the same line"
+        );
+        // Unreadable is not zero: a level nobody could read must not be shown
+        // as a mute machine.
+        assert_eq!(parse_audio_level(""), None);
+        assert_eq!(parse_audio_level("Node: sink\n"), None);
+        assert_eq!(parse_audio_level("Volume: loud\n"), None);
+        assert_eq!(parse_audio_level("Volume: -0.5\n"), None);
+        // Amplification past the limit the setter enforces is clamped, not
+        // reported as a value this daemon could not have produced.
+        assert_eq!(parse_audio_level("Volume: 1.50\n"), Some((100, false)));
+        assert_eq!(parse_audio_level("Volume: 0.333\n"), Some((33, false)));
+    }
+
+    #[test]
+    fn reading_the_level_asks_the_tool_and_reports_its_answers() {
+        let runner = RecordingRunner::succeeding(0).answering(0, "Volume: 0.35\n");
+        assert_eq!(audio_level(&runner), Ok((35, false)));
+        assert_eq!(
+            runner.calls(),
+            vec![(
+                WPCTL.to_owned(),
+                vec!["get-volume".to_owned(), "@DEFAULT_AUDIO_SINK@".to_owned()]
+            )],
+            "the question is the one WirePlumber's client answers"
+        );
+
+        // A tool that is not installed: the sentence names it, and no number is
+        // invented.
+        let missing = RecordingRunner::failing(std::io::ErrorKind::NotFound, "no such file");
+        assert!(audio_level(&missing).is_err_and(|e| e.contains(WPCTL)));
+
+        // A tool that ran and failed is its own answer.
+        let failed = RecordingRunner::succeeding(0).answering(1, "");
+        assert!(audio_level(&failed).is_err_and(|e| e.contains("exited 1")));
+
+        // A tool that answered with prose is not a measurement.
+        let prose = RecordingRunner::succeeding(0).answering(0, "there is no default sink");
+        assert!(audio_level(&prose).is_err_and(|e| e.contains("not a level")));
     }
 
     fn audio_volume(percent: u8) -> SystemAction {
