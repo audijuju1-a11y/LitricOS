@@ -13,33 +13,33 @@ CH00.10,CH00,elementary OS / Pantheon,COMPLETE,OS 8.1.1 (2026-02-26); component 
 CH00.11,CH00,Budgie,COMPLETE,Budgie 10.10.3 (2026-09-27)
 CH00.12,CH00,ChromeOS stable,COMPLETE,16805.33.0 / browser 154.0.8037.151 (2026-10-09); later M156 rollout reported by third party only
 F,,Research F — Shared component catalog,PENDING,
-F.01,F,Buttons,PENDING,
-F.02,F,Text fields,PENDING,
-F.03,F,Switches,PENDING,
-F.04,F,Checkboxes,PENDING,
-F.05,F,Radio controls,PENDING,
-F.06,F,Sliders,PENDING,
-F.07,F,Pickers (date/time/color/file),PENDING,
-F.08,F,Tabs,PENDING,
-F.09,F,Navigation views,PENDING,
-F.10,F,Sidebars,PENDING,
-F.11,F,Command bars/toolbars,PENDING,
-F.12,F,Menus,PENDING,
-F.13,F,Context menus,PENDING,
-F.14,F,Tooltips,PENDING,
-F.15,F,Dialogs,PENDING,
-F.16,F,Sheets,PENDING,
-F.17,F,Notifications/banners/toasts,PENDING,
-F.18,F,Progress indicators,PENDING,
-F.19,F,Lists,PENDING,
-F.20,F,Trees,PENDING,
-F.21,F,Grids/tables,PENDING,
-F.22,F,Cards,PENDING,
-F.23,F,Search fields,PENDING,
-F.24,F,Empty states,PENDING,
-F.25,F,Loading states,PENDING,
-F.26,F,Errors/validation,PENDING,
-F.27,F,Confirmation flows,PENDING,
+F.01,F,Buttons,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.02,F,Text fields,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.03,F,Switches,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.04,F,Checkboxes,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.05,F,Radio controls,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.06,F,Sliders,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.07,F,Pickers (date/time/color/file),PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.08,F,Tabs,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.09,F,Navigation views,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.10,F,Sidebars,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.11,F,Command bars/toolbars,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.12,F,Menus,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.13,F,Context menus,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.14,F,Tooltips,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.15,F,Dialogs,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.16,F,Sheets,PARTIAL,"macOS sheets: Apple HIG, 8 elements and 4 guidelines, Part 6 §MC.04.06. Windows and Linux sheets were not compared, so this is one platform of three."
+F.17,F,Notifications/banners/toasts,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.18,F,Progress indicators,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.19,F,Lists,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.20,F,Trees,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.21,F,Grids/tables,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.22,F,Cards,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.23,F,Search fields,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.24,F,Empty states,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.25,F,Loading states,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.26,F,Errors/validation,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.27,F,Confirmation flows,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
 G,,Research G — Tokens & accessibility,PARTIAL,"Windows evidence for G.01–G.11, G.14 (Part 4)."
 G.01,G,Color tokens,PARTIAL,macOS evidence added in Part 7. Linux pending.
 G.02,G,Typography,PARTIAL,macOS evidence added in Part 7. Linux pending.

@@ -387,3 +387,4 @@ WB.12.05,windows-26h2,settings/processes,ADAPT,"Task Manager's role is the Activ
 WB.12.06,windows-26h2,settings/disks,DEFER,"Disk Management needs partitioning, filesystem creation and a device model; this system installs one image onto one device",none,,STATIC: docs/adr/0004-filesystem-layout.md,M6
 WB.12.07,windows-26h2,settings/legacy-dialogs,REJECT,Legacy control-panel dialogs are a second interface for settings this system has in one place,none,,STATIC: docs/SYSTEM-SCOPE.md,M6
 WB.12.09,windows-26h2,settings/skus,REJECT,"Home, Pro, Enterprise and Education are editions of a commercial product; this system has one image and no licensing tiers",none,,STATIC: docs/SYSTEM-SCOPE.md,M6
+F.16,macos-27,design/sheets,ADAPT,"The sheet's role -- a modal card over its parent, dismissed by Cancel or Done -- is the shell's dialog component, attached to the desktop rather than to a window",litric-shell::apps::DialogKind,,STATIC: src/litric-shell/src/apps.rs,M3

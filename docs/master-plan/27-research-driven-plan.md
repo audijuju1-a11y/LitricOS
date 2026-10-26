@@ -42,8 +42,8 @@ unfinished:
 | Status | Items | Share |
 |---|---:|---:|
 | `COMPLETE` | 18 | 3 % |
-| `PARTIAL` | 382 | 64 % |
-| `PENDING` (not yet researched) | 193 | 32 % |
+| `PARTIAL` | 383 | 64 % |
+| `PENDING` (not yet researched) | 192 | 32 % |
 | `NOT APPLICABLE` | 3 | — |
 | `NOT FOUND` | 1 | — |
 
@@ -51,8 +51,8 @@ By section, the shape is: Windows shell (`WA`) 97 partial, Windows Settings
 (`WB`) 141 partial, macOS desktop (`MC`) 62 partial, macOS Settings (`MD`) 38
 partial, Fluent (`WC`) 12 partial, tokens (`G`) 19 partial — while the whole
 Linux-desktop comparison (`LG`–`LR`, eight systems × 15 items = 120), the shared
-component catalogue (`F`, 28), workflows (`H`, 21), technical feasibility (`I`,
-12) and the final audit (`J`, 9) are **entirely `PENDING`**.
+component catalogue (`F`, 27 of 28), workflows (`H`, 21), technical feasibility
+(`I`, 12) and the final audit (`J`, 9) are **still `PENDING`**.
 
 That single table decides the plan's shape: **the research cannot be treated as
 a finished specification**, so the build must proceed on the parts that are
@@ -296,8 +296,8 @@ completion is work, scheduled beside the build:
 
 ### Coverage today (2026-10-26)
 
-The checklist holds 597 items; 400 are `COMPLETE` or `PARTIAL` and therefore
-citable, and `docs/parity/ledger.csv` decides 388 of them -- every one that is a
+The checklist holds 597 items; 401 are `COMPLETE` or `PARTIAL` and therefore
+citable, and `docs/parity/ledger.csv` decides 389 of them -- every one that is a
 surface. Per chapter:
 
 | Chapter | Citable | Decided |
@@ -309,9 +309,10 @@ surface. Per chapter:
 | `G` tokens & accessibility | 19 | 19 |
 | `WC` Fluent / WinUI design system | 14 | 14 |
 | `MG` macOS HIG | 11 | 11 |
+| `F` shared component catalogue | 1 | 1 (the other 27 are `PENDING`) |
 | `CH00` version baseline | 12 | 0 (not a surface; see the ledger README) |
 
-The 388 rows split 168 `ADAPT`, 126 `DEFER`, 88 `REJECT`, 6 `ADOPT`. `DEFER` is
+The 389 rows split 169 `ADAPT`, 126 `DEFER`, 88 `REJECT`, 6 `ADOPT`. `DEFER` is
 a promise with a milestone on it, and the promises are the build's own backlog:
 `M3` carries the settings families that need the files daemon, `M4` the session
 and accessibility ones, `M5` the capability and privacy ones, and `M6` the ones
@@ -323,24 +324,38 @@ be cited until their status is final, so they are Track R's work and not rows.
 
 ### Track R queue, first pass (2026-10-26)
 
-193 checklist items are `PENDING`, and none of them may be cited. A first pass
-over the corpus -- does the item's own title appear as a heading in any research
-part -- finds 56 of them written up already:
+192 checklist items are `PENDING`, and none of them may be cited. The first pass
+counted any heading that *contained* an item's title and found 56; that number was
+wrong, and the chapter `F` review below is how it was found out. Counting only
+headings that name the item -- its id, or its whole title -- leaves 24:
 
-| Chapter | `PENDING` | Title found as a heading |
+| Chapter | `PENDING` | A section names it |
 |---|---:|---:|
-| `F` shared component catalogue | 28 | 12 |
-| `H` workflows & edge cases | 21 | 7 |
+| `F` shared component catalogue | 27 | 1 |
+| `H` workflows & edge cases | 21 | 2 |
 | `I` technical feasibility | 12 | 1 |
-| `J` source register & audit | 9 | 2 |
-| each of `LB`–`LX` (8 desktops) | 15 | 4 |
+| `J` source register & audit | 9 | 1 |
+| each of `LB`–`LX` (8 desktops) | 15 | 2 |
 
-A heading match is **not** a status: it says a researcher wrote something under
-that name, not that the item has a source, a note and a final status. The 56 are
-where a status review is cheapest to start -- read the section, decide whether it
-answers the item, then set `COMPLETE` or `PARTIAL` on the checklist, at which
-point the row can be cited. The 137 without a heading are research that has not
-been done, and no amount of checking will find them.
+A section is **not** a status either: it says someone wrote something under that
+name, not that it answers the item with a source. So the queue is 24 reviews, and
+the other 168 items are research that has not been done.
+
+#### Chapter `F`, reviewed (2026-10-26)
+
+`F` is the case the substring count got wrong: it reported 12 of 28 items as
+written up, and the review found 1. The corpus's `F` section is the checklist
+table itself (`Part1` §"F — Research F — Shared component catalog"): 27 rows of
+`PENDING` and no prose. What matched were other chapters' headings that happened
+to contain the word -- "Buttons" in a toast-lifecycle heading, "Menus" in a File
+Explorer heading -- which is why a substring is not evidence.
+
+The one real section is `F.16 Sheets`: `Part6` §MC.04.06 carries Apple's HIG
+guidance with eight elements and four behavioural guidelines. That is one
+platform of the three this catalogue needs, so the item is `PARTIAL` with that
+note, and its row is in the ledger. The other 27 carry the note
+"the corpus has no section for this item"; a review that ends by writing down
+what is missing is worth more than one that guesses.
 
 Each batch produces ledger-ready rows, not prose: a research batch is done when
 its checklist status is final and its rows carry evidence tiers.
@@ -414,5 +429,5 @@ one measured strip inside the layout pass.
   what people expect.
 - It does not implement a control whose backend does not exist, and does not
   hide a missing backend behind a disabled-looking row.
-- It does not treat the research as complete. 193 items are unread, and the
+- It does not treat the research as complete. 192 items are unread, and the
   build may not use them until they are not.

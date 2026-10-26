@@ -1635,3 +1635,57 @@ the tree it describes.
 Revert this commit. The ledger returns to 130 rows — the `WA` chapter and the
 earlier scattered decisions — and the coverage tables in the plan and the parity
 README go back with it. Nothing else reads the ledger yet, so no code changes.
+
+## 2026-10-26 — reviewing chapter F, and the substring count that lied
+
+The plan's Track R queue said 56 of the 193 `PENDING` research items were "written
+up already", chapter `F` among the best covered at 12 of 28. This is the review
+that checked, and it found the number was an artifact of the way it was counted.
+
+### What changed
+
+* **`F` has one researched item, not twelve.** The corpus's `F` section
+  (`Part1` §"F — Research F — Shared component catalog") is the checklist table
+  itself: 27 rows of `PENDING` and no prose. What the count matched were headings
+  in other chapters that happened to contain the word — "Buttons" inside a toast
+  lifecycle heading, "Menus" inside a File Explorer one. A substring is not a
+  section.
+* **`F.16 Sheets` is `PARTIAL`, and only that.** `Part6` §MC.04.06 carries
+  Apple's HIG guidance on sheets — eight elements, four behavioural guidelines, a
+  named source — so the item has one platform of the three the catalogue needs.
+  Its note says exactly that, and it has a ledger row (a sheet's role is the
+  shell's dialog component, `ADAPT`, `litric-shell::apps::DialogKind`).
+* **The other 27 carry the audit instead of a status.** Each note now reads
+  "Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING
+  until one exists." A review that writes down what is missing is worth more than
+  one that guesses, and the next reviewer starts from the note rather than the
+  heading.
+* **The plan's queue is corrected to what the stricter count finds**: 24 items
+  with a section that names them (by id or exact title), not 56. `F` drops from
+  12 to 1; the Linux desktops from 4 to 2 each.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| checklist statuses | `PARTIAL` 382 → 383, `PENDING` 193 → 192, total still 597 |
+| `python3 ci/lint-parity.py` | PASS — 389 rows, 0 problems |
+| `python3 ci/lint-doc-refs.py` | OK — 663 citations across 138 documents |
+| the `F` section as it stands | `Part1` line 793: a table of 27 `PENDING` rows and no prose |
+
+No code changed, so `cargo test`, `clippy` and `ci/verify.sh` were not re-run.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that `F` will be researched | 27 items are still nobody's work. This review only proved they are not done and wrote that down |
+| that `F.16` is fully documented | one platform of three. A components catalogue that knows only macOS sheets cannot decide a cross-platform sheet |
+| that the corrected 24-item queue is complete | it counts headings that name an item. A section that answers an item under another name is still invisible to it |
+
+### Rollback
+
+Revert this commit. `F.16` returns to `PENDING` (and its ledger row with it), the
+27 notes return to empty, and the plan's Track R table returns to the 56/12
+numbers -- which were wrong, and which the next reviewer would have had to
+discover again.
