@@ -294,6 +294,30 @@ because every later row depends on the registry existing.
 The corpus is 32 % unresearched and 64 % partial. The build may not cite it, so
 completion is work, scheduled beside the build:
 
+### Coverage today (2026-10-26)
+
+The checklist holds 597 items; 400 are `COMPLETE` or `PARTIAL` and therefore
+citable, and `docs/parity/ledger.csv` decides 129 of them. Per chapter:
+
+| Chapter | Citable | Decided |
+|---|---:|---:|
+| `WA` Windows 11 shell & system UI | 98 | 97 |
+| `WB` Windows Settings (26H2) | 143 | 15 |
+| `MC` macOS 27 desktop model | 64 | 0 |
+| `MD` macOS 27 System Settings | 39 | 15 |
+| `G` tokens & accessibility | 19 | 0 |
+| `WC` Fluent / WinUI design system | 14 | 2 |
+| `CH00` version baseline | 12 | 0 |
+| `MG` macOS HIG | 11 | 0 |
+
+`WA` is complete: 98 of 98 citable items decided, with `WA.08.04` excluded as
+`NOT APPLICABLE` (Timeline). The remaining 271 are all in the chapters below,
+worst first: `MC` (64), `WB` (128), `MD` (24), `G` (19), `CH00` (12), `WC` (12)
+and `MG` (11). A chapter
+is finished when its checklist status is final and every citable item has a row:
+the batch is not prose, it is rows.
+
+
 | Batch | Items | Why it matters to the build | Milestone |
 |---|---:|---|---|
 | `F` shared component catalogue | 28 | WP-11 needs a decision per component, not per pixel | M2 |

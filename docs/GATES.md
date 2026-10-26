@@ -1543,10 +1543,10 @@ the other side.
   an `#[allow]` that states the bound (255·256 + 255·256 + 128, far inside
   `u32`). Plus `clone_on_copy`, `manual_range_contains`, `type_complexity`, two
   missing doc lines and a dead `radius` parameter that the new pill made dead.
-* **The ledger batch.** 84 new rows, all `WA` (Windows 11 shell and system UI),
-  which is the chapter this tree has the most surfaces for. The ledger is now
-  129 rows over the 400 citable research items: 67 `ADAPT`, 43 `DEFER`, 15
-  `REJECT`, 4 `ADOPT`. The rows that name a backend name one that exists; the
+* **The ledger batch.** 85 new rows, all `WA` (Windows 11 shell and system UI),
+  which is the chapter this tree has the most surfaces for -- every one of its
+  98 citable items is now decided. The ledger is 130 rows over the 400 citable
+  research items: 67 `ADAPT`, 43 `DEFER`, 15 `REJECT`, 5 `ADOPT`. The rows that name a backend name one that exists; the
   ones that do not are `DEFER` or `REJECT` with the reason.
 
 ### Evidence
@@ -1559,7 +1559,7 @@ the other side.
 | `cargo test --workspace --locked` | **1560 passed, 0 failed** |
 | `bash ci/verify.sh` | **29 pass, 0 fail, 3 skipped** (image build, boot, idle: no `mkosi`, no QEMU, no `pytest`) |
 | `python3 ci/check-golden-frames.py --frames build/frames` | PASS — 24 frames, every one within threshold of the re-recorded set |
-| `python3 ci/lint-parity.py` | PASS — 129 rows, 0 problems |
+| `python3 ci/lint-parity.py` | PASS — 130 rows, 0 problems |
 | `cargo run --example frame_dump -- --fonts ../build/fonts` | 24 scenes, dark; 24 more with `--theme light` |
 
 The frames are in [`docs/evidence/2026-10-26/`](evidence/2026-10-26/README.md) —
@@ -1574,7 +1574,7 @@ note that was in that README is gone.
 | that the V6 interface renders on a real display | the frames are `frame_dump`'s composition with a fixed fixture of facts. No framebuffer, no scanout, no boot |
 | that the merged daemons and the new chrome coexist in a session | the shell is tested against fixtures and in-process clients; no guest ran the two together |
 | that the image builds with this tree | no `mkosi` on this host. `verify.sh` reported the image step SKIP, not pass |
-| that the remaining 271 citable research items are decided | the batch covered `WA` only. `WB` (143), `MC` (64), `MD` (39), `G` (19), `WC` (14), `CH00` (12) and `MG` (11) still carry partial coverage |
+| that the remaining 270 citable research items are decided | the batch covered `WA` only. `WB` (128 of 143), `MC` (0 of 64), `MD` (24 of 39), `G` (0 of 19), `CH00` (0 of 12), `WC` (12 of 14) and `MG` (0 of 11) are still open |
 
 ### Rollback
 
