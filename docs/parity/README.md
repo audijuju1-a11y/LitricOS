@@ -38,6 +38,17 @@ implies](../master-plan/27-research-driven-plan.md) §3.
 closes the ledger, and a `DEFER` that is still `DEFER` then is a `REJECT` that
 has not been honest yet.
 
+## What is not a row
+
+The checklist's 597 items include things that are not surfaces. `CH00` is the
+version baseline the research was taken against -- which build of Windows 11,
+which release of macOS, which desktop -- and it is verified by the research
+itself, not by this system: there is nothing here to adopt, adapt, reject or
+defer. `CH00`'s twelve citable items are therefore deliberately absent, and the
+linter does not ask for them. The `PENDING` chapters (`F`, `H`, `I`, `J`, and the
+eight Linux desktops) are absent for the other reason: research that is not
+finished may not be cited, so they become rows when their status does.
+
 ## The five rules the checker enforces
 
 1. **The columns are exactly the ten above**, in that order. A ledger that grows

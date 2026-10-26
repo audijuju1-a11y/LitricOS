@@ -297,36 +297,29 @@ completion is work, scheduled beside the build:
 ### Coverage today (2026-10-26)
 
 The checklist holds 597 items; 400 are `COMPLETE` or `PARTIAL` and therefore
-citable, and `docs/parity/ledger.csv` decides 129 of them. Per chapter:
+citable, and `docs/parity/ledger.csv` decides 388 of them -- every one that is a
+surface. Per chapter:
 
 | Chapter | Citable | Decided |
 |---|---:|---:|
-| `WA` Windows 11 shell & system UI | 98 | 97 |
-| `WB` Windows Settings (26H2) | 143 | 15 |
-| `MC` macOS 27 desktop model | 64 | 0 |
-| `MD` macOS 27 System Settings | 39 | 15 |
-| `G` tokens & accessibility | 19 | 0 |
-| `WC` Fluent / WinUI design system | 14 | 2 |
-| `CH00` version baseline | 12 | 0 |
-| `MG` macOS HIG | 11 | 0 |
+| `WB` Windows Settings (26H2) | 143 | 143 |
+| `WA` Windows 11 shell & system UI | 98 | 98 |
+| `MC` macOS 27 desktop model | 64 | 64 |
+| `MD` macOS 27 System Settings | 39 | 39 |
+| `G` tokens & accessibility | 19 | 19 |
+| `WC` Fluent / WinUI design system | 14 | 14 |
+| `MG` macOS HIG | 11 | 11 |
+| `CH00` version baseline | 12 | 0 (not a surface; see the ledger README) |
 
-`WA` is complete: 98 of 98 citable items decided, with `WA.08.04` excluded as
-`NOT APPLICABLE` (Timeline). The remaining 271 are all in the chapters below,
-worst first: `MC` (64), `WB` (128), `MD` (24), `G` (19), `CH00` (12), `WC` (12)
-and `MG` (11). A chapter
-is finished when its checklist status is final and every citable item has a row:
-the batch is not prose, it is rows.
+The 388 rows split 168 `ADAPT`, 126 `DEFER`, 88 `REJECT`, 6 `ADOPT`. `DEFER` is
+a promise with a milestone on it, and the promises are the build's own backlog:
+`M3` carries the settings families that need the files daemon, `M4` the session
+and accessibility ones, `M5` the capability and privacy ones, and `M6` the ones
+that will have to become `REJECT` or be built.
 
-
-| Batch | Items | Why it matters to the build | Milestone |
-|---|---:|---|---|
-| `F` shared component catalogue | 28 | WP-11 needs a decision per component, not per pixel | M2 |
-| `G` tokens & accessibility | 19 (partial) | WP-11, WP-10 | M2 |
-| `H` workflows & edge cases | 21 | WP-04/07/08 flows; without it, states are invented | M3 |
-| `I` technical feasibility | 12 | converts research rows into LitricOS constraints before they reach the ledger | M1 (early) |
-| `LG`–`LR` Linux desktops (8 × 15) | 120 | distinguishes "everyone does this" from "Windows does this" — the main defence against copying one vendor | M4 |
-| `J` final audit | 9 | closes the checklist and proves the registers | M6 |
-| `WB`/`WA`/`MC`/`MD` partial → complete | 338 | the rows the build actually consumes | rolling |
+What remains outside the ledger is research, not decisions: the `PENDING`
+chapters (`F` 28, `H` 21, `I` 12, `J` 9 and eight Linux desktops of 15) cannot
+be cited until their status is final, so they are Track R's work and not rows.
 
 Each batch produces ledger-ready rows, not prose: a research batch is done when
 its checklist status is final and its rows carry evidence tiers.

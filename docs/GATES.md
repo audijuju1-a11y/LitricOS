@@ -1584,3 +1584,54 @@ rows, and the golden fingerprints go back to the stale set that could not be
 checked on a host without the image's fonts. Delete
 `docs/evidence/2026-10-26/` with it: it documents a tree that would no longer
 exist.
+
+## 2026-10-26 — the ledger closes over every citable surface
+
+The parity ledger was 45 rows this morning and 130 after the `WA` chapter. It is
+388 now: every item in the research checklist that is finished enough to cite and
+that names a surface has a decision.
+
+### What changed
+
+* **Five chapters closed in one pass** — `WB` (Windows Settings, 143), `MC`
+  (the macOS desktop model, 64), `MD` (macOS System Settings, 39), `G` (tokens and
+  accessibility, 19), `MG` (the HIG, 11), plus the rest of `WC` and `WA`. 288 new
+  rows in this commit.
+* **The split is the decision, not a placeholder.** 168 `ADAPT`, 126 `DEFER`,
+  88 `REJECT`, 6 `ADOPT`. An `ADAPT` names the module that carries it
+  (`litric-shell::views::quick_cards`, `litric-sysd::platform::net`,
+  `litric-filesd::ops`, `litric-shell::lock`, …). A `DEFER` says which backend is
+  missing (`no print subsystem`, `no accelerator address`, `one framebuffer`). A
+  `REJECT` says what this system does not do and why it will not claim to — the
+  vendor-account, telemetry, assistant and licensing families are the bulk of it.
+* **`CH00` is not a surface.** It is the version baseline the research was taken
+  against; there is nothing to adopt or reject. The twelve citable items in it are
+  deliberately absent, and `docs/parity/README.md` now says so, so the next reader
+  does not mistake a decision for a gap.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `python3 ci/lint-parity.py` | PASS — 388 rows, 0 problems (every row sourced, backed and evidenced) |
+| `python3 ci/lint-doc-refs.py` | OK — 661 citations across 138 documents resolve |
+| `python3 ci/lint-line-endings.py` | OK — 338 files, all LF |
+| `python3 ci/lint-parity.py --self-test` | PASS — the checker still fails an inert row |
+
+No code changed in this commit, so `cargo test`, `clippy` and `ci/verify.sh` were
+not re-run for it; the run recorded in the section above is the one that covers
+the tree it describes.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that an `ADAPT` row's backend behaves as the justification says | the linter checks a row is well-formed, sourced and openable, not that the code does what the sentence claims. The row's evidence column is how a reader checks one |
+| that a `DEFER` will be built | it is a promise with a milestone, not a plan item with an owner. `M6` is where the ones nobody built become `REJECT` |
+| that the `PENDING` chapters are covered | they are not citable. `F` (28), `H` (21), `I` (12), `J` (9) and the eight Linux desktops (120) are Track R's research work |
+
+### Rollback
+
+Revert this commit. The ledger returns to 130 rows — the `WA` chapter and the
+earlier scattered decisions — and the coverage tables in the plan and the parity
+README go back with it. Nothing else reads the ledger yet, so no code changes.
