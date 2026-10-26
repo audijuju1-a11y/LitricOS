@@ -1382,3 +1382,68 @@ Revert this commit. The unit checker goes back to accepting a `required-features
 binary on the strength of its name, the engine choice goes back to lasting one
 window, and the three shell tests and three self-test cases disappear. The audit
 document is additive and can stay.
+
+## 2026-10-26 — a settings registry, a deep link, and a ledger that fails CI
+
+The research corpus in `Research-Deep-all/` catalogues ~446 settings panes, 573
+shortcut actions and 5,358 design tokens. The shell had 13 pages, no way to find
+a setting by its own name, and no record of what it had decided about any of the
+rest. This session built the two things that make that inventory usable instead
+of overwhelming: a registry the shell resolves through, and a ledger the build
+fails on.
+
+### What changed
+
+| Area | Before | After |
+|---|---|---|
+| finding a setting | the launcher search could reach a **page** ("Accessibility") and never a **row** ("reduce motion") | every stored preference is a registered row, and the search reaches it by title, synonym or page |
+| addressing a setting | none | `litric://settings/<page>/<key>` resolves through the registry, in the search field and in code |
+| appearance | light / dark / high-contrast, chosen by hand | plus an automatic schedule: dark 19:00–07:00 local, light otherwise, re-resolved on every tick and never persisted as a theme |
+| the store and the UI | could drift: a key written by `prefstore::encode` and offered by no control | a two-way test fails if either side gains a key the other does not have |
+| decisions about the research | prose in a plan | `docs/parity/ledger.csv` — 41 rows, machine-checked |
+
+### The rules the ledger is held to
+
+`ci/lint-parity.py` fails the build when a row cites a `PENDING` research item,
+when an `ADOPT`/`ADAPT` row names no backend (`none`), when an `ADAPT`/`REJECT`/
+`DEFER` row's justification is shorter than 40 characters, when the evidence
+cannot be opened (a `STATIC` path that does not exist, a `UNIT` test name that
+is not a `fn` in the tree), when a `store_key` is not a key the preference store
+writes, or when an item appears twice. Its self-test proves it fails on all 16 of
+those forms and accepts 5 valid ones.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test -p litric-shell` | lib **486 passed** (484 before; 2 new), bin 32, other targets unchanged — **547 total, 0 failed** |
+| `cargo clippy -p litric-shell --all-targets` | clean |
+| `cargo fmt -p litric-shell` | applied, then clean |
+| `python3 ci/lint-parity.py` | 41 rows: 20 `ADAPT`, 17 `DEFER`, 4 `ADOPT`, 0 problems |
+| `python3 ci/lint-parity.py --self-test` | 16 defects caught, 5 valid forms accepted |
+| `python3 ci/lint-doc-refs.py` | 629 citations across 133 documents resolve |
+| `bash ci/verify.sh` | **28 pass, 0 fail, 4 skipped** (the four skips are golden frames, image build, boot and idle: no Latin face, no `mkosi`, no QEMU) |
+
+The two new shell tests:
+
+| Test | What it would catch |
+|---|---|
+| `the_appearance_schedule_follows_the_clock_and_nothing_else` | a schedule that ignores the clock, one that moves a manual theme, or an off-by-one at 07:00/19:00 |
+| `opening_a_setting_row_from_search_lands_on_its_page_with_the_row_focused` | a search hit that opens the wrong page, or a highlight that outlives its link |
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the schedule looks right at dusk on a real screen | the test sets the clock; no booted image has been left running across 19:00 |
+| that the deep link works from another program | the resolver and the search field are tested; nothing in the image registers a handler for the scheme yet |
+| that the 41 ledger rows are *complete* | they are the surfaces this shell owns today plus the ones the plan reaches first. 193 research items are still `PENDING` and may not be cited at all |
+| that any `ADAPT` row behaves as its justification says | the linter checks that a backend is named and that the evidence opens. It cannot read the backend |
+
+### Rollback
+
+Revert this commit. The Appearance page loses its schedule row, the search goes
+back to finding pages rather than settings, `litric://settings/...` stops
+resolving, `theme_schedule` disappears from the record (older builds ignore an
+unknown key, so a downgrade is safe), and `ci/lint-parity.py` and
+`docs/parity/` are removed. The three corrected gate-matrix rows revert with it.

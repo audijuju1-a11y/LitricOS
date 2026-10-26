@@ -109,6 +109,11 @@ pub fn parse(text: &str, defaults: Preferences) -> Preferences {
                     preferences.reduce_motion = enabled;
                 }
             }
+            "theme_schedule" => {
+                if let Some(schedule) = crate::settings::ThemeSchedule::parse(value) {
+                    preferences.theme_schedule = schedule;
+                }
+            }
             "onboarded" => {
                 if let Some(done) = parse_bool(value) {
                     preferences.onboarded = done;
@@ -156,6 +161,9 @@ pub fn encode(preferences: Preferences) -> String {
     out.push('\n');
     out.push_str("reduce_motion=");
     out.push_str(if preferences.reduce_motion { "1" } else { "0" });
+    out.push('\n');
+    out.push_str("theme_schedule=");
+    out.push_str(preferences.theme_schedule.token());
     out.push('\n');
     out.push_str("onboarded=");
     out.push_str(if preferences.onboarded { "1" } else { "0" });
@@ -297,6 +305,26 @@ mod tests {
     }
 
     #[test]
+    fn the_schedule_round_trips_and_an_unknown_one_keeps_the_default() {
+        use crate::settings::ThemeSchedule;
+
+        let preferences = Preferences {
+            theme_schedule: ThemeSchedule::Auto,
+            ..Preferences::default()
+        };
+        let text = encode(preferences);
+        assert!(text.contains("theme_schedule=auto"), "{text}");
+        assert_eq!(
+            parse(&text, Preferences::default()).theme_schedule,
+            ThemeSchedule::Auto
+        );
+        // A file from a build that knows a third value must not reset the
+        // record, and must not silently become the wrong schedule.
+        let parsed = parse("theme_schedule=sunrise\n", Preferences::default());
+        assert_eq!(parsed.theme_schedule, ThemeSchedule::Manual);
+    }
+
+    #[test]
     fn an_absent_file_is_not_an_error_and_a_present_one_counts_as_set_up() {
         let path = fixture("absent");
         let store = Store::new(&path);
@@ -411,6 +439,7 @@ mod tests {
             "language=",
             "reduce_motion=",
             "onboarded=",
+            "theme_schedule=",
         ] {
             assert!(text.contains(key), "the record omits {key}: {text}");
         }

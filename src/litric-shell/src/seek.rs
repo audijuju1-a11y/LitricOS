@@ -33,6 +33,9 @@ pub enum Hit {
     Action(Action),
     /// Open a Settings page.
     Setting(Page),
+    /// Open a Settings page with one row focused. The row is the registry's
+    /// own entry, so the result cannot name a setting the shell does not own.
+    SettingRow(&'static crate::registry::Entry),
     /// Bring a window to the user.
     Window(WindowId),
 }
@@ -99,6 +102,31 @@ pub fn search(shell: &Shell, query: &str) -> Vec<Result> {
     }
     let mut out: Vec<Result> = Vec::new();
 
+    // A settings address typed into the field is an address, not a search: the
+    // user has written down exactly what they want and the result list must
+    // not offer them a page with a similar name instead. It resolves to the
+    // same row the rest of the shell opens, so there is one way in.
+    if let Some(target) = crate::registry::resolve(query) {
+        let (title, detail) = match target.row {
+            Some(entry) => (
+                entry.title.to_owned(),
+                format!("Settings  ·  {}", entry.page.title()),
+            ),
+            None => (target.page.title().to_owned(), "Settings".to_owned()),
+        };
+        return vec![Result {
+            hit: match target.row {
+                Some(entry) => Hit::SettingRow(entry),
+                None => Hit::Setting(target.page),
+            },
+            score: u32::MAX,
+            rank: (0, title.to_lowercase()),
+            title,
+            detail,
+            key: None,
+        }];
+    }
+
     // Applications are ranked by their own search, which knows their
     // descriptions -- a result the user cannot name is still findable by what
     // it does.
@@ -128,6 +156,25 @@ pub fn search(shell: &Shell, query: &str) -> Vec<Result> {
             None,
             1,
             60,
+            query,
+        ) {
+            out.push(result);
+        }
+    }
+
+    // The rows inside those pages. Before the registry existed the field could
+    // reach "Accessibility" and never "reduce motion", which is the name the
+    // user actually has for the thing they are looking for. A row ranks beside
+    // its page rather than below it, and slightly higher, because a row is the
+    // more precise answer.
+    for entry in crate::registry::all() {
+        if let Some(result) = scored(
+            Hit::SettingRow(entry),
+            entry.title,
+            format!("Settings  ·  {}", entry.page.title()),
+            None,
+            1,
+            65,
             query,
         ) {
             out.push(result);
@@ -289,6 +336,43 @@ mod tests {
                 .any(|r| matches!(r.hit, Hit::Setting(Page::Bluetooth))),
             "{results:?}"
         );
+    }
+
+    #[test]
+    fn a_setting_row_is_reachable_by_a_word_its_page_does_not_use() {
+        // "reduce motion" appears on no page title; before the registry it
+        // could not be found at all, and the user had to guess that it lived
+        // under Accessibility.
+        let s = shell();
+        let results = search(&s, "reduce motion");
+        assert!(
+            results.iter().any(|r| matches!(
+                r.hit,
+                Hit::SettingRow(entry) if entry.key == "reduce_motion"
+            )),
+            "{results:?}"
+        );
+    }
+
+    #[test]
+    fn a_typed_settings_link_opens_that_row_and_nothing_else() {
+        let s = shell();
+        let results = search(&s, "litric://settings/appearance/theme");
+        assert_eq!(results.len(), 1, "{results:?}");
+        let hit = results.first().map(|r| r.hit);
+        assert!(
+            matches!(hit, Some(Hit::SettingRow(entry)) if entry.page == Page::Appearance),
+            "{hit:?}"
+        );
+    }
+
+    #[test]
+    fn a_broken_settings_link_is_searched_for_like_any_other_text() {
+        // A link to a row this build does not have must not open the nearest
+        // page: the field falls back to text, which produces an empty list
+        // rather than the wrong screen.
+        let s = shell();
+        assert!(search(&s, "litric://settings/appearance/nope").is_empty());
     }
 
     #[test]

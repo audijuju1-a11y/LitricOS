@@ -396,6 +396,8 @@ pub enum Hot {
     SettingsAccent,
     /// Cycle the wallpaper choices.
     SettingsWallpaper,
+    /// Switch the appearance schedule between manual and automatic.
+    SettingsSchedule,
     /// Toggle reduced motion in the shell.
     SettingsMotion,
     /// Finish first-run setup and show the desktop.
@@ -2519,18 +2521,46 @@ pub const BOOT_WRITE_MS: u64 = 1_900;
 /// One function rather than three call sites doing it themselves, so loading,
 /// applying and rolling back a preference cannot disagree about what the
 /// accent means.
-fn resolved_theme(preferences: crate::settings::Preferences) -> litric_design::Theme {
-    litric_design::Theme::of(preferences.theme).with_accent(preferences.accent)
+fn resolved_theme(preferences: crate::settings::Preferences, hour: u8) -> litric_design::Theme {
+    let kind = preferences
+        .theme_schedule
+        .effective(preferences.theme, hour);
+    litric_design::Theme::of(kind).with_accent(preferences.accent)
 }
 
 impl Shell {
     /// Replace startup defaults with a validated preference record.
     pub fn load_preferences(&mut self, preferences: crate::settings::Preferences) {
         self.settings = crate::settings::Model::new(preferences);
-        self.tokens.theme = resolved_theme(preferences);
+        self.tokens.theme = resolved_theme(preferences, self.local_hour());
         self.quick.reduce_motion = preferences.reduce_motion;
         self.browser.engine = preferences.search_engine;
         self.request_full_redraw();
+    }
+
+    /// The local hour, which is what an appearance schedule is written against.
+    #[must_use]
+    pub fn local_hour(&self) -> u8 {
+        self.regional.local(self.clock_seconds()).hour
+    }
+
+    /// Follow the clock into or out of the dark, when the user asked for it.
+    ///
+    /// Called from [`Self::tick`], the only place that knows time moved.
+    /// Nothing is persisted: the schedule is a rule and the hour is read again
+    /// on the next tick, so a power cut at 18:59 still comes back light and one
+    /// at 19:01 comes back dark without writing to disk.
+    fn follow_schedule(&mut self) {
+        if self.settings.preferences.theme_schedule != crate::settings::ThemeSchedule::Auto {
+            return;
+        }
+        let theme = resolved_theme(self.settings.preferences, self.local_hour());
+        if theme.kind != self.tokens.theme.kind {
+            self.tokens.theme = theme;
+            // Wallpaper, glass alphas and every text role resolve from the
+            // theme, so this is a whole-screen change rather than a panel's.
+            self.request_full_redraw();
+        }
     }
 
     /// Begin a shell-owned preference update and return its persistence effect.
@@ -2538,7 +2568,7 @@ impl Shell {
         let Some(next) = self.settings.begin(preferences) else {
             return Vec::new();
         };
-        self.tokens.theme = resolved_theme(next);
+        self.tokens.theme = resolved_theme(next, self.local_hour());
         self.quick.reduce_motion = next.reduce_motion;
         self.browser.engine = next.search_engine;
         self.request_full_redraw();
@@ -2550,7 +2580,7 @@ impl Shell {
     pub fn finish_preferences_save(&mut self, result: Result<(), String>) {
         self.settings.finish(result);
         let preferences = self.settings.preferences;
-        self.tokens.theme = resolved_theme(preferences);
+        self.tokens.theme = resolved_theme(preferences, self.local_hour());
         self.quick.reduce_motion = preferences.reduce_motion;
         self.request_full_redraw();
     }
@@ -2578,6 +2608,32 @@ impl Shell {
         let mut next = self.settings.preferences;
         next.theme = theme;
         self.save_preferences(next)
+    }
+
+    /// Switch the appearance schedule on or off.
+    ///
+    /// Turning it on does not change what is on screen immediately: the theme
+    /// is re-resolved from the clock by the next tick, through the same
+    /// `resolved_theme` every other path uses. That is deliberate — a toggle
+    /// that jumped the screen into dark the moment it was pressed would look
+    /// like a theme change rather than a schedule, and the user would not know
+    /// which of the two they had just done.
+    fn cycle_theme_schedule(&mut self) -> Vec<Effect> {
+        use crate::settings::ThemeSchedule;
+        let schedules = ThemeSchedule::all();
+        let next = schedules
+            .iter()
+            .position(|schedule| *schedule == self.settings.preferences.theme_schedule)
+            .and_then(|index| schedules.get(index.saturating_add(1)).copied())
+            .or_else(|| schedules.first().copied());
+        let Some(schedule) = next else {
+            return Vec::new();
+        };
+        let mut preferences = self.settings.preferences;
+        preferences.theme_schedule = schedule;
+        let effects = self.save_preferences(preferences);
+        self.follow_schedule();
+        effects
     }
 
     /// Step to the next accent choice. The cycle starts at the theme's own
@@ -3619,6 +3675,9 @@ impl Shell {
     /// Move time forward without any input, for the idle timers and the clock.
     pub fn tick(&mut self, now_ms: u64) {
         self.set_now(now_ms);
+        // An appearance schedule is time passing, so it belongs here rather
+        // than in a timer of its own: the shell already wakes for the clock.
+        self.follow_schedule();
         // The intro repaints every tick while it plays, and once more when it
         // ends so the desktop comes back without waiting for input.
         if self.boot_started_ms.is_some() {
@@ -5087,6 +5146,10 @@ impl Shell {
             Hot::SettingsCategory(index) => {
                 if let Some(page) = crate::settings::Page::from_index(index) {
                     self.settings.page = page;
+                    // A deep link's highlight belongs to the page it named. A
+                    // user who navigates away has moved on, and a ring around a
+                    // row they did not ask for is noise on the next page.
+                    self.settings.focus = None;
                 }
                 Vec::new()
             }
@@ -5094,6 +5157,7 @@ impl Shell {
             Hot::SettingsTheme => self.cycle_theme(),
             Hot::SettingsAccent => self.cycle_accent(),
             Hot::SettingsWallpaper => self.cycle_wallpaper(),
+            Hot::SettingsSchedule => self.cycle_theme_schedule(),
             Hot::SettingsMotion => self.toggle_reduced_motion(),
             Hot::SetupDone => self.finish_first_run(),
             // The dock and the launcher it becomes.
@@ -5758,6 +5822,12 @@ impl Shell {
             crate::seek::Hit::Action(action) => self.perform(action),
             crate::seek::Hit::Setting(page) => {
                 self.settings.page = page;
+                self.settings.focus = None;
+                self.open_app(App::Settings)
+            }
+            crate::seek::Hit::SettingRow(entry) => {
+                self.settings.page = entry.page;
+                self.settings.focus = Some(entry.key);
                 self.open_app(App::Settings)
             }
             crate::seek::Hit::Window(id) => {
@@ -6280,7 +6350,8 @@ mod tests {
             crate::settings::Preferences::new(ThemeKind::Dark, crate::i18n::Language::English);
         preferences.accent = litric_design::Accent::Violet;
 
-        let dark = resolved_theme(preferences);
+        // Noon, so the schedule cannot be what produced the dark theme.
+        let dark = resolved_theme(preferences, 12);
         assert_ne!(
             dark.palette.accent,
             Theme::of(ThemeKind::Dark).palette.accent
@@ -6288,7 +6359,7 @@ mod tests {
         assert!(dark.palette.on_accent.contrast(dark.palette.accent) >= 4.5);
 
         preferences.theme = ThemeKind::Light;
-        let light = resolved_theme(preferences);
+        let light = resolved_theme(preferences, 12);
         assert_ne!(
             light.palette.accent,
             Theme::of(ThemeKind::Light).palette.accent,
@@ -6299,12 +6370,64 @@ mod tests {
         for kind in [ThemeKind::HighContrastDark, ThemeKind::HighContrastLight] {
             preferences.theme = kind;
             assert_eq!(
-                resolved_theme(preferences),
+                resolved_theme(preferences, 12),
                 Theme::of(kind),
                 "{}: a high-contrast theme must keep its own accent",
                 kind.token()
             );
         }
+    }
+
+    #[test]
+    fn the_appearance_schedule_follows_the_clock_and_nothing_else() {
+        // 2000-01-01 in UTC, which is the zone the test locale falls back to.
+        const NOON_MS: u64 = 946_728_000_000;
+        const NIGHT_MS: u64 = 946_767_600_000;
+
+        let preferences = crate::settings::Preferences {
+            theme: ThemeKind::Light,
+            theme_schedule: crate::settings::ThemeSchedule::Auto,
+            ..crate::settings::Preferences::default()
+        };
+
+        let mut scheduled = shell();
+        scheduled.load_preferences(preferences);
+        scheduled.tick(NOON_MS);
+        assert_eq!(
+            scheduled.tokens.theme.kind,
+            ThemeKind::Light,
+            "noon is light under an automatic schedule"
+        );
+        scheduled.tick(NIGHT_MS);
+        assert_eq!(
+            scheduled.tokens.theme.kind,
+            ThemeKind::Dark,
+            "23:00 is dark under an automatic schedule"
+        );
+
+        // Without the schedule the clock is not consulted at all, so a manual
+        // light theme stays light at midnight.
+        let mut manual = shell();
+        manual.load_preferences(crate::settings::Preferences {
+            theme_schedule: crate::settings::ThemeSchedule::Manual,
+            ..preferences
+        });
+        manual.tick(NIGHT_MS);
+        assert_eq!(manual.tokens.theme.kind, ThemeKind::Light);
+    }
+
+    #[test]
+    fn opening_a_setting_row_from_search_lands_on_its_page_with_the_row_focused() {
+        let mut s = shell();
+        let entry = crate::registry::find("reduce_motion").expect("reduce_motion is registered");
+        s.seek_open(crate::seek::Hit::SettingRow(entry));
+        assert_eq!(s.settings.page, crate::settings::Page::Accessibility);
+        assert_eq!(s.settings.focus, Some("reduce_motion"));
+
+        // Choosing a category by hand clears the highlight: the ring belongs to
+        // the link, not to the page.
+        s.activate(Hot::SettingsCategory(0));
+        assert_eq!(s.settings.focus, None);
     }
 
     #[test]

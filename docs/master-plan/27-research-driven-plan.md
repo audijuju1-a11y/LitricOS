@@ -342,6 +342,19 @@ its checklist status is final and its rows carry evidence tiers.
    accent from wallpaper, theme schedule, dock size/position — every row recorded
    in the ledger with its store key and test.
 
+### 9.1 What has landed since this plan was written
+
+| Session | State | Where |
+|---|---|---|
+| 1 — ledger and checker | **done** (2026-10-26): 41 seeded rows, `ci/lint-parity.py` with a 16-case self-test, wired into `ci/verify.sh`; the three stale gate-matrix rows corrected | `docs/parity/ledger.csv`, `ci/lint-parity.py` |
+| 2 — registry, search, deep links | **done**: 7 rows, a two-way test against the store, `litric://settings/<page>/<key>`, and the launcher search reaches rows as well as pages | `src/litric-shell/src/registry.rs` |
+| 3 — appearance family | **partial**: the automatic light/dark schedule is in (`theme_schedule`, resolved on every tick); wallpaper sources, slideshow, accent-from-wallpaper and dock size remain `DEFER` in the ledger | `src/litric-shell/src/settings.rs` |
+
+Session 3 is partial on purpose: the three rows it deferred are deferred for a
+reason the ledger records, not because there was no time. Slideshow and
+per-monitor wallpaper need an image decoder and a monitor model; dock geometry is
+one measured strip inside the layout pass.
+
 ## 10. What this plan refuses to do
 
 - It does not declare parity with Windows or macOS. It uses them as evidence of

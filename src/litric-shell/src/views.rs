@@ -2500,14 +2500,24 @@ fn settings_icon(page: crate::settings::Page) -> Icon {
     }
 }
 
+/// One editable row on a Settings page: the store key it changes, the words on
+/// the button, and the hotspot that presses it.
+struct SettingRow<'a> {
+    /// The `settings.conf` key, compared against a deep link's focus.
+    key: &'static str,
+    /// The button's text.
+    label: &'a str,
+    /// What clicking it does.
+    hot: Hot,
+}
+
 fn settings_button(
     canvas: &mut Canvas,
     shell: &mut Shell,
     t: &Tokens,
     pane: Rect,
     y: f32,
-    label: &str,
-    hot: Hot,
+    row: SettingRow<'_>,
 ) {
     let r = Rect::new(
         pane.x + t.sp(Space::Lg),
@@ -2515,8 +2525,15 @@ fn settings_button(
         (pane.w - t.sp(Space::Lg) * 2.0).min(t.px(230.0)),
         t.px(30.0),
     );
-    ui::button(canvas, t, r, label, State::Normal, Tone::Accent);
-    shell.hotspots_mut().push(r, hot);
+    // A row a `litric://settings/<page>/<key>` link named is marked with a ring
+    // rather than a different fill: the accent fill already means "this is a
+    // control", and a second fill would read as a different kind of control.
+    let focused = shell.settings.focus == Some(row.key);
+    ui::button(canvas, t, r, row.label, State::Normal, Tone::Accent);
+    if focused {
+        canvas.stroke_round_rect(r, t.radius(Radius::Sm), t.px(2.0), t.text());
+    }
+    shell.hotspots_mut().push(r, row.hot);
 }
 
 fn settings_rows(canvas: &mut Canvas, t: &Tokens, pane: Rect, rows: &[(String, String)]) {
@@ -2559,7 +2576,18 @@ fn draw_settings_page(
         Page::Appearance => {
             let theme = shell.settings.preferences.theme;
             let label = format!("{} · {}", "Change theme", theme_name(theme));
-            settings_button(canvas, shell, t, pane, y, &label, Hot::SettingsTheme);
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SettingRow {
+                    key: "theme",
+                    label: &label,
+                    hot: Hot::SettingsTheme,
+                },
+            );
             y += t.px(40.0);
             // The accent is a preference about decoration, never about
             // contrast: a high-contrast theme keeps its own accent and the row
@@ -2579,8 +2607,11 @@ fn draw_settings_page(
                 t,
                 pane,
                 y,
-                &accent_label,
-                Hot::SettingsAccent,
+                SettingRow {
+                    key: "accent",
+                    label: &accent_label,
+                    hot: Hot::SettingsAccent,
+                },
             );
             y += t.px(40.0);
             let wallpaper_label = format!(
@@ -2594,8 +2625,11 @@ fn draw_settings_page(
                 t,
                 pane,
                 y,
-                &wallpaper_label,
-                Hot::SettingsWallpaper,
+                SettingRow {
+                    key: "wallpaper",
+                    label: &wallpaper_label,
+                    hot: Hot::SettingsWallpaper,
+                },
             );
             y += t.px(40.0);
             // `label` rather than `title`: a language offered under its own
@@ -2608,7 +2642,52 @@ fn draw_settings_page(
                 "Change language",
                 shell.settings.preferences.language.label()
             );
-            settings_button(canvas, shell, t, pane, y, &label, Hot::SettingsLanguage);
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SettingRow {
+                    key: "language",
+                    label: &label,
+                    hot: Hot::SettingsLanguage,
+                },
+            );
+            y += t.px(40.0);
+            // The schedule is its own row rather than a fourth theme: it
+            // answers "when", and the theme row answers "which". The detail
+            // line under it is the same `effective` call the shell makes when it
+            // paints, so the sentence cannot outlive the behaviour.
+            let label = format!(
+                "{} · {}",
+                "Automatic light and dark",
+                shell.settings.preferences.theme_schedule.title()
+            );
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SettingRow {
+                    key: "theme_schedule",
+                    label: &label,
+                    hot: Hot::SettingsSchedule,
+                },
+            );
+            if shell.settings.preferences.theme_schedule == crate::settings::ThemeSchedule::Auto {
+                let hour = shell.local_hour();
+                let detail = crate::registry::schedule_detail(&shell.settings.preferences, hour);
+                let style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+                font::draw(
+                    canvas,
+                    &detail,
+                    pane.x + t.sp(Space::Lg),
+                    y + t.px(42.0),
+                    &style,
+                );
+            }
         }
         Page::Display => {
             settings_rows(
@@ -2804,7 +2883,18 @@ fn draw_settings_page(
                     "Off"
                 }
             );
-            settings_button(canvas, shell, t, pane, y, &label, Hot::SettingsMotion);
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SettingRow {
+                    key: "reduce_motion",
+                    label: &label,
+                    hot: Hot::SettingsMotion,
+                },
+            );
             y += t.px(42.0);
             let note = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
             font::draw(
@@ -3653,6 +3743,7 @@ fn launcher_rows(
         let icon = match result.hit {
             crate::seek::Hit::App(app) => icon_for(app),
             crate::seek::Hit::Setting(page) => settings_icon(page),
+            crate::seek::Hit::SettingRow(entry) => settings_icon(entry.page),
             crate::seek::Hit::Window(_) => Icon::Window,
             crate::seek::Hit::Action(_) => Icon::Search,
         };

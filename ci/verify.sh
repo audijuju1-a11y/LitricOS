@@ -175,6 +175,23 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
+echo "[3d2] Parity ledger"
+# ---------------------------------------------------------------------------
+# The ledger is the only place a "we support X" claim may come from, so it is
+# checked like the evidence it stands in for: a row that adopts a behaviour must
+# name the backend that makes it work, and a row that defers must say what is
+# blocking it. A ledger nobody validates is a wish list with columns.
+if [[ -n "$PY" ]]; then
+    check "every parity row is sourced, backed and evidenced" \
+        "$PY" ci/lint-parity.py
+    check "parity linter detects an inert row" \
+        "$PY" ci/lint-parity.py --self-test
+else
+    skip "parity ledger" "no python interpreter on PATH"
+fi
+
+# ---------------------------------------------------------------------------
+echo
 echo "[3e] Memory budget (static policy presence)"
 # ---------------------------------------------------------------------------
 # Checks the ledger against the units in image/mkosi.extra. It cannot measure

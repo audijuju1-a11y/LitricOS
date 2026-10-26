@@ -2,6 +2,89 @@
 
 use litric_design::{Accent, ThemeKind};
 
+/// When the shell follows the clock instead of the chosen theme.
+///
+/// Both reference desktops that the research corpus catalogues offer this as a
+/// third value beside light and dark (`MD.11` Appearance › Auto, `WB.04.03`),
+/// and it is the one appearance behaviour that a desk-bound user notices
+/// without opening Settings: the screen dims in the evening on its own.
+///
+/// It is a separate key rather than a fourth [`ThemeKind`] because it answers a
+/// different question. `theme` is *which* look, `theme_schedule` is *when* — and
+/// the user who turns the schedule off must get the look they chose back, not
+/// the one the clock last picked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemeSchedule {
+    /// Use the chosen theme at every hour. The default: a desktop that changes
+    /// appearance overnight without being asked is a surprise, not a feature.
+    #[default]
+    Manual,
+    /// Dark from 19:00 to 07:00 local time, light otherwise.
+    Auto,
+}
+
+/// The hour the automatic schedule turns dark, local time, inclusive.
+pub const DARK_FROM_HOUR: u8 = 19;
+
+/// The hour the automatic schedule turns light again, local time, inclusive.
+pub const LIGHT_FROM_HOUR: u8 = 7;
+
+impl ThemeSchedule {
+    /// Both values, in the order the settings row steps through them.
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &[Self::Manual, Self::Auto]
+    }
+
+    /// Stable token, written to the preference file.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Auto => "auto",
+        }
+    }
+
+    /// Parse a stored token; `None` for anything this build does not know, so a
+    /// file from a newer build keeps the caller's default.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        Self::all().iter().copied().find(|s| s.token() == raw)
+    }
+
+    /// The name shown on the Appearance row.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Manual => "Manual",
+            Self::Auto => "Automatic",
+        }
+    }
+
+    /// The theme to paint at `hour` local time.
+    ///
+    /// High-contrast themes are left alone. Auto picks between dark and light,
+    /// and a user who chose a high-contrast theme chose contrast over
+    /// appearance; silently swapping it for a standard theme at 19:00 would
+    /// remove the accessibility setting they came for.
+    #[must_use]
+    pub const fn effective(self, chosen: ThemeKind, hour: u8) -> ThemeKind {
+        match self {
+            Self::Manual => chosen,
+            Self::Auto => {
+                if chosen.requires_aaa() {
+                    chosen
+                } else if hour >= DARK_FROM_HOUR || hour < LIGHT_FROM_HOUR {
+                    ThemeKind::Dark
+                } else {
+                    ThemeKind::Light
+                }
+            }
+        }
+    }
+}
+
 use crate::apps::SearchEngine;
 use crate::desktop::Wallpaper;
 use crate::i18n::Language;
@@ -23,6 +106,8 @@ pub struct Preferences {
     /// Whether first-run setup has finished. Until it has, the desktop shows the
     /// setup screen instead of the desktop.
     pub onboarded: bool,
+    /// Whether `theme` follows the clock. See [`ThemeSchedule`].
+    pub theme_schedule: ThemeSchedule,
     /// The engine the omnibox searches with.
     ///
     /// Here rather than in `browser-data.conf` because it is a preference, not
@@ -44,6 +129,7 @@ impl Preferences {
             language,
             reduce_motion: false,
             onboarded: true,
+            theme_schedule: ThemeSchedule::Manual,
             search_engine: SearchEngine::Google,
         }
     }
@@ -125,6 +211,40 @@ impl Page {
     pub fn from_index(index: u8) -> Option<Self> {
         Self::ALL.get(usize::from(index)).copied()
     }
+
+    /// The lower-case name this page answers to in a `litric://settings/` link.
+    ///
+    /// A path segment, so it is lower case, hyphen-free for the single-word
+    /// pages that exist today, and stable: changing one breaks every link a
+    /// person has written down or bookmarked.
+    #[must_use]
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Appearance => "appearance",
+            Self::Display => "display",
+            Self::Input => "input",
+            Self::Network => "network",
+            Self::Bluetooth => "bluetooth",
+            Self::Power => "power",
+            Self::Region => "region",
+            Self::Environments => "environments",
+            Self::Accessibility => "accessibility",
+            Self::Sound => "sound",
+            Self::Privacy => "privacy",
+            Self::Accounts => "accounts",
+            Self::Diagnostics => "diagnostics",
+        }
+    }
+
+    /// The page a link names, or `None` when it names no page this build has.
+    #[must_use]
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        let slug = slug.trim();
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|page| page.slug().eq_ignore_ascii_case(slug))
+    }
 }
 
 /// Result state shown while applying a shell-owned preference.
@@ -150,6 +270,12 @@ pub struct Model {
     pub page: Page,
     /// Last apply/persist state.
     pub save: SaveState,
+    /// The store key a deep link asked to highlight, until the user moves.
+    ///
+    /// Not persisted: it is where a link pointed, not a preference. Held as the
+    /// key rather than the row so nothing here borrows from the registry's
+    /// static table and nothing can outlive it.
+    pub focus: Option<&'static str>,
     previous: Option<Preferences>,
 }
 
@@ -167,6 +293,7 @@ impl Model {
             preferences,
             page: Page::Display,
             save: SaveState::Idle,
+            focus: None,
             previous: None,
         }
     }
@@ -213,5 +340,74 @@ mod tests {
             Preferences::new(ThemeKind::Dark, Language::Thai)
         );
         assert!(matches!(model.save, SaveState::Failed(_)));
+    }
+
+    #[test]
+    fn the_schedule_switches_at_the_hours_the_row_promises() {
+        use ThemeKind;
+        // The boundaries are inclusive at the start and exclusive at the end, so
+        // 19:00 is dark and 07:00 is light. An off-by-one here is a screen that
+        // turns over an hour late, which nobody would notice and nobody could
+        // explain.
+        for (hour, expected) in [
+            (LIGHT_FROM_HOUR, ThemeKind::Light),
+            (12, ThemeKind::Light),
+            (DARK_FROM_HOUR.saturating_sub(1), ThemeKind::Light),
+            (DARK_FROM_HOUR, ThemeKind::Dark),
+            (23, ThemeKind::Dark),
+            (0, ThemeKind::Dark),
+            (LIGHT_FROM_HOUR.saturating_sub(1), ThemeKind::Dark),
+        ] {
+            assert_eq!(
+                ThemeSchedule::Auto.effective(ThemeKind::Light, hour),
+                expected,
+                "hour {hour}"
+            );
+        }
+    }
+
+    #[test]
+    fn manual_keeps_the_chosen_theme_at_every_hour() {
+        for hour in 0..24u8 {
+            assert_eq!(
+                ThemeSchedule::Manual.effective(ThemeKind::Light, hour),
+                ThemeKind::Light
+            );
+            assert_eq!(
+                ThemeSchedule::Manual.effective(ThemeKind::Dark, hour),
+                ThemeKind::Dark
+            );
+        }
+    }
+
+    #[test]
+    fn the_schedule_leaves_a_high_contrast_theme_alone() {
+        // Auto picks dark or light. A user who chose a contrast theme chose
+        // contrast, and swapping it for a standard theme at 19:00 would take
+        // their accessibility setting away without asking.
+        for hour in [0u8, 8, 12, 19, 23] {
+            for theme in [ThemeKind::HighContrastDark, ThemeKind::HighContrastLight] {
+                assert_eq!(ThemeSchedule::Auto.effective(theme, hour), theme);
+            }
+        }
+    }
+
+    #[test]
+    fn the_schedule_tokens_round_trip_and_unknown_ones_are_refused() {
+        for schedule in ThemeSchedule::all() {
+            assert_eq!(ThemeSchedule::parse(schedule.token()), Some(*schedule));
+        }
+        assert_eq!(ThemeSchedule::parse("sometimes"), None);
+        assert_eq!(ThemeSchedule::parse(""), None);
+        assert_eq!(ThemeSchedule::parse("  auto  "), Some(ThemeSchedule::Auto));
+    }
+
+    #[test]
+    fn a_page_slug_is_the_page_whatever_its_case() {
+        for page in Page::ALL {
+            assert_eq!(Page::from_slug(page.slug()), Some(page));
+            assert_eq!(Page::from_slug(&page.slug().to_uppercase()), Some(page));
+        }
+        assert_eq!(Page::from_slug("nonsense"), None);
     }
 }
