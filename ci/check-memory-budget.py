@@ -91,6 +91,7 @@ COMPONENT_UNITS = {
     "litric-aid": ["litric-ai.slice"],
     "litric-sysd": ["litric-sysd.service"],
     "litric-envd": ["litric-envd.service"],
+    "litric-notifyd": ["litric-notifyd.service"],
     "journald": ["systemd-journald.service"],
     "udevd": ["systemd-udevd.service"],
     "dbus-broker": ["dbus-broker.service"],

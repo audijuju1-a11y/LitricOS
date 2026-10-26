@@ -519,6 +519,55 @@ impl Notifications {
         id
     }
 
+    /// Adopt a notification that was queued before this process started.
+    ///
+    /// The timestamps come from the queue rather than from now: a note posted
+    /// twenty minutes ago must not claim to have just arrived. One whose lifetime
+    /// ran out while the shell was down is refused here as well as in the
+    /// daemon's own expiry, because "the daemon said it was fine a moment ago" is
+    /// not the same as "it is still worth showing now".
+    ///
+    /// Adoption never raises a banner: it goes into the centre. A desktop that
+    /// interrupts with everything it missed while it was off trains people to
+    /// dismiss without reading, which is the opposite of what a notification
+    /// centre is for.
+    pub fn adopt(&mut self, note: &litric_notifyd::proto::Note, now_ms: u64) -> Option<u32> {
+        if note.expires_ms.is_some_and(|at| at <= now_ms) {
+            return None;
+        }
+        // A queue that hands the same note over twice — a retry after a timeout
+        // the daemon had already answered, say — must not show it twice.
+        let duplicate = self.items.iter().any(|n| {
+            n.source == note.app
+                && n.title == note.title
+                && n.body == note.body
+                && n.at_ms == note.created_ms
+        });
+        if duplicate {
+            return None;
+        }
+        let id = self.next_id.saturating_add(1);
+        self.next_id = id;
+        self.items.push_back(Notification {
+            id,
+            source: note.app.clone(),
+            title: note.title.clone(),
+            body: note.body.clone(),
+            priority: crate::inbox::priority(note.priority),
+            at_ms: note.created_ms,
+            expires_ms: note.expires_ms,
+        });
+        while self.items.len() > Self::CAPACITY {
+            let victim = self
+                .items
+                .iter()
+                .rposition(|n| n.priority != Priority::Critical)
+                .unwrap_or_else(|| self.items.len().saturating_sub(1));
+            self.items.remove(victim);
+        }
+        Some(id)
+    }
+
     /// Remove anything whose time is up. Returns how many went.
     pub fn expire(&mut self, now_ms: u64) -> usize {
         let before = self.items.len();
@@ -5857,6 +5906,29 @@ impl Shell {
         id
     }
 
+    /// Take everything `litric-notifyd` is holding into the centre.
+    ///
+    /// Returns how many were adopted, so the caller can put it in the status
+    /// file: "twelve notifications arrived while the desktop was down" is a fact
+    /// worth being able to read from outside the shell.
+    ///
+    /// The queue hands them over newest first and the centre keeps them that
+    /// way, so they are appended in the order received: newest at the front, and
+    /// any notification this process already raised stays ahead of them, where
+    /// it belongs chronologically.
+    pub fn adopt_inbox(&mut self, notes: Vec<litric_notifyd::proto::Note>) -> usize {
+        let mut adopted = 0usize;
+        for note in notes {
+            if self.notifications.adopt(&note, self.now_ms).is_some() {
+                adopted = adopted.saturating_add(1);
+            }
+        }
+        if adopted > 0 {
+            self.request_full_redraw();
+        }
+        adopted
+    }
+
     /// The current instant in seconds since the epoch, for the clock.
     #[must_use]
     pub fn clock_seconds(&self) -> i64 {
@@ -6376,6 +6448,105 @@ mod tests {
                 kind.token()
             );
         }
+    }
+
+    fn queued(
+        id: u32,
+        title: &str,
+        created_ms: u64,
+        expires_ms: Option<u64>,
+    ) -> litric_notifyd::proto::Note {
+        litric_notifyd::proto::Note {
+            id,
+            app: "com.litric.browser".to_owned(),
+            priority: litric_notifyd::proto::Priority::High,
+            title: title.to_owned(),
+            body: "detail".to_owned(),
+            created_ms,
+            expires_ms,
+        }
+    }
+
+    #[test]
+    fn a_notification_queued_while_the_desktop_was_down_arrives_with_its_own_timestamp() {
+        // The promise the daemon exists for, at the level the shell can keep: the
+        // note is in the centre, and it says when it actually happened rather
+        // than pretending it arrived at boot.
+        let mut s = shell();
+        s.tick(50_000);
+        let adopted = s.adopt_inbox(vec![queued(1, "posted while you were off", 10_000, None)]);
+        assert_eq!(adopted, 1);
+        let items = s.notifications.items();
+        let item = items
+            .first()
+            .expect("the adopted notification is in the centre");
+        assert_eq!(item.title, "posted while you were off");
+        assert_eq!(item.at_ms, 10_000, "the queue's clock, not the boot's");
+        assert_eq!(item.priority, Priority::High, "the level is carried over");
+    }
+
+    #[test]
+    fn a_notification_whose_lifetime_ran_out_while_the_desktop_was_down_is_not_shown() {
+        // A five-second toast from an hour ago is not news. The daemon expires
+        // it first, and the shell refuses it as well rather than trusting that
+        // the daemon's answer is still current.
+        let mut s = shell();
+        s.tick(50_000);
+        let adopted = s.adopt_inbox(vec![queued(1, "stale", 1_000, Some(2_000))]);
+        assert_eq!(adopted, 0);
+        assert!(s.notifications.items().is_empty());
+    }
+
+    #[test]
+    fn the_queue_is_adopted_in_the_order_it_was_posted() {
+        // TAKE hands the newest first; the centre shows the newest at the top.
+        // Adopting in the order received would reverse the conversation.
+        let mut s = shell();
+        s.tick(90_000);
+        let adopted = s.adopt_inbox(vec![
+            queued(3, "third", 3_000, None),
+            queued(2, "second", 2_000, None),
+            queued(1, "first", 1_000, None),
+        ]);
+        assert_eq!(adopted, 3);
+        let titles: Vec<&str> = s
+            .notifications
+            .items()
+            .iter()
+            .map(|n| n.title.as_str())
+            .collect();
+        assert_eq!(titles, vec!["third", "second", "first"]);
+    }
+
+    #[test]
+    fn the_same_note_handed_over_twice_is_shown_once() {
+        // A retry after a timeout the daemon had already answered must not
+        // produce two identical rows.
+        let mut s = shell();
+        s.tick(50_000);
+        assert_eq!(s.adopt_inbox(vec![queued(1, "once", 10_000, None)]), 1);
+        assert_eq!(s.adopt_inbox(vec![queued(1, "once", 10_000, None)]), 0);
+        assert_eq!(s.notifications.items().len(), 1);
+    }
+
+    #[test]
+    fn adopting_does_not_interrupt_even_when_the_note_is_critical() {
+        // Adoption is "you missed this", not "stop what you are doing". The note
+        // is in the centre either way; what it must not do is raise a banner on
+        // a desktop that has just finished drawing its first frame.
+        let mut s = shell();
+        s.tick(50_000);
+        let mut note = queued(1, "disk is full", 10_000, None);
+        note.priority = litric_notifyd::proto::Priority::Critical;
+        assert_eq!(s.adopt_inbox(vec![note]), 1);
+        assert!(
+            s.retiring_banners.is_empty(),
+            "an adopted notification must not queue a banner"
+        );
+        assert_eq!(
+            s.notifications.items().first().map(|n| n.priority),
+            Some(Priority::Critical)
+        );
     }
 
     #[test]

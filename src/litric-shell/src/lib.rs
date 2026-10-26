@@ -49,6 +49,7 @@ pub mod font;
 pub mod fsbridge;
 pub mod i18n;
 pub mod icons;
+pub mod inbox;
 pub mod link;
 pub mod lock;
 pub mod monitor;

@@ -1,0 +1,23 @@
+[package]
+name        = "litric-notifyd"
+description = "LitricOS notification queue: the record of a notification the desktop has not shown yet"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+# No third-party dependencies, for the same reason every other runtime crate has
+# none: this decides what appears on screen with an application's name on it, and
+# a daemon that accepts text from any program on the machine should be the
+# smallest surface that can accept it.
+
+[lib]
+name = "litric_notifyd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "litric-notifyd"
+path = "src/main.rs"

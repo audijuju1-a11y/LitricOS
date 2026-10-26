@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 litric-design = { path = "../litric-design" }
 litric-sysd   = { path = "../litric-sysd" }
+litric-notifyd = { path = "../litric-notifyd" }
 litric-input  = { path = "../litric-input" }
 litric-wm     = { path = "../litric-wm" }
 litric-locale = { path = "../litric-locale" }

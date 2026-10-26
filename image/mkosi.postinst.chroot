@@ -63,6 +63,9 @@ enable_unit litric-sysd.service     multi-user.target
 # goes through this daemon (ADR-0015). Enabled alongside sysd, ordered after
 # it, and useless-but-harmless until a guest disk exists.
 enable_unit litric-envd.service     multi-user.target
+# The notification queue: what a program posts while the desktop is not
+# running waits here, on disk, until the shell takes it at startup.
+enable_unit litric-notifyd.service  multi-user.target
 enable_unit litric-shell.service    multi-user.target
 enable_unit litric-drop-caches.service  multi-user.target
 # Socket-activated per connection (ADR-0018, ADR-0019): enabling the socket is

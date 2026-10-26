@@ -1447,3 +1447,69 @@ back to finding pages rather than settings, `litric://settings/...` stops
 resolving, `theme_schedule` disappears from the record (older builds ignore an
 unknown key, so a downgrade is safe), and `ci/lint-parity.py` and
 `docs/parity/` are removed. The three corrected gate-matrix rows revert with it.
+
+## 2026-10-26 — a notification queue that outlives the desktop
+
+The notification centre was honest about its limit: the queue lived in the
+compositor's memory, so everything raised while the shell was restarting — or
+before it started — was lost, and nothing could tell the user it had existed.
+This session gave it a daemon with a file. The plan is
+[ADR-0025](adr/0025-notification-queue.md); the decisions it records are in
+`docs/parity/ledger.csv` (`WA.07.01`–`WA.07.04`, `WB.01.03`, `WB.01.03.01`).
+
+### What changed
+
+| Area | Before | After |
+|---|---|---|
+| a notification raised while the shell is down | lost | queued in `/var/lib/litric-notifyd/queue.conf`, written atomically before the sender is answered |
+| where the queue lives | the compositor's heap | a daemon with its own unit, `StateDirectory`, empty capability set and no network |
+| the shell's side | nothing | `TAKE` at startup and on the 2 s facts cadence; adopted notes keep the queue's timestamps and do not raise banners |
+| expiry | a ttl in memory | converted to an absolute expiry on acceptance, so a five-second toast cannot reappear after a reboot |
+| "should this interrupt?" | one answer (the shell's DND) | still one answer: the queue has no DND flag on purpose |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace --locked` | **1492 passed, 0 failed** across 53 test binaries; `litric-notifyd` alone is 46 lib + 7 bin |
+| `cargo clippy --workspace --all-targets --locked` | clean (three warnings in the new code found and fixed: a derivable `Default`, a `drain(..).collect()`, a doubled `must_use`) |
+| `cargo fmt --all -- --check` | clean |
+| `bash ci/verify.sh` | **28 pass, 0 fail, 4 skipped** (golden frames, image build, boot, idle: no Latin face, no `mkosi`, no QEMU) |
+| `python3 ci/lint-parity.py` | 45 rows: 23 `ADAPT`, 18 `DEFER`, 4 `ADOPT`, 0 problems |
+| `python3 ci/lint-unit-binaries.py` | 17 program references, 7 resolvable, 0 broken — the new unit resolves to a real `[[bin]]` |
+| `python3 ci/check-memory-budget.py` | PASS — the unit's `MemoryMax=32M` is now in the ledger as row 17 |
+| `python3 ci/lint-file-safety.py` | PASS — the two new deletion sites (a temp file, a stale socket) are recorded with their reasons |
+
+### The binary, run on this host
+
+Not inside a booted image — there is no `mkosi` or QEMU here — but the real
+binary, its real socket and its real file:
+
+```text
+litric-notifyd --serve --socket $D/notify.sock --state $D/queue.conf &
+litric-notifyd --post --app com.litric.browser --title "Download finished" --ttl-ms 60000   -> id=1
+litric-notifyd --count                                                                    -> 1
+kill %1                                  # the desktop is not running any more
+cat $D/queue.conf                        # version=1, next_id=1, one note, absolute expires_ms
+litric-notifyd --serve ...               # litric.notifyd.queued=1
+litric-notifyd --take                    # NOTE 1 … END, count=1   (what the shell does at startup)
+litric-notifyd --take                    # count=0                 (a delivered note is not redelivered)
+```
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the unit starts and the queue survives a reboot inside the image | no `mkosi`, no QEMU. The unit is checked statically (`lint-unit-binaries`, `check-memory-budget`) and enabled in `image/mkosi.postinst.chroot`; the boot was not run |
+| that the shell adopts from a real booted daemon | the shell's side is unit-tested with real `Note` values, and the client is tested against a real socket in-process. The two have not met inside a guest |
+| that a notification arrives within the documented 2 s | the drain runs on the facts cadence and the client has a 250 ms budget; the interval was not measured on a running desktop |
+| that the memory cap is right | 32 MB is a ceiling, not a measurement. The queue is 64 notes of a few hundred bytes; nothing measured the resident set |
+| that a sender cannot flood other notifications out | the cap evicts oldest-non-critical, so a flood costs other notes rather than memory. Per-sender rate limiting belongs with the capability broker, which has no persisted grants yet (ADR-0025, "what this does not do") |
+
+### Rollback
+
+Revert this commit. The shell goes back to an in-process queue (nothing else
+depends on the daemon), `src/litric-notifyd/` and its unit disappear, the
+`litric.notifyd` lines leave the boot log, and the ledger rows go back to
+`WA.07.01`–`WA.07.04` being absent and `WB.01.03` naming only the shell. A
+`queue.conf` left behind is inert: nothing reads it once the unit is gone.

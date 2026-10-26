@@ -202,7 +202,7 @@ if command -v cargo >/dev/null 2>&1; then
     TARGET_DIR="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/src/target}"
     REQUIRE_BROWSER=0
     [[ "$PROFILE" == "desktop" || "$PROFILE" == "gaming" ]] && REQUIRE_BROWSER=1
-    for bin in litric-sysd litric-envd litric-shell litric-browserd litric-filesd litric-capd litric-defender litricctl; do
+    for bin in litric-sysd litric-notifyd litric-envd litric-shell litric-browserd litric-filesd litric-capd litric-defender litricctl; do
         src="${TARGET_DIR}/release/${bin}"
         if [[ -x "$src" ]]; then
             mkdir -p "$STAGE"

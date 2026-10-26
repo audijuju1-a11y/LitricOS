@@ -244,6 +244,33 @@ fn usable_lock_account(user: &str) -> bool {
         && !user.chars().any(char::is_control)
 }
 
+/// Take whatever the notification queue is holding into the centre.
+///
+/// `0` covers both "nothing was queued" and "no queue answered". The second case
+/// is normal — before this daemon exists, and for the second it takes to restart
+/// — and a desktop that put an error banner on screen every time a helper
+/// restarted would teach its user to dismiss banners without reading them.
+///
+/// The count goes into the status file, because "four notifications arrived while
+/// the desktop was down" is a fact that can be checked from outside the shell and
+/// a claim that cannot is one nobody should have to take on trust.
+fn drain_inbox(session: &mut Session) -> usize {
+    let Ok(notes) = litric_shell::inbox::take_default() else {
+        return 0;
+    };
+    let adopted = session.shell.adopt_inbox(notes);
+    let line = format!("inbox={adopted}");
+    match session
+        .lines
+        .iter_mut()
+        .find(|existing| existing.starts_with("inbox="))
+    {
+        Some(existing) => *existing = line,
+        None => session.lines.push(line),
+    }
+    adopted
+}
+
 /// Read the system's state, preferring the daemon and falling back to `/proc`.
 fn gather_facts(args: &Args) -> SystemFacts {
     let mut f = SystemFacts {
@@ -1730,6 +1757,20 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
         );
     }
 
+    // What was raised while the desktop was not running. Taken before the first
+    // frame, so the centre is already right when the user first opens it, and
+    // deliberately not banner-ed: six interruptions at boot is not a welcome.
+    let recovered = drain_inbox(&mut session);
+    if recovered > 0 {
+        session.shell.notify(
+            "Notifications",
+            &format!("{recovered} while you were away"),
+            "They are in the notification centre.",
+            Priority::Low,
+            Some(9_000),
+        );
+    }
+
     // The boot intro starts with the first frame, so the machine never shows
     // a black screen while the desktop is being made ready.
     session.shell.start_boot_intro(now_ms());
@@ -1831,6 +1872,12 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
             // Re-query environments periodically in case daemon was not ready at startup.
             // Always re-query and update, even if empty, to detect when daemon
             // becomes available.
+            // Third-party senders post while the desktop is running too. The
+            // same cadence as the facts keeps the cost to one local socket
+            // round trip every two seconds, bounded by the client's timeout, and
+            // keeps a notification's worst-case delay at that interval rather
+            // than at the next shell restart.
+            drain_inbox(&mut session);
             let envs = gather_environments(args);
             if session.shell.environments != envs {
                 session.shell.environments = envs;

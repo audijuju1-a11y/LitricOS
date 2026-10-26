@@ -71,6 +71,12 @@ ALLOWED = {
     "src/litric-sysd/src/server.rs": {
         "bind": "replaces a stale socket file after a symlink_metadata check; never a user path",
     },
+    "src/litric-notifyd/src/queue.rs": {
+        "save": "removes only the queue's own temporary file (queue.conf.tmp.<pid>) -- before writing, and again when the write failed -- never a queue record",
+    },
+    "src/litric-notifyd/src/server.rs": {
+        "bind": "replaces a stale socket file after a symlink_metadata check; never a user path",
+    },
     "src/litric-shell/examples/render_bench.rs": {
         "main": "removes the frame-buffer device file the benchmark created itself",
     },

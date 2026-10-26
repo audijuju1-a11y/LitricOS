@@ -1,0 +1,92 @@
+[Unit]
+Description=LitricOS notification queue
+Documentation=file:///usr/share/doc/litric/adr/0025-notification-queue.md
+
+# After basic.target, not multi-user.target. Ordering a unit after the target
+# that pulls it in is a dependency cycle, and systemd resolves it by dropping the
+# ordering: the unit stays enabled, never runs, and reports nothing. That exact
+# mistake already cost this project a session on litric-selftest.
+After=basic.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/litric-notifyd --serve --socket /run/litric/notify.sock --state /var/lib/litric-notifyd/queue.conf
+
+# The socket is a runtime object: /run is tmpfs and the whole directory is gone
+# at reboot, which is what should happen to it.
+#
+# `RuntimeDirectoryPreserve=yes` because litric-sysd, litric-shell and this unit
+# all declare /run/litric. Without it, systemd deletes the shared directory when
+# ANY of them stops, taking the others' sockets with it, and producing a shell
+# that cannot reach a daemon that is still running.
+#
+# 0700, not 0755: the Wayland socket for client applications lives in this same
+# directory, and that socket is an unauthenticated door to the compositor. The
+# strictest owner of the directory sets the mode, so this unit must not be the
+# one that widens it.
+RuntimeDirectory=litric
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+
+# The queue itself, and the only writable path this unit gets. `StateDirectory`
+# is why the promise "a notification raised while the desktop was down is still
+# there afterwards" is true across a reboot: /var is persistent, and systemd both
+# creates this directory and opens it through the ProtectSystem boundary below.
+# Nothing else is writable, so a compromised sender cannot use this daemon to
+# reach any file but its own queue.
+StateDirectory=litric-notifyd
+StateDirectoryMode=0700
+
+StandardOutput=journal+console
+StandardError=journal+console
+
+# A queue that dies on a bad request would take every future notification with
+# it. Restarting is cheap: the queue is on disk, so the worst case is that one
+# connection is dropped.
+Restart=on-failure
+RestartSec=1s
+
+# --- sandbox ---------------------------------------------------------------
+# The daemon reads one directory, writes one file, binds one Unix socket and
+# holds text in memory. It needs no capability, no device and no network, and the
+# settings below are the smallest set that still lets it do that.
+NoNewPrivileges=yes
+# Empty, with the reason recorded as PHASE-02 requires: unlike litric-sysd this
+# daemon execs no tool and sets no link, so it has nothing to justify.
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# No JIT and no generated code: the binary is ahead-of-time compiled Rust with no
+# interpreter in it, so this costs nothing and closes the usual route from a
+# memory-write primitive to code execution.
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# AF_UNIX for the socket, and nothing else. A notification transport that can
+# open an INET socket is a notification transport that can exfiltrate whatever it
+# is given; IPAddressDeny is the second lock on the same door.
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+# A queue is at most 64 notifications of a few hundred bytes. If this daemon ever
+# needs more than 32 MB it has a bug worth failing on, and failing here is louder
+# than quietly competing with the compositor for memory.
+MemoryMax=32M
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target

@@ -33,6 +33,7 @@ members = [
     # --- runtime: runs inside the OS, Unix transport, still no third-party deps -
     "litric-sysd",
     "litric-envd",
+    "litric-notifyd",
     "litric-input",
     "litric-wm",
     "litric-locale",
