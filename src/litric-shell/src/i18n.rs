@@ -150,6 +150,8 @@ pub fn text<'a>(english: &'a str) -> Cow<'a, str> {
         "Search" => "ค้นหา",
         "Back" => "ย้อนกลับ",
         "Forward" => "ถัดไป",
+        "Reload" => "โหลดใหม่",
+        "Stop" => "หยุด",
         "Up" => "ขึ้น",
         "Save" => "บันทึก",
         "History" => "ประวัติ",

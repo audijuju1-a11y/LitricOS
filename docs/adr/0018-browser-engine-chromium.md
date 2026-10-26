@@ -79,7 +79,7 @@ header is followed immediately by its binary payload.
 | `CLOSE <tab>` | Close a tab. Event `CLOSED <tab>`. |
 | `ACTIVATE <tab>` | Stream frames for this tab only; the previous tab's screencast stops. A fresh frame is sent. |
 | `GO <tab> <input-pct>` | Address-bar input: `url::interpret` → `Policy::check_navigation` → navigate. |
-| `BACK <tab>` `FORWARD <tab>` `RELOAD <tab>` `STOP <tab>` | History and loading. |
+| `BACK <tab>` `FORWARD <tab>` `RELOAD <tab>` `STOP <tab>` | History and loading. `STOP` answers with a `TAB` line whose state is `stopped` unless the document's `readyState` was already `complete`, in which case nothing was interrupted and it says `loaded` — a stopped page is never reported as a finished one. |
 | `MOUSE <tab> <move\|down\|up> <x> <y> <none\|left\|middle\|right> <clicks> <mods>` | Pointer, in content pixels. |
 | `WHEEL <tab> <x> <y> <dx> <dy>` | Scroll, in pixels. |
 | `KEY <tab> <down\|up> <key-pct> <code-pct> <vk> <mods> <text-pct\|->` | DOM `key`, DOM `code`, Windows virtual-key code, modifiers, produced text. |
@@ -96,7 +96,7 @@ never reused within a connection. At most 16 tabs.
 
 | Event | Meaning |
 |---|---|
-| `TAB <tab> state=<empty\|loading\|loaded\|failed\|blocked> url=<pct> title=<pct> back=<0\|1> fwd=<0\|1> secure=<0\|1>` | Full state of one tab after any change. |
+| `TAB <tab> state=<empty\|loading\|loaded\|failed\|blocked\|stopped> url=<pct> title=<pct> back=<0\|1> fwd=<0\|1> secure=<0\|1>` | Full state of one tab after any change. |
 | `CLOSED <tab>` | The tab is gone (closed by request, by the page, or by an engine crash). |
 | `FRAME <tab> <w> <h> <n>` + `n` bytes | Raw pixels, `n == w*h*4`, each pixel a little-endian `u32` `0xAARRGGBB`. `w,h ≤ 4096`. |
 | `NOTICE <tab\|-> <kind> <pct-msg>` | `dialog-dismissed`, `popup-opened`, `download-started`, `download-refused`, `blocked`, `engine-restarted`. |

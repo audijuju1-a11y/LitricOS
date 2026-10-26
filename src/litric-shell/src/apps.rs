@@ -901,6 +901,15 @@ pub struct BrowserApp {
     pub downloads: Vec<BrowserDownload>,
     /// Current download-list request status.
     pub downloads_status: Option<String>,
+    /// Whether the active tab has asked the engine for a page and has not
+    /// heard back yet.
+    ///
+    /// This is what makes Stop meaningful: a Stop button that is always
+    /// enabled is a button that is usually pressing nothing, and reloading a
+    /// page that is still arriving is not a request a person makes. Set when a
+    /// navigation is sent, cleared by the tab line or the engine's error that
+    /// answers it.
+    pub loading: bool,
     /// The next stable engine tab id to hand out. Monotonic: an id is never
     /// reused, so a late frame can never land on a newer tab.
     next_engine_tab: u32,
@@ -930,6 +939,7 @@ impl Default for BrowserApp {
             panel: BrowserPanel::Page,
             downloads: Vec::new(),
             downloads_status: None,
+            loading: false,
             next_engine_tab: 2,
         }
     }
@@ -1110,6 +1120,23 @@ impl BrowserApp {
     #[must_use]
     pub fn can_go_back(&self) -> bool {
         self.tab().is_some_and(|tab| tab.history_index > 0)
+    }
+
+    /// Whether a load is in flight, so Stop would stop something.
+    #[must_use]
+    pub fn can_stop(&self) -> bool {
+        self.loading
+    }
+
+    /// Whether Reload would reload a page the engine is drawing.
+    ///
+    /// The start page is the shell's own surface, and `about:blank` has nothing
+    /// to reload; asking the engine for either produced a fresh `about:blank`
+    /// frame over a designed page.
+    #[must_use]
+    pub fn can_reload(&self) -> bool {
+        self.tab()
+            .is_some_and(|tab| tab.url != "litric://about" && tab.url != "about:blank")
     }
 
     /// Whether the active tab can go forward.

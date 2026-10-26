@@ -319,6 +319,10 @@ pub enum Hot {
     BrowserBack,
     /// Navigate the active browser tab forward.
     BrowserForward,
+    /// Reload the active browser tab's page.
+    BrowserReload,
+    /// Stop the active browser tab's load.
+    BrowserStop,
     /// Add or remove the active address from bookmarks.
     BrowserBookmark,
     /// Show the recent history panel.
@@ -1569,6 +1573,10 @@ impl Shell {
             return;
         };
         let active = index == self.browser.active;
+        // The tab line is the answer to whatever was in flight, whatever it
+        // says: loaded, failed, empty, stopped. Only a new navigation sets the
+        // flag again.
+        self.browser.loading = false;
         let url = update.url.clone();
         if let Some(tab) = self.browser.tabs.get_mut(index) {
             if !update.url.is_empty() {
@@ -1608,6 +1616,9 @@ impl Shell {
         if let Some(tab) = self.browser.tabs.get_mut(self.browser.active) {
             tab.error = true;
         }
+        // An error is an answer: nothing is in flight any more, and a Stop
+        // button left enabled over a failed page would stop nothing.
+        self.browser.loading = false;
         self.browser.status = match code {
             "engine-unavailable" => format!("the browser engine is not available: {detail}"),
             "engine-failed" => format!("the page could not be shown: {detail}"),
@@ -1694,6 +1705,7 @@ impl Shell {
         self.browser.last_frame = None;
         self.browser_pointer_sent = None;
         if self.send_line(&format!("GO {tab} {pct}")) {
+            self.browser.loading = true;
             self.browser.status = format!("loading {url}");
             self.request_full_redraw();
         }
@@ -2234,7 +2246,9 @@ impl Shell {
                 if self.browser.active_tab_has_page() {
                     if let Some(tab) = self.browser.active_engine_tab() {
                         self.browser.status = "reloading".to_owned();
-                        self.send_line(&format!("RELOAD {tab}"));
+                        if self.send_line(&format!("RELOAD {tab}")) {
+                            self.browser.loading = true;
+                        }
                     }
                 }
             }
@@ -5421,6 +5435,21 @@ impl Shell {
                 }
                 Vec::new()
             }
+            Hot::BrowserReload => self.perform_menu(crate::apps::MenuAction::BrowserReload),
+            Hot::BrowserStop => {
+                // STOP is the engine's own verb (ADR-0018): the page stops
+                // arriving and keeps what it has. The reply is a TAB line whose
+                // state says whether the document had finished, so nothing is
+                // claimed here beyond having asked.
+                if let Some(tab) = self.browser.active_engine_tab() {
+                    if self.browser.can_stop() && self.send_line(&format!("STOP {tab}")) {
+                        self.browser.loading = false;
+                        self.browser.status = "stopping".to_owned();
+                    }
+                }
+                self.request_full_redraw();
+                Vec::new()
+            }
             Hot::BrowserBookmark => {
                 let saved = self.browser.toggle_bookmark();
                 self.browser.status = if saved {
@@ -7616,6 +7645,111 @@ mod tests {
             s.wm.window(id).is_none(),
             "the close button did not close it"
         );
+    }
+
+    /// Attach a link over a socket pair, and return the broker's end so a test
+    /// can read the command lines the shell actually writes.
+    #[cfg(unix)]
+    fn browser_link(s: &mut Shell) -> std::os::unix::net::UnixStream {
+        use std::os::unix::net::UnixStream;
+        let (ours, theirs) = UnixStream::pair().expect("pair");
+        let framing = crate::link::Framing {
+            max_line: 256,
+            payload_len: browser_frame_len,
+            coalesce_key: |h| {
+                h.strip_prefix("FRAME ")
+                    .and_then(|r| r.split(' ').next())
+                    .map(str::to_owned)
+            },
+        };
+        s.browser_session =
+            Some(crate::link::Link::over(ours, framing, Box::new(|| {})).expect("link"));
+        theirs
+    }
+
+    /// Point the active tab at an address, without indexing the tab list.
+    fn set_active_url(s: &mut Shell, url: &str) {
+        let index = s.browser.active;
+        s.browser.tabs.get_mut(index).expect("a tab").url = url.to_owned();
+    }
+
+    /// Read whatever has arrived on the broker's end by now.
+    #[cfg(unix)]
+    fn broker_lines(their: &mut std::os::unix::net::UnixStream) -> Vec<String> {
+        use std::io::{BufRead, BufReader};
+        use std::time::Duration;
+        their
+            .set_read_timeout(Some(Duration::from_millis(150)))
+            .expect("timeout");
+        let mut reader = BufReader::new(their.try_clone().expect("clone"));
+        let mut out = Vec::new();
+        while let Ok(Some(line)) = {
+            let mut line = String::new();
+            Ok::<Option<String>, std::io::Error>(match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => None,
+                Ok(_) => Some(line.trim_end().to_owned()),
+            })
+        } {
+            out.push(line);
+        }
+        out
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_is_sent_only_while_a_page_is_actually_arriving() {
+        let mut s = shell();
+        let mut their = browser_link(&mut s);
+        set_active_url(&mut s, "https://example.com/");
+
+        // Nothing in flight: Stop is disabled in the toolbar and activating it
+        // must not write a command that stops nothing.
+        assert!(!s.browser.can_stop());
+        s.activate(Hot::BrowserStop);
+        assert!(
+            broker_lines(&mut their).is_empty(),
+            "STOP was sent with no load in flight"
+        );
+
+        // A navigation sets the flag; Stop then reaches the engine.
+        s.browser.loading = true;
+        assert!(s.browser.can_stop());
+        s.activate(Hot::BrowserStop);
+        assert_eq!(broker_lines(&mut their), ["STOP 1"]);
+        assert!(!s.browser.loading, "the load is over once Stop is sent");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tab_line_ends_the_load_and_reload_starts_another() {
+        let mut s = shell();
+        let mut their = browser_link(&mut s);
+        set_active_url(&mut s, "https://example.com/");
+        s.browser.loading = true;
+
+        let update = parse_tab_line(
+            "TAB 1 state=loaded url=https%3A%2F%2Fexample.com%2F title=Example back=0 fwd=0 secure=1",
+        )
+        .expect("a TAB line");
+        s.apply_tab_update(&update);
+        assert!(!s.browser.loading, "a tab line answers the load");
+
+        s.activate(Hot::BrowserReload);
+        let lines = broker_lines(&mut their);
+        assert_eq!(lines, ["RELOAD 1"]);
+        assert!(s.browser.loading, "a reload is a load in flight");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_start_page_is_not_offered_a_reload_because_it_has_no_page() {
+        let mut s = shell();
+        set_active_url(&mut s, "litric://about");
+        assert!(!s.browser.can_reload());
+        set_active_url(&mut s, "about:blank");
+        assert!(!s.browser.can_reload());
+        set_active_url(&mut s, "https://example.com/");
+        assert!(s.browser.can_reload());
     }
 
     #[test]

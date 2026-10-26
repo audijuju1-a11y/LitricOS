@@ -311,6 +311,18 @@ mod broker {
             .as_ref()
     }
 
+    /// The tab state that tells the truth after `Page.stopLoading`.
+    ///
+    /// `document.readyState` is `complete` only when the load had already
+    /// finished. Unknown (the evaluation failed) is not a reason to claim
+    /// `loaded`: the honest answer is that the page is stopped where it is.
+    pub(super) fn stopped_state(ready: Option<&str>) -> &'static str {
+        match ready {
+            Some("complete") => "loaded",
+            _ => "stopped",
+        }
+    }
+
     /// Remove one finished download from the staging directory.
     ///
     /// The name must be one plain segment: this is the only place the broker
@@ -801,8 +813,22 @@ mod broker {
                 .map(|t| t.session.clone())
                 .ok_or("no such tab")?;
             self.call_session("Page.stopLoading", "{}", Some(&session))?;
+            // Stopping does not finish a page. Ask the document what it has:
+            // `complete` means the load had already finished and Stop changed
+            // nothing, anything else means the user is looking at a partial
+            // page and the tab must say so rather than "loaded".
+            let ready = self
+                .call_session(
+                    "Runtime.evaluate",
+                    r#"{"expression":"document.readyState","returnByValue":true}"#,
+                    Some(&session),
+                )
+                .ok()
+                .and_then(|reply| field(&reply, "result").cloned())
+                .and_then(|v| text_field(&v, "value"));
+            let state = stopped_state(ready.as_deref());
             if let Some(t) = self.tabs.get_mut(&tab) {
-                t.state = "loaded";
+                t.state = state;
             }
             Ok(())
         }
@@ -1725,6 +1751,16 @@ mod tests {
         );
         let fields: Vec<&str> = header.split(' ').collect();
         assert_eq!(fields, ["FRAME", "3", "1280", "800", "4096000"]);
+    }
+
+    #[test]
+    fn a_stopped_page_is_not_reported_as_loaded() {
+        use super::broker::stopped_state;
+        assert_eq!(stopped_state(Some("complete")), "loaded");
+        assert_eq!(stopped_state(Some("loading")), "stopped");
+        assert_eq!(stopped_state(Some("interactive")), "stopped");
+        // The evaluation failed, so nothing is known about the document.
+        assert_eq!(stopped_state(None), "stopped");
     }
 
     fn staging(tag: &str) -> std::path::PathBuf {

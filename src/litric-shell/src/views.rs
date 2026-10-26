@@ -1641,6 +1641,8 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let items = [
         ("Back", Hot::BrowserBack),
         ("Forward", Hot::BrowserForward),
+        ("Reload", Hot::BrowserReload),
+        ("Stop", Hot::BrowserStop),
         (
             if app.is_bookmarked() { "Saved" } else { "Save" },
             Hot::BrowserBookmark,
@@ -1659,10 +1661,14 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let available = (body.w - t.px(12.0)).max(t.px(120.0));
     let gaps = items.len().saturating_sub(1);
     let single_width: f32 = desired.iter().sum::<f32>() + gap * gaps as f32;
-    let groups: &[(usize, usize)] = if single_width <= available {
-        &[(0, 7)]
+    // The row split is the item count's, not a literal's: a control added to
+    // the list above without touching this would otherwise never be drawn,
+    // and the buttons that were drawn would keep the old indices.
+    let split = items.len().div_ceil(2);
+    let groups: Vec<(usize, usize)> = if single_width <= available {
+        vec![(0, items.len())]
     } else {
-        &[(0, 3), (3, 7)]
+        vec![(0, split), (split, items.len())]
     };
     let controls = Rect::new(
         body.x,
@@ -1693,7 +1699,11 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
                 t.px(24.0),
             );
             let disabled = (matches!(hot, Hot::BrowserBack) && !app.can_go_back())
-                || (matches!(hot, Hot::BrowserForward) && !app.can_go_forward());
+                || (matches!(hot, Hot::BrowserForward) && !app.can_go_forward())
+                // Stop over a page that is not arriving stops nothing, and
+                // Reload on the shell's own start page has no page to reload.
+                || (matches!(hot, Hot::BrowserStop) && !app.can_stop())
+                || (matches!(hot, Hot::BrowserReload) && !app.can_reload());
             let selected = (matches!(hot, Hot::BrowserHistory)
                 && app.panel == crate::apps::BrowserPanel::History)
                 || (matches!(hot, Hot::BrowserBookmarks)
