@@ -826,6 +826,26 @@ impl SearchEngine {
         }
     }
 
+    /// The token this engine is stored under in `settings.conf`.
+    ///
+    /// A token, not the display title: `title()` is translated and would make a
+    /// saved file depend on the interface language it was written in.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Google => "google",
+            Self::DuckDuckGo => "duckduckgo",
+            Self::Bing => "bing",
+        }
+    }
+
+    /// The engine a stored token names, or `None` for one this build does not
+    /// know -- a newer build's choice, which must fall back rather than panic.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|engine| engine.token() == raw)
+    }
+
     /// The search URL for a query.
     #[must_use]
     pub fn search_url(self, query: &str) -> String {
@@ -2251,6 +2271,19 @@ mod tests {
         assert_eq!(b.commit_omnibox().as_deref(), Some("file:///etc/hostname"));
         b.omnibox = "  ".to_owned();
         assert_eq!(b.commit_omnibox(), None);
+    }
+
+    #[test]
+    fn search_engines_round_trip_through_their_stored_tokens() {
+        for engine in SearchEngine::ALL {
+            assert_eq!(SearchEngine::parse(engine.token()), Some(engine));
+        }
+        assert_eq!(SearchEngine::parse("klingon"), None);
+        assert_eq!(SearchEngine::parse(""), None);
+        // The token is not the translated title: a saved file must not depend
+        // on the language the session was in when it was written.
+        let tokens: Vec<&str> = SearchEngine::ALL.iter().map(|e| e.token()).collect();
+        assert_eq!(tokens, vec!["google", "duckduckgo", "bing"]);
     }
 
     #[test]

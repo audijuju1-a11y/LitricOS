@@ -2,6 +2,7 @@
 
 use litric_design::{Accent, ThemeKind};
 
+use crate::apps::SearchEngine;
 use crate::desktop::Wallpaper;
 use crate::i18n::Language;
 
@@ -22,6 +23,13 @@ pub struct Preferences {
     /// Whether first-run setup has finished. Until it has, the desktop shows the
     /// setup screen instead of the desktop.
     pub onboarded: bool,
+    /// The engine the omnibox searches with.
+    ///
+    /// Here rather than in `browser-data.conf` because it is a preference, not
+    /// browsing history: it must survive the "clear history" that the browser
+    /// data file is allowed to lose, and it belongs with the other choices the
+    /// Settings window owns.
+    pub search_engine: SearchEngine,
 }
 
 impl Preferences {
@@ -36,6 +44,7 @@ impl Preferences {
             language,
             reduce_motion: false,
             onboarded: true,
+            search_engine: SearchEngine::Google,
         }
     }
 }

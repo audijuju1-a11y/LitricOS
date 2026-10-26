@@ -24,6 +24,12 @@ What it checks:
     manifest, or a `src/main.rs` (Cargo's implicit bin, named after the
     package). Listing the binaries is derived from the manifests, never
     hand-copied, so adding a daemon is what makes a unit legal.
+  * A binary declared with `required-features = [...]` is only legal when
+    `tools/build.sh` contains a `cargo build` line for its package that turns
+    those features on. `litric-browserd` has `required-features = ["broker"]`,
+    so a workspace build silently skips it; before this rule the checker called
+    the unit satisfied because a `[[bin]]` block existed, which is the same
+    "exists, therefore present" reasoning that shipped an image with no broker.
   * A program path under `/usr/lib/litric/` must be a file the image ships, so
     `/usr/lib/litric/selftest` is checked by existence rather than by an
     allowlist entry someone has to remember to write.
@@ -61,6 +67,18 @@ EXEC_RE = re.compile(r"^\s*Exec(Start|StartPre|StartPost|Reload)\s*=\s*(.*)$")
 NAME_RE = re.compile(r'^\s*name\s*=\s*"([^"]+)"\s*$')
 BIN_SECTION_RE = re.compile(r"^\s*\[\[bin\]\]\s*$")
 
+# `required-features = ["broker"]` inside a `[[bin]]` block. Cargo accepts a
+# single-line array; this file only needs to read what the manifests contain.
+REQUIRED_FEATURES_RE = re.compile(r'^\s*required-features\s*=\s*\[(.*?)\]\s*$')
+
+# A `cargo build` invocation in tools/build.sh, and the two flags that decide
+# whether a feature-gated binary is produced. The script is line-continued bash,
+# so the whole file is unwrapped before these run.
+CARGO_BUILD_RE = re.compile(r"cargo\s+build\b([^&|;]*)")
+PACKAGE_FLAG_RE = re.compile(r"(?:^|\s)(?:-p|--package)[\s=]+([A-Za-z0-9_.:-]+)")
+FEATURES_FLAG_RE = re.compile(r"--features[\s=]+([^\s]+)")
+ALL_FEATURES_RE = re.compile(r"--all-features\b")
+
 
 def workspace_members(root: Path) -> list[Path]:
     """Member directories, from the workspace manifest's `members` list."""
@@ -71,36 +89,89 @@ def workspace_members(root: Path) -> list[Path]:
     return [root / "src" / name for name in re.findall(r'"([^"]+)"', m.group(1))]
 
 
-def producible_binaries(root: Path) -> dict[str, str]:
-    """Binary name -> a sentence saying where the workspace builds it."""
-    out: dict[str, str] = {}
+def bin_entries(root: Path) -> dict[str, dict]:
+    """Binary name -> {where, package, features} for every bin a member declares."""
+    out: dict[str, dict] = {}
     for member in workspace_members(root):
         manifest = member / "Cargo.toml"
         if not manifest.is_file():
             continue
         text = manifest.read_text(encoding="utf-8", errors="replace")
-        package = None
-        declared: list[str] = []
+        package = member.name
+        blocks: list[dict] = []
+        current: dict | None = None
+        in_package = False
         for line in text.splitlines():
-            if line.strip() == "[package]":
-                package = None
+            stripped = line.strip()
+            if stripped == "[package]":
+                in_package = True
+                current = None
                 continue
             if BIN_SECTION_RE.match(line):
-                declared.append("__pending__")
+                in_package = False
+                current = {"name": None, "features": set()}
+                blocks.append(current)
                 continue
-            m = re.match(r'^\s*name\s*=\s*"([^"]+)"\s*$', line)
+            m = NAME_RE.match(line)
             if m:
-                if declared and declared[-1] == "__pending__":
-                    declared[-1] = m.group(1)
-                elif package is None:
+                if current is not None and current["name"] is None:
+                    current["name"] = m.group(1)
+                elif in_package:
                     package = m.group(1)
+                continue
+            m = REQUIRED_FEATURES_RE.match(line)
+            if m and current is not None:
+                current["features"] |= set(re.findall(r'"([^"]*)"', m.group(1)))
         if (member / "src" / "main.rs").is_file():
-            name = package or member.name
-            out[name] = f"src/{member.name}/src/main.rs (implicit bin)"
-        for name in declared:
-            if name and name != "__pending__":
-                out[name] = f"src/{member.name}/Cargo.toml [[bin]]"
+            out[package] = {
+                "where": f"src/{member.name}/src/main.rs (implicit bin)",
+                "package": package,
+                "features": set(),
+            }
+        for block in blocks:
+            name = block["name"]
+            if name:
+                out[name] = {
+                    "where": f"src/{member.name}/Cargo.toml [[bin]]",
+                    "package": package,
+                    "features": block["features"],
+                }
     return out
+
+
+def build_coverage(root: Path) -> list[tuple[set[str], set[str]]]:
+    """(packages, features) for every `cargo build` invocation in tools/build.sh.
+
+    This is what makes a `required-features` declaration checkable: the binary is
+    only in the image if some documented build turns those features on, and the
+    one place that builds the image is tools/build.sh.
+    """
+    script = root / "tools" / "build.sh"
+    if not script.is_file():
+        return []
+    text = script.read_text(encoding="utf-8", errors="replace").replace("\\\n", " ")
+    invocations: list[tuple[set[str], set[str]]] = []
+    for tail in CARGO_BUILD_RE.findall(text):
+        packages = set(PACKAGE_FLAG_RE.findall(tail))
+        features: set[str] = set()
+        if ALL_FEATURES_RE.search(tail):
+            features.add("*")
+        for chunk in FEATURES_FLAG_RE.findall(tail):
+            features |= {f for f in re.split(r"[,\s]+", chunk) if f}
+        invocations.append((packages, features))
+    return invocations
+
+
+def uncovered_features(entry: dict, coverage: list[tuple[set[str], set[str]]]) -> list[str]:
+    """Required features that no documented build turns on for this package."""
+    missing = set(entry["features"])
+    for packages, features in coverage:
+        if entry["package"] not in packages:
+            continue
+        if "*" in features:
+            return []
+        missing -= features
+    return sorted(missing)
 
 
 def units(tree: Path) -> list[Path]:
@@ -119,15 +190,30 @@ def program_of(value: str) -> str | None:
     return value.split()[0]
 
 
-def judge(program: str, produced: dict[str, str], tree: Path) -> tuple[str, str]:
+def judge(
+    program: str,
+    produced: dict[str, dict],
+    tree: Path,
+    coverage: list[tuple[set[str], set[str]]] | None = None,
+) -> tuple[str, str]:
     """Return (status, detail) where status is OK, SKIP or MISSING."""
+    coverage = coverage or []
     if not program.startswith("/"):
         return "SKIP", f"not an absolute path ({program})"
     for d in BIN_DIRS:
         if program.startswith(d):
             name = program[len(d):]
-            if name in produced:
-                return "OK", produced[name]
+            entry = produced.get(name)
+            if entry is not None:
+                missing = uncovered_features(entry, coverage)
+                if missing:
+                    return "MISSING", (
+                        f"{entry['where']} requires feature(s) {', '.join(missing)}, "
+                        f"and no cargo build in tools/build.sh enables them for "
+                        f"{entry['package']} -- the unit would start a binary that the "
+                        f"documented build never produces"
+                    )
+                return "OK", entry["where"]
             # Only our own names are failures. This checker does not model the
             # base distribution's /usr/bin (it cannot: the image is built on a
             # Linux host and this gate also runs on Windows), so a name that
@@ -153,7 +239,8 @@ def judge(program: str, produced: dict[str, str], tree: Path) -> tuple[str, str]
 def scan(root: Path) -> tuple[list[str], list[str], list[str]]:
     """(violations, skips, oks) for the real tree."""
     tree = root / "image" / "mkosi.extra"
-    produced = producible_binaries(root)
+    produced = bin_entries(root)
+    coverage = build_coverage(root)
     violations: list[str] = []
     skips: list[str] = []
     oks: list[str] = []
@@ -165,7 +252,7 @@ def scan(root: Path) -> tuple[list[str], list[str], list[str]]:
             program = program_of(m.group(2))
             if program is None:
                 continue
-            status, detail = judge(program, produced, tree)
+            status, detail = judge(program, produced, tree, coverage)
             where = f"{unit.relative_to(root)}:{lineno}"
             if status == "MISSING":
                 violations.append(f"{where}: {program} -- {detail}")
@@ -247,6 +334,57 @@ def self_test() -> int:
             rc = 1
         else:
             print("PASS  self-test: a base-distribution binary is skipped, not failed")
+
+        # A `required-features` binary that the documented build never produces.
+        # This is litric-browserd's shape: the unit is fine, the manifest is
+        # fine, and the binary is simply absent from every image.
+        gated = root / "src" / "litric-gated"
+        (gated / "src").mkdir(parents=True)
+        (gated / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+        (gated / "Cargo.toml").write_text(
+            '[package]\nname = "litric-gated"\nversion = "0.0.0"\n\n'
+            '[[bin]]\nname = "litric-gatedd"\npath = "src/main.rs"\n'
+            'required-features = ["net"]\n\n[features]\nnet = []\n',
+            encoding="utf-8")
+        (root / "src" / "Cargo.toml").write_text(
+            '[workspace]\nmembers = [\n    "litric-real",\n    "litric-gated",\n]\n',
+            encoding="utf-8")
+        script_dir = root / "tools"
+        script_dir.mkdir(parents=True)
+        script = script_dir / "build.sh"
+        script.write_text("cargo build --release --locked -p litric-real\n", encoding="utf-8")
+        gated_unit = tree / "litric-gated.service"
+        gated_unit.write_text(
+            "[Service]\nExecStart=/usr/bin/litric-gatedd --stdio\n", encoding="utf-8")
+        violations, _, _ = scan(root)
+        if not any("net" in v and "litric-gatedd" in v for v in violations):
+            print("FAIL  self-test: a required-feature binary with no build line was NOT flagged")
+            rc = 1
+        else:
+            print("PASS  self-test: a required-feature binary with no build line is flagged")
+
+        script.write_text(
+            "cargo build --release --locked -p litric-real\n"
+            "cargo build --release --locked -p litric-gated \\\n"
+            "    --features net\n",
+            encoding="utf-8")
+        violations, _, oks = scan(root)
+        if any("litric-gatedd" in v for v in violations):
+            print(f"FAIL  self-test: the enabled build was still rejected ({violations})")
+            rc = 1
+        else:
+            print("PASS  self-test: the same binary is accepted once a build enables its feature")
+
+        script.write_text(
+            "cargo build --release --locked -p litric-real\n"
+            "cargo build --release --locked -p litric-gated --features something-else\n",
+            encoding="utf-8")
+        violations, _, _ = scan(root)
+        if not any("net" in v and "litric-gatedd" in v for v in violations):
+            print("FAIL  self-test: a build enabling the wrong feature was accepted")
+            rc = 1
+        else:
+            print("PASS  self-test: a build enabling a different feature does not count")
     return rc
 
 

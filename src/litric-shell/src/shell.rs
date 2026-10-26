@@ -2187,14 +2187,17 @@ impl Shell {
             MA::NextWallpaper => {
                 return self.cycle_wallpaper();
             }
+            // The engine is a setting, so it is saved as one: the old code
+            // assigned the field and returned no effect, which made the choice
+            // last exactly as long as the window it was made in.
             MA::EngineGoogle => {
-                self.browser.engine = crate::apps::SearchEngine::Google;
+                return self.set_search_engine(crate::apps::SearchEngine::Google);
             }
             MA::EngineDuckDuckGo => {
-                self.browser.engine = crate::apps::SearchEngine::DuckDuckGo;
+                return self.set_search_engine(crate::apps::SearchEngine::DuckDuckGo);
             }
             MA::EngineBing => {
-                self.browser.engine = crate::apps::SearchEngine::Bing;
+                return self.set_search_engine(crate::apps::SearchEngine::Bing);
             }
         }
         Vec::new()
@@ -2522,6 +2525,7 @@ impl Shell {
         self.settings = crate::settings::Model::new(preferences);
         self.tokens.theme = resolved_theme(preferences);
         self.quick.reduce_motion = preferences.reduce_motion;
+        self.browser.engine = preferences.search_engine;
         self.request_full_redraw();
     }
 
@@ -2532,6 +2536,7 @@ impl Shell {
         };
         self.tokens.theme = resolved_theme(next);
         self.quick.reduce_motion = next.reduce_motion;
+        self.browser.engine = next.search_engine;
         self.request_full_redraw();
         vec![Effect::PersistPreferences(next)]
     }
@@ -2590,6 +2595,20 @@ impl Shell {
         };
         let mut next = self.settings.preferences;
         next.accent = accent;
+        self.save_preferences(next)
+    }
+
+    /// Choose the engine the omnibox searches with, and persist it.
+    ///
+    /// Returns the persistence effect rather than assigning the field directly:
+    /// a preference the window keeps and the disk does not is the failure this
+    /// whole settings path exists to avoid.
+    fn set_search_engine(&mut self, engine: crate::apps::SearchEngine) -> Vec<Effect> {
+        if self.settings.preferences.search_engine == engine {
+            return Vec::new();
+        }
+        let mut next = self.settings.preferences;
+        next.search_engine = engine;
         self.save_preferences(next)
     }
 
@@ -4933,11 +4952,12 @@ impl Shell {
                 self.dock_click(*app)
             }
             Hot::EngineChip(i) => {
-                if let Some(e) = crate::apps::SearchEngine::ALL.get(usize::from(i)) {
-                    self.browser.engine = *e;
-                    self.browser.status = format!("search engine: {}", e.label());
-                }
-                Vec::new()
+                let Some(engine) = crate::apps::SearchEngine::ALL.get(usize::from(i)) else {
+                    return Vec::new();
+                };
+                let engine = *engine;
+                self.browser.status = format!("search engine: {}", engine.label());
+                self.set_search_engine(engine)
             }
             Hot::QuickLink(i) => {
                 let urls = [
@@ -6306,6 +6326,41 @@ mod tests {
                 .any(|e| matches!(e, Effect::PersistPreferences(_))),
             "a wallpaper change that is not persisted is gone at logout"
         );
+    }
+
+    #[test]
+    fn choosing_a_search_engine_persists_it_and_a_restart_applies_it() {
+        use crate::apps::SearchEngine;
+
+        let mut s = shell();
+        assert_eq!(s.browser.engine, SearchEngine::Google);
+
+        let effects = s.perform_menu(crate::apps::MenuAction::EngineDuckDuckGo);
+        assert_eq!(s.browser.engine, SearchEngine::DuckDuckGo);
+        let saved = effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::PersistPreferences(p) => Some(*p),
+                _ => None,
+            })
+            .expect("choosing an engine must be persisted, not remembered for one window");
+        assert_eq!(saved.search_engine, SearchEngine::DuckDuckGo);
+        // The write completed, as it does in the event loop before the next
+        // click: a second change while one is in flight is refused on purpose.
+        s.finish_preferences_save(Ok(()));
+
+        // The start page's chips are the second route to the same setting, and
+        // they must not disagree with the menu.
+        let effects = s.activate(Hot::EngineChip(2));
+        assert_eq!(s.browser.engine, SearchEngine::Bing);
+        assert!(effects.iter().any(
+            |e| matches!(e, Effect::PersistPreferences(p) if p.search_engine == SearchEngine::Bing)
+        ));
+
+        // What a restart does: a fresh shell loaded from that record.
+        let mut restarted = shell();
+        restarted.load_preferences(saved);
+        assert_eq!(restarted.browser.engine, SearchEngine::DuckDuckGo);
     }
 
     #[test]

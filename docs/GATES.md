@@ -1279,3 +1279,95 @@ The new tests and what they would catch:
 Revert this commit. The inline parser and writer come back, the record loses its
 `version` line (it still parses), the behaviour change above reverts to showing
 first-run for an unreadable file, and the ten tests above disappear.
+
+## 2026-10-26 — the browser's build path and its settings, audited against a repair brief
+
+### Verdict
+
+**PASS_WITH_LIMITATIONS** at the `UNIT` / `STATIC` level. Two real defects were
+found and fixed. The brief's central claim — that the browser cannot load a page
+in a booted image — could **not** be reproduced or refuted here, because this
+machine has no Chromium, no `mkosi` and no QEMU. Nothing in this entry is `VM
+E2E`.
+
+### What the brief asked for, and what was already true
+
+The brief was written against an older tree. Of its fourteen audit questions,
+eleven are already implemented and unit-tested at `abf70e2`: the broker is built
+with `--features broker` by `tools/build.sh`, the binary is staged and the
+desktop profile refuses to build without it, the socket path matches on both
+sides (`/run/litric/browser.sock`), LBP/1 agrees command for command, and the
+shell checks frame length and preserves aspect before drawing. The full table is
+in `docs/audit/2026-10-26-browser-repair-audit.md`.
+
+The two that were not true are below.
+
+### Defect 1 — a feature-gated binary satisfied the unit gate by existing
+
+`ci/lint-unit-binaries.py` accepted any `[[bin]]` name in any manifest as proof
+that a unit's `ExecStart` resolves. `litric-browserd` carries
+`required-features = ["broker"]`, so a plain workspace build never produces it
+while the checker still reported the unit healthy — the same "exists, therefore
+present" reasoning that once shipped an image with an enabled socket and no
+broker.
+
+| File | Change |
+|---|---|
+| `ci/lint-unit-binaries.py` | reads `required-features` from every `[[bin]]`; parses the `cargo build` lines in `tools/build.sh` for package and features (including continuations and `--all-features`); a unit whose binary needs a feature no documented build enables is `MISSING` |
+| `ci/lint-unit-binaries.py --self-test` | three new cases: no build line, the right feature, a different feature |
+
+Negative control on the real tree: deleting the broker build line makes the
+checker fail on `litric-browser@.service:8` and name `broker`; restoring it makes
+the check pass. This is the regression test the brief asked for, and it fails for
+the right reason rather than by a hard-coded path.
+
+### Defect 2 — the search-engine choice was remembered for one window
+
+Both routes to the setting — the start page's chips and the browser context menu
+— assigned `BrowserApp::engine` and returned no effect. Nothing wrote it and
+nothing read it at startup, so DuckDuckGo was Google again on the next launch.
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/apps.rs` | `SearchEngine::token()` / `SearchEngine::parse()` — stable storage tokens, not translated titles |
+| `src/litric-shell/src/settings.rs` | `Preferences::search_engine` |
+| `src/litric-shell/src/prefstore.rs` | `search_engine=` parsed and encoded; an unknown token keeps the default instead of resetting the record |
+| `src/litric-shell/src/shell.rs` | `set_search_engine` returns `Effect::PersistPreferences`; `load_preferences` / `save_preferences` keep the live model and the stored record in step, so a failed write rolls the engine back too |
+| `docs/audit/2026-10-26-browser-repair-audit.md` | the audit itself: every question, its answer, its evidence, and what was not verified |
+
+### Evidence
+
+| Command | Result |
+|---|---|
+| `cargo build --release --locked -p litric-browser --features broker` | ok; `litric-browserd` produced |
+| `cargo test -p litric-browser --features broker` | 85 + 7 passed |
+| `cargo test -p litric-shell` | lib 463 passed (460 before; 3 new), bin 32, other targets unchanged |
+| `cargo clippy -p litric-shell --all-targets` | clean |
+| `cargo fmt --all -- --check` | clean |
+| `python3 ci/lint-unit-binaries.py --self-test` | 7 passed |
+| `python3 ci/lint-unit-binaries.py` | 16 program references, 0 broken |
+| `bash ci/verify.sh` | 26 pass, 0 fail, 4 skipped (golden frames need a Latin face; image, boot and idle need mkosi/QEMU) |
+
+The three new shell tests and what each would catch:
+
+| Test | What it would catch |
+|---|---|
+| `search_engines_round_trip_through_their_stored_tokens` | a token that is translated, so the saved file depends on the UI language |
+| `the_search_engine_round_trips_and_an_unknown_one_keeps_the_default` | a newer build's engine resetting the whole record, or silently becoming a different engine |
+| `choosing_a_search_engine_persists_it_and_a_restart_applies_it` | either route to the setting being forgotten at the next launch |
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that Chromium starts and a page is captured | no Chromium on this host. The spawn path (`--headless=new`, `--remote-debugging-pipe`, fd 3/4, sandbox left on) is read, not run |
+| that the socket activates inside the image | no `mkosi`, no QEMU. `tools/build.sh` and the units are checked statically; the built image was not inspected |
+| that the browser works end to end | the honest status is: implemented and unit-tested, not booted. `docs/audit/2026-10-26-browser-repair-audit.md` lists the exact commands that would close it |
+| that anything in the brief about PAM, lock screens or the Files app was regressed | those paths were read and found already implemented at HEAD (`StateDirectory=litric-shell litric-browser litric-files`, `Verifier::UnixChkpwd`, `files_root` under `/var/lib/litric-files/root`) and were not modified |
+
+### Rollback
+
+Revert this commit. The unit checker goes back to accepting a `required-features`
+binary on the strength of its name, the engine choice goes back to lasting one
+window, and the three shell tests and three self-test cases disappear. The audit
+document is additive and can stay.

@@ -65,7 +65,7 @@ own headings). `In-tree evidence` is what exists **today** in this checkout.
 | Code integrity, secure boot, verity | E2 (503–528), A1 11 | dm-verity in the image; `keys/` dev keys | **P0** | `PARTIAL` | Secure Boot boot never exercised (GATE 01 condition 8 `NOT RUN`) |
 | Defender | E3 (529–546) | `src/litric-defender` (35 tests), `Aho-Corasick` + verdict ladder; no binary | **P0** | `BACKEND_ONLY` | no daemon, no on-access hook; the `litric-defender.service` unit points at a binary that does not exist |
 | Updates, rollback, recovery | A1 2–10, E2, Pack §12 | ADR-0021 design; nothing executable | **P0** | `NOT_IMPLEMENTED` | must not be advertised until the generation engine exists |
-| Applications: built-ins, platform, packages | F1 (547–590), F2 (591–616) | `src/litric-manifest`, `src/litric-browser` (89 tests), `src/litric-winbridge` (49) | P1 | `PARTIAL` | no app registry, no store, no installer |
+| Applications: built-ins, platform, packages | F1 (547–590), F2 (591–616) | `src/litric-manifest`, `src/litric-browser` (92 tests with `--features broker`), `src/litric-winbridge` (49) | P1 | `PARTIAL` | no app registry, no store, no installer |
 | Windows compatibility | F3 (617–646) | `src/litric-winbridge` planning only | P2 | `PARTIAL` | deliberately not a Beta claim |
 | Input, keyboard, IME, Thai | G1 (647–670), 652 | `src/litric-input` (70 tests), `src/litric-locale` (43) | **P0** | `PARTIAL` | Thai word breaking is spec'd, not built; keyboard layouts exist without a settings surface |
 | Accessibility | G2 (671–696+) | focus ring, high-contrast tokens, reduced motion | **P0** | `PARTIAL` | no accessibility tree, no screen reader, no on-screen keyboard — must be labelled unsupported, not omitted |

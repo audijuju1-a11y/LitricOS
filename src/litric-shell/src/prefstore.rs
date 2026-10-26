@@ -114,6 +114,11 @@ pub fn parse(text: &str, defaults: Preferences) -> Preferences {
                     preferences.onboarded = done;
                 }
             }
+            "search_engine" => {
+                if let Some(engine) = crate::apps::SearchEngine::parse(value) {
+                    preferences.search_engine = engine;
+                }
+            }
             _ => {}
         }
     }
@@ -154,6 +159,9 @@ pub fn encode(preferences: Preferences) -> String {
     out.push('\n');
     out.push_str("onboarded=");
     out.push_str(if preferences.onboarded { "1" } else { "0" });
+    out.push('\n');
+    out.push_str("search_engine=");
+    out.push_str(preferences.search_engine.token());
     out.push('\n');
     out
 }
@@ -320,6 +328,27 @@ mod tests {
 
         // A setup that is in progress says so, and that is honoured.
         assert!(!parse("onboarded=0\n", Preferences::default()).onboarded);
+    }
+
+    #[test]
+    fn the_search_engine_round_trips_and_an_unknown_one_keeps_the_default() {
+        use crate::apps::SearchEngine;
+
+        let preferences = Preferences {
+            search_engine: SearchEngine::DuckDuckGo,
+            ..Preferences::default()
+        };
+        let text = encode(preferences);
+        assert!(text.contains("search_engine=duckduckgo"), "{text}");
+        assert_eq!(
+            parse(&text, Preferences::default()).search_engine,
+            SearchEngine::DuckDuckGo
+        );
+
+        // A file from a newer build that knows a fourth engine must not reset
+        // the whole record, and must not silently become the wrong engine.
+        let parsed = parse("version=1\nsearch_engine=brave\n", Preferences::default());
+        assert_eq!(parsed.search_engine, SearchEngine::Google);
     }
 
     #[test]
