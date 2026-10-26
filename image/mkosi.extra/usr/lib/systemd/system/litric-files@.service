@@ -1,0 +1,72 @@
+[Unit]
+Description=Litric Files daemon (connection %i)
+Documentation=file:///usr/share/doc/litric/adr/0019-litric-files.md
+# One instance per connection, started by litric-files.socket. It never outlives
+# its client, and a failed instance leaves nothing to collect.
+CollectMode=inactive-or-failed
+
+[Service]
+# `exec` rather than `simple`: if the binary cannot be executed, the instance is
+# reported as failed at the moment the shell connects, instead of a connection
+# that is accepted and then closed for no stated reason.
+Type=exec
+ExecStart=/usr/bin/litric-filesd --stdio --root /var/lib/litric-files/root
+# The accepted connection IS stdin/stdout. Nothing listens in this process: the
+# socket unit owns the listening side, which is why there is no port to protect
+# and no accept loop to get wrong.
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+User=litric
+Group=litric
+
+# --- the one directory it serves -------------------------------------------
+# `StateDirectory` is what makes it writable under `ProtectSystem=strict`: the
+# same trick the shell unit uses for its settings. Without it the daemon would
+# come up with a read-only /var and every create would be EROFS while the window
+# said the folder had been made.
+#
+# The root is `/var/lib/litric-files/root`, NOT a path under `/var/home`: this
+# unit sets ProtectHome=yes, so a root in somebody's home directory would be an
+# empty directory inside the sandbox and the Files application would open an
+# empty folder that is not the user's.
+StateDirectory=litric-files
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/litric-files
+
+# --- sandbox ---------------------------------------------------------------
+# It reads and writes the user's documents and nothing else, needs no network,
+# no devices, no namespaces and no generated code. A file daemon is the process
+# most exposed to hostile input on this system -- the names, the archives and
+# the trash records all arrive from disk -- so it holds the least authority of
+# anything here.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Row 18 of docs/PERF-budget.md. A connection serves one request at a time and
+# reads at most one archive entry buffer plus 64 KiB of preview text; the tasks
+# are the main thread and whatever std spawns for it.
+MemoryMax=256M
+TasksMax=16

@@ -81,6 +81,9 @@ struct Args {
     /// `<root>/var/lib/litric-files/root`, so a fixture root keeps its files in
     /// the fixture and the real system uses the unit's StateDirectory.
     files_root: Option<PathBuf>,
+    /// The Files daemon's socket. `None` means "use the system one when it is
+    /// there": a booted image always has it, a fixture host does not.
+    files_socket: Option<PathBuf>,
     socket: PathBuf,
     status: PathBuf,
     png: Option<PathBuf>,
@@ -99,6 +102,7 @@ impl Default for Args {
         Self {
             root: PathBuf::from("/"),
             files_root: None,
+            files_socket: None,
             socket: PathBuf::from(SYSD_SOCKET),
             status: PathBuf::from(STATUS_PATH),
             png: None,
@@ -134,6 +138,10 @@ OPTIONS:
     --root DIR        Where /proc, /sys and /dev are rooted. For testing.
     --files-root DIR  Where the Files application keeps user files. Defaults to
                       <root>/var/lib/litric-files/root.
+    --files-socket P  The Files daemon's socket (default /run/litric/files.sock).
+                      Given explicitly, the shell insists on the daemon; left
+                      out, it uses the daemon when the socket exists and opens
+                      the files itself when it does not.
     --once            Draw a single frame and exit.
     --seconds N       Exit after N seconds. For automated boot tests.
     -h, --help        This text.
@@ -187,6 +195,7 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
             "--status" => a.status = PathBuf::from(need("--status")?),
             "--root" => a.root = PathBuf::from(need("--root")?),
             "--files-root" => a.files_root = Some(PathBuf::from(need("--files-root")?)),
+            "--files-socket" => a.files_socket = Some(PathBuf::from(need("--files-socket")?)),
             "--once" => a.once = true,
             "--seconds" => {
                 let v = need("--seconds")?;
@@ -1578,6 +1587,32 @@ fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
     // even on a test host.
     let files_root = files_storage_root(args);
     shell.files_root = files_root.clone();
+    // Who holds the user's documents (ADR-0019). On a booted machine the daemon
+    // does: the shell asks it over LFP/1 and never opens a document for writing
+    // itself. On a fixture host there is no daemon, and the shell opens the
+    // directory directly, which is what the test suite exercises.
+    //
+    // An explicit --files-socket is an instruction, not a hint: if the daemon
+    // is not answering, the Files application is reported as unavailable rather
+    // than quietly reopening the storage in this process. Falling back would be
+    // the one thing this change exists to stop.
+    // Who holds the user's documents (ADR-0019). On a booted machine the daemon
+    // does: the shell asks over LFP/1 and never opens a document for writing
+    // itself. On a fixture host there is no daemon, and the shell opens the
+    // directory directly, which is what the test suite exercises.
+    //
+    // An explicit --files-socket is an instruction, not a hint: when the daemon
+    // is named and does not answer, the Files application is reported as
+    // unavailable rather than quietly reopening the storage in this process.
+    // Falling back would undo the only thing this arrangement exists for.
+    #[cfg(unix)]
+    let files_socket = args.files_socket.clone().unwrap_or_else(|| {
+        std::env::var_os("LITRIC_FILES_SOCKET")
+            .map_or_else(|| PathBuf::from("/run/litric/files.sock"), PathBuf::from)
+    });
+    #[cfg(unix)]
+    let want_daemon = args.files_socket.is_some() || files_socket.exists();
+    let mut files_status: Option<String> = None;
     if !args.root.is_dir() {
         // A fixture root that was never created is a root with nothing in it,
         // not an invitation to create `no-such-root/var/...` in the caller's
@@ -1586,19 +1621,73 @@ fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
             "the configured root {} does not exist, so no file storage was opened",
             args.root.display()
         ));
-    } else if let Err(error) = litric_shell::fsbridge::ensure_storage(&files_root) {
-        let message = format!(
-            "the file storage at {} is not ready: {error}",
-            files_root.display()
-        );
-        shell.files.error = Some(message.clone());
-        shell.notify(
-            "Files",
-            "Files storage unavailable",
-            &message,
-            Priority::High,
-            None,
-        );
+    } else {
+        #[cfg(unix)]
+        {
+            let mut via_daemon = false;
+            if want_daemon {
+                // One connection for the whole session: the daemon is socket
+                // activated per connection, so a folder listing must not cost
+                // a process.
+                let daemon = litric_shell::fsclient::Daemon::new(files_socket.clone());
+                match daemon.probe() {
+                    Ok(()) => {
+                        shell.files_daemon = Some(daemon);
+                        via_daemon = true;
+                        files_status =
+                            Some(format!("files=daemon socket={}", files_socket.display()));
+                    }
+                    Err(error) => {
+                        let message = format!(
+                            "the file service at {} is not answering: {error}. The Files \
+                             application is unavailable rather than falling back to opening \
+                             the storage from this process.",
+                            files_socket.display()
+                        );
+                        shell.files.error = Some(message.clone());
+                        shell.notify(
+                            "Files",
+                            "File service unavailable",
+                            &message,
+                            Priority::High,
+                            None,
+                        );
+                        files_status = Some(format!(
+                            "files=daemon-unavailable socket={}",
+                            files_socket.display()
+                        ));
+                    }
+                }
+            }
+            if !via_daemon && shell.files.error.is_none() {
+                files_status = Some(format!(
+                    "files=direct (no daemon socket at {})",
+                    files_socket.display()
+                ));
+                if let Err(error) = litric_shell::fsbridge::ensure_storage(&files_root) {
+                    let message = format!(
+                        "the file storage at {} is not ready: {error}",
+                        files_root.display()
+                    );
+                    shell.files.error = Some(message.clone());
+                    shell.notify(
+                        "Files",
+                        "Files storage unavailable",
+                        &message,
+                        Priority::High,
+                        None,
+                    );
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        if let Err(error) = litric_shell::fsbridge::ensure_storage(&files_root) {
+            let message = format!(
+                "the file storage at {} is not ready: {error}",
+                files_root.display()
+            );
+            shell.files.error = Some(message);
+        }
     }
 
     shell.sample(gather_facts(args));
@@ -1614,6 +1703,9 @@ fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
         format!("facts.source={}", shell.facts.source),
         format!("environments={}", shell.environments.len()),
     ];
+    if let Some(status) = &files_status {
+        lines.push(status.clone());
+    }
     lines.extend(
         shell
             .regional

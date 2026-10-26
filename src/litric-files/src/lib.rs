@@ -11,6 +11,7 @@
 //!
 //! ```text
 //!   path      logical paths ("/Documents/a.txt"), name-collision rules    any host
+//!   storage   the first-run folder layout of a user storage root          any host
 //!   proto     LFP/1 request parsing and reply encoding                     any host
 //!   trashinfo the `.trashinfo` Path= format, shared by both writers       any host
 //!   crc32 inflate deflate gzip zip tar   codecs written from the specs     any host
@@ -37,6 +38,7 @@ pub mod gzip;
 pub mod inflate;
 pub mod path;
 pub mod proto;
+pub mod storage;
 pub mod tar;
 pub mod trashinfo;
 pub mod zip;
@@ -52,6 +54,7 @@ pub mod trash;
 
 #[cfg(unix)]
 pub use ops::Root;
+pub use storage::{ensure_storage, STANDARD_DIRS};
 
 /// The error kinds of LFP/1, one per `ERR <kind>` token in ADR-0019.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

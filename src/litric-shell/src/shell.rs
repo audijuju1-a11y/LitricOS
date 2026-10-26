@@ -1280,10 +1280,18 @@ impl Shell {
     /// On a host with no root filesystem (Windows CI) there is no bridge;
     /// callers show the refusal in place rather than panicking in the render
     /// loop.
-    fn try_files_bridge(
+    pub fn try_files_bridge(
         &self,
         zone: litric_locale::TimeZone,
     ) -> Result<crate::fsbridge::FsBridge, crate::fsbridge::FsError> {
+        #[cfg(unix)]
+        if let Some(daemon) = &self.files_daemon {
+            return crate::fsbridge::FsBridge::open_via_daemon(
+                &self.files_root,
+                zone,
+                std::sync::Arc::clone(daemon),
+            );
+        }
         crate::fsbridge::FsBridge::open(&self.files_root, zone)
     }
 
@@ -2433,6 +2441,12 @@ pub struct Shell {
     /// test needs: a journey that creates a folder can aim at a temporary
     /// directory instead of the real root.
     pub files_root: std::path::PathBuf,
+    /// The Files daemon, when this machine has one (ADR-0019). With it set,
+    /// every file operation in the Files application is a request to
+    /// `litric-filesd`; with it `None` the shell performs the I/O itself, which
+    /// is what a fixture host and the test suite need.
+    #[cfg(unix)]
+    pub files_daemon: Option<std::sync::Arc<crate::fsclient::Daemon>>,
     /// The Litric Browser window model (Chrome-style tab strip + omnibox).
     pub browser: crate::apps::BrowserApp,
     /// The Defender application model and its scan state.
@@ -2774,6 +2788,8 @@ impl Shell {
             activity: crate::taskmgr::TaskManager::new(),
             files: crate::apps::FilesApp::default(),
             files_root: std::path::PathBuf::from("/"),
+            #[cfg(unix)]
+            files_daemon: None,
             browser: crate::apps::BrowserApp::default(),
             defender: DefenderState::default(),
             trash: crate::apps::TrashApp::default(),

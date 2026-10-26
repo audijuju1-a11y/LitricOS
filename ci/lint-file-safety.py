@@ -83,6 +83,18 @@ ALLOWED = {
     "src/litric-bench/src/bin/litricos-test.rs": {
         "cmd_cleanup": "the explicit cleanup command; the path is the one the CLI was given",
     },
+    "src/litric-files/src/storage.rs": {
+        "scratch": "removes the scratch directory this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
+        "a_new_root_gets_every_standard_folder_once": "removes the scratch root this test created under the system temp directory, after asserting the folders it was asked for exist in it",
+        "a_standard_name_that_is_a_file_is_refused_not_replaced": "removes the scratch root this test created under the system temp directory, after asserting the file it planted survived the refusal",
+        "a_symlinked_root_is_refused": "removes the scratch directory (real folder plus link) this test created under the system temp directory",
+    },
+    "src/litric-files/tests/filesd.rs": {
+        "scratch": "removes the scratch directory this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
+        "the_binary_serves_a_whole_files_session": "removes the fixture root the session test created under the system temp directory, after the daemon it ran has exited",
+        "the_binary_refuses_a_root_it_cannot_serve": "removes the single scratch file this test placed where a storage root should be, after asserting the daemon refused to serve it",
+        "the_binary_reports_what_it_would_serve": "removes the empty scratch root this test created under the system temp directory, after asserting --info created nothing in it",
+    },
     "src/litric-shell/src/prefstore.rs": {
         "save": "removes only the store's own temporary file (settings.conf.tmp.<pid>) -- before writing, and again when the write failed -- never a preference record",
     },

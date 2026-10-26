@@ -50,17 +50,20 @@ Environment=XDG_RUNTIME_DIR=/run/litric
 #
 #   litric-shell    settings.conf (language, theme, reduced motion)
 #   litric-browser  browser-data.conf (history and bookmarks)
-#   litric-files    root/ -- the Files application's user files
+#
+# `litric-files` used to be on this list. It is GONE as of 2026-10-26: the user's
+# documents are served by `litric-filesd` over `/run/litric/files.sock` (ADR-0019)
+# and the daemon's own unit owns `/var/lib/litric-files`. A shell that keeps a
+# writable handle on the document root while claiming to have delegated file I/O
+# to a daemon is a delegation on paper only.
 #
 # `litric-browser` was missing here while main.rs wrote
 # /var/lib/litric-browser/browser-data.conf. With ProtectSystem=strict that
 # directory is on a read-only mount inside this unit, so every save was EROFS
-# and the file never existed after a restart. `litric-files` is the dedicated
-# store for the Files app: `/` itself is read-only erofs on the image and
-# outside this unit's writable paths, which is why creating a folder in
-# /Documents could never work. Neither directory is opened at a wider path:
-# / remains read-only for this service.
-StateDirectory=litric-shell litric-browser litric-files
+# and the file never existed after a restart. Neither directory is opened at a
+# wider path: / remains read-only for this service, and so does the document
+# root the daemon serves.
+StateDirectory=litric-shell litric-browser
 StateDirectoryMode=0700
 
 RuntimeDirectory=litric

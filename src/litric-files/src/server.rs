@@ -79,6 +79,7 @@ impl Connection {
             "DU" => self.du(&request),
             "MKDIR" => self.make(&request, Kind::Dir),
             "NEWFILE" => self.make(&request, Kind::File),
+            "WRITETEXT" => self.write_text(&request),
             "RENAME" => self.rename(&request),
             "CONFLICTS" => self.conflicts(&request),
             "COPY" => self.transfer(&request, Move::Copy, progress),
@@ -157,9 +158,9 @@ impl Connection {
             return Outcome::Fail(Error::new(ErrorKind::BadRequest, "LIST takes a path"));
         };
         let hidden = request.fields.get(1).is_some_and(|f| f == "hidden=1");
-        let logical = match LogicalPath::parse(path_field) {
+        let logical = match logical_path(path_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         match self.root.list_dir(&logical, hidden) {
             Ok((entries, truncated)) => {
@@ -180,9 +181,9 @@ impl Connection {
         let Some(path_field) = request.fields.first() else {
             return Outcome::Fail(Error::new(ErrorKind::BadRequest, "STAT takes a path"));
         };
-        let logical = match LogicalPath::parse(path_field) {
+        let logical = match logical_path(path_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         match self.root.stat_with_items(&logical) {
             Ok((info, items)) => {
@@ -198,9 +199,9 @@ impl Connection {
         let Some(path_field) = request.fields.first() else {
             return Outcome::Fail(Error::new(ErrorKind::BadRequest, "DU takes a path"));
         };
-        let logical = match LogicalPath::parse(path_field) {
+        let logical = match logical_path(path_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         match self.root.measure(&logical) {
             Ok((bytes, files, dirs, partial)) => Outcome::Reply(vec![proto::entry(&[
@@ -224,17 +225,81 @@ impl Connection {
             Ok(n) => n,
             Err(e) => return Outcome::Fail(e),
         };
-        let parent = match LogicalPath::parse(parent) {
+        let parent = match logical_path(parent) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         let made = match kind {
             Kind::Dir => self.root.mkdir(&parent, &name),
             Kind::File => self.root.new_file(&parent, &name),
         };
         match made {
-            Ok(host) => Outcome::Reply(vec![proto::entry(&[("path", &host.to_string_lossy())])]),
+            // The logical path, never the host path. The root is `/` in the
+            // image, so both spellings were identical there and the difference
+            // only appeared on a fixture root — where the shell would have shown
+            // `/tmp/x/root/Documents` in a message about `/Documents`.
+            Ok(_host) => match parent.join(&name) {
+                Ok(created) => Outcome::Reply(vec![proto::entry(&[("path", created.as_str())])]),
+                Err(e) => Outcome::Fail(invalid(e)),
+            },
             Err(e) => Outcome::Fail(e),
+        }
+    }
+
+    /// `WRITETEXT <parent> <name> <pct-content>` — create a file with content.
+    ///
+    /// Exclusive, like `NEWFILE`: a name that is taken is refused rather than
+    /// overwritten, so a mistyped name can never destroy an existing document.
+    /// The content is one percent-encoded field, which bounds it by
+    /// [`proto::MAX_LINE`]; the shell's New Text File flow writes empty or short
+    /// files, and anything larger is refused with `limit` instead of being
+    /// truncated into a half-written document.
+    fn write_text(&self, request: &Request) -> Outcome {
+        let (Some(parent), Some(raw_name), Some(raw_content)) = (
+            request.fields.first(),
+            request.fields.get(1),
+            request.fields.get(2),
+        ) else {
+            return Outcome::Fail(Error::new(
+                ErrorKind::BadRequest,
+                "WRITETEXT takes a parent path, a name and the encoded content",
+            ));
+        };
+        // Exactly three. A fourth field used to be ignored, which is how a
+        // request with an extra argument silently wrote the wrong content into
+        // the wrong place instead of being refused.
+        if request.fields.len() > 3 {
+            return Outcome::Fail(Error::new(
+                ErrorKind::BadRequest,
+                "WRITETEXT takes exactly three fields; quote the content as one",
+            ));
+        }
+        let name = match proto::decode_field(raw_name) {
+            Ok(n) => n,
+            Err(e) => return Outcome::Fail(e),
+        };
+        let content = match proto::decode_field(raw_content) {
+            Ok(c) => c,
+            Err(e) => return Outcome::Fail(e),
+        };
+        let parent = match logical_path(parent) {
+            Ok(p) => p,
+            Err(e) => return Outcome::Fail(e),
+        };
+        let host = match self.root.new_file(&parent, &name) {
+            Ok(h) => h,
+            Err(e) => return Outcome::Fail(e),
+        };
+        // The file was created exclusively a moment ago, so this writes the
+        // content the caller asked for into the file it just reserved. A
+        // failure here leaves an empty file behind, which is what the user sees
+        // as "created but empty" rather than as a success.
+        match std::fs::write(&host, content.as_bytes()) {
+            Ok(()) => match parent.join(&name) {
+                Ok(written) => Outcome::Reply(vec![proto::entry(&[("path", written.as_str())])]),
+                Err(e) => Outcome::Fail(invalid(e)),
+            },
+            Err(e) => Outcome::Fail(Error::from_io("writetext", &e)),
         }
     }
 
@@ -250,12 +315,19 @@ impl Connection {
             Ok(n) => n,
             Err(e) => return Outcome::Fail(e),
         };
-        let logical = match LogicalPath::parse(path_field) {
+        let logical = match logical_path(path_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         match self.root.rename(&logical, &name) {
-            Ok(host) => Outcome::Reply(vec![proto::entry(&[("path", &host.to_string_lossy())])]),
+            Ok(_host) => match logical
+                .parent()
+                .unwrap_or_else(LogicalPath::root)
+                .join(&name)
+            {
+                Ok(renamed) => Outcome::Reply(vec![proto::entry(&[("path", renamed.as_str())])]),
+                Err(e) => Outcome::Fail(invalid(e)),
+            },
             Err(e) => Outcome::Fail(e),
         }
     }
@@ -267,9 +339,9 @@ impl Connection {
                 "CONFLICTS takes a destination and paths",
             ));
         };
-        let dest = match LogicalPath::parse(dest_field) {
+        let dest = match logical_path(dest_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         let dest_host = match self.root.resolve(&dest) {
             Ok(h) => h,
@@ -279,7 +351,7 @@ impl Connection {
             .fields
             .iter()
             .skip(1)
-            .filter_map(|f| LogicalPath::parse(f).ok())
+            .filter_map(|f| logical_path(f).ok())
             .filter(|src| std::fs::symlink_metadata(dest_host.join(src.file_name())).is_ok())
             .map(|src| proto::entry(&[("name", src.file_name())]))
             .collect();
@@ -306,9 +378,9 @@ impl Connection {
                 "policy must be skip, replace or keep-both",
             ));
         };
-        let dest = match LogicalPath::parse(dest_field) {
+        let dest = match logical_path(dest_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         let dest_host = match self.root.resolve(&dest) {
             Ok(h) => h,
@@ -318,7 +390,7 @@ impl Connection {
             .fields
             .iter()
             .skip(2)
-            .map(|f| LogicalPath::parse(f).map_err(invalid))
+            .map(|f| logical_path(f))
             .collect::<Result<Vec<_>, Error>>()
         {
             Ok(s) => s,
@@ -351,7 +423,16 @@ impl Connection {
                 Ok(host) => {
                     done = done.saturating_add(*size);
                     progress(done, total);
-                    lines.push(proto::entry(&[("path", &host.to_string_lossy())]));
+                    // The destination's logical path: `dest` joined with the
+                    // name the item actually landed under (which a clash may
+                    // have changed to `name (2).ext`).
+                    let leaf = host
+                        .file_name()
+                        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                    match dest.join(&leaf) {
+                        Ok(placed) => lines.push(proto::entry(&[("path", placed.as_str())])),
+                        Err(e) => return Outcome::Fail(invalid(e)),
+                    }
                 }
                 Err(e) => {
                     return Outcome::Fail(partial(e, src.as_str(), lines.len(), sources.len()))
@@ -371,9 +452,9 @@ impl Connection {
         };
         let mut lines = Vec::new();
         for field in &request.fields {
-            let logical = match LogicalPath::parse(field) {
+            let logical = match logical_path(field) {
                 Ok(p) => p,
-                Err(e) => return Outcome::Fail(invalid(e)),
+                Err(e) => return Outcome::Fail(e),
             };
             match disk.put(&self.root, &logical, now_unix()) {
                 Ok(item) => lines.push(proto::entry(&[("trashed", &item.name)])),
@@ -426,7 +507,16 @@ impl Connection {
             Err(e) => return Outcome::Fail(e),
         };
         let mut lines = Vec::new();
-        for name in &request.fields {
+        for raw in &request.fields {
+            // A trash entry is named after the file it holds, so it carries
+            // every character a file name can — spaces included. `TRASHLIST`
+            // hands the name back percent-encoded, so it is decoded here; a
+            // name that needed no encoding decodes to itself.
+            let name = match proto::decode_field(raw) {
+                Ok(n) => n,
+                Err(e) => return Outcome::Fail(e),
+            };
+            let name = name.as_str();
             let Some(item) = disk.get(name) else {
                 return Outcome::Fail(Error::new(
                     ErrorKind::NotFound,
@@ -469,7 +559,16 @@ impl Connection {
             };
             let dest = parent.join(logical.file_name());
             match disk.restore(name, &dest) {
-                Ok(host) => lines.push(proto::entry(&[("path", &host.to_string_lossy())])),
+                // Where it went back to, as a logical path: the shell shows this
+                // in "restored back in <folder>".
+                Ok(_host) => match logical
+                    .parent()
+                    .unwrap_or_else(LogicalPath::root)
+                    .join(name)
+                {
+                    Ok(back) => lines.push(proto::entry(&[("path", back.as_str())])),
+                    Err(e) => return Outcome::Fail(invalid(e)),
+                },
                 Err(e) => {
                     return Outcome::Fail(partial(e, name, lines.len(), request.fields.len()))
                 }
@@ -488,10 +587,16 @@ impl Connection {
         };
         let mut removed = 0u64;
         let total = request.fields.len();
-        for (index, name) in request.fields.iter().enumerate() {
-            match disk.purge(name) {
+        for (index, raw) in request.fields.iter().enumerate() {
+            // Same decoding as RESTORE: the name is a file name, and
+            // `TRASHLIST` sends it percent-encoded.
+            let name = match proto::decode_field(raw) {
+                Ok(n) => n,
+                Err(e) => return Outcome::Fail(e),
+            };
+            match disk.purge(&name) {
                 Ok(_) => removed = removed.saturating_add(1),
-                Err(e) => return Outcome::Fail(partial(e, name, index, total)),
+                Err(e) => return Outcome::Fail(partial(e, &name, index, total)),
             }
         }
         Outcome::Reply(vec![removed_line(removed)])
@@ -515,9 +620,9 @@ impl Connection {
         let mut removed = 0u64;
         let total = request.fields.len();
         for (index, field) in request.fields.iter().enumerate() {
-            let logical = match LogicalPath::parse(field) {
+            let logical = match logical_path(field) {
                 Ok(p) => p,
-                Err(e) => return Outcome::Fail(invalid(e)),
+                Err(e) => return Outcome::Fail(e),
             };
             match self.root.delete(&logical) {
                 Ok(()) => removed = removed.saturating_add(1),
@@ -535,20 +640,20 @@ impl Connection {
             ));
         };
         let sources: Vec<String> = request.fields.iter().skip(1).cloned().collect();
-        let dest = match LogicalPath::parse(dest_field) {
+        let dest = match logical_path(dest_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         let sources = match sources
             .iter()
-            .map(|f| LogicalPath::parse(f).map_err(invalid))
+            .map(|f| logical_path(f))
             .collect::<Result<Vec<_>, Error>>()
         {
             Ok(s) => s,
             Err(e) => return Outcome::Fail(e),
         };
         match crate::archive::compress_zip(&self.root, &dest, &sources, progress) {
-            Ok(host) => Outcome::Reply(vec![proto::entry(&[("path", &host.to_string_lossy())])]),
+            Ok(_host) => Outcome::Reply(vec![proto::entry(&[("path", dest.as_str())])]),
             Err(e) => Outcome::Fail(e),
         }
     }
@@ -562,13 +667,13 @@ impl Connection {
                 "EXTRACT takes an archive and a destination directory",
             ));
         };
-        let archive = match LogicalPath::parse(archive_field) {
+        let archive = match logical_path(archive_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
-        let dest = match LogicalPath::parse(dest_field) {
+        let dest = match logical_path(dest_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         match crate::archive::extract_archive(&self.root, &archive, &dest, progress) {
             Ok(_host) => Outcome::Reply(vec![proto::entry(&[("path", dest.as_str())])]),
@@ -588,25 +693,26 @@ impl Connection {
             Ok(q) => q,
             Err(e) => return Outcome::Fail(e),
         };
-        let start = match LogicalPath::parse(path_field) {
+        let start = match logical_path(path_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         match self.root.search(&start, &query) {
             Ok((hits, truncated)) => {
+                // `e ` in front of every hit, as ADR-0019 documents. Without it
+                // a reader that splits `e `-prefixed entry lines saw an empty
+                // result set for a search that found files.
                 let mut lines: Vec<String> = hits
                     .iter()
                     .map(|(rel, info)| {
-                        let mut pairs = vec![("path", rel.clone())];
-                        pairs.push(("name", info.name.clone()));
-                        pairs.push(("kind", EntryKind::token(info.kind).to_owned()));
-                        pairs.push(("size", info.size.to_string()));
-                        pairs.push(("mtime", info.mtime.to_string()));
-                        pairs
-                            .iter()
-                            .map(|(k, v)| format!("{k}={}", pct::encode_field(v)))
-                            .collect::<Vec<_>>()
-                            .join(" ")
+                        let pairs = vec![
+                            ("path".to_owned(), rel.clone()),
+                            ("name".to_owned(), info.name.clone()),
+                            ("kind".to_owned(), EntryKind::token(info.kind).to_owned()),
+                            ("size".to_owned(), info.size.to_string()),
+                            ("mtime".to_owned(), info.mtime.to_string()),
+                        ];
+                        format!("e {}", pairs_line(pairs))
                     })
                     .collect();
                 if truncated {
@@ -648,9 +754,9 @@ impl Connection {
         let Some(path_field) = request.fields.first() else {
             return Outcome::Fail(Error::new(ErrorKind::BadRequest, "READTEXT takes a path"));
         };
-        let logical = match LogicalPath::parse(path_field) {
+        let logical = match logical_path(path_field) {
             Ok(p) => p,
-            Err(e) => return Outcome::Fail(invalid(e)),
+            Err(e) => return Outcome::Fail(e),
         };
         let host = match self.root.resolve(&logical) {
             Ok(h) => h,
@@ -701,8 +807,17 @@ enum Move {
 }
 
 fn stat_pairs(info: &StatInfo) -> Vec<(String, String)> {
-    let mut pairs = vec![
-        ("name".to_owned(), pct::encode_field(&info.name)),
+    // RAW values. `pairs_line` percent-encodes every value exactly once, and it
+    // used to receive names that were already encoded here, so a folder called
+    // `รายงาน` listed as `%25E0%25B8...` — the escape of the escape. ASCII names
+    // hid it, because for them encoding is the identity, which is why it
+    // survived until a Thai name went through a socket.
+    //
+    // `target` is listed once, not twice: a link's target is the same value the
+    // line already carries, and a duplicate key is a line a reader has to guess
+    // the meaning of.
+    vec![
+        ("name".to_owned(), info.name.clone()),
         ("kind".to_owned(), EntryKind::token(info.kind).to_owned()),
         ("size".to_owned(), info.size.to_string()),
         ("mtime".to_owned(), info.mtime.to_string()),
@@ -715,21 +830,39 @@ fn stat_pairs(info: &StatInfo) -> Vec<(String, String)> {
                 "0".to_owned()
             },
         ),
-        (
-            "target".to_owned(),
-            pct::encode_field(info.target.as_deref().unwrap_or("")),
-        ),
-    ];
-    if info.kind == EntryKind::Link {
-        if let Some(target) = &info.target {
-            pairs.push(("target".to_owned(), pct::encode_field(target)));
-        }
-    }
-    pairs
+        ("target".to_owned(), info.target.clone().unwrap_or_default()),
+    ]
 }
 
 fn invalid(e: crate::path::PathError) -> Error {
     Error::new(ErrorKind::InvalidName, format!("bad path: {e}"))
+}
+
+/// Parse a path field, in either of the two forms LFP/1 carries.
+///
+/// A path is normally sent as it is — `/Documents/report.odt` — because that is
+/// what ADR-0019 documents and what every reply contains. But the line grammar
+/// separates fields with single spaces, so a folder the user named *My
+/// Documents* cannot be written that way at all, and before this existed the
+/// daemon had no way to serve one: `MKDIR` could create the name but no
+/// subsequent command could address it.
+///
+/// So a path that cannot be sent as-is is percent-encoded instead, exactly like
+/// the free-text fields, and it stops starting with `/` when it is (`/` encodes
+/// to `%2F`). That gives one unambiguous rule with no room for guessing:
+///
+/// * starts with `/`  → the path is literal, used as it is;
+/// * anything else    → the path is percent-encoded and must decode.
+///
+/// # Errors
+/// `bad-request` for a malformed escape; `invalid-name` for a path that breaks
+/// the naming rules.
+fn logical_path(raw: &str) -> Result<LogicalPath, Error> {
+    if raw.starts_with('/') {
+        return LogicalPath::parse(raw).map_err(invalid);
+    }
+    let decoded = proto::decode_field(raw)?;
+    LogicalPath::parse(&decoded).map_err(invalid)
 }
 
 /// Encode every value in a key-value pair list into one protocol line.
@@ -828,21 +961,33 @@ fn percent(done: u64, total: u64) -> u64 {
         .min(100)
 }
 
-/// Bind and serve LFP/1 on a Unix socket, one connection at a time. The
-/// listener is created by systemd socket activation in production; this
-/// path is for standalone runs and integration tests.
+/// Bind and serve LFP/1 on a Unix socket. The listener is created by systemd
+/// socket activation in production (`Accept=yes` gives one process per
+/// connection); this path is for standalone runs and integration tests.
+///
+/// Each connection is served on its own thread. A client that keeps its
+/// connection open — the shell does, so that a folder listing does not pay for
+/// a new process — must not stop the next client from being accepted, and with
+/// `Accept=yes` the reason is the same: connections are independent.
 ///
 /// # Errors
-/// Bind/accept/stream errors surface to the caller.
+/// Bind errors surface to the caller; an error accepting or serving one
+/// connection does not stop the listener.
 pub fn serve_unix(socket: &Path, root: Root) -> io::Result<()> {
     let _ = std::fs::remove_file(socket);
     let listener = std::os::unix::net::UnixListener::bind(socket)?;
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
-                let mut reader = io::BufReader::new(s.try_clone()?);
-                let mut writer = s;
-                let _ = serve_stream(&mut reader, &mut writer, root.clone());
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    let Ok(reader) = s.try_clone() else {
+                        return;
+                    };
+                    let mut reader = io::BufReader::new(reader);
+                    let mut writer = s;
+                    let _ = serve_stream(&mut reader, &mut writer, root);
+                });
             }
             Err(_) => continue, // a dead accept is retried, not fatal
         }
@@ -1029,6 +1174,124 @@ mod tests {
             }
             other => panic!("not a reply: {other:?}"),
         }
+    }
+
+    #[test]
+    fn writetext_creates_the_file_with_its_content() {
+        let (dir, root) = open_root("writetext");
+        let mut conn = Connection::new(root);
+        let line = one_line(&mut conn, "WRITETEXT /Documents note.txt hello%20there");
+        assert!(line.starts_with("path="), "got: {line}");
+        assert_eq!(
+            fs::read_to_string(dir.join("Documents/note.txt")).expect("written"),
+            "hello there"
+        );
+    }
+
+    #[test]
+    fn writetext_never_overwrites_and_decodes_unicode() {
+        let (dir, root) = open_root("writetext-exclusive");
+        let mut conn = Connection::new(root);
+        // Thai text, percent-encoded, round-trips as UTF-8.
+        let encoded = litric_core::pct::encode_field("สวัสดี");
+        one_line(
+            &mut conn,
+            &format!("WRITETEXT /Documents thai.txt {encoded}"),
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("Documents/thai.txt")).expect("written"),
+            "สวัสดี"
+        );
+        // The same name again is refused, and the first content survives.
+        match conn.dispatch("WRITETEXT /Documents thai.txt second", &mut |_, _| {}) {
+            Outcome::Fail(e) => assert_eq!(e.kind(), ErrorKind::Exists),
+            other => panic!("not a refusal: {other:?}"),
+        }
+        assert_eq!(
+            fs::read_to_string(dir.join("Documents/thai.txt")).expect("still there"),
+            "สวัสดี"
+        );
+    }
+
+    #[test]
+    fn writetext_refuses_a_traversal_name() {
+        let (_dir, root) = open_root("writetext-traversal");
+        let mut conn = Connection::new(root);
+        match conn.dispatch("WRITETEXT /Documents ..%2Fescape escape", &mut |_, _| {}) {
+            Outcome::Fail(e) => assert_eq!(e.kind(), ErrorKind::InvalidName),
+            other => panic!("not a refusal: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_folder_the_user_named_with_a_space_can_be_addressed() {
+        let (dir, root) = open_root("spaces");
+        let mut conn = Connection::new(root);
+        // The name is a free-text field and was always encoded; the path to it
+        // is what could not be written down before `path_field` existed.
+        one_line(&mut conn, "MKDIR /Documents My%20Documents");
+        let encoded = litric_core::pct::encode("/Documents/My Documents");
+        let line = one_line(&mut conn, &format!("STAT {encoded}"));
+        assert!(line.contains("kind=dir"), "got: {line}");
+        one_line(&mut conn, &format!("WRITETEXT {encoded} note.txt hi"));
+        assert_eq!(
+            fs::read_to_string(dir.join("Documents/My Documents/note.txt")).expect("written"),
+            "hi"
+        );
+        // And the listing of the folder it lives in names it.
+        match conn.dispatch(&format!("LIST {encoded}"), &mut |_, _| {}) {
+            Outcome::Reply(lines) => {
+                assert_eq!(lines.len(), 1, "{lines:?}");
+                assert!(lines[0].contains("name=note.txt"), "{lines:?}");
+            }
+            other => panic!("not a reply: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_raw_path_containing_a_percent_sign_is_not_mistaken_for_an_escape() {
+        let (dir, root) = open_root("percent-name");
+        let mut conn = Connection::new(root);
+        // A literal `%` in a name: the client encodes the path, so the wire
+        // field does not start with `/` and the escape cannot be confused with
+        // a raw path.
+        one_line(&mut conn, "MKDIR /Documents 100%25%20done");
+        let encoded = litric_core::pct::encode("/Documents/100% done");
+        let line = one_line(&mut conn, &format!("STAT {encoded}"));
+        assert!(line.contains("kind=dir"), "got: {line}");
+        assert!(dir.join("Documents/100% done").is_dir());
+    }
+
+    #[test]
+    fn a_trashed_name_with_a_space_can_be_listed_and_restored() {
+        let (dir, root) = open_root("trash-space");
+        let mut conn = Connection::new(root);
+        one_line(&mut conn, "WRITETEXT /Documents my%20notes.txt bye");
+        one_line(
+            &mut conn,
+            &format!(
+                "TRASH {}",
+                litric_core::pct::encode("/Documents/my notes.txt")
+            ),
+        );
+        let listed = match conn.dispatch("TRASHLIST", &mut |_, _| {}) {
+            Outcome::Reply(lines) => lines,
+            other => panic!("not a reply: {other:?}"),
+        };
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        let name = listed[0]
+            .split(' ')
+            .find_map(|f| f.strip_prefix("name="))
+            .expect("name field")
+            .to_owned();
+        let decoded = litric_core::pct::decode_field(&name).expect("decodes");
+        assert_eq!(decoded, "my notes.txt");
+        let restored = one_line(&mut conn, &format!("RESTORE {name}"));
+        assert!(restored.starts_with("path="), "got: {restored}");
+        assert_eq!(
+            fs::read_to_string(dir.join("Documents/my notes.txt")).expect("restored"),
+            "bye"
+        );
     }
 
     #[test]
@@ -1283,9 +1546,13 @@ mod tests {
         match outcome {
             Outcome::Reply(lines) => {
                 assert_eq!(lines.len(), 1);
-                // Values are percent-encoded on the wire; the path's `/`
-                // characters travel as %2F.
-                assert!(lines[0].starts_with("path=%2FDocuments%2Freport-2026.txt "));
+                // ADR-0019: every hit is an entry line, `e ` first, values
+                // percent-encoded — the path's `/` characters travel as %2F.
+                assert!(
+                    lines[0].starts_with("e path=%2FDocuments%2Freport-2026.txt "),
+                    "got: {}",
+                    lines[0]
+                );
                 assert!(lines[0].contains("kind=file"));
             }
             other => panic!("not a reply: {other:?}"),

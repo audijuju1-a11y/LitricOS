@@ -435,9 +435,16 @@ fn write_entry(
     content: &[u8],
     is_dir: bool,
 ) -> Result<PathBuf, Error> {
-    let (parent_host, name) = root.resolve_parent(logical)?;
-    root.ensure_dir_chain(&parent_host)?;
-    let host = parent_host.join(name);
+    // The entry's own folder may be missing: a zip is allowed to carry
+    // `docs/report.txt` and no `docs/` entry at all, and `COMPRESS` writes
+    // exactly that shape. `resolve_parent` would refuse it with `not-found`, so
+    // the parent is resolved through the creating form. The link checks are the
+    // same ones every other write performs.
+    let parent_logical = logical
+        .parent()
+        .ok_or_else(|| Error::new(ErrorKind::NotADirectory, "the root has no parent"))?;
+    let parent_host = root.resolve_dir_creating(&parent_logical)?;
+    let host = parent_host.join(logical.file_name());
     if is_dir {
         match fs::create_dir(&host) {
             Ok(()) => {}

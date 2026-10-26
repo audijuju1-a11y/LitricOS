@@ -101,6 +101,7 @@ below surfaced.
 | 14 | litric-sysd | unset | `MemoryMax=64M` | enabled at boot, so resident at idle, and it has **no budget line** - BUG-0008 |
 | 15 | litric-envd | unset | `MemoryMax=128M` | enabled at boot, so resident at idle, and it has **no budget line** - BUG-0008 |
 | 17 | litric-notifyd | unset | `MemoryMax=32M` | added 2026-10-26 with the notification queue. Enabled at boot, so resident at idle, and it has **no budget line** - BUG-0008. The cap is a ceiling, not a measurement: the queue is at most 64 notes of a few hundred bytes, and nothing on this host has run the daemon inside the image yet |
+| 18 | litric-filesd | unset | `MemoryMax=256M` | added 2026-10-26 with the Files daemon (ADR-0019). Socket-activated (`Accept=yes`), so **0 MB until the Files application opens a folder**, and the cap is a ceiling, not a measurement - BUG-0008 |
 | 16 | bluetoothd (`bluez`) | 5 MB | TARGET (not enforced: no drop-in supplies it - BUG-0008) | added 2026-10-12 with the wave-1 write half. Enabled at boot, so resident at idle. **The 320 MB TOTAL below was written before this row**, so it is 5 MB optimistic until the headroom row (13) is re-derived; the guest's own `mem.used_mb` in the GATE 01 entry of 2026-10-12 is the measurement, and it is a floor — no radio, no scanning, no traffic |
 | | **TOTAL** | **320 MB** | `ci/check-memory-budget.py` — static policy presence, not a runtime measurement | |
 

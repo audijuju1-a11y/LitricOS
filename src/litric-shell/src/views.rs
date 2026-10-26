@@ -841,8 +841,11 @@ fn refresh_files(shell: &mut Shell) {
         return;
     }
     let zone = shell.regional.zone.clone();
-    let root = shell.files_root.clone();
-    let bridge = match crate::fsbridge::FsBridge::open(&root, zone) {
+    // The same bridge the rest of the shell uses: whatever the daemon policy
+    // decided at startup applies to the listing too, and a second `open` here
+    // is how a window would come to read the disk directly while every other
+    // operation went through the daemon.
+    let bridge = match shell.try_files_bridge(zone) {
         Ok(b) => b,
         Err(e) => {
             shell.files.apply_error(e.to_string());

@@ -111,6 +111,12 @@ pub struct FsBridge {
     host_root: std::path::PathBuf,
     #[cfg(unix)]
     zone: litric_locale::TimeZone,
+    /// The Files daemon, when the machine has one. `None` means this bridge
+    /// performs the I/O itself, which is what a fixture host and a unit test
+    /// need and what a booted image must not: there, the daemon owns the
+    /// directory and this process does not open it for writing at all.
+    #[cfg(unix)]
+    daemon: Option<std::sync::Arc<crate::fsclient::Daemon>>,
 }
 
 #[cfg(unix)]
@@ -135,77 +141,42 @@ fn map_err(op: &str, e: &std::io::Error) -> FsError {
 
 /// The directories every user storage starts with.
 ///
-/// These are the places the Files window and the desktop icons name, plus
-/// `Projects`, which is in `FilesApp::DEFAULT_PLACES`. Creating one that exists
-/// is a no-op: the first-run initialiser is run on every boot, so it must never
-/// delete or replace anything.
-pub const DEFAULT_STORAGE_DIRS: [&str; 7] = [
-    "Documents",
-    "Downloads",
-    "Desktop",
-    "Pictures",
-    "Music",
-    "Videos",
-    "Projects",
-];
+/// Re-exported from `litric-files`, which is where the daemon gets the same
+/// list. Two copies of "which folders does a new account start with" is how a
+/// user ends up with a `Documents` on one path and not on the other.
+pub const DEFAULT_STORAGE_DIRS: [&str; 7] = litric_files::STANDARD_DIRS;
 
 /// Create `host` and the standard folders inside it, without disturbing what is
 /// already there.
 ///
-/// This is what makes a first boot work: the Files application opens in
-/// `/Documents`, and a storage root that exists but has no `Documents` would
-/// make the first thing the user sees an empty folder with no way to tell
-/// whether it is empty or broken. Running it again after a restart changes
-/// nothing.
+/// This is the direct path: it exists for a fixture host and for the test
+/// suite. On a booted machine `litric-filesd` performs it, because the daemon
+/// owns the directory (ADR-0019).
 ///
 /// # Errors
 /// `NotADirectory` when the root or a standard name exists as something else;
-/// otherwise the OS error mapped to a sentence a person can act on.
+/// otherwise the OS error, mapped to a sentence a person can act on.
 pub fn ensure_storage(host: &std::path::Path) -> Result<(), FsError> {
-    #[cfg(not(unix))]
-    {
-        let _ = host;
-        Err(FsError::Unsupported)
-    }
-    #[cfg(unix)]
-    {
-        match std::fs::symlink_metadata(host) {
-            Ok(meta) if !meta.is_dir() => return Err(FsError::NotADirectory),
-            // A link is not a directory here even when it points at one: the
-            // storage root is a real directory the systemd sandbox opened.
-            Ok(meta) if meta.file_type().is_symlink() => return Err(FsError::NotADirectory),
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::create_dir_all(host).map_err(|e| map_err("create storage", &e))?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    // Private by default. Only this process writes the user's
-                    // documents, and the browser's download directory is opened
-                    // separately (see the unit file) rather than by widening
-                    // every folder in the tree.
-                    std::fs::set_permissions(host, std::fs::Permissions::from_mode(0o700))
-                        .map_err(|e| map_err("secure storage", &e))?;
-                }
+    litric_files::ensure_storage(host).map_err(|e| FsError::from_files(&e))
+}
+
+impl FsError {
+    /// The sentence for an error the `litric-files` library raised.
+    fn from_files(e: &litric_files::Error) -> Self {
+        use litric_files::ErrorKind;
+        match e.kind() {
+            ErrorKind::NotFound => Self::NotFound,
+            ErrorKind::Exists => Self::Exists,
+            ErrorKind::PermissionDenied | ErrorKind::SymlinkRefused => Self::Denied,
+            ErrorKind::InvalidName | ErrorKind::BadRequest => Self::BadName,
+            ErrorKind::NotADirectory | ErrorKind::IsADirectory => Self::NotADirectory,
+            ErrorKind::TooLarge | ErrorKind::Limit => {
+                Self::Io(format!("that is too large: {}", e.message()))
             }
-            Err(e) => return Err(map_err("open storage", &e)),
+            // Every remaining kind is a real refusal with a real reason, and
+            // the reason is the message the library wrote.
+            _ => Self::Io(e.message().to_owned()),
         }
-        for name in DEFAULT_STORAGE_DIRS {
-            let dir = host.join(name);
-            match std::fs::symlink_metadata(&dir) {
-                Ok(meta) if meta.file_type().is_dir() && !meta.file_type().is_symlink() => {}
-                Ok(_) => {
-                    return Err(FsError::Io(format!(
-                        "{name} in the file storage exists but is not a folder"
-                    )))
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    std::fs::create_dir(&dir).map_err(|e| map_err("create folder", &e))?;
-                }
-                Err(e) => return Err(map_err("create folder", &e)),
-            }
-        }
-        Ok(())
     }
 }
 
@@ -227,11 +198,45 @@ impl FsBridge {
             if !meta.is_dir() {
                 return Err(FsError::NotADirectory);
             }
+
+            // Direct mode: this process opens the documents itself. Only a
+            // fixture host reaches this; the image attaches the daemon with
+            // `open_via_daemon` instead.
             Ok(Self {
                 host_root: host.to_path_buf(),
                 zone,
+                daemon: None,
             })
         }
+    }
+
+    /// A bridge that sends every operation to `daemon` instead of performing it
+    /// here (ADR-0019).
+    ///
+    /// The root is still checked as a directory on this host: the shell shows
+    /// paths, and a bridge whose root does not exist would report "not found"
+    /// for a storage the daemon is serving. The daemon creates the root, so on
+    /// a booted machine this check passes because the daemon already ran.
+    ///
+    /// # Errors
+    /// `Unsupported` on non-Unix hosts; `NotFound` / `NotADirectory` when the
+    /// root is not a real directory there.
+    #[cfg(unix)]
+    pub fn open_via_daemon(
+        host: &std::path::Path,
+        zone: litric_locale::TimeZone,
+        daemon: std::sync::Arc<crate::fsclient::Daemon>,
+    ) -> Result<Self, FsError> {
+        let mut bridge = Self::open(host, zone)?;
+        bridge.daemon = Some(daemon);
+        Ok(bridge)
+    }
+
+    /// The daemon this bridge forwards to, if any.
+    #[cfg(unix)]
+    #[must_use]
+    pub fn daemon(&self) -> Option<&std::sync::Arc<crate::fsclient::Daemon>> {
+        self.daemon.as_ref()
     }
 
     /// The host path of a logical path such as `/Documents`, refusing `..`,
@@ -321,6 +326,12 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::host_path`], plus I/O.
     pub fn list_dir(&self, logical: &str) -> Result<Vec<Entry>, FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.list_dir(logical);
+        }
         #[cfg(not(unix))]
         {
             let _ = logical;
@@ -376,6 +387,12 @@ impl FsBridge {
     /// # Errors
     /// [`FsError::Unsupported`] on non-Unix hosts.
     pub fn exists(&self, logical: &str) -> Result<bool, FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.exists(logical);
+        }
         #[cfg(not(unix))]
         {
             let _ = logical;
@@ -393,6 +410,12 @@ impl FsBridge {
     /// # Errors
     /// [`FsError::BadName`] for an illegal name; then as [`Self::host_path`].
     pub fn mkdir(&self, parent: &str, name: &str) -> Result<(), FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.mkdir(parent, name);
+        }
         if !valid_name(name) {
             return reject(name);
         }
@@ -418,6 +441,12 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::mkdir`].
     pub fn new_file(&self, parent: &str, name: &str) -> Result<(), FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.new_file(parent, name);
+        }
         if !valid_name(name) {
             return reject(name);
         }
@@ -444,6 +473,12 @@ impl FsBridge {
     /// # Errors
     /// [`FsError::Exists`] when the destination name is taken.
     pub fn rename(&self, parent: &str, old: &str, new: &str) -> Result<(), FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.rename(parent, old, new);
+        }
         // Both names are final segments. `old` was only checked by the caller, and
         // a bridge method that trusts its caller with a path is a bridge whose
         // confinement is a promise: `rename(dir, "/etc/passwd", ...)` used to
@@ -476,6 +511,12 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::host_path`] plus I/O.
     pub fn copy(&self, from: &str, dest_dir: &str) -> Result<String, FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.copy(from, dest_dir);
+        }
         #[cfg(not(unix))]
         {
             let _ = (from, dest_dir);
@@ -508,6 +549,12 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::copy`].
     pub fn move_item(&self, from: &str, dest_dir: &str) -> Result<String, FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.move_item(from, dest_dir);
+        }
         #[cfg(not(unix))]
         {
             let _ = (from, dest_dir);
@@ -553,6 +600,12 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::host_path`].
     pub fn delete(&self, logical: &str) -> Result<(), FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.delete(logical);
+        }
         #[cfg(not(unix))]
         {
             let _ = logical;
@@ -577,6 +630,12 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::host_path`] plus I/O.
     pub fn trash(&self, logical: &str, now_secs: u64) -> Result<(), FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.trash(logical);
+        }
         #[cfg(not(unix))]
         {
             let _ = (logical, now_secs);
@@ -630,6 +689,12 @@ impl FsBridge {
     /// # Errors
     /// [`FsError::Unsupported`] on non-Unix; I/O when the trash cannot be read.
     pub fn trash_list(&self) -> Result<Vec<TrashEntry>, FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.trash_list();
+        }
         #[cfg(not(unix))]
         {
             Err(FsError::Unsupported)
@@ -721,6 +786,12 @@ impl FsBridge {
     /// [`FsError::NotFound`] when the entry is gone; [`FsError::Exists`] when
     /// something now stands where it would go.
     pub fn trash_restore(&self, name: &str) -> Result<String, FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.trash_restore(name);
+        }
         if name.starts_with('.') || name.contains('/') {
             return Err(FsError::BadName);
         }
@@ -758,6 +829,12 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::delete`] on the trash name.
     pub fn trash_purge(&self, name: &str) -> Result<(), FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.trash_purge(name);
+        }
         if name.starts_with('.') || name.contains('/') {
             return Err(FsError::BadName);
         }
@@ -770,6 +847,12 @@ impl FsBridge {
     /// # Errors
     /// Per-entry failures skip the entry; only a total failure surfaces.
     pub fn trash_empty(&self) -> Result<usize, FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.trash_empty();
+        }
         let mut n = 0usize;
         for e in self.trash_list()? {
             if self.trash_purge(&e.name).is_ok() {
@@ -785,6 +868,12 @@ impl FsBridge {
     /// # Errors
     /// [`FsError::NotFound`] / [`FsError::Denied`] / [`FsError::Io`].
     pub fn read_text(&self, logical: &str) -> Result<String, FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.read_text(logical);
+        }
         #[cfg(not(unix))]
         {
             let _ = logical;
@@ -812,6 +901,12 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::new_file`].
     pub fn write_text(&self, parent: &str, name: &str, content: &str) -> Result<(), FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.write_text(parent, name, content);
+        }
         if !valid_name(name) {
             return reject(name);
         }
@@ -841,6 +936,12 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::host_path`]; unreadable subtrees are skipped.
     pub fn search(&self, from: &str, query: &str) -> Result<Vec<String>, FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.search(from, query);
+        }
         // `host_path` fails with `Unsupported` on non-Unix, which also keeps
         // the recursive walk below a Unix-only method.
         self.host_path(from)?;
@@ -889,6 +990,12 @@ impl FsBridge {
     /// # Errors
     /// [`FsError::Unsupported`] on non-Unix; then as the archive writer.
     pub fn compress(&self, dest: &str, sources: &[String]) -> Result<(), FsError> {
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.compress(dest, sources);
+        }
         let leaf = dest.rsplit('/').next().unwrap_or_default();
         if !valid_name(leaf) {
             return Err(FsError::BadName);
@@ -974,6 +1081,16 @@ impl FsBridge {
     /// # Errors
     /// As the archive reader (unsafe-entry, ratio, depth), plus I/O.
     pub fn extract(&self, archive: &str) -> Result<String, FsError> {
+        // The daemon is told the destination explicitly rather than deriving
+        // it, so both ends agree on where an archive lands.
+        // The daemon owns the user's documents (ADR-0019), so the operation
+        // does not happen in this process at all.
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            let out_dir = extract_dir(archive);
+            daemon.extract(archive, &out_dir)?;
+            return Ok(out_dir);
+        }
         #[cfg(not(unix))]
         {
             let _ = archive;
@@ -987,25 +1104,7 @@ impl FsBridge {
             std::fs::File::open(&p)
                 .and_then(|mut f| f.read_to_end(&mut bytes))
                 .map_err(|e| map_err("extract", &e))?;
-            let stem = archive
-                .rsplit('/')
-                .next()
-                .unwrap_or_default()
-                .trim_end_matches(".zip")
-                .trim_end_matches(".tar")
-                .trim_end_matches(".gz")
-                .trim_end_matches(".tgz")
-                .to_owned();
-            let parent = std::path::PathBuf::from(archive)
-                .parent()
-                .and_then(|d| d.to_str())
-                .unwrap_or("/")
-                .to_owned();
-            let out_dir = if parent.ends_with('/') {
-                format!("{parent}{stem}")
-            } else {
-                format!("{parent}/{stem}")
-            };
+            let out_dir = extract_dir(archive);
             let out_host = self.checked_path(&out_dir, true)?;
             if std::fs::symlink_metadata(&out_host).is_ok() {
                 return Err(FsError::Exists);
@@ -1053,6 +1152,35 @@ impl FsBridge {
     #[must_use]
     pub fn host_root(&self) -> &std::path::Path {
         &self.host_root
+    }
+}
+
+/// Where an archive's contents are written: a folder beside it, named after the
+/// archive with its extension removed.
+///
+/// One implementation, used by the direct path and by the daemon path. A second
+/// copy is how the two ends would come to disagree about where an extraction
+/// lands — the class of defect this module has already paid for once
+/// (BUG-0009/BUG-0011).
+fn extract_dir(archive: &str) -> String {
+    let stem = archive
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(".zip")
+        .trim_end_matches(".tar")
+        .trim_end_matches(".gz")
+        .trim_end_matches(".tgz")
+        .to_owned();
+    let parent = std::path::PathBuf::from(archive)
+        .parent()
+        .and_then(|d| d.to_str())
+        .unwrap_or("/")
+        .to_owned();
+    if parent.ends_with('/') {
+        format!("{parent}{stem}")
+    } else {
+        format!("{parent}/{stem}")
     }
 }
 

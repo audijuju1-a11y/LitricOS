@@ -17,10 +17,13 @@ performs trash operations (`litric-filesd`) and it did not exist.
 ## Decision
 
 1. **`litric-filesd`** (crate `litric-files`) performs every file operation. It runs
-   as the desktop user `litric`, with write access to that user's home only
-   (`/var/home/litric`), activated per connection by `litric-files.socket`
-   (`/run/litric/files.sock`, `SocketMode=0600`, owner root, `Accept=yes`), exactly like
-   the browser broker in ADR-0018.
+   as the desktop user `litric`, with write access to one directory only
+   (`/var/lib/litric-files`, created by `StateDirectory=` and opened through
+   `ProtectSystem=strict`; `ProtectHome=yes` hides the user's home from it entirely),
+   activated per connection by `litric-files.socket` (`/run/litric/files.sock`,
+   `SocketMode=0600`, owner root, `Accept=yes`), exactly like the browser broker in
+   ADR-0018. The shell is what opens that socket; it no longer performs a file
+   operation of its own.
 2. **Logical paths.** The shell never sends an absolute host path. Every path is
    relative to the user root and written `/Documents/report.odt`. Each segment is
    validated: not empty, not `.` or `..`, no `/`, no NUL or other control byte, at most
@@ -53,6 +56,20 @@ space, free text percent-encoded as in ADR-0018. Response: `OK <n>` followed by 
 `PROGRESS <done-bytes> <total-bytes> <current-pct>` lines before the final `OK`/`ERR`.
 Entry lines are `key=value` pairs.
 
+**Paths on the wire.** A path field is normally sent literally — `/Documents/a.txt` —
+which is what every example below shows and what a reply always contains. The line
+grammar separates fields with single spaces, so a path that holds a space (a folder the
+user named *My Documents*), a literal `%`, or a non-ASCII byte cannot be written that
+way. Such a path is percent-encoded instead, exactly like a free-text field, and then it
+no longer starts with `/` (`/` encodes to `%2F`). The rule has no third case:
+
+* starts with `/` → a literal path, used as it is;
+* anything else → a percent-encoded path, which must decode.
+
+Replies always carry **logical** paths (`/Documents/x`), never host paths. On the image
+the root is `/` and the two spellings coincide; on a fixture root they do not, and a
+host path in a message is a sandbox detail leaking into the interface.
+
 | Command | Reply lines |
 |---|---|
 | `HELLO 1` | `version=… root=<pct> trash=1` |
@@ -60,18 +77,19 @@ Entry lines are `key=value` pairs.
 | `LIST <path> [hidden=0\|1]` | `e name= kind=<dir\|file\|link\|other> size= mtime= mode= hidden= target=` ; a final `truncated=1` if more than 10000 entries |
 | `STAT <path>` | one entry line plus `items=` for a directory |
 | `DU <path>` | `bytes= files= dirs= partial=<0\|1>` |
-| `MKDIR <parent> <name>` · `NEWFILE <parent> <name>` | `path=<pct>` — never overwrites |
+| `MKDIR <parent> <name>` · `NEWFILE <parent> <name>` | `path=<pct>` (logical) — never overwrites |
+| `WRITETEXT <parent> <name> <content-pct>` | `path=<pct>` — creates with content, exactly three fields, never overwrites. The content is one field, so it is bounded by the line limit (16384 bytes); anything larger is refused with `limit` rather than written short |
 | `RENAME <path> <new-name>` | `path=<pct>` — never overwrites |
 | `CONFLICTS <dest-dir> <path>…` | `name=<pct>` for every source whose name already exists in `dest-dir` |
 | `COPY <dest-dir> <skip\|replace\|keep-both> <path>…` | progress, then `path=<pct>` per created item. Copying into the source's own directory always keeps both, as "name - Copy.ext" |
 | `MOVE <dest-dir> <skip\|replace\|keep-both> <path>…` | progress, then `path=` per item. Rename when possible, copy-then-delete across filesystems. A directory can never be moved into itself |
 | `TRASH <path>…` | `trashed=<pct-trash-name>` per item |
-| `TRASHLIST` | `t name= original=<pct> deleted= size= kind=` |
+| `TRASHLIST` | `t name= original=<pct> deleted= size= kind=`. `name` is a file name and is percent-encoded, so `RESTORE`/`PURGE` decode theirs |
 | `RESTORE <trash-name>…` | `path=` per item; `ERR restore-would-overwrite` if the original location is occupied |
 | `PURGE <trash-name>…` · `EMPTYTRASH` | `removed=<n>` |
 | `DELETE <path>…` | `removed=<n>` — permanent, the shell confirms first |
 | `COMPRESS <dest-zip> <path>…` | progress, then `path=` of the new archive (never overwrites) |
-| `EXTRACT <archive> <dest-dir>` | progress, then `path=` of the directory written; `.zip .tar .tar.gz .tgz .gz` |
+| `EXTRACT <archive> <dest-dir>` | progress, then `path=` of the directory written; `.zip .tar .tar.gz .tgz .gz`. `dest-dir` must already exist — the daemon writes *into* it and never creates it, so the caller makes the folder first (the shell does, over this protocol). Entries whose own parent folder is absent from the archive are created on the way |
 | `SEARCH <path> <query-pct>` | `e path= name= kind= size= mtime=`; at most 500, then `truncated=1` |
 | `RECENT` | the 100 most recently modified files under the root, excluding Trash |
 | `VOLUMES` | `v target=<pct> fstype= size= used= avail=` |

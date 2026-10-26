@@ -205,6 +205,33 @@ impl Root {
         Ok((dir, logical.file_name().to_owned()))
     }
 
+    /// The host directory for a logical directory, creating it when missing.
+    ///
+    /// [`Root::resolve`] refuses a path whose components do not exist, which is
+    /// right for every operation on an item that is supposed to be there. It is
+    /// wrong for extraction: an archive is allowed to store `docs/report.txt`
+    /// without also storing `docs/`, and the parent then has to be created as
+    /// part of writing the entry. Before this existed, such an archive failed
+    /// with `not-found`, naming a folder the archive had every right not to
+    /// list.
+    ///
+    /// The components are still walked one at a time and each existing one is
+    /// checked with `symlink_metadata`, so a link standing where a folder should
+    /// be is refused rather than written through — the confinement is the same,
+    /// only the create is new.
+    ///
+    /// # Errors
+    /// `symlink-refused` / `not-a-directory` for a component in the way; OS
+    /// errors map through [`Error::from_io`].
+    pub fn resolve_dir_creating(&self, logical: &LogicalPath) -> Result<PathBuf, Error> {
+        let mut host = self.host_root.clone();
+        for segment in logical.as_str().split('/').filter(|s| !s.is_empty()) {
+            host.push(segment);
+        }
+        self.ensure_dir_chain(&host)?;
+        Ok(host)
+    }
+
     /// Create every missing directory between the root and `host_dir`,
     /// verifying each existing component with `symlink_metadata` so a link
     /// in the way is refused rather than followed. Used by restore, which
@@ -963,7 +990,10 @@ fn numbered_name(base: &str, occupied: &dyn Fn(&str) -> bool) -> Option<String> 
 /// Relative path join used by the search and recent walks. The root itself
 /// is the empty string; every child is `parent/name`.
 fn join_rel(parent: &str, name: &str) -> String {
-    if parent.is_empty() {
+    // A walk that starts at the root passes "/" as its parent, and joining it
+    // naively produced "//Documents/a.txt" — a path that is accepted everywhere
+    // and matches nothing that was printed from a LIST.
+    if parent.is_empty() || parent == "/" {
         format!("/{name}")
     } else {
         format!("{parent}/{name}")

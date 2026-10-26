@@ -92,6 +92,9 @@ COMPONENT_UNITS = {
     "litric-sysd": ["litric-sysd.service"],
     "litric-envd": ["litric-envd.service"],
     "litric-notifyd": ["litric-notifyd.service"],
+    # The Files daemon is a template: one instance per connection, and the
+    # cap sits in the template, which is where an instance inherits it from.
+    "litric-filesd": ["litric-files@.service"],
     "journald": ["systemd-journald.service"],
     "udevd": ["systemd-udevd.service"],
     "dbus-broker": ["dbus-broker.service"],

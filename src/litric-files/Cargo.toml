@@ -18,3 +18,7 @@ litric-locale  = { path = "../litric-locale" }
 [lib]
 name = "litric_files"
 path = "src/lib.rs"
+
+[[bin]]
+name = "litric-filesd"
+path = "src/main.rs"

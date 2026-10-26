@@ -79,11 +79,23 @@ means a Linux host with `tools/provision-builder.sh` applied.
   the smoke test fail.
 - **Runs:** builder only.
 
-### W1 — Files privilege split (`litric-filesd`)
+### W1 — Files privilege split (`litric-filesd`) — **DONE 2026-10-26, unit level**
 
 - **Outcome:** the Files application stops writing files in-process. The shell
   talks to a daemon over a socket; the daemon runs as its own user with exactly
   the file root writable.
+- **What landed:** `litric-filesd` (`--stdio` for `Accept=yes`, `--socket` for a
+  standalone run, `--info`); `WRITETEXT` added to LFP/1; path fields carry an
+  encoded form so a folder named *My Documents* can be addressed at all; the
+  shell's `fsclient.rs` routes every `FsBridge` operation through it and refuses
+  to fall back when the daemon is absent; the socket and service units moved out
+  of `image/units-pending/` and the socket is enabled by `mkosi.postinst.chroot`;
+  the shell unit no longer declares `litric-files` as a writable StateDirectory.
+  Three protocol defects were found by driving it over a socket (double-encoded
+  entry names, host paths in replies, `SEARCH` lines missing their `e ` prefix)
+  and fixed with tests.
+- **Still open:** no booted image and no QEMU on this host, so the socket
+  activation, the sandbox and the uid split are reviewed but not exercised.
 - **Why now:** `src/litric-files/src/server.rs` and `ops.rs` already exist and
   the unit is parked in `image/units-pending/`; the shell's direct `fsbridge`
   path is `Saved/UNRESOLVED_ITEMS.md` items 2 and 8, and the matrix's Files row

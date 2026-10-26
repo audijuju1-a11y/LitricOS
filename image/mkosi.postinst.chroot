@@ -71,12 +71,12 @@ enable_unit litric-drop-caches.service  multi-user.target
 # Socket-activated per connection (ADR-0018, ADR-0019): enabling the socket is
 # what makes the daemon reachable; the @.service template is never enabled.
 enable_unit litric-browser.socket   sockets.target
-# NOT enabled: litric-files.socket. Its ExecStart is /usr/bin/litric-filesd and no
-# crate produces that binary, so the socket would accept connections and then
-# fail to spawn a daemon -- a broken service that a healthy boot log hides,
-# because a socket unit needs no binary to start. The units are kept, with the
-# reason, in image/units-pending/; re-enable this line in the same change that
-# gives litric-filesd a real binary target.
+# The Files daemon (ADR-0019). It was NOT enabled until `litric-filesd` existed:
+# a socket unit needs no binary to start, so the boot looked healthy while every
+# connection failed to spawn a daemon. `src/litric-files` now builds the binary,
+# `tools/build.sh` stages it, and the shell talks to it instead of opening the
+# user's documents from the process that draws the screen.
+enable_unit litric-files.socket    sockets.target
 # Lab diagnostic console: an autologin shell on the second serial port, so a
 # disposable image can answer "why did this unit die" from inside. The
 # production profile ships without this drop-in and with root locked.

@@ -47,6 +47,8 @@ pub mod domkey;
 pub mod fb;
 pub mod font;
 pub mod fsbridge;
+#[cfg(unix)]
+pub mod fsclient;
 pub mod i18n;
 pub mod icons;
 pub mod inbox;
