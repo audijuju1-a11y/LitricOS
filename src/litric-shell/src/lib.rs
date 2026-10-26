@@ -53,6 +53,7 @@ pub mod link;
 pub mod lock;
 pub mod monitor;
 pub mod overview;
+pub mod prefstore;
 pub mod seek;
 pub mod settings;
 pub mod shell;

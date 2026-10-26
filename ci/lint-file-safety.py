@@ -77,6 +77,9 @@ ALLOWED = {
     "src/litric-bench/src/bin/litricos-test.rs": {
         "cmd_cleanup": "the explicit cleanup command; the path is the one the CLI was given",
     },
+    "src/litric-shell/src/prefstore.rs": {
+        "save": "removes only the store's own temporary file (settings.conf.tmp.<pid>) -- before writing, and again when the write failed -- never a preference record",
+    },
     "src/litric-shell/src/e2e.rs": {
         "e2e_root": "removes the temporary fixture root it is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
         "journey_files_selects_with_mouse_and_compresses_multiple_items": "removes the fixture root this journey made with `e2e_root` -- tagged with this process's id under the system temp directory -- after asserting the archive it asked for exists in it",

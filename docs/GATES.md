@@ -1212,3 +1212,70 @@ exists to keep muted (chroma ≤ 90 at three anchors).
 Revert this commit. `Wallpaper` disappears, the compositor takes a theme only, the
 context-menu row cycles themes again, and the five tests above fail — including the
 one written for the original defect.
+
+## 2026-10-25 — one preference store: versioned, atomic, and it survives garbage
+
+- **Result:** PASS_WITH_LIMITATIONS
+- **Command:** `ci/verify.sh` (Linux x86_64, cargo 1.99.1; no mkosi, qemu or pytest on this host)
+- **Raw:** **26 pass, 0 fail, 4 skipped** — the four SKIPs are image build, boot smoke
+  test, idle measurement and golden frames.
+- **Scope:** the gate matrix blocker "Settings application and registry — no settings
+  store, no schema, no persistence path", narrowed to the settings the shell itself
+  owns. It does **not** claim a settings daemon.
+
+### What the old path did wrong
+
+The record was parsed and written inline in `main.rs`. Three specific failures, in
+increasing order of consequence:
+
+| Failure | What a user sees |
+|---|---|
+| two parsers waiting to drift | nothing today; a second reader of the file would have had to copy the match arms, and the copies would diverge on the first new key |
+| `fs::read_to_string` treated **any** read error as "no file" | an invalid-UTF-8 or truncated record — a write interrupted by a power cut — made the account look brand new, so first-run appeared and the desktop settings looked lost |
+| no `version` key | there was nowhere for a migration to start, so the only way to change the format was to guess from the keys that happened to be present |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/prefstore.rs` | new module: `VERSION = 1`, `parse`, `encode`, `Store::{new, path, load, save}`. Line-oriented `key=value`, unknown keys ignored, unparsable values keep the caller's default, invalid UTF-8 decoded lossily instead of refused. Writes go to `settings.conf.tmp.<pid>`, are `fsync`ed, renamed, and the directory is `fsync`ed; the directory is `0700` and the file `0600` |
+| `src/litric-shell/src/main.rs` | `load_preferences` / `store_preferences` are now two short calls into the store. **Behaviour change:** a record that exists but cannot be read is reported on stderr and defaults are used with setup still finished, instead of being silently treated as a fresh account |
+| `src/litric-shell/src/lib.rs` | module registration |
+| `ci/lint-file-safety.py` | one reviewed entry for `prefstore::save` — the only deletions are the store's own temporary file, before writing and on the failure path (45 sites reviewed, up from 44) |
+| `docs/master-plan/25-beta-1.0-gate-matrix.md` | the settings row now names what exists and what still does not |
+
+### Evidence
+
+`cargo test -p litric-shell --lib` — 460 passed (450 before; 10 new), `main.rs` 32
+passed, every other target unchanged. `cargo clippy --all-targets -- -D warnings`
+passes; `ci/lint-file-safety.py` reports 45 reviewed deletion sites.
+
+The new tests and what they would catch:
+
+| Test | What it would catch |
+|---|---|
+| `a_record_round_trips_through_the_file` | a save that is never read back, or a key written under one name and parsed under another |
+| `an_absent_file_is_not_an_error_and_a_present_one_counts_as_set_up` | "missing" and "unreadable" collapsing into the same state again |
+| `a_file_from_before_the_flag_existed_still_counts_as_finished_setup` | an upgraded account being shown first-run because the new flag is absent from an old file |
+| `unknown_keys_and_values_keep_the_defaults` | a newer build's file resetting this build's settings to garbage, or a `version=9` file being rejected outright |
+| `malformed_lines_are_skipped_rather_than_failing_the_whole_record` | one bad line costing the user every other setting |
+| `bool_tokens_accept_the_forms_a_person_writes` | a hand-edited `yes` being read as `false` |
+| `the_encoded_record_names_its_version_first` | a writer that loses the version, making migration impossible again |
+| `the_file_is_private_to_the_account_and_leaves_no_temporary_behind` | a world-readable preference file, or a temp file left behind on every save |
+| `a_garbage_file_parses_to_defaults_instead_of_stopping_the_desktop` | binary noise or a truncated write taking the desktop down at startup |
+| `saving_over_a_stale_temporary_still_succeeds` | a killed process's temp file making every later save fail forever |
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that this is a settings store for the system | it is the shell's own preferences. `litric-settingsd` still does not exist and settings owned by other components have no store; the gate matrix row stays `NOT_IMPLEMENTED` |
+| that the write survives a power cut | atomicity is by construction (temp file, `fsync`, rename, directory `fsync`), and the tests prove the failure paths that can be exercised in-process. No power-loss injection was performed |
+| that the file lands where the image allows | the path is `/var/lib/litric-shell/settings.conf` under the caller's root; the image's writable layout was not exercised because no image was built |
+| that `Saved/UNRESOLVED_ITEMS.md` item 11 is closed | that file is a dated audit snapshot of an earlier tree and was deliberately not edited; this entry is the newer evidence, and the daemon/registry half of the item remains open |
+
+### Rollback
+
+Revert this commit. The inline parser and writer come back, the record loses its
+`version` line (it still parses), the behaviour change above reverts to showing
+first-run for an unreadable file, and the ten tests above disappear.

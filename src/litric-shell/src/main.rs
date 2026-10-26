@@ -1479,9 +1479,8 @@ fn store_browser_data(args: &Args, history: &[String], bookmarks: &[String]) -> 
 }
 
 fn load_preferences(args: &Args, regional: &Regional) -> litric_shell::settings::Preferences {
-    use litric_design::Accent;
-    use litric_shell::desktop::Wallpaper;
     use litric_shell::i18n::Language;
+    use litric_shell::prefstore::Store;
     use litric_shell::settings::Preferences;
 
     let detected_language = if regional.locale.tag.starts_with("en") {
@@ -1490,126 +1489,38 @@ fn load_preferences(args: &Args, regional: &Regional) -> litric_shell::settings:
         // The product default is Thai when no supported UI locale was detected.
         Language::Thai
     };
-    let mut preferences = Preferences::new(args.theme, detected_language);
-    // No file means this account has never finished setup. A file written before
-    // the flag existed came from a setup that finished, so it keeps the desktop.
-    let stored = fs::read_to_string(preference_path(args)).ok();
-    preferences.onboarded = stored.is_some();
-    if let Some(content) = stored {
-        for line in content.lines() {
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            match key.trim() {
-                "theme" => {
-                    if let Some(theme) = ThemeKind::all()
-                        .iter()
-                        .copied()
-                        .find(|theme| theme.token() == value.trim())
-                    {
-                        preferences.theme = theme;
-                    }
-                }
-                "language" => {
-                    if let Some(language) = Language::parse(value) {
-                        preferences.language = language;
-                    }
-                }
-                // An accent this build does not know is not an error: a
-                // settings file written by a newer build has to load, and the
-                // default accent is the honest fallback. The contrast gate in
-                // `litric-design` is what makes every accepted value safe.
-                "accent" => {
-                    if let Some(accent) = Accent::parse(value) {
-                        preferences.accent = accent;
-                    }
-                }
-                "wallpaper" => {
-                    if let Some(wallpaper) = Wallpaper::parse(value) {
-                        preferences.wallpaper = wallpaper;
-                    }
-                }
-                "reduce_motion" => {
-                    if let Some(enabled) = parse_bool(value) {
-                        preferences.reduce_motion = enabled;
-                    }
-                }
-                "onboarded" => {
-                    if let Some(done) = parse_bool(value) {
-                        preferences.onboarded = done;
-                    }
-                }
-                _ => {}
+    let defaults = Preferences::new(args.theme, detected_language);
+    let store = Store::new(preference_path(args));
+    let mut preferences = match store.load() {
+        Ok(Some(preferences)) => preferences,
+        // No file means this account has never finished setup.
+        Ok(None) => Preferences {
+            onboarded: false,
+            ..defaults
+        },
+        // A record that exists but cannot be read is reported, not treated as a
+        // fresh account: silently resetting preferences is how a user loses
+        // their desktop to a permissions mistake. Setup stays finished, the
+        // defaults are used, and the reason is on stderr.
+        Err(error) => {
+            eprintln!("litric-shell: {error}; using defaults");
+            Preferences {
+                onboarded: true,
+                ..defaults
             }
         }
-    }
+    };
     if args.theme_explicit {
         preferences.theme = args.theme;
     }
     preferences
 }
 
-fn parse_bool(raw: &str) -> Option<bool> {
-    match raw.trim() {
-        "1" | "true" | "yes" => Some(true),
-        "0" | "false" | "no" => Some(false),
-        _ => None,
-    }
-}
-
 fn store_preferences(
     args: &Args,
     preferences: litric_shell::settings::Preferences,
 ) -> Result<(), String> {
-    use std::fs::OpenOptions;
-
-    let path = preference_path(args);
-    let parent = path
-        .parent()
-        .ok_or_else(|| "settings path has no parent directory".to_owned())?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("cannot create settings directory: {error}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
-            .map_err(|error| format!("cannot secure settings directory: {error}"))?;
-    }
-
-    let temp = parent.join(format!("settings.conf.tmp.{}", std::process::id()));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let result = (|| -> Result<(), String> {
-        let mut file = options
-            .open(&temp)
-            .map_err(|error| format!("cannot create temporary settings file: {error}"))?;
-        writeln!(file, "theme={}", preferences.theme.token())
-            .and_then(|()| writeln!(file, "language={}", preferences.language.token()))
-            .and_then(|()| writeln!(file, "accent={}", preferences.accent.token()))
-            .and_then(|()| writeln!(file, "wallpaper={}", preferences.wallpaper.token()))
-            .and_then(|()| {
-                writeln!(
-                    file,
-                    "reduce_motion={}",
-                    u8::from(preferences.reduce_motion)
-                )
-            })
-            .and_then(|()| writeln!(file, "onboarded={}", u8::from(preferences.onboarded)))
-            .map_err(|error| format!("cannot write settings: {error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("cannot sync settings: {error}"))?;
-        fs::rename(&temp, &path).map_err(|error| format!("cannot commit settings: {error}"))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
+    litric_shell::prefstore::Store::new(preference_path(args)).save(preferences)
 }
 
 fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
