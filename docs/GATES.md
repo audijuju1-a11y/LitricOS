@@ -1689,3 +1689,76 @@ Revert this commit. `F.16` returns to `PENDING` (and its ledger row with it), th
 27 notes return to empty, and the plan's Track R table returns to the 56/12
 numbers -- which were wrong, and which the next reviewer would have had to
 discover again.
+## 2026-10-26 -- the four components the shell already has
+
+The review above ended with "27 items are still nobody's work". Four of them are
+now somebody's: `Part 10` compares Windows 26H2, macOS 27 and GNOME 51 guidance
+with the shell's own component layer, item by item, and every claim about the
+shell in it can be checked by opening `src/litric-shell/src/ui.rs`.
+
+### What changed
+
+* **A new research part, `Part 10`, with four items.** `F.01` buttons,
+  `F.03` switches, `F.06` sliders and `F.19` lists each get platform guidance
+  with tiered sources, the shell's implementation read out of the source with
+  `MEASURED` values, a delta table, and a status. Four of the 27 are researched;
+  the other 23 are untouched.
+* **Two of the four components are dead code, and nothing said so.** `ui::slider`
+  and `ui::icon_button` have no call site anywhere in the shell. The volume
+  control -- the canonical slider on two of the three platforms -- is two step
+  buttons and a mute button; every icon-only control calls `icons::draw` at its
+  own site and inherits none of the component's states. "The shell has a slider"
+  was true of the component layer and false of the product.
+* **Two state defects.** A disabled **off** switch renders pixel-identical to an
+  enabled off switch (the disabled branch only lowers the *on* fill), which
+  contradicts the module's own contract in its header comment; and `ui::slider`
+  ignores `Disabled`, `Error`, `Loading` and `Selected` entirely, so a slider
+  nobody can move draws exactly like one they can.
+* **Keyboard focus is drawn as hover.** `Shell::is_highlighted`
+  (`src/litric-shell/src/shell.rs`) merges the pointer and the keyboard focus, and
+  no surface asks for `State::Focused` -- the focus ring in `ui::focus_ring` is
+  live code with no caller in the product. Windows documents a distinct
+  high-visibility focus visual and GNOME documents Tab/Shift+Tab with Return to
+  activate, so this is a delta against both, found by searching for the variant
+  rather than by looking at a screen.
+* **Numbers where the platforms give none.** Microsoft publishes one button
+  minimum (120 px) and one target (7.5 mm / 40 px); Apple publishes 44 x 44 pt;
+  GNOME publishes no numbers. The shell's targets are 34 x 22 px step buttons,
+  a 110 px scan button, and 30 px Settings rows -- all measured from the call
+  sites and the token file, none estimated.
+* **Sources registered.** 31 new rows in `Research-Deep-all/LitricOS Source Register.csv`,
+  including the Apple pages as `SNIPPET_ONLY`: the reader returned titles and
+  summaries for those, so the macOS column is the weakest of the three and says so.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| checklist statuses | `PARTIAL` 383 -> 387, `PENDING` 192 -> 188, total still 597 |
+| `python3 ci/lint-parity.py` | PASS -- 389 rows, 0 problems |
+| `python3 ci/lint-doc-refs.py` | OK -- 666 citations across 138 documents |
+| `python3 ci/lint-line-endings.py` | OK -- 338 files, all LF |
+| `python3 ci/check-python-syntax.py` | OK -- 48 files parse |
+
+No code changed, so `cargo test`, `clippy` and `ci/verify.sh` were not re-run.
+The two state defects above were read out of the source and are recorded, not
+fixed: fixing them is a code change with its own tests, and neither has been
+decided yet.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that any of the four components is correct | the part compared guidance with an implementation and decided nothing. Eight findings, zero decisions |
+| that the macOS column is as good as the other two | four Apple pages returned summaries; one item's detail came through a third-party mirror |
+| that the shell's state matrix matches a platform | none of the three publishes a full rest/hover/pressed/disabled/focus specification for these controls in the pages read |
+| that anything was seen on screen | no image was booted and no pixel measured. Every rendering claim is a claim about the code that draws it |
+| that `F` is nearly done | 23 of 27 items remain `PENDING` |
+
+### Rollback
+
+Revert this commit. The four statuses return to `PENDING` with their audit notes,
+`Part 10` disappears, the 31 source rows go with it, and the plan's counts return
+to 192/383 -- along with the four comparisons, including the one that found the
+dead slider, which the next reviewer would have had to rediscover by counting call
+sites that nobody had counted.

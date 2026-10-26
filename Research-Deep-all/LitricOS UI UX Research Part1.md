@@ -33,7 +33,7 @@ Status vocabulary used throughout: COMPLETE, PARTIAL, NOT FOUND, INACCESSIBLE, N
 | 21 | macOS 27 System Settings catalogue (MD) | 2 | PENDING |
 | 22 | macOS HIG / Liquid Glass design system (MG) | 3, 4 | PENDING |
 | 30–37 | GNOME, KDE Plasma, Xfce, Cinnamon, COSMIC, Pantheon, Budgie, ChromeOS (LG–LR) | 1, 2 | PENDING |
-| 40 | Shared component catalog (F) | 3 | PENDING |
+| 40 | Shared component catalog (F) | 3 | PARTIAL (Part 10: `F.01`, `F.03`, `F.06`, `F.19` researched; 23 items `PENDING`) |
 | 41 | Design tokens and accessibility (G) | 4 | PENDING |
 | 42 | User workflows and edge cases (H) | 5 | PENDING |
 | 43 | Technical integration and LitricOS feasibility (I) | 6, 7 | PENDING |

@@ -25,6 +25,7 @@ implemented from — not a design document and not a specification.
 | `Research-Deep-all/LitricOS UI UX Research Part 4  Fluent and WinUI Design System.md` | Fluent token/geometry/material/state rules `WC.01`–`WC.13` | 3,460+ lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 5  macOS 27 System Settings.md` | macOS Settings catalogue `MD.01`–`MD.28+` | 2,700+ lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 6  macOS 27 Desktop Model.md` | menu bar, Dock, Finder, window model, Spaces, Spotlight, Control Center, dialogs, input, session | 5,726 lines |
+| `Research-Deep-all/LitricOS UI UX Research Part 10 F Shared Component Catalogue.md` | chapter `F`, the shared component catalogue: the four controls the shell has (`F.01` buttons, `F.03` switches, `F.06` sliders, `F.19` lists) compared against `src/litric-shell/src/ui.rs` | 422 lines |
 | `Research-Deep-all/LitricOS Coverage Checklist.csv` | the ledger behind all of it | 597 items |
 | `Research-Deep-all/LitricOS Source Register.csv` | every source URL with tier and status | 3,979 rows |
 | `Research-Deep-all/Fluent Token Register.csv` | measured Fluent tokens | 3,553 rows |
@@ -42,8 +43,8 @@ unfinished:
 | Status | Items | Share |
 |---|---:|---:|
 | `COMPLETE` | 18 | 3 % |
-| `PARTIAL` | 383 | 64 % |
-| `PENDING` (not yet researched) | 192 | 32 % |
+| `PARTIAL` | 387 | 65 % |
+| `PENDING` (not yet researched) | 188 | 31 % |
 | `NOT APPLICABLE` | 3 | — |
 | `NOT FOUND` | 1 | — |
 
@@ -51,7 +52,7 @@ By section, the shape is: Windows shell (`WA`) 97 partial, Windows Settings
 (`WB`) 141 partial, macOS desktop (`MC`) 62 partial, macOS Settings (`MD`) 38
 partial, Fluent (`WC`) 12 partial, tokens (`G`) 19 partial — while the whole
 Linux-desktop comparison (`LG`–`LR`, eight systems × 15 items = 120), the shared
-component catalogue (`F`, 27 of 28), workflows (`H`, 21), technical feasibility
+component catalogue (`F`, 23 of 28), workflows (`H`, 21), technical feasibility
 (`I`, 12) and the final audit (`J`, 9) are **still `PENDING`**.
 
 That single table decides the plan's shape: **the research cannot be treated as
@@ -291,12 +292,12 @@ because every later row depends on the registry existing.
 
 ## 6. Track R — finishing the research
 
-The corpus is 32 % unresearched and 64 % partial. The build may not cite it, so
+The corpus is 31 % unresearched and 65 % partial. The build may not cite it, so
 completion is work, scheduled beside the build:
 
 ### Coverage today (2026-10-26)
 
-The checklist holds 597 items; 401 are `COMPLETE` or `PARTIAL` and therefore
+The checklist holds 597 items; 405 are `COMPLETE` or `PARTIAL` and therefore
 citable, and `docs/parity/ledger.csv` decides 389 of them -- every one that is a
 surface. Per chapter:
 
@@ -309,7 +310,7 @@ surface. Per chapter:
 | `G` tokens & accessibility | 19 | 19 |
 | `WC` Fluent / WinUI design system | 14 | 14 |
 | `MG` macOS HIG | 11 | 11 |
-| `F` shared component catalogue | 1 | 1 (the other 27 are `PENDING`) |
+| `F` shared component catalogue | 5 | 1 (4 newly citable; their decisions are not written, 23 are `PENDING`) |
 | `CH00` version baseline | 12 | 0 (not a surface; see the ledger README) |
 
 The 389 rows split 169 `ADAPT`, 126 `DEFER`, 88 `REJECT`, 6 `ADOPT`. `DEFER` is
@@ -324,14 +325,14 @@ be cited until their status is final, so they are Track R's work and not rows.
 
 ### Track R queue, first pass (2026-10-26)
 
-192 checklist items are `PENDING`, and none of them may be cited. The first pass
+188 checklist items are `PENDING`, and none of them may be cited. The first pass
 counted any heading that *contained* an item's title and found 56; that number was
 wrong, and the chapter `F` review below is how it was found out. Counting only
 headings that name the item -- its id, or its whole title -- leaves 24:
 
 | Chapter | `PENDING` | A section names it |
 |---|---:|---:|
-| `F` shared component catalogue | 27 | 1 |
+| `F` shared component catalogue | 23 | 5 |
 | `H` workflows & edge cases | 21 | 2 |
 | `I` technical feasibility | 12 | 1 |
 | `J` source register & audit | 9 | 1 |
@@ -339,7 +340,7 @@ headings that name the item -- its id, or its whole title -- leaves 24:
 
 A section is **not** a status either: it says someone wrote something under that
 name, not that it answers the item with a source. So the queue is 24 reviews, and
-the other 168 items are research that has not been done.
+the other 164 items are research that has not been done.
 
 #### Chapter `F`, reviewed (2026-10-26)
 
@@ -356,6 +357,28 @@ platform of the three this catalogue needs, so the item is `PARTIAL` with that
 note, and its row is in the ledger. The other 27 carry the note
 "the corpus has no section for this item"; a review that ends by writing down
 what is missing is worth more than one that guesses.
+
+#### Part 10: the four components the shell already has (2026-10-26)
+
+Batch B9 entered early and partially, on the four `F` items that can be checked
+against running code today rather than against another system's documentation.
+`Part 10` compares Windows 26H2, macOS 27 and GNOME 51 guidance with
+`src/litric-shell/src/ui.rs` and sets `F.01` buttons, `F.03` switches, `F.06`
+sliders and `F.19` lists to `PARTIAL`.
+
+It found eight things, and none of them is a ledger row yet: a disabled **off**
+switch draws exactly like an enabled one; `ui::slider` and `ui::icon_button` have
+no call site at all, so the component layer contains a slider the product does not
+have and an icon button every icon-only control bypasses; keyboard focus is drawn
+as the hover picture while `State::Focused` stays unreachable; the state-matrix
+test covers two of the four controls; and the shell's Settings rows are 30 px
+tall against every platform's minimum target.
+
+Why this is `PARTIAL` and not `COMPLETE`: Apple's component pages return titles
+and summaries to a reader, so the macOS column is the weakest of the three and one
+item's detail came through a third-party mirror. Why it is citable at all: the
+comparison is against code in this repository, so a reader can open the file and
+disagree with a specific sentence.
 
 Each batch produces ledger-ready rows, not prose: a research batch is done when
 its checklist status is final and its rows carry evidence tiers.
@@ -429,5 +452,5 @@ one measured strip inside the layout pass.
   what people expect.
 - It does not implement a control whose backend does not exist, and does not
   hide a missing backend behind a disabled-looking row.
-- It does not treat the research as complete. 192 items are unread, and the
+- It does not treat the research as complete. 188 items are unread, and the
   build may not use them until they are not.
