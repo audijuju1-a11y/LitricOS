@@ -790,7 +790,7 @@ fn main() -> ExitCode {
 fn partial_frame(rig: &mut Rig) -> (f64, u64, u64, String) {
     let region = Rect::new(600.0, 560.0, 160.0, 48.0);
     let area = (region.w * region.h) as u64;
-    let mut comp = desktop::Compositor::new(W, H, &rig.theme);
+    let mut comp = desktop::Compositor::new(W, H, &rig.theme, desktop::Wallpaper::System);
     let _ = comp.repaint(&mut rig.shell, true, &[]);
     comp.scene.reset_pixels_visited();
     let t = Instant::now();

@@ -2,6 +2,7 @@
 
 use litric_design::{Accent, ThemeKind};
 
+use crate::desktop::Wallpaper;
 use crate::i18n::Language;
 
 /// Preferences that the shell can apply itself and persist safely.
@@ -12,6 +13,8 @@ pub struct Preferences {
     /// Accent colour applied on top of `theme`. High-contrast themes keep their
     /// own accent, which is why this is a separate choice rather than a theme.
     pub accent: Accent,
+    /// Wallpaper the desktop paints.
+    pub wallpaper: Wallpaper,
     /// Shell interface language.
     pub language: Language,
     /// Whether shell animation is reduced.
@@ -29,6 +32,7 @@ impl Preferences {
         Self {
             theme,
             accent: Accent::Default,
+            wallpaper: Wallpaper::System,
             language,
             reduce_motion: false,
             onboarded: true,

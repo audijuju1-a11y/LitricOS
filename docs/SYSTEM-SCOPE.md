@@ -114,9 +114,9 @@ component, our UI and policy on top
 | Status | Count | Share |
 |---|---:|---:|
 | `D` done and tested | **9** | 0.8% |
-| `P` partial, real code with passing tests | **114** | 9.8% |
+| `P` partial, real code with passing tests | **116** | 10.0% |
 | `S` specified, no code | **294** | 25.2% |
-| `T` not started | **748** | 64.2% |
+| `T` not started | **746** | 64.0% |
 | **Total** | **1165** | |
 
 Nine rows are done: the boot chain, proved by `docs/evidence/gate01-boot.log`.
@@ -436,7 +436,7 @@ SerenityOS rewrote everything and mostly runs in emulators.
 
 | # | Feature | Owner | Status |
 |---:|---|:---:|:---:|
-| 219 | Wallpaper: static image | O | T |
+| 219 | Wallpaper: static image | O | **P** |
 | 220 | Wallpaper: slideshow | O | T |
 | 221 | Wallpaper: per-monitor | O | T |
 | 222 | Wallpaper: dynamic (time of day) | O | T |
@@ -698,7 +698,7 @@ anything is destroyed. It performs no I/O and has no view; those rows stay `T`.
 
 | # | Setting | Owner | Status |
 |---:|---|:---:|:---:|
-| 425 | Wallpaper picker | O | T |
+| 425 | Wallpaper picker | O | **P** |
 | 426 | Theme: light / dark / auto | O | T |
 | 427 | Accent colour | O | T |
 | 428 | Font family and size | O | T |

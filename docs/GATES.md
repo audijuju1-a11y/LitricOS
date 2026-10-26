@@ -1132,3 +1132,83 @@ The new tests and what they would catch:
 Revert this commit. `Accent` disappears, `Preferences` loses the field, the
 Appearance page is theme → language again, and the seven design tests and the two
 shell tests above fail with it — which is the point of adding them.
+
+## 2026-10-25 — a wallpaper choice, and the menu row that finally does what it says
+
+- **Result:** PASS_WITH_LIMITATIONS
+- **Command:** `ci/verify.sh` (Linux x86_64, cargo 1.99.1; no mkosi, qemu or pytest on this host)
+- **Raw:** **26 pass, 0 fail, 4 skipped** — unchanged from the entry above; the four
+  SKIPs are still image build, boot smoke test, idle measurement and golden frames.
+- **Scope:** Wave 2 (appearance), second slice: the wallpaper half the previous entry
+  left open. Same gate, one commit later.
+
+### The row that named one thing and changed another
+
+The desktop context menu has always carried **"Next wallpaper"**. It called
+`cycle_theme`, so it changed the colour theme and left the wallpaper alone. That is
+the kind of defect a status table cannot show: the control existed, the action
+existed, and the wiring between them was wrong in a way only a click reveals. The
+row now cycles the wallpaper, and a test performs that action and asserts the theme
+did not move.
+
+### What a wallpaper choice is allowed to be
+
+Three built-in wallpapers, all drawn by the shell from tokens and its one embedded
+image. No directory of images, because ADR-0009 keeps decoders out of the privileged
+drawing process, and no user-supplied file format support: a choice that opened
+`/usr/share/backgrounds` to the shell's decoder would be a new attack surface sold as
+a feature.
+
+| Choice | What it paints | Why it exists |
+|---|---|---|
+| `system` | the embedded obsidian wave (dark) / solid pearl (light) — byte-identical to what shipped before the setting | the default must change no pixel |
+| `flat` | one field of the theme's own `bg_base` | the calm option; nothing to sample, nothing to decode |
+| `glow` | a vertical wash `bg_elevated` → `bg_base` with a 10% accent glow top-right | a second look that still comes from the palette, so the contrast gate has seen every colour in it |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/desktop.rs` | `Wallpaper` (all/token/parse), `wallpaper_for`, and `Compositor::new`/`retheme` take the choice. `wallpaper()` remains the system default for the frame dump and the older render path |
+| `src/litric-shell/src/settings.rs` | `Preferences.wallpaper`, defaulting to `system` |
+| `src/litric-shell/src/shell.rs` | `cycle_wallpaper`, `Hot::SettingsWallpaper`, Ctrl+W on the Settings surface, and `NextWallpaper` routed to it instead of `cycle_theme` |
+| `src/litric-shell/src/views.rs` | the Appearance row and the updated shortcut hint |
+| `src/litric-shell/src/main.rs` | `wallpaper=` written and parsed; the compositor is built and rebuilt with the stored choice |
+| `docs/SYSTEM-SCOPE.md` | rows 219 (wallpaper: static image) and 425 (wallpaper picker) `T` → `P`; tally rewritten by `ci/count-scope.py --fix` |
+
+### Evidence
+
+| Target | Result |
+|---|---|
+| `cargo test -p litric-shell --lib` | 450 passed (445 before; 5 new) |
+| `cargo test -p litric-shell` (all targets) | 450 + 32 + 4 + 10 + 3 + 3 + 9 passed, 0 failed |
+| `src/litric-shell/src/e2e.rs` | the Settings journey clicks the wallpaper row and asserts the persistence effect |
+
+The new tests and what they would catch:
+
+| Test | What it would catch |
+|---|---|
+| `every_wallpaper_choice_paints_something_different` | a picker whose entries all paint the same frame, compared as whole frames rather than one pixel |
+| `the_flat_wallpaper_is_one_colour_and_the_glow_is_not` | `glow` collapsing to a flat fill, which would keep the setting "working" and change nothing on screen |
+| `wallpaper_tokens_are_unique_and_round_trip` | two choices sharing a token, so a stored choice loads as a different wallpaper |
+| `every_wallpaper_still_leaves_the_glass_a_readable_alpha` | a new wallpaper becoming a way to make text unreadable without touching contrast: for every theme and wallpaper the glass solver must still find an alpha that keeps body text at 4.5:1 over the brightest pixel |
+| `the_next_wallpaper_row_changes_the_wallpaper_and_not_the_theme` | the original defect: a menu row that names the wallpaper and cycles the theme |
+
+`the_wallpaper_stays_a_backdrop_not_a_gradient_demo` was extended from the shipped
+wallpaper to all three, because `glow` is exactly the kind of accent wash that test
+exists to keep muted (chroma ≤ 90 at three anchors).
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the wallpaper looks right on a real framebuffer | no image was built or booted; golden frames are SKIP (no Latin face on this host). The evidence is painted canvases and state, not a photograph |
+| that it is a wallpaper *picker* in the product sense | it is a cycling row over three built-ins: no thumbnails, no user images, no slideshow, no per-monitor wallpaper (row 221 still `T`), no time-of-day wallpaper (row 222 still `T`), no accent extracted from the wallpaper (row 247 still `T`) |
+| that frame cost is unchanged | the flat and glow fields are cheaper than the wave, but no frame-time measurement was taken on a booted image; the project's perf budgets are still `FAIL` as recorded |
+| that the choice survives a reboot on the image | the record round-trip is tested against a temporary root, not the image's writable location |
+
+### Rollback
+
+Revert this commit. `Wallpaper` disappears, the compositor takes a theme only, the
+context-menu row cycles themes again, and the five tests above fail — including the
+one written for the original defect.

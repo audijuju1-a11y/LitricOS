@@ -1480,6 +1480,7 @@ fn store_browser_data(args: &Args, history: &[String], bookmarks: &[String]) -> 
 
 fn load_preferences(args: &Args, regional: &Regional) -> litric_shell::settings::Preferences {
     use litric_design::Accent;
+    use litric_shell::desktop::Wallpaper;
     use litric_shell::i18n::Language;
     use litric_shell::settings::Preferences;
 
@@ -1521,6 +1522,11 @@ fn load_preferences(args: &Args, regional: &Regional) -> litric_shell::settings:
                 "accent" => {
                     if let Some(accent) = Accent::parse(value) {
                         preferences.accent = accent;
+                    }
+                }
+                "wallpaper" => {
+                    if let Some(wallpaper) = Wallpaper::parse(value) {
+                        preferences.wallpaper = wallpaper;
                     }
                 }
                 "reduce_motion" => {
@@ -1585,6 +1591,7 @@ fn store_preferences(
         writeln!(file, "theme={}", preferences.theme.token())
             .and_then(|()| writeln!(file, "language={}", preferences.language.token()))
             .and_then(|()| writeln!(file, "accent={}", preferences.accent.token()))
+            .and_then(|()| writeln!(file, "wallpaper={}", preferences.wallpaper.token()))
             .and_then(|()| {
                 writeln!(
                     file,
@@ -1659,7 +1666,7 @@ fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
     shell.sample(gather_facts(args));
     shell.environments = gather_environments(args);
 
-    let compositor = desktop::Compositor::new(width, height, &theme);
+    let compositor = desktop::Compositor::new(width, height, &theme, preferences.wallpaper);
 
     let mut lines = vec![
         format!("version={VERSION}"),
@@ -1894,7 +1901,10 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
                     .iter()
                     .any(|effect| matches!(effect, Effect::PersistPreferences(_)))
                 {
-                    session.compositor.retheme(&session.shell.tokens.theme);
+                    session.compositor.retheme(
+                        &session.shell.tokens.theme,
+                        session.shell.settings.preferences.wallpaper,
+                    );
                 }
             }
         }
@@ -2096,19 +2106,23 @@ mod tests {
 
         let mut chosen = load_preferences(&args, &regional);
         chosen.accent = Accent::Violet;
-        store_preferences(&args, chosen).expect("accent is stored");
-        assert_eq!(load_preferences(&args, &regional).accent, Accent::Violet);
+        chosen.wallpaper = litric_shell::desktop::Wallpaper::Glow;
+        store_preferences(&args, chosen).expect("appearance is stored");
+        let stored = load_preferences(&args, &regional);
+        assert_eq!(stored.accent, Accent::Violet);
+        assert_eq!(stored.wallpaper, litric_shell::desktop::Wallpaper::Glow);
 
         // A token written by a newer build must not make the whole record
         // unreadable: the rest of the file still loads and the accent falls
         // back to the theme's own.
         fs::write(
             preference_path(&args),
-            "theme=light\nlanguage=th\naccent=chartreuse\nonboarded=1\n",
+            "theme=light\nlanguage=th\naccent=chartreuse\nwallpaper=neon\nonboarded=1\n",
         )
         .expect("future file");
         let loaded = load_preferences(&args, &regional);
         assert_eq!(loaded.accent, Accent::Default);
+        assert_eq!(loaded.wallpaper, litric_shell::desktop::Wallpaper::System);
         assert_eq!(loaded.theme, ThemeKind::Light);
 
         let _ = fs::remove_dir_all(&root);

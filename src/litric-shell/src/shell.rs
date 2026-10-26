@@ -394,6 +394,8 @@ pub enum Hot {
     SettingsTheme,
     /// Cycle the accent colour choices.
     SettingsAccent,
+    /// Cycle the wallpaper choices.
+    SettingsWallpaper,
     /// Toggle reduced motion in the shell.
     SettingsMotion,
     /// Finish first-run setup and show the desktop.
@@ -2180,8 +2182,10 @@ impl Shell {
                     return self.open_files_entry(&p);
                 }
             }
+            // The row says "Next wallpaper"; it used to cycle the theme, which
+            // made the menu item a lie about the thing it changed.
             MA::NextWallpaper => {
-                return self.cycle_theme();
+                return self.cycle_wallpaper();
             }
             MA::EngineGoogle => {
                 self.browser.engine = crate::apps::SearchEngine::Google;
@@ -2586,6 +2590,24 @@ impl Shell {
         };
         let mut next = self.settings.preferences;
         next.accent = accent;
+        self.save_preferences(next)
+    }
+
+    /// Step to the next wallpaper. Like the accent, the first entry is the
+    /// shipped look, so the default is reachable from the cycle.
+    fn cycle_wallpaper(&mut self) -> Vec<Effect> {
+        let wallpapers = crate::desktop::Wallpaper::all();
+        let current = self.settings.preferences.wallpaper;
+        let next_wallpaper = wallpapers
+            .iter()
+            .position(|wallpaper| *wallpaper == current)
+            .and_then(|index| wallpapers.get(index.saturating_add(1)).copied())
+            .or_else(|| wallpapers.first().copied());
+        let Some(wallpaper) = next_wallpaper else {
+            return Vec::new();
+        };
+        let mut next = self.settings.preferences;
+        next.wallpaper = wallpaper;
         self.save_preferences(next)
     }
 
@@ -4239,6 +4261,7 @@ impl Shell {
                 Key::Char('l') if mods.ctrl => Some(self.toggle_language()),
                 Key::Char('t') if mods.ctrl => Some(self.cycle_theme()),
                 Key::Char('a') if mods.ctrl => Some(self.cycle_accent()),
+                Key::Char('w') if mods.ctrl => Some(self.cycle_wallpaper()),
                 Key::Char('m') if mods.ctrl => Some(self.toggle_reduced_motion()),
                 _ => None,
             },
@@ -5046,6 +5069,7 @@ impl Shell {
             Hot::SettingsLanguage => self.toggle_language(),
             Hot::SettingsTheme => self.cycle_theme(),
             Hot::SettingsAccent => self.cycle_accent(),
+            Hot::SettingsWallpaper => self.cycle_wallpaper(),
             Hot::SettingsMotion => self.toggle_reduced_motion(),
             Hot::SetupDone => self.finish_first_run(),
             // The dock and the launcher it becomes.
@@ -6260,6 +6284,31 @@ mod tests {
     }
 
     #[test]
+    fn the_next_wallpaper_row_changes_the_wallpaper_and_not_the_theme() {
+        // The row has always said "Next wallpaper" and used to cycle the theme.
+        // A menu item that names one thing and changes another is a lie the UI
+        // tells on every right-click.
+        let mut s = shell();
+        let before_theme = s.settings.preferences.theme;
+        let before_wallpaper = s.settings.preferences.wallpaper;
+        let effects = s.perform_menu(crate::apps::MenuAction::NextWallpaper);
+        assert_ne!(
+            s.settings.preferences.wallpaper, before_wallpaper,
+            "the row named next wallpaper and left it alone"
+        );
+        assert_eq!(
+            s.settings.preferences.theme, before_theme,
+            "the row named next wallpaper and changed the theme"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::PersistPreferences(_))),
+            "a wallpaper change that is not persisted is gone at logout"
+        );
+    }
+
+    #[test]
     fn every_power_command_names_itself_for_the_user_and_for_the_daemon() {
         // Two vocabularies that must not drift apart: the word on the button
         // and the word in the request. `Restart` is `REBOOT` on the wire, and
@@ -6919,8 +6968,8 @@ mod tests {
         let theme = Theme::of(ThemeKind::Dark);
         let mut fast = shell();
         let mut full = shell();
-        let mut a = Compositor::new(1280, 800, &theme);
-        let mut b = Compositor::new(1280, 800, &theme);
+        let mut a = Compositor::new(1280, 800, &theme, crate::desktop::Wallpaper::System);
+        let mut b = Compositor::new(1280, 800, &theme, crate::desktop::Wallpaper::System);
         let move_to = |s: &mut Shell, x: f32, y: f32, t: u64| {
             s.handle(
                 &InputEvent::PointerMove {

@@ -2583,6 +2583,21 @@ fn draw_settings_page(
                 Hot::SettingsAccent,
             );
             y += t.px(40.0);
+            let wallpaper_label = format!(
+                "{} · {}",
+                "Change wallpaper",
+                wallpaper_name(shell.settings.preferences.wallpaper)
+            );
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                &wallpaper_label,
+                Hot::SettingsWallpaper,
+            );
+            y += t.px(40.0);
             // `label` rather than `title`: a language offered under its own
             // name is the friendly thing to do, until the face that draws that
             // name is the missing one — then the cheerful label is itself a row
@@ -2933,11 +2948,19 @@ fn draw_settings_page(
         let hint = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
         font::draw(
             canvas,
-            "Ctrl+T theme · Ctrl+A accent · Ctrl+L language · Ctrl+M motion · Tab next control",
+            "Ctrl+T theme · Ctrl+A accent · Ctrl+W wallpaper · Ctrl+L language · Ctrl+M motion · Tab next control",
             pane.x + t.sp(Space::Lg),
             pane.bottom() - t.px(8.0),
             &hint,
         );
+    }
+}
+
+fn wallpaper_name(wallpaper: crate::desktop::Wallpaper) -> &'static str {
+    match wallpaper {
+        crate::desktop::Wallpaper::System => "Default",
+        crate::desktop::Wallpaper::Flat => "Flat",
+        crate::desktop::Wallpaper::Glow => "Glow",
     }
 }
 

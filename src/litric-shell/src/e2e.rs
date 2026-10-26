@@ -391,6 +391,16 @@ fn journey_activity_environment_and_settings_controls_change_real_state() {
         "the accent row must move the accent off the theme default"
     );
     let _ = draw_frame(&mut s);
+    let wallpaper = s.hotspots().rect_of(Hot::SettingsWallpaper).unwrap();
+    let effects = click(&mut s, wallpaper.center().0, wallpaper.center().1);
+    assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));
+    s.finish_preferences_save(Ok(()));
+    assert_ne!(
+        s.settings.preferences.wallpaper,
+        crate::desktop::Wallpaper::System,
+        "the wallpaper row must move the wallpaper off the shipped default"
+    );
+    let _ = draw_frame(&mut s);
     let language = s.hotspots().rect_of(Hot::SettingsLanguage).unwrap();
     let effects = click(&mut s, language.center().0, language.center().1);
     assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));

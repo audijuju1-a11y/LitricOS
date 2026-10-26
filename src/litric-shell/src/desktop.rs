@@ -209,9 +209,9 @@ impl Compositor {
     /// and start the scene as a copy of the wallpaper with that backdrop
     /// attached.
     #[must_use]
-    pub fn new(width: u32, height: u32, theme: &Theme) -> Self {
+    pub fn new(width: u32, height: u32, theme: &Theme, choice: Wallpaper) -> Self {
         let mut paper = Canvas::new(width, height, rgb(0x000000));
-        wallpaper(&mut paper, theme);
+        wallpaper_for(&mut paper, theme, choice);
         let (blur, saturation) = glass_params(theme);
         // The shell composites single-threaded, so the shared backdrop is an
         // Rc: `Canvas` is neither Send nor Sync and never needs to be.
@@ -228,11 +228,11 @@ impl Compositor {
     }
 
     /// Replace the cached wallpaper and glass backdrop after a theme change.
-    pub fn retheme(&mut self, theme: &Theme) {
+    pub fn retheme(&mut self, theme: &Theme, choice: Wallpaper) {
         let width = self.scene.width();
         let height = self.scene.height();
         let mut paper = Canvas::new(width, height, rgb(0x000000));
-        wallpaper(&mut paper, theme);
+        wallpaper_for(&mut paper, theme, choice);
         let (blur, saturation) = glass_params(theme);
         let source = std::rc::Rc::new(paper.glass_source(blur, saturation));
         let mut scene = paper.clone();
@@ -384,13 +384,95 @@ fn paint_cover(canvas: &mut Canvas, iw: u32, ih: u32, pixels: &[u32]) {
     }
 }
 
+/// Which wallpaper the desktop paints.
+///
+/// A choice rather than a path: the shell draws every one of these itself, so a
+/// wallpaper cannot arrive from a directory as an executable image decoder's
+/// problem (ADR-0009 keeps untrusted decoding out of the shell).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Wallpaper {
+    /// What ships: the embedded obsidian wave on the dark themes, a solid pearl
+    /// field on the light ones.
+    #[default]
+    System,
+    /// One flat field of the theme's own base colour. No image, no wash.
+    Flat,
+    /// A restrained vertical wash from the elevated surface into the base
+    /// colour, with a low accent glow in the top-right corner.
+    Glow,
+}
+
+impl Wallpaper {
+    /// Every wallpaper, so the settings UI, the preference file and the tests
+    /// enumerate one list.
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &[Self::System, Self::Flat, Self::Glow]
+    }
+
+    /// Stable token, written to the preference file and parsed back from it.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Flat => "flat",
+            Self::Glow => "glow",
+        }
+    }
+
+    /// Parse a stored token. `None` for anything this build does not know, so a
+    /// settings file from a newer build falls back instead of failing to load.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        Self::all().iter().copied().find(|w| w.token() == raw)
+    }
+}
+
+/// An opaque canvas colour from a design token.
+fn argb(c: litric_design::Rgb) -> u32 {
+    rgb((u32::from(c.r) << 16) | (u32::from(c.g) << 8) | u32::from(c.b))
+}
+
 /// Paint the wallpaper for `theme`.
 ///
 /// Dark uses the embedded wave. Light is a solid Pearl field: the wave is a dark
-/// image and would not read as a light desktop. Both are opaque, with no
-/// gradients, so the glass above them samples real content rather than a wash.
+/// image and would not read as a light desktop. Both are opaque, so the glass
+/// above them samples real content rather than a wash.
 pub fn wallpaper(canvas: &mut Canvas, theme: &Theme) {
-    paint_wallpaper(canvas, theme, WAVE_PNG);
+    wallpaper_for(canvas, theme, Wallpaper::System);
+}
+
+/// Paint the chosen wallpaper.
+///
+/// [`Wallpaper::System`] is byte-for-byte what this desktop painted before the
+/// choice existed, so the default changes no pixel. The other two are drawn from
+/// the theme's own tokens: a wallpaper cannot introduce a colour the contrast
+/// gate has never seen.
+pub fn wallpaper_for(canvas: &mut Canvas, theme: &Theme, choice: Wallpaper) {
+    let field = Rect::new(0.0, 0.0, canvas.width() as f32, canvas.height() as f32);
+    match choice {
+        Wallpaper::System => paint_wallpaper(canvas, theme, WAVE_PNG),
+        Wallpaper::Flat => canvas.fill_round_rect(field, 0.0, argb(theme.palette.bg_base)),
+        Wallpaper::Glow => {
+            canvas.fill_vertical_gradient(
+                field,
+                argb(theme.palette.bg_elevated),
+                argb(theme.palette.bg_base),
+            );
+            // Peak 0.10: the wash is a tint, not a light source. The design
+            // material test that keeps a wallpaper a backdrop rather than a
+            // gradient demo (`the_wallpaper_stays_a_backdrop_not_a_gradient_demo`)
+            // covers this wallpaper too.
+            canvas.radial_wash(
+                field.w * 0.82,
+                field.h * 0.12,
+                field.w.max(field.h) * 0.55,
+                argb(theme.palette.accent),
+                0.10,
+            );
+        }
+    }
 }
 
 fn paint_wallpaper(canvas: &mut Canvas, theme: &Theme, png_bytes: &[u8]) {
@@ -1284,25 +1366,136 @@ mod tests {
     }
 
     #[test]
+    fn every_wallpaper_choice_paints_something_different() {
+        // A picker whose entries all look the same is a picker that lies about
+        // having options. Compared as whole frames rather than by sampling one
+        // pixel: two wallpapers may agree in a corner and differ everywhere a
+        // person actually looks.
+        let theme = Theme::of(ThemeKind::Dark);
+        let mut painted: Vec<(Wallpaper, Vec<u32>)> = Vec::new();
+        for choice in Wallpaper::all() {
+            let mut c = Canvas::new(320, 200, rgb(0x000000));
+            wallpaper_for(&mut c, &theme, *choice);
+            painted.push((*choice, c.pixels().to_vec()));
+        }
+        for (i, (a, pa)) in painted.iter().enumerate() {
+            for (b, pb) in painted.iter().skip(i.saturating_add(1)) {
+                assert_ne!(pa, pb, "{a:?} and {b:?} paint the same wallpaper");
+            }
+        }
+    }
+
+    #[test]
+    fn the_flat_wallpaper_is_one_colour_and_the_glow_is_not() {
+        // The two claims the names make, in every theme: `Flat` is one field,
+        // `Glow` is not. If `Glow` collapsed to a flat fill the setting would
+        // still "work" and change nothing visible.
+        for &kind in ThemeKind::all() {
+            let theme = Theme::of(kind);
+
+            let mut flat = Canvas::new(320, 200, rgb(0x000000));
+            wallpaper_for(&mut flat, &theme, Wallpaper::Flat);
+            let first = flat.get(0, 0);
+            for (x, y) in [(0, 0), (319, 0), (160, 100), (319, 199)] {
+                assert_eq!(
+                    flat.get(x, y),
+                    first,
+                    "{kind:?}: flat wallpaper is not flat at ({x}, {y})"
+                );
+            }
+
+            // Sampled at the glow's own centre and at a corner outside it. The
+            // corners alone are not enough: in the high-contrast light theme the
+            // gradient runs white to white, so two corners can agree while the
+            // wash is still painted where it belongs.
+            let mut glow = Canvas::new(320, 200, rgb(0x000000));
+            wallpaper_for(&mut glow, &theme, Wallpaper::Glow);
+            let centre = glow.get(262, 24);
+            assert_ne!(
+                centre,
+                glow.get(0, 0),
+                "{kind:?}: the glow wallpaper is a flat colour"
+            );
+        }
+    }
+
+    #[test]
+    fn wallpaper_tokens_are_unique_and_round_trip() {
+        // The preference file stores these strings. A duplicate token means a
+        // user's choice loads back as a different wallpaper.
+        let mut seen: Vec<&str> = Vec::new();
+        for choice in Wallpaper::all() {
+            assert!(
+                !seen.contains(&choice.token()),
+                "duplicate token {}",
+                choice.token()
+            );
+            seen.push(choice.token());
+            assert_eq!(Wallpaper::parse(choice.token()), Some(*choice));
+        }
+        assert_eq!(Wallpaper::parse("  glow "), Some(Wallpaper::Glow));
+        assert_eq!(Wallpaper::parse("aurora-borealis"), None);
+        assert_eq!(Wallpaper::parse(""), None);
+    }
+
+    #[test]
+    fn every_wallpaper_still_leaves_the_glass_a_readable_alpha() {
+        // A wallpaper is a user choice; legibility is not. The solver that
+        // firms the glass up over a bright backdrop has to find an alpha in its
+        // permitted range for every wallpaper the picker offers, or the new
+        // option is a way to make text unreadable without touching contrast.
+        for kind in [ThemeKind::Dark, ThemeKind::Light] {
+            let theme = Theme::of(kind);
+            for choice in Wallpaper::all() {
+                let mut c = Canvas::new(480, 300, rgb(0x000000));
+                wallpaper_for(&mut c, &theme, *choice);
+                let brightest = c.brightest(Rect::new(0.0, 0.0, 480.0, 300.0));
+                let backdrop = litric_design::Rgb::new(
+                    ((brightest >> 16) & 0xFF) as u8,
+                    ((brightest >> 8) & 0xFF) as u8,
+                    (brightest & 0xFF) as u8,
+                );
+                let target = 4.5;
+                let alpha = litric_design::Glass::adaptive_alpha_pct(
+                    theme.palette.glass_tint,
+                    theme.palette.text_primary,
+                    backdrop,
+                    target,
+                );
+                assert!(
+                    alpha.is_some(),
+                    "{kind:?} + {choice:?}: no glass alpha keeps text at {target}:1 over {backdrop}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn the_wallpaper_stays_a_backdrop_not_a_gradient_demo() {
         // Saturated washes read through every glass surface as a coloured
         // haze. At each wash anchor the composited colour must stay inside
         // the muted band; 90 would have failed the old 0x2E5BFF@0.55 wash
         // (chroma 124) and passes every current one with margin.
+        // Every wallpaper the picker offers, not just the shipped one: the
+        // accent glow is exactly the kind of wash this test exists to keep
+        // muted.
         for &kind in ThemeKind::all() {
-            let mut c = Canvas::new(1280, 800, rgb(0x000000));
-            wallpaper(&mut c, &Theme::of(kind));
-            let anchors = [
-                c.get((1280.0 * 0.14) as i64, (800.0 * 0.10) as i64),
-                c.get((1280.0 * 0.88) as i64, (800.0 * 0.22) as i64),
-                c.get((1280.0 * 0.62) as i64, (800.0 * 0.98) as i64),
-            ];
-            for px in anchors.into_iter().flatten() {
-                assert!(
-                    chroma(px) <= 90,
-                    "{kind:?} wallpaper wash drifted back to neon: {px:#010x} has chroma {}",
-                    chroma(px)
-                );
+            for choice in Wallpaper::all() {
+                let mut c = Canvas::new(1280, 800, rgb(0x000000));
+                wallpaper_for(&mut c, &Theme::of(kind), *choice);
+                let anchors = [
+                    c.get((1280.0 * 0.14) as i64, (800.0 * 0.10) as i64),
+                    c.get((1280.0 * 0.88) as i64, (800.0 * 0.22) as i64),
+                    c.get((1280.0 * 0.62) as i64, (800.0 * 0.98) as i64),
+                ];
+                for px in anchors.into_iter().flatten() {
+                    assert!(
+                        chroma(px) <= 90,
+                        "{kind:?} {choice:?} wallpaper wash drifted back to neon: \
+                         {px:#010x} has chroma {}",
+                        chroma(px)
+                    );
+                }
             }
         }
     }
