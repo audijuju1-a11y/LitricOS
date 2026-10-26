@@ -1,6 +1,6 @@
 //! Typed settings state owned by the shell.
 
-use litric_design::ThemeKind;
+use litric_design::{Accent, ThemeKind};
 
 use crate::i18n::Language;
 
@@ -9,6 +9,9 @@ use crate::i18n::Language;
 pub struct Preferences {
     /// Built-in colour theme.
     pub theme: ThemeKind,
+    /// Accent colour applied on top of `theme`. High-contrast themes keep their
+    /// own accent, which is why this is a separate choice rather than a theme.
+    pub accent: Accent,
     /// Shell interface language.
     pub language: Language,
     /// Whether shell animation is reduced.
@@ -25,6 +28,7 @@ impl Preferences {
     pub const fn new(theme: ThemeKind, language: Language) -> Self {
         Self {
             theme,
+            accent: Accent::Default,
             language,
             reduce_motion: false,
             onboarded: true,

@@ -1479,6 +1479,7 @@ fn store_browser_data(args: &Args, history: &[String], bookmarks: &[String]) -> 
 }
 
 fn load_preferences(args: &Args, regional: &Regional) -> litric_shell::settings::Preferences {
+    use litric_design::Accent;
     use litric_shell::i18n::Language;
     use litric_shell::settings::Preferences;
 
@@ -1511,6 +1512,15 @@ fn load_preferences(args: &Args, regional: &Regional) -> litric_shell::settings:
                 "language" => {
                     if let Some(language) = Language::parse(value) {
                         preferences.language = language;
+                    }
+                }
+                // An accent this build does not know is not an error: a
+                // settings file written by a newer build has to load, and the
+                // default accent is the honest fallback. The contrast gate in
+                // `litric-design` is what makes every accepted value safe.
+                "accent" => {
+                    if let Some(accent) = Accent::parse(value) {
+                        preferences.accent = accent;
                     }
                 }
                 "reduce_motion" => {
@@ -1574,6 +1584,7 @@ fn store_preferences(
             .map_err(|error| format!("cannot create temporary settings file: {error}"))?;
         writeln!(file, "theme={}", preferences.theme.token())
             .and_then(|()| writeln!(file, "language={}", preferences.language.token()))
+            .and_then(|()| writeln!(file, "accent={}", preferences.accent.token()))
             .and_then(|()| {
                 writeln!(
                     file,
@@ -1598,7 +1609,7 @@ fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
     let _ = litric_shell::font::initialize();
     let regional = Regional::detect(&args.root, |k| std::env::var(k).ok());
     let preferences = load_preferences(args, &regional);
-    let theme = Theme::of(preferences.theme);
+    let theme = Theme::of(preferences.theme).with_accent(preferences.accent);
     let tokens = Tokens::new(theme, scale);
     let mut shell = Shell::new(tokens, width as f32, height as f32, regional);
     shell.load_preferences(preferences);
@@ -2066,6 +2077,39 @@ mod tests {
         // A file written before the flag existed came from a finished setup.
         fs::write(preference_path(&args), "theme=dark\nlanguage=en\n").expect("legacy file");
         assert!(load_preferences(&args, &regional).onboarded);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_accent_choice_survives_a_restart_and_unknown_tokens_fall_back() {
+        use litric_design::Accent;
+
+        let root = std::env::temp_dir().join(format!("litric-accent-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("fixture root");
+        let args = Args {
+            root: root.clone(),
+            ..Args::default()
+        };
+        let regional = Regional::fallback("test");
+
+        let mut chosen = load_preferences(&args, &regional);
+        chosen.accent = Accent::Violet;
+        store_preferences(&args, chosen).expect("accent is stored");
+        assert_eq!(load_preferences(&args, &regional).accent, Accent::Violet);
+
+        // A token written by a newer build must not make the whole record
+        // unreadable: the rest of the file still loads and the accent falls
+        // back to the theme's own.
+        fs::write(
+            preference_path(&args),
+            "theme=light\nlanguage=th\naccent=chartreuse\nonboarded=1\n",
+        )
+        .expect("future file");
+        let loaded = load_preferences(&args, &regional);
+        assert_eq!(loaded.accent, Accent::Default);
+        assert_eq!(loaded.theme, ThemeKind::Light);
 
         let _ = fs::remove_dir_all(&root);
     }

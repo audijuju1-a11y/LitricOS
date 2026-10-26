@@ -78,6 +78,74 @@ impl ThemeKind {
     }
 }
 
+/// A user-selected accent colour, applied on top of a theme.
+///
+/// The choice is a *slot*, not a hex value. Each theme carries the value for
+/// that slot, because the blue that reads on a near-black background is not the
+/// blue that reads on white: the same literal in both themes is how an accent
+/// picker ships an unreadable selection colour.
+///
+/// High-contrast themes ignore the choice entirely. Their accent is part of the
+/// AAA contrast guarantee this crate enforces, and a decorative preference must
+/// not be able to break it. [`Theme::with_accent`] returns such a theme
+/// unchanged, and the settings UI says so rather than offering a control that
+/// silently does nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum Accent {
+    /// The theme's own accent.
+    #[default]
+    Default,
+    /// Cool blue.
+    Sky,
+    /// Soft violet.
+    Violet,
+    /// Blue-green.
+    Teal,
+    /// Warm amber.
+    Amber,
+    /// Pink.
+    Rose,
+}
+
+impl Accent {
+    /// Every accent, so the settings UI and the contrast gate enumerate the
+    /// same list.
+    #[must_use]
+    pub const fn all() -> &'static [Self] {
+        &[
+            Self::Default,
+            Self::Sky,
+            Self::Violet,
+            Self::Teal,
+            Self::Amber,
+            Self::Rose,
+        ]
+    }
+
+    /// Stable token, written to the preference file and parsed back from it.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Sky => "sky",
+            Self::Violet => "violet",
+            Self::Teal => "teal",
+            Self::Amber => "amber",
+            Self::Rose => "rose",
+        }
+    }
+
+    /// Parse a stored token. `None` for anything this build does not know, so a
+    /// settings file from a newer build falls back to the default accent
+    /// instead of failing to load.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        Self::all().iter().copied().find(|a| a.token() == raw)
+    }
+}
+
 /// The semantic colour tokens.
 ///
 /// Semantic, not literal: components ask for `text_primary`, never for a hex
@@ -193,6 +261,43 @@ impl Theme {
                 },
                 glass: Glass::HIGH_CONTRAST,
             },
+        }
+    }
+
+    /// The theme with the user's accent applied.
+    ///
+    /// Only the accent pair moves: `text_primary`, the surfaces and the status
+    /// colours are untouched, because they are the contrast contract and not
+    /// decoration. High-contrast themes return themselves unchanged — see
+    /// [`Accent`].
+    ///
+    /// Every value below is checked by `every_accent_keeps_text_legible` in
+    /// this crate's tests: `on_accent` over `accent`, and `accent` as a text
+    /// tone over both theme backgrounds, at AA in the standard themes.
+    #[must_use]
+    pub const fn with_accent(self, accent: Accent) -> Self {
+        let (accent, on_accent) = match (self.kind, accent) {
+            (ThemeKind::HighContrastDark | ThemeKind::HighContrastLight, _)
+            | (_, Accent::Default) => return self,
+            (ThemeKind::Dark, Accent::Sky) => (Rgb::hex(0x6AA6FF), Rgb::hex(0x06080C)),
+            (ThemeKind::Dark, Accent::Violet) => (Rgb::hex(0xB79CFF), Rgb::hex(0x0B0714)),
+            (ThemeKind::Dark, Accent::Teal) => (Rgb::hex(0x63E0C8), Rgb::hex(0x041712)),
+            (ThemeKind::Dark, Accent::Amber) => (Rgb::hex(0xFFC46B), Rgb::hex(0x1A1000)),
+            (ThemeKind::Dark, Accent::Rose) => (Rgb::hex(0xFFA3C7), Rgb::hex(0x1A0710)),
+            (ThemeKind::Light, Accent::Sky) => (Rgb::hex(0x1D5FD6), Rgb::hex(0xFFFFFF)),
+            (ThemeKind::Light, Accent::Violet) => (Rgb::hex(0x5B32C4), Rgb::hex(0xFFFFFF)),
+            (ThemeKind::Light, Accent::Teal) => (Rgb::hex(0x046B5E), Rgb::hex(0xFFFFFF)),
+            (ThemeKind::Light, Accent::Amber) => (Rgb::hex(0x7A4E00), Rgb::hex(0xFFFFFF)),
+            (ThemeKind::Light, Accent::Rose) => (Rgb::hex(0xA3215C), Rgb::hex(0xFFFFFF)),
+        };
+        Self {
+            kind: self.kind,
+            palette: Palette {
+                accent,
+                on_accent,
+                ..self.palette
+            },
+            glass: self.glass,
         }
     }
 }
@@ -822,6 +927,120 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- accents: a user choice that must not undo the contrast gate ------
+
+    /// The two themes an accent can actually change. High contrast is excluded
+    /// on purpose: see `high_contrast_themes_ignore_the_accent_choice`.
+    const ACCENT_THEMES: [ThemeKind; 2] = [ThemeKind::Dark, ThemeKind::Light];
+
+    #[test]
+    fn every_accent_keeps_text_legible_on_its_own_fill() {
+        // The failure this test exists for: an accent picker whose swatch is
+        // fine and whose button label is unreadable, because `on_accent` was
+        // left at whatever the default theme used.
+        for kind in ACCENT_THEMES {
+            for accent in Accent::all() {
+                let t = Theme::of(kind).with_accent(*accent);
+                let r = t.palette.on_accent.contrast(t.palette.accent);
+                assert!(
+                    r >= 4.5,
+                    "{}: on_accent over {} accent is {r:.2}, needs 4.5",
+                    kind.token(),
+                    accent.token()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_accent_is_readable_as_text_on_the_theme_backgrounds() {
+        // The accent is also a text tone (`Tone::Accent`): selected rows, links
+        // and the primary action label. A pastel that is only meant as a fill
+        // becomes invisible the moment it is used for words.
+        for kind in ACCENT_THEMES {
+            for accent in Accent::all() {
+                let p = Theme::of(kind).with_accent(*accent).palette;
+                for (name, surface) in [("bg_base", p.bg_base), ("bg_elevated", p.bg_elevated)] {
+                    let r = p.accent.contrast(surface);
+                    assert!(
+                        r >= 4.5,
+                        "{}: {} accent on {name} is {r:.2}, needs 4.5",
+                        kind.token(),
+                        accent.token()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn high_contrast_themes_ignore_the_accent_choice() {
+        // A statement of policy, not an implementation detail: the accent is
+        // part of the AAA guarantee in these themes, so the picker must not be
+        // able to weaken it. The settings UI reports the choice as fixed rather
+        // than showing a control with no effect.
+        for kind in [ThemeKind::HighContrastDark, ThemeKind::HighContrastLight] {
+            let base = Theme::of(kind);
+            for accent in Accent::all() {
+                assert_eq!(
+                    base.with_accent(*accent),
+                    base,
+                    "{}: accent {} changed a high-contrast theme",
+                    kind.token(),
+                    accent.token()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn choosing_an_accent_moves_only_the_accent_pair() {
+        // Everything else in the palette is the contrast contract. If a
+        // decorative choice could move `bg_base` or `text_primary`, it would be
+        // a second theme system wearing an accent picker's name.
+        let base = Theme::of(ThemeKind::Dark);
+        let chosen = base.with_accent(Accent::Violet);
+        assert_ne!(chosen.palette.accent, base.palette.accent);
+        assert_eq!(chosen.palette.bg_base, base.palette.bg_base);
+        assert_eq!(chosen.palette.bg_elevated, base.palette.bg_elevated);
+        assert_eq!(chosen.palette.text_primary, base.palette.text_primary);
+        assert_eq!(chosen.palette.text_secondary, base.palette.text_secondary);
+        assert_eq!(chosen.palette.danger, base.palette.danger);
+        assert_eq!(chosen.palette.success, base.palette.success);
+        assert_eq!(chosen.palette.warning, base.palette.warning);
+        assert_eq!(chosen.palette.border, base.palette.border);
+        assert_eq!(chosen.glass, base.glass);
+    }
+
+    #[test]
+    fn the_default_accent_is_the_theme_itself() {
+        for kind in ThemeKind::all() {
+            assert_eq!(
+                Theme::of(*kind).with_accent(Accent::Default),
+                Theme::of(*kind)
+            );
+        }
+    }
+
+    #[test]
+    fn accent_tokens_are_unique_and_round_trip() {
+        // The preference file stores these strings. Two accents sharing a token
+        // means a user's choice silently becomes a different colour on restart.
+        let mut seen: Vec<&str> = Vec::new();
+        for accent in Accent::all() {
+            assert!(
+                !seen.contains(&accent.token()),
+                "duplicate token {}",
+                accent.token()
+            );
+            seen.push(accent.token());
+            assert_eq!(Accent::parse(accent.token()), Some(*accent));
+        }
+        assert_eq!(Accent::parse("  violet "), Some(Accent::Violet));
+        assert_eq!(Accent::parse("chartreuse"), None);
+        assert_eq!(Accent::parse(""), None);
     }
 
     // ---- glass: the failure mode this crate was written to prevent --------

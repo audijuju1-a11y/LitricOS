@@ -89,6 +89,14 @@ Glass **ห้าม default** — จำกัดที่: system bar, Control
 ## 10. Color — ห้ามแตะ palette ใหม่
 `Theme` มี accent/semantic ครบ + AA gate รันอยู่ งานนี้ = **discipline ไม่ใช่แต่ง**: lint จับ `Rgb::hex` นอก wallpaper/demo, และทุกสีที่สื่อสถานะต้องมี non-color cue คู่ (icon/รูปทรง/ข้อความ) ตาม MASTER §42
 
+**เพิ่ม 2026-10-25 — Accent slot:** `Accent` (default/sky/violet/teal/amber/rose) เป็น
+*ช่อง* ไม่ใช่ hex: แต่ละ theme ถือค่าของช่องนั้นเอง (`Theme::with_accent`) เพราะฟ้าเดียวกัน
+ที่อ่านได้บนพื้นเกือบดำไม่ใช่ฟ้าเดียวกันที่อ่านได้บนพื้นขาว. `with_accent` แตะเฉพาะคู่
+`accent`/`on_accent` — พื้น, ตัวอักษร และสีสถานะไม่ขยับ และ high-contrast theme คืนค่าเดิม
+เพราะ accent ที่นั่นเป็นส่วนหนึ่งของสัญญา AAA. ด่านคือ
+`every_accent_keeps_text_legible_on_its_own_fill` + `every_accent_is_readable_as_text_on_the_theme_backgrounds`
+ใน `src/litric-design/src/lib.rs` (40 tests ทั้ง crate).
+
 ## เกณฑ์ตรวจเฟส Foundation
 - [ ] `cargo test -p litric-design` contrast gate ยังเขียว
 - [ ] ไม่มี px ลอยใหม่นอก mapping (grep audit)

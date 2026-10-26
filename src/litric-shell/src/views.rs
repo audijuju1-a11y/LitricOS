@@ -2561,6 +2561,28 @@ fn draw_settings_page(
             let label = format!("{} · {}", "Change theme", theme_name(theme));
             settings_button(canvas, shell, t, pane, y, &label, Hot::SettingsTheme);
             y += t.px(40.0);
+            // The accent is a preference about decoration, never about
+            // contrast: a high-contrast theme keeps its own accent and the row
+            // says so instead of offering a control that would do nothing.
+            let accent_label = if shell.settings.preferences.theme.requires_aaa() {
+                "Accent · fixed in high contrast themes".to_owned()
+            } else {
+                format!(
+                    "{} · {}",
+                    "Change accent",
+                    accent_name(shell.settings.preferences.accent)
+                )
+            };
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                &accent_label,
+                Hot::SettingsAccent,
+            );
+            y += t.px(40.0);
             // `label` rather than `title`: a language offered under its own
             // name is the friendly thing to do, until the face that draws that
             // name is the missing one — then the cheerful label is itself a row
@@ -2911,11 +2933,23 @@ fn draw_settings_page(
         let hint = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
         font::draw(
             canvas,
-            "Ctrl+T theme · Ctrl+L language · Ctrl+M motion · Tab next control",
+            "Ctrl+T theme · Ctrl+A accent · Ctrl+L language · Ctrl+M motion · Tab next control",
             pane.x + t.sp(Space::Lg),
             pane.bottom() - t.px(8.0),
             &hint,
         );
+    }
+}
+
+fn accent_name(accent: litric_design::Accent) -> &'static str {
+    match accent {
+        litric_design::Accent::Default => "Default",
+        litric_design::Accent::Sky => "Sky",
+        litric_design::Accent::Violet => "Violet",
+        litric_design::Accent::Teal => "Teal",
+        litric_design::Accent::Amber => "Amber",
+        litric_design::Accent::Rose => "Rose",
+        _ => "Default",
     }
 }
 

@@ -381,6 +381,16 @@ fn journey_activity_environment_and_settings_controls_change_real_state() {
     assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));
     s.finish_preferences_save(Ok(()));
     let _ = draw_frame(&mut s);
+    let accent = s.hotspots().rect_of(Hot::SettingsAccent).unwrap();
+    let effects = click(&mut s, accent.center().0, accent.center().1);
+    assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));
+    s.finish_preferences_save(Ok(()));
+    assert_ne!(
+        s.settings.preferences.accent,
+        litric_design::Accent::Default,
+        "the accent row must move the accent off the theme default"
+    );
+    let _ = draw_frame(&mut s);
     let language = s.hotspots().rect_of(Hot::SettingsLanguage).unwrap();
     let effects = click(&mut s, language.center().0, language.center().1);
     assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));

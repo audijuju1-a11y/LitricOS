@@ -114,9 +114,9 @@ component, our UI and policy on top
 | Status | Count | Share |
 |---|---:|---:|
 | `D` done and tested | **9** | 0.8% |
-| `P` partial, real code with passing tests | **113** | 9.7% |
+| `P` partial, real code with passing tests | **114** | 9.8% |
 | `S` specified, no code | **294** | 25.2% |
-| `T` not started | **749** | 64.3% |
+| `T` not started | **748** | 64.2% |
 | **Total** | **1165** | |
 
 Nine rows are done: the boot chain, proved by `docs/evidence/gate01-boot.log`.
@@ -468,7 +468,7 @@ SerenityOS rewrote everything and mostly runs in emulators.
 | 243 | Dark theme | O | **P** |
 | 244 | Automatic light/dark by time or ambient light | O | T |
 | 245 | High-contrast theme | O | **P** |
-| 246 | Accent colour selection | O | T |
+| 246 | Accent colour selection | O | **P** |
 | 247 | Accent extracted from the wallpaper | O | T |
 | 248 | Consistent corner radii across every surface | O | **P** |
 | 249 | Real shadows with correct elevation model | O | S |

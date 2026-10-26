@@ -392,6 +392,8 @@ pub enum Hot {
     SettingsLanguage,
     /// Cycle the supported colour themes.
     SettingsTheme,
+    /// Cycle the accent colour choices.
+    SettingsAccent,
     /// Toggle reduced motion in the shell.
     SettingsMotion,
     /// Finish first-run setup and show the desktop.
@@ -2500,11 +2502,21 @@ pub const BOOT_INTRO_MS: u64 = 2_400;
 /// holds the finished mark before the desktop appears.
 pub const BOOT_WRITE_MS: u64 = 1_900;
 
+/// The theme a preference record resolves to: the chosen theme with the chosen
+/// accent applied.
+///
+/// One function rather than three call sites doing it themselves, so loading,
+/// applying and rolling back a preference cannot disagree about what the
+/// accent means.
+fn resolved_theme(preferences: crate::settings::Preferences) -> litric_design::Theme {
+    litric_design::Theme::of(preferences.theme).with_accent(preferences.accent)
+}
+
 impl Shell {
     /// Replace startup defaults with a validated preference record.
     pub fn load_preferences(&mut self, preferences: crate::settings::Preferences) {
         self.settings = crate::settings::Model::new(preferences);
-        self.tokens.theme = litric_design::Theme::of(preferences.theme);
+        self.tokens.theme = resolved_theme(preferences);
         self.quick.reduce_motion = preferences.reduce_motion;
         self.request_full_redraw();
     }
@@ -2514,7 +2526,7 @@ impl Shell {
         let Some(next) = self.settings.begin(preferences) else {
             return Vec::new();
         };
-        self.tokens.theme = litric_design::Theme::of(next.theme);
+        self.tokens.theme = resolved_theme(next);
         self.quick.reduce_motion = next.reduce_motion;
         self.request_full_redraw();
         vec![Effect::PersistPreferences(next)]
@@ -2525,7 +2537,7 @@ impl Shell {
     pub fn finish_preferences_save(&mut self, result: Result<(), String>) {
         self.settings.finish(result);
         let preferences = self.settings.preferences;
-        self.tokens.theme = litric_design::Theme::of(preferences.theme);
+        self.tokens.theme = resolved_theme(preferences);
         self.quick.reduce_motion = preferences.reduce_motion;
         self.request_full_redraw();
     }
@@ -2552,6 +2564,28 @@ impl Shell {
         };
         let mut next = self.settings.preferences;
         next.theme = theme;
+        self.save_preferences(next)
+    }
+
+    /// Step to the next accent choice. The cycle starts at the theme's own
+    /// accent, so the shipped look is reachable again without a reset.
+    ///
+    /// High-contrast themes keep their accent while the choice is live; what
+    /// makes that true is `resolved_theme`, so the step is still recorded and
+    /// takes effect the moment the user returns to a standard theme.
+    fn cycle_accent(&mut self) -> Vec<Effect> {
+        let accents = litric_design::Accent::all();
+        let current = self.settings.preferences.accent;
+        let next_accent = accents
+            .iter()
+            .position(|accent| *accent == current)
+            .and_then(|index| accents.get(index.saturating_add(1)).copied())
+            .or_else(|| accents.first().copied());
+        let Some(accent) = next_accent else {
+            return Vec::new();
+        };
+        let mut next = self.settings.preferences;
+        next.accent = accent;
         self.save_preferences(next)
     }
 
@@ -4204,6 +4238,7 @@ impl Shell {
             "com.litric.settings" => match key {
                 Key::Char('l') if mods.ctrl => Some(self.toggle_language()),
                 Key::Char('t') if mods.ctrl => Some(self.cycle_theme()),
+                Key::Char('a') if mods.ctrl => Some(self.cycle_accent()),
                 Key::Char('m') if mods.ctrl => Some(self.toggle_reduced_motion()),
                 _ => None,
             },
@@ -5010,6 +5045,7 @@ impl Shell {
             }
             Hot::SettingsLanguage => self.toggle_language(),
             Hot::SettingsTheme => self.cycle_theme(),
+            Hot::SettingsAccent => self.cycle_accent(),
             Hot::SettingsMotion => self.toggle_reduced_motion(),
             Hot::SetupDone => self.finish_first_run(),
             // The dock and the launcher it becomes.
@@ -6186,6 +6222,42 @@ mod tests {
     use super::*;
     use litric_design::{Theme, ThemeKind};
     use litric_input::keys::Side;
+
+    #[test]
+    fn the_accent_applies_on_standard_themes_and_not_on_high_contrast_ones() {
+        // The UI says a high-contrast theme keeps its accent. This is the
+        // assertion behind that sentence: the choice is recorded either way,
+        // and resolved by one function rather than by the drawing code.
+        let mut preferences =
+            crate::settings::Preferences::new(ThemeKind::Dark, crate::i18n::Language::English);
+        preferences.accent = litric_design::Accent::Violet;
+
+        let dark = resolved_theme(preferences);
+        assert_ne!(
+            dark.palette.accent,
+            Theme::of(ThemeKind::Dark).palette.accent
+        );
+        assert!(dark.palette.on_accent.contrast(dark.palette.accent) >= 4.5);
+
+        preferences.theme = ThemeKind::Light;
+        let light = resolved_theme(preferences);
+        assert_ne!(
+            light.palette.accent,
+            Theme::of(ThemeKind::Light).palette.accent,
+            "the same violet token must resolve to the light theme's violet"
+        );
+        assert!(light.palette.on_accent.contrast(light.palette.accent) >= 4.5);
+
+        for kind in [ThemeKind::HighContrastDark, ThemeKind::HighContrastLight] {
+            preferences.theme = kind;
+            assert_eq!(
+                resolved_theme(preferences),
+                Theme::of(kind),
+                "{}: a high-contrast theme must keep its own accent",
+                kind.token()
+            );
+        }
+    }
 
     #[test]
     fn every_power_command_names_itself_for_the_user_and_for_the_daemon() {

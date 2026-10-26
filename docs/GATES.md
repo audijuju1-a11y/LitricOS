@@ -1058,3 +1058,77 @@ host).
 
 Revert this commit. The surfaces close in one frame again, the three gate rows
 go back red, and the six tests above fail — which is the point of the tests.
+
+## 2026-10-25 — accent colour is a setting, and the contrast gate survives it
+
+- **Result:** PASS_WITH_LIMITATIONS
+- **Command:** `ci/verify.sh` (Linux x86_64, cargo 1.99.1; no mkosi, qemu or pytest on this host)
+- **Raw:** **26 pass, 0 fail, 4 skipped** — same counts as the entry above. The four
+  SKIPs are unchanged and named: image build, boot smoke test, idle measurement and
+  golden frames.
+- **Scope:** Wave 2 (appearance), first slice, taken from this matrix's own blocker:
+  "accent-colour and wallpaper settings do not exist". This entry covers the accent
+  half only; the wallpaper half is not claimed and not implemented.
+
+### Why an accent is a slot, not a hex value
+
+An accent picker that stores one hex value and applies it to every theme ships an
+unreadable selection colour: the blue that reads on a near-black background is not
+the blue that reads on white. So the preference stores an [`Accent`] *slot*
+(`default`, `sky`, `violet`, `teal`, `amber`, `rose`) and every theme carries its own
+value for that slot, resolved by `Theme::with_accent`.
+
+Two rules make it safe rather than merely pretty:
+
+| Rule | Why |
+|---|---|
+| `with_accent` moves only `accent` and `on_accent` | the surfaces, the text and the status colours are the contrast contract; a decorative choice that could move them would be a second theme system |
+| high-contrast themes return themselves unchanged | their accent is part of the AAA guarantee, so the picker must not be able to weaken it. The Settings row says "fixed in high contrast themes" instead of offering a control that silently does nothing |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-design/src/lib.rs` | `Accent` (token/parse/all) and `Theme::with_accent`; seven new tests including the two contrast gates over every accent in both standard themes |
+| `src/litric-shell/src/settings.rs` | `Preferences.accent`, defaulting to the theme's own accent |
+| `src/litric-shell/src/shell.rs` | `resolved_theme` is the single place a preference becomes a theme; `cycle_accent`, `Hot::SettingsAccent`, Ctrl+A on the Settings surface |
+| `src/litric-shell/src/views.rs` | the Appearance row, with the high-contrast wording and the updated shortcut hint |
+| `src/litric-shell/src/main.rs` | `accent=` written and parsed; an unknown token falls back to the default instead of failing the record |
+| `docs/SYSTEM-SCOPE.md` | row 246 (accent colour selection) `T` → `P`, tally rewritten by `ci/count-scope.py --fix` |
+
+### Evidence
+
+| Target | Result |
+|---|---|
+| `cargo test -p litric-design` | 40 passed (33 before; 7 new) |
+| `cargo test -p litric-shell --lib` | 445 passed (444 before; 1 new) |
+| `src/litric-shell/src/main.rs` | 32 passed (31 before; 1 new) |
+| `src/litric-shell/src/e2e.rs` | the Settings journey now clicks the accent row and asserts the persistence effect |
+
+The new tests and what they would catch:
+
+| Test | What it would catch |
+|---|---|
+| `every_accent_keeps_text_legible_on_its_own_fill` | a swatch that is fine and a button label that is not, because `on_accent` was left at the default theme's value |
+| `every_accent_is_readable_as_text_on_the_theme_backgrounds` | a pastel meant as a fill, reused as the accent text tone |
+| `high_contrast_themes_ignore_the_accent_choice` | a picker that can weaken an AAA theme |
+| `choosing_an_accent_moves_only_the_accent_pair` | a decorative option becoming a second theme |
+| `the_default_accent_is_the_theme_itself` | a default that quietly differs from the shipped palette |
+| `accent_tokens_are_unique_and_round_trip` | two accents sharing a token, so a stored choice loads as a different colour |
+| `the_accent_choice_survives_a_restart_and_unknown_tokens_fall_back` | a write that is never read back, or a newer file that cannot load |
+| `the_accent_applies_on_standard_themes_and_not_on_high_contrast_ones` | the shell drawing an accent its own settings page says is ignored |
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the accent looks right on a real framebuffer | no image was built or booted and the golden-frame row is SKIP (no Latin face on this host). The evidence is tokens, tests and composed state, not a photograph |
+| that the accent survives a reboot on the image | the preference round-trip is tested in `main.rs` against a temporary root; the image's writable location was not exercised |
+| that an accent changes the wallpaper or the glass | it does not, deliberately: the wallpaper sampler and the glass solver are unchanged. Row 247 (accent extracted from the wallpaper) is still `T` |
+| that every surface uses the accent consistently | the token is global, but no frame-diff test asserts each surface; the design lint rules were not extended for it |
+
+### Rollback
+
+Revert this commit. `Accent` disappears, `Preferences` loses the field, the
+Appearance page is theme → language again, and the seven design tests and the two
+shell tests above fail with it — which is the point of adding them.
