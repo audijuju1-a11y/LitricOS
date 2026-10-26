@@ -1335,6 +1335,17 @@ nothing read it at startup, so DuckDuckGo was Google again on the next launch.
 | `src/litric-shell/src/shell.rs` | `set_search_engine` returns `Effect::PersistPreferences`; `load_preferences` / `save_preferences` keep the live model and the stored record in step, so a failed write rolls the engine back too |
 | `docs/audit/2026-10-26-browser-repair-audit.md` | the audit itself: every question, its answer, its evidence, and what was not verified |
 
+### Defect 3 — the frame overwrote the page's own status
+
+`accept_frame` ended with `self.browser.status = "page loaded"`. The `TAB` line
+that always precedes a frame had already put the page's real state and title
+there (`loaded — Example`), so the frame replaced the title with a generic
+sentence, and the status line claimed "page loaded" whatever the line before it
+had said. The assignment is gone; the line that knows the state keeps it. The
+existing fake-broker test
+`the_shell_shows_the_frame_a_broker_sends_and_forwards_a_click` now also asserts
+that the title survives the frame.
+
 ### Evidence
 
 | Command | Result |

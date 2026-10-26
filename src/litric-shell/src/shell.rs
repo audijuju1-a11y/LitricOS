@@ -1393,7 +1393,11 @@ impl Shell {
         }
         self.browser_frame = Some(Arc::from(bytes.into_boxed_slice()));
         self.browser.last_frame = Some((w, h));
-        self.browser.status = "page loaded".to_owned();
+        // The TAB line that precedes every frame already put the page's own
+        // state and title here ("loaded - Example", "failed", ...). Writing a
+        // generic "page loaded" over it hid the title and told the user the
+        // page had loaded even when the line said otherwise, so the status is
+        // left to the line that actually knows.
         self.request_full_redraw();
     }
 
@@ -6671,6 +6675,13 @@ mod tests {
         let tab = s.browser.tabs.first().expect("a tab was opened");
         assert_eq!(tab.url, "https://example.com/");
         assert_eq!(tab.title, "Example");
+        // The frame must not replace the tab's own status with a generic one:
+        // the title is how a person knows which page they are looking at.
+        assert!(
+            s.browser.status.contains("Example"),
+            "the status line lost the page title: {:?}",
+            s.browser.status
+        );
 
         // Where the view drew the frame is the mapping the pointer uses.
         s.set_browser_engine_area(Some(Rect::new(100.0, 100.0, 800.0, 400.0)));
