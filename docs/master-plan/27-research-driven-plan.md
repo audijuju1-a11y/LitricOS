@@ -191,8 +191,20 @@ proves it. Milestones are in §5.
 - **Build:** volume and brightness sliders over the real providers, network and
   Bluetooth tiles with honest state, media controls driven by the audio
   provider, and edit mode that persists the tile order.
+  *Landed:* the volume controls (2026-10-26, session 5), and the network and
+  Bluetooth tiles (same day, session 6) — a link switch and a re-read over
+  `NET LINK`/`NET RECONFIGURE`, and a radio switch over `BT POWER` that only
+  appears where a radio, an unblocked rfkill and a Bluetooth service exist, with
+  both readings taken from the machine (`AUDIO LEVEL`, `BT STATUS`) rather than
+  remembered. *Remaining:* the brightness slider, which has no provider on this
+  image (no backlight, `DEFER` in the ledger), the media controls, which need a
+  player to talk to, and edit mode with a persisted tile order.
 - **Acceptance:** no tile without a provider; dragging a slider changes the
-  measured value; tile order survives restart.
+  measured value; tile order survives restart. The first is now a test —
+  `the_panel_offers_no_control_where_the_machine_reports_no_provider` — and the
+  panel's height is measured from its sections, so a tile added without room for
+  it fails `no_panel_row_is_drawn_outside_the_panel` rather than being drawn off
+  the bottom.
 
 ### WP-06 — Shell chrome parity (M3)
 
@@ -351,6 +363,7 @@ its checklist status is final and its rows carry evidence tiers.
 | 3 — appearance family | **partial**: the automatic light/dark schedule is in (`theme_schedule`, resolved on every tick); wallpaper sources, slideshow, accent-from-wallpaper and dock size remain `DEFER` in the ledger | `src/litric-shell/src/settings.rs` |
 | 4 — browser controls | **done**: Stop and Reload are in the toolbar over the engine's own `STOP`/`RELOAD`, each disabled when it would act on nothing; the broker reports `stopped` instead of `loaded` when a stop interrupted a page | `src/litric-shell/src/views.rs`, `src/litric-browser/src/bin/browserd.rs` |
 | 5 — quick settings volume | **done** (WP-05, first control): the panel reads the sink's level through `litric-sysd` (`AUDIO LEVEL`, read back after every change) and offers quieter/louder/mute; the two `DEFER` rows it answers (`WB.01.02`, `WA.06`) are `ADAPT` with the constraint written down | `src/litric-sysd/src/providers.rs`, `src/litric-shell/src/main.rs` |
+| 6 — network and Bluetooth tiles | **done** (WP-05, second and third controls): the network row names the interface the kernel reports and offers a link switch and a re-read; the Bluetooth row shows the radio's state and a switch, and both exist only where a provider does. The radio's power became a measurement (`BT STATUS` → `bt.powered`) because no file under `/sys` carries it, and the panel asks for both readings when it opens instead of waiting for a change | `src/litric-sysd/src/state.rs`, `src/litric-sysd/src/providers.rs`, `src/litric-shell/src/views.rs` |
 
 Session 3 is partial on purpose: the three rows it deferred are deferred for a
 reason the ledger records, not because there was no time. Slideshow and

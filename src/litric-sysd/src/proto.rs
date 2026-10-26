@@ -81,6 +81,13 @@ pub enum Request {
     /// the way [`Request::Facts`] is: it changes nothing and reveals nothing
     /// that is not already on the screen behind the panel that asks.
     AudioLevel,
+    /// Whether the Bluetooth radio is powered on, as BlueZ reports it.
+    ///
+    /// The same kind of question as [`Request::AudioLevel`], and here for the
+    /// same reason: the radio's power is not in the sysfs facts, so a panel that
+    /// showed anything but an answer from BlueZ would be showing what it last
+    /// asked for. It changes nothing, so it needs no capability.
+    BtStatus,
     /// Ask the machine for a power transition.
     ///
     /// `consent` is the UI's report that the user answered a prompt naming
@@ -402,6 +409,14 @@ impl Request {
             "bt" | "bluetooth" => {
                 let sub = arg(0).to_ascii_lowercase();
                 let action = match sub.as_str() {
+                    // A question rather than a change, like `AUDIO LEVEL`: the
+                    // radio's power state exists only inside BlueZ, and this is
+                    // how the interface reads it back instead of remembering
+                    // what it asked for.
+                    "status" => {
+                        arity("BT STATUS", 1)?;
+                        return Ok(Self::BtStatus);
+                    }
                     "power" | "scan" => {
                         arity("BT POWER", 2)?;
                         let on = on_off(arg(1))?;
@@ -654,6 +669,12 @@ mod tests {
             action("BT POWER ON"),
             SystemAction::Bluetooth(BtAction::Power(true))
         );
+        // A question, not an action: `BT STATUS` reads the radio's power back
+        // from BlueZ and must not be mistaken for `BT POWER` with an argument.
+        assert_eq!(Request::parse("BT STATUS"), Ok(Request::BtStatus));
+        assert_eq!(Request::parse("bt status"), Ok(Request::BtStatus));
+        let refused = Request::parse("BT STATUS ON").expect_err("status takes no argument");
+        assert_eq!(refused.kind(), "bad-arity");
         assert_eq!(
             action("bluetooth scan off"),
             SystemAction::Bluetooth(BtAction::Scan(false))

@@ -73,7 +73,11 @@ because `FACTS` is polled twice a second and a poll must not spawn a process; th
 daemon refreshes the cache when it is asked directly and after every audio action
 it applies. It is absent until something has been measured — `volume=0` over a
 machine nobody has asked is a mute machine this daemon invented — and a tool that
-cannot be run is `ERR audio-unavailable` with the reason, never a zero.
+cannot be run is `ERR audio-unavailable` with the reason, never a zero. Since
+2026-10-26 the shell asks on the one occasion somebody is about to look: opening
+quick settings sends `AUDIO LEVEL` (and `BT STATUS`), so the panel shows a
+measured level from the first open instead of only after a change. Closing the
+panel asks nothing.
 
 `audio.state` is *presence*: whether `/run/user/<uid>/pipewire-0` exists. The
 socket is never opened, so "running" means the socket is there and says nothing

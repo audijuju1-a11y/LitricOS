@@ -4566,21 +4566,62 @@ fn icon_for_app_id(app_id: &str) -> Icon {
         .map_or(Icon::Window, |a| icon_for(*a))
 }
 
-fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
-    let t = shell.tokens.clone();
+/// The quick-settings panel's rectangle, measured from the sections drawn in it.
+///
+/// The height is a sum of the rows the panel draws rather than a chosen number.
+/// The constant that used to stand here -- 420 pixels -- was already shorter
+/// than the sections it claimed to hold, so the bottom one was drawn into the
+/// clip that reveals the panel and never appeared. The sum and the drawing are
+/// kept in step by `no_panel_row_is_drawn_outside_the_panel`, which fails when a
+/// section is added without a term here.
+fn quick_panel_rect(shell: &Shell, t: &Tokens) -> Rect {
     let screen = shell.wm.screen();
     let w = t.px(320.0).min(screen.w * 0.9);
-    // The panel is four sections: power profile, system toggles, environment.
-    // The session rows that used to be a fifth section here moved to the power
-    // menu behind the power and person icons, so the height is now measured
-    // from what is in it and still clamped to the screen: a panel whose last
-    // row is off the bottom is a panel whose last row cannot be clicked.
-    let panel = Rect::new(
+    let h = quick_content_height(shell, t) + t.sp(Space::Md) * 2.0;
+    Rect::new(
         screen.w - w - t.px(12.0),
         shell.top_bar().h + t.px(8.0),
         w,
-        t.px(420.0).min(screen.h - shell.top_bar().h - t.px(20.0)),
-    );
+        h.min(screen.h - shell.top_bar().h - t.px(20.0)),
+    )
+}
+
+/// The height of everything the quick-settings panel draws, in pixels.
+///
+/// One term per section, in the order the drawing visits them. `gap` is the
+/// [`ui::Column`]'s own gap, which it adds after every row.
+fn quick_content_height(shell: &Shell, t: &Tokens) -> f32 {
+    let gap = t.sp(Space::Xs);
+    let head = t.px(18.0); // a section label, and the space under it
+    let switch_row = t.px(38.0);
+    let control_row = t.px(34.0);
+    let env_row = t.px(30.0);
+    let note = t.px(16.0);
+    let rule = 1.0;
+    let mut h = 0.0;
+    // POWER: the four profile buttons.
+    h += head + control_row + gap;
+    // SYSTEM: four switches.
+    h += t.px(10.0) + rule + gap + t.px(8.0) + head + 4.0 * (switch_row + gap);
+    // NETWORK, and BLUETOOTH: one labelled row each, and a note only when there
+    // is something the row itself does not say.
+    h += t.px(8.0) + rule + gap + t.px(8.0) + head + switch_row + gap;
+    if !shell.quick.net_note.is_empty() {
+        h += note + gap;
+    }
+    h += t.px(8.0) + rule + gap + t.px(8.0) + head + switch_row + gap;
+    if !shell.quick.bt_note.is_empty() {
+        h += note + gap;
+    }
+    // VOLUME: the level row, a gap, and the note the row always carries.
+    h += t.px(8.0) + rule + gap + t.px(8.0) + head + control_row + gap + t.px(16.0) + note + gap;
+    // ENVIRONMENT: three rows, under a label at the footnote step.
+    h += t.px(8.0) + rule + gap + t.px(8.0) + t.px(16.0) + 3.0 * (env_row + gap);
+    h
+}
+
+fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
     // The panel reveals downward under a clip that grows with its spring,
     // and its rows only become clickable once the spring is far enough
     // along that a click can only be aiming at the panel, not passing
@@ -4589,6 +4630,7 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
     if reveal <= 0.01 {
         return;
     }
+    let panel = quick_panel_rect(shell, &t);
     let shown_h = panel.h * reveal;
     let saved = canvas.push_clip(Rect::new(panel.x, panel.y, panel.w, shown_h));
     ui::surface(canvas, &t, panel, t.radius(Radius::Lg), Material::Popover);
@@ -4702,6 +4744,150 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
         shell.hotspots_mut().push(row, hot);
     }
 
+    // --- network: one tile, over the provider litric-sysd already has ---
+    // The state is the kernel's, read from the facts; the controls are the two
+    // actions the daemon implements for a link (`NET LINK`, `NET RECONFIGURE`).
+    // A machine that reports no interface gets the sentence and no controls.
+    col.space(t.px(8.0));
+    ui::separator(canvas, &t, col.row(1.0));
+    col.space(t.px(8.0));
+    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "NETWORK");
+    col.space(t.px(18.0));
+    {
+        let row = col.row(t.px(38.0));
+        let iface = shell.primary_iface().map(|i| i.name.clone());
+        let up = shell.primary_iface().is_some_and(|i| i.state == "up");
+        let summary = shell.net_summary();
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.text());
+        let n = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        // The label yields to the state line, which is the part that says which
+        // interface this row is about.
+        let room = if iface.is_some() {
+            row.w - t.px(160.0)
+        } else {
+            row.w - t.px(56.0)
+        };
+        font::draw(canvas, "Network", row.x + t.px(8.0), row.y + t.px(16.0), &s);
+        font::draw(
+            canvas,
+            &ui::elide(&summary, &n, room.max(t.px(40.0))),
+            row.x + t.px(8.0),
+            row.y + row.h - t.px(5.0),
+            &n,
+        );
+        let sw = Rect::new(
+            row.right() - t.px(48.0),
+            row.y + t.px(8.0),
+            t.px(40.0),
+            t.px(22.0),
+        );
+        if iface.is_some() {
+            let re = Rect::new(sw.x - t.px(80.0), sw.y, t.px(74.0), t.px(22.0));
+            ui::button(
+                canvas,
+                &t,
+                re,
+                "Reconnect",
+                if shell.is_highlighted(Hot::QuickLinkReconnect) {
+                    State::Hover
+                } else {
+                    State::Normal
+                },
+                Tone::Neutral,
+            );
+            shell.hotspots_mut().push(re, Hot::QuickLinkReconnect);
+            ui::toggle(
+                canvas,
+                &t,
+                sw,
+                up,
+                if shell.is_highlighted(Hot::QuickLinkToggle) {
+                    State::Hover
+                } else {
+                    State::Normal
+                },
+            );
+            shell.hotspots_mut().push(sw, Hot::QuickLinkToggle);
+        } else {
+            // No interface: the switch is drawn in its off position and is not
+            // clickable, because there is nothing to bring up.
+            ui::toggle(canvas, &t, sw, false, State::Disabled);
+        }
+        if !shell.quick.net_note.is_empty() {
+            let note_row = col.row(t.px(16.0));
+            font::draw(
+                canvas,
+                &ui::elide(shell.quick.net_note.as_str(), &n, note_row.w - t.px(12.0)),
+                note_row.x + t.px(8.0),
+                note_row.y + t.px(11.0),
+                &n,
+            );
+        }
+    }
+
+    // --- Bluetooth: the radio's state, and its switch ---
+    // The switch has a position only where BlueZ has been asked, and exists at
+    // all only where the platform found a radio, nothing is blocking it and a
+    // service is installed. Everywhere else the row says which of those is
+    // missing instead of drawing a control that could not work.
+    col.space(t.px(8.0));
+    ui::separator(canvas, &t, col.row(1.0));
+    col.space(t.px(8.0));
+    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "BLUETOOTH");
+    col.space(t.px(18.0));
+    {
+        let row = col.row(t.px(38.0));
+        let measured = shell.quick.bt_powered;
+        let live = shell.bt_controllable() && measured.is_some();
+        let summary = shell.bt_summary();
+        let s = Style::new(t.text_px(TypeStep::Footnote), t.text());
+        let n = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        font::draw(
+            canvas,
+            "Bluetooth",
+            row.x + t.px(8.0),
+            row.y + t.px(16.0),
+            &s,
+        );
+        // The row has one control, not two: the state line gets the width the
+        // switch does not need, so an adapter address is readable rather than
+        // cut at "hci0 00:1a:7d:da:71:...".
+        font::draw(
+            canvas,
+            &ui::elide(&summary, &n, row.w - t.px(60.0)),
+            row.x + t.px(8.0),
+            row.y + row.h - t.px(5.0),
+            &n,
+        );
+        let sw = Rect::new(
+            row.right() - t.px(48.0),
+            row.y + t.px(8.0),
+            t.px(40.0),
+            t.px(22.0),
+        );
+        let state = if !live {
+            State::Disabled
+        } else if shell.is_highlighted(Hot::QuickBluetoothPower) {
+            State::Hover
+        } else {
+            State::Normal
+        };
+        ui::toggle(canvas, &t, sw, measured.unwrap_or(false), state);
+        if live {
+            shell.hotspots_mut().push(sw, Hot::QuickBluetoothPower);
+        }
+        if !shell.quick.bt_note.is_empty() {
+            let note_row = col.row(t.px(16.0));
+            font::draw(
+                canvas,
+                &ui::elide(shell.quick.bt_note.as_str(), &n, note_row.w - t.px(12.0)),
+                note_row.x + t.px(8.0),
+                note_row.y + t.px(11.0),
+                &n,
+            );
+        }
+    }
+
     col.space(t.px(8.0));
     ui::separator(canvas, &t, col.row(1.0));
     col.space(t.px(8.0));
@@ -4727,16 +4913,6 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
             row.y + row.h / 2.0 + s_value.size * 0.36,
             &s_value,
         );
-        if shell.quick.volume.is_none() {
-            let n = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
-            font::draw(
-                canvas,
-                "the sound server has not answered",
-                row.x + t.px(8.0),
-                row.y + row.h - t.px(2.0),
-                &n,
-            );
-        }
         // Two step buttons and a mute switch, right-aligned. Each one is
         // disabled when there is no measured level to step from: a control that
         // would send a number nobody measured is not offered.
@@ -4801,10 +4977,16 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
             shell.hotspots_mut().push(up, Hot::QuickVolumeUp);
             shell.hotspots_mut().push(mute, Hot::QuickVolumeMute);
         }
-        let note = if shell.quick.audio_note.is_empty() {
-            "Set through litric-sysd, which asks the sound server and reads the level back."
-        } else {
+        // Why the level reads "unavailable" belongs on the note line, not
+        // squeezed under the value: at the body step two lines of text in a
+        // 34-pixel row are drawn through each other, which the frame for this
+        // panel showed before it was moved here.
+        let note = if !shell.quick.audio_note.is_empty() {
             shell.quick.audio_note.as_str()
+        } else if shell.quick.volume.is_none() {
+            "the sound server has not answered"
+        } else {
+            "Set through litric-sysd, which asks the sound server and reads the level back."
         };
         let n = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
         col.space(t.px(16.0));
@@ -5322,7 +5504,7 @@ mod tests {
         );
     }
     use crate::canvas::luminance;
-    use crate::shell::{DesktopMode, EnvRow, SystemFacts};
+    use crate::shell::{DesktopMode, EnvRow, NetIface, SystemFacts};
     use crate::shortcuts::Action;
     use crate::ui::Tokens;
     use litric_design::{Theme, ThemeKind};
@@ -5689,6 +5871,111 @@ mod tests {
             assert!(
                 s.hotspots().rect_of(Hot::QuickPower(i)).is_some(),
                 "power {i}"
+            );
+        }
+    }
+
+    /// Everything the quick-settings panel can show, so that the layout is
+    /// measured at its tallest.
+    fn quick_shell_with_a_full_panel() -> Shell {
+        let mut s = shell();
+        s.facts.net_ifaces = vec![NetIface {
+            name: "enp0s2".to_owned(),
+            state: "up".to_owned(),
+            mac: "02:00:00:00:00:01".to_owned(),
+            wireless: false,
+        }];
+        s.facts.bt_state = Some("ready".to_owned());
+        s.facts.bt_adapters = vec!["hci0 00:1a:7d:da:71:13".to_owned()];
+        s.quick.bt_powered = Some(true);
+        s.quick.volume = Some(40);
+        s.quick.net_note =
+            "enp0s2 was asked to come down; the state below is read from the kernel.".to_owned();
+        s.quick.bt_note =
+            "the radio was asked to turn on; the state below is what BlueZ reports.".to_owned();
+        s.quick.audio_note = "Muted, as the sound server confirmed.".to_owned();
+        s
+    }
+
+    #[test]
+    fn no_panel_row_is_drawn_outside_the_panel() {
+        // The panel's height is a sum of the rows it draws, and this is what
+        // keeps the sum honest: the constant it replaced was already shorter
+        // than its own content, so the last section was drawn into the clip that
+        // reveals the panel and never appeared -- and a row outside the panel is
+        // a row no click can reach.
+        let mut s = quick_shell_with_a_full_panel();
+        s.perform(Action::ToggleQuickSettings);
+        s.tick_after(16);
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        let t = s.tokens.clone();
+        let panel = quick_panel_rect(&s, &t);
+        // And the panel must fit the screen rather than being clamped: a clamped
+        // panel has rows below its last visible pixel.
+        let room = s.wm.screen().h - s.top_bar().h - t.px(20.0);
+        let needed = quick_content_height(&s, &t) + t.sp(Space::Md) * 2.0;
+        assert!(
+            needed <= room,
+            "the panel needs {needed} pixels and has {room}"
+        );
+
+        let inside = |r: Rect| {
+            r.x >= panel.x - 0.5
+                && r.right() <= panel.right() + 0.5
+                && r.y >= panel.y - 0.5
+                && r.bottom() <= panel.bottom() + 0.5
+        };
+        let mut checked = 0;
+        let mut check = |s: &Shell, hot: Hot| {
+            let r = s
+                .hotspots()
+                .rect_of(hot)
+                .unwrap_or_else(|| panic!("{hot:?} was not registered"));
+            assert!(inside(r), "{hot:?} at {r:?} is outside {panel:?}");
+            checked += 1;
+        };
+        for i in 0..4u8 {
+            check(&s, Hot::QuickPower(i));
+            check(&s, Hot::QuickToggle(i));
+        }
+        for hot in [
+            Hot::QuickLinkToggle,
+            Hot::QuickLinkReconnect,
+            Hot::QuickBluetoothPower,
+            Hot::QuickVolumeDown,
+            Hot::QuickVolumeUp,
+            Hot::QuickVolumeMute,
+        ] {
+            check(&s, hot);
+        }
+        for i in 0..2u8 {
+            check(&s, Hot::QuickEnvironment(i));
+        }
+        assert!(checked >= 16, "only {checked} controls were checked");
+    }
+
+    #[test]
+    fn the_panel_offers_no_control_where_the_machine_reports_no_provider() {
+        // A machine with no interface, no radio and no answer from the sound
+        // server: the rows say so and nothing is clickable. This is the rule
+        // WP-05 is accepted on -- no tile without a provider.
+        let mut s = shell();
+        s.perform(Action::ToggleQuickSettings);
+        s.tick_after(16);
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        for hot in [
+            Hot::QuickLinkToggle,
+            Hot::QuickLinkReconnect,
+            Hot::QuickBluetoothPower,
+            Hot::QuickVolumeDown,
+            Hot::QuickVolumeUp,
+            Hot::QuickVolumeMute,
+        ] {
+            assert!(
+                s.hotspots().rect_of(hot).is_none(),
+                "{hot:?} is offered with nothing behind it"
             );
         }
     }

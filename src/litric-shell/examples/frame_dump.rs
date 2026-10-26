@@ -336,7 +336,28 @@ fn scene_danger_dialog(rig: &mut Rig) {
 }
 
 /// The Control Center, open (governance §2, screen 6).
+///
+/// The facts are the QEMU machine's: one wired link, a radio that BlueZ says is
+/// on, and a sink at 40%. A panel recorded with no interface and no radio would
+/// be a picture of an empty state; the screen this frame stands for is the one a
+/// person opens, with every row the build can draw doing so.
 fn scene_control_centre(rig: &mut Rig) {
+    use litric_shell::shell::{NetIface, SystemFacts};
+    rig.shell.sample(SystemFacts {
+        net_ifaces: vec![NetIface {
+            name: "enp0s2".to_owned(),
+            state: "up".to_owned(),
+            mac: "52:54:00:12:34:56".to_owned(),
+            wireless: false,
+        }],
+        bt_state: Some("ready".to_owned()),
+        bt_daemon: Some(true),
+        bt_adapters: vec!["hci0 00:1a:7d:da:71:13".to_owned()],
+        bt_powered: Some(true),
+        audio_volume: Some(40),
+        audio_muted: Some(false),
+        ..SystemFacts::default()
+    });
     let _ = rig.shell.perform(Action::ToggleQuickSettings);
     for _ in 0..40 {
         rig.shell.tick_after(16);

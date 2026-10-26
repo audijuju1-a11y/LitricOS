@@ -145,7 +145,8 @@ audit entry.
 | the image brings up the wired link | a booted image + QEMU slirp (the configuration is written for exactly that bus) — **done 2026-10-11**: `net.iface enp0s2 state=up carrier=1` with the slirp address |
 | a reload applies a new drop-in without dropping the link | a booted image, a second interface state to observe (the writer itself is not written yet either) |
 | writing an `iwd` credential file joins a real network | a wireless device (`iwd` cannot be exercised in QEMU's default NIC set). **NOT verified**, and the booted image cannot make it more true — it has no radio |
-| the link action reaches the kernel in a booted image | a booted image — **done 2026-10-12**: the in-guest self test runs `NET LINK lo up` and records `litric.sysd.net_link_lo=ok` |
+| the link action reaches the kernel in a booted image | a booted image — **done 2026-10-12**: the in-guest self test runs `NET LINK lo up` and records `litric.sysd.net_link_lo=ok`. The quick-settings switch sends the same verb, so what is unverified about it is the panel, not the action |
+| the panel's link switch shows the link's real state | a booted image: the state is read from `/sys/class/net` every two seconds, so a link the kernel refused to bring up stays drawn as down |
 | scanning is impossible without D-Bus | nothing: it is a property of `iwd`'s API, recorded as the reason for the Phase 2 decision |
 
 ## 8. Tickets this note implies
@@ -159,10 +160,15 @@ audit entry.
    writes to `/run`, and it needs the capability broker to be the writer's
    caller rather than the shell.
 4. Settings pane: wired state, known Wi-Fi networks, "join a named network".
-   **Not done** — the facts are served and the actions exist, the pane is not
+   **Partly done 2026-10-26** — the *quick-settings tile* reaches two of the four
+   actions: the row names the interface the kernel reports and offers a link
+   switch (`NET LINK <iface> UP|DOWN`) and a re-read (`NET RECONFIGURE`), with the
+   interface chosen by a stated policy (loopback out, an interface that is up
+   ahead of one that is down, kernel order among equals) and no control at all on
+   a machine that reports no interface. The Settings pane itself is still not
    drawn (`src/litric-shell/src/views.rs` line ~1995 still says Network has no
-   page). This is now the largest gap in this note: everything behind the pane is
-   real as of 2026-10-12, and a person still cannot reach it.
+   page), so Wi-Fi join and a network list remain out of reach: joining needs an
+   SSID and a passphrase typed, which is a pane, not a tile.
 5. Non-ASCII and escaped network names, and a hex pre-shared key instead of a
    passphrase. **Not done** — refused rather than guessed at, see §2.
 6. Phase 2 only: the D-Bus decision from ADR-0023, then scanning, then a network

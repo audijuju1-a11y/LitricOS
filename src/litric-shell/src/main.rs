@@ -332,6 +332,14 @@ fn gather_facts(args: &Args) -> SystemFacts {
         f.net_ifaces = parse_net_ifaces(&lines, &args.root);
         f.bt_state = field(&lines, "bt.state").map(str::to_owned);
         f.bt_daemon = field(&lines, "bt.daemon").map(|v| v == "present");
+        // The radio's power, which is not in sysfs: it appears in a reply only
+        // after the daemon has asked BlueZ, and its absence means nobody has.
+        f.bt_powered = field(&lines, "bt.powered").and_then(|v| match v {
+            "1" => Some(true),
+            "0" => Some(false),
+            // A third value is not a power state, so nothing is kept.
+            _ => None,
+        });
         f.bt_adapters = parse_bt_adapters(&lines);
         f.audio_cards = parse_audio_cards(&lines);
         f.audio_server = lines.iter().find_map(|l| {
@@ -1098,9 +1106,11 @@ fn apply_volume(args: &Args, shell: &mut Shell, step: i8) {
                 "Unmuted, as the sound server confirmed.".to_owned()
             };
         } else if let Some(next) = field(&lines, "percent") {
-            shell.quick.audio_note = format!(
-                "Asked the sound server for {next}%; the level it reads back is what the                  panel shows."
-            );
+            // "Asked", not "set": what the panel shows is the level the sound
+            // server reads back, so the note must not claim the number in it as
+            // the machine's own state.
+            shell.quick.audio_note =
+                format!("Asked the sound server for {next}%; the level it reads back is what the panel shows.");
         } else {
             shell.quick.audio_note = "Changed, and the level is being read back.".to_owned();
         }
@@ -1122,6 +1132,183 @@ fn apply_volume(args: &Args, shell: &mut Shell, step: i8) {
             Priority::High,
             Some(6_000),
         );
+    }
+}
+
+/// Ask the daemon where the sink's level and the radio's power stand.
+///
+/// Two questions, two answers, and no third case where the interface keeps
+/// showing a number nobody measured: a question that cannot be answered leaves
+/// the panel saying so, and the note under it names the tool that was missing.
+fn read_panel_state(args: &Args, shell: &mut Shell) {
+    match ask(&args.socket, "AUDIO LEVEL") {
+        Some(reply) => {
+            let lines: Vec<&str> = reply.lines().collect();
+            apply_measured_volume(shell, &lines);
+        }
+        None => {
+            shell.quick.audio_note = "litric-sysd did not answer: the level is unknown.".to_owned();
+        }
+    }
+    match ask(&args.socket, "BT STATUS") {
+        Some(reply) => {
+            let lines: Vec<&str> = reply.lines().collect();
+            match field(&lines, "bt.powered") {
+                Some("1") => shell.quick.bt_powered = Some(true),
+                Some("0") => shell.quick.bt_powered = Some(false),
+                _ => {
+                    let detail = field(&lines, "detail").unwrap_or("no power state was reported");
+                    shell.quick.bt_note = format!("the radio could not be read: {detail}");
+                }
+            }
+        }
+        None => {
+            shell.quick.bt_note =
+                "litric-sysd did not answer: the radio state is unknown.".to_owned();
+        }
+    }
+}
+
+/// Take the level and mute flag out of a reply, if it carries them.
+///
+/// The line is `audio.level volume=60 muted=0` -- a name followed by
+/// `key=value` pairs, not a single `key=value` -- so it is split on its own
+/// prefix rather than read with [`field`], which would look for
+/// `audio.level=...` and find nothing.
+fn apply_measured_volume(shell: &mut Shell, lines: &[&str]) {
+    let Some(rest) = lines.iter().find_map(|l| l.strip_prefix("audio.level ")) else {
+        let detail = field(lines, "detail").unwrap_or("no level was reported");
+        shell.quick.audio_note = format!("the level could not be read: {detail}");
+        return;
+    };
+    for kv in rest.split_whitespace() {
+        if let Some(v) = kv.strip_prefix("volume=") {
+            if let Some(level) = v.parse::<u8>().ok().filter(|v| *v <= 100) {
+                shell.quick.volume = Some(level);
+            }
+        } else if let Some(v) = kv.strip_prefix("muted=") {
+            shell.quick.muted = v == "1";
+        }
+    }
+}
+
+/// Bring one interface up or down, and report what the machine said.
+///
+/// A change with three outcomes and three sentences, the same shape as the
+/// volume's: applied (the next facts sample shows the new link state, because
+/// the state is read from sysfs and not from this process), refused with the
+/// daemon's own reason, or unreachable.
+fn apply_link(args: &Args, shell: &mut Shell, iface: &str, up: bool) {
+    let request = format!("NET LINK {iface} {}", if up { "up" } else { "down" });
+    match ask(&args.socket, &request) {
+        Some(reply) => {
+            let lines: Vec<&str> = reply.lines().collect();
+            if field(&lines, "applied") == Some("true") {
+                shell.quick.net_note = format!(
+                    "{} was asked to come {}; the state below is read from the kernel.",
+                    iface,
+                    if up { "up" } else { "down" }
+                );
+            } else {
+                let detail = field(&lines, "detail").unwrap_or("the link was not changed");
+                shell.quick.net_note = format!("Refused: {detail}");
+                shell.notify(
+                    "Network",
+                    "The link was not changed",
+                    detail,
+                    Priority::High,
+                    Some(6_000),
+                );
+            }
+        }
+        None => {
+            shell.quick.net_note = "litric-sysd did not answer: nothing was changed.".to_owned();
+            shell.notify(
+                "Network",
+                "The system service did not answer",
+                "The link was not changed.",
+                Priority::High,
+                Some(6_000),
+            );
+        }
+    }
+}
+
+/// Ask `systemd-networkd` to re-read one interface's configuration.
+fn apply_reconfigure(args: &Args, shell: &mut Shell, iface: &str) {
+    let request = format!("NET RECONFIGURE {iface}");
+    match ask(&args.socket, &request) {
+        Some(reply) => {
+            let lines: Vec<&str> = reply.lines().collect();
+            if field(&lines, "applied") == Some("true") {
+                shell.quick.net_note = format!("{iface} was asked to re-read its configuration.");
+            } else {
+                let detail =
+                    field(&lines, "detail").unwrap_or("the interface was not reconfigured");
+                shell.quick.net_note = format!("Refused: {detail}");
+                shell.notify(
+                    "Network",
+                    "The interface was not reconfigured",
+                    detail,
+                    Priority::High,
+                    Some(6_000),
+                );
+            }
+        }
+        None => {
+            shell.quick.net_note = "litric-sysd did not answer: nothing was changed.".to_owned();
+        }
+    }
+}
+
+/// Turn the radio on or off, and read the machine's answer back.
+///
+/// The switch does not move the panel on its own: what the panel shows is what
+/// BlueZ says after the change, so a radio that refuses to come up leaves the
+/// switch where the machine is rather than where the click was.
+fn apply_bluetooth_power(args: &Args, shell: &mut Shell, on: bool) {
+    let request = format!("BT POWER {}", if on { "on" } else { "off" });
+    match ask(&args.socket, &request) {
+        Some(reply) => {
+            let lines: Vec<&str> = reply.lines().collect();
+            if field(&lines, "applied") == Some("true") {
+                shell.quick.bt_note = format!(
+                    "the radio was asked to turn {}; the state below is what BlueZ reports.",
+                    if on { "on" } else { "off" }
+                );
+                // Read it back at once, so the switch answers the click in the
+                // same frame instead of waiting for the next facts poll -- and
+                // shows the radio's answer rather than the request.
+                if let Some(confirm) = ask(&args.socket, "BT STATUS") {
+                    let confirm = confirm.lines().collect::<Vec<&str>>();
+                    match field(&confirm, "bt.powered") {
+                        Some("1") => shell.quick.bt_powered = Some(true),
+                        Some("0") => shell.quick.bt_powered = Some(false),
+                        _ => {}
+                    }
+                }
+            } else {
+                let detail = field(&lines, "detail").unwrap_or("the radio was not changed");
+                shell.quick.bt_note = format!("Refused: {detail}");
+                shell.notify(
+                    "Bluetooth",
+                    "The radio was not changed",
+                    detail,
+                    Priority::High,
+                    Some(6_000),
+                );
+            }
+        }
+        None => {
+            shell.quick.bt_note = "litric-sysd did not answer: nothing was changed.".to_owned();
+            shell.notify(
+                "Bluetooth",
+                "The system service did not answer",
+                "The radio was not changed.",
+                Priority::High,
+                Some(6_000),
+            );
+        }
     }
 }
 
@@ -1320,6 +1507,14 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
                 }
             }
             Effect::Volume(step) => apply_volume(args, shell, *step),
+            // The panel's two questions, asked together and only when somebody
+            // is looking: both cost a process and both answers are measurements.
+            Effect::ReadPanelState => {
+                read_panel_state(args, shell);
+            }
+            Effect::SetLink { iface, up } => apply_link(args, shell, iface, *up),
+            Effect::ReconfigureLink(iface) => apply_reconfigure(args, shell, iface),
+            Effect::SetBluetoothPower(on) => apply_bluetooth_power(args, shell, *on),
             Effect::Brightness(_) => {
                 shell.notify(
                     "Display",

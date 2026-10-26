@@ -319,6 +319,12 @@ pub enum Hot {
     QuickVolumeMute,
     /// An environment row in quick settings.
     QuickEnvironment(u8),
+    /// The switch that turns the network link on or off.
+    QuickLinkToggle,
+    /// Ask the network manager to re-read this interface's configuration.
+    QuickLinkReconnect,
+    /// The switch that turns the Bluetooth radio on or off.
+    QuickBluetoothPower,
     /// The browser's new-tab button.
     BrowserNewTab,
     /// Navigate the active browser tab backward.
@@ -780,6 +786,17 @@ pub struct QuickSettings {
     pub muted: bool,
     /// What the last volume change did, in the interface's own words.
     pub audio_note: String,
+    /// Whether the Bluetooth radio is on, as BlueZ last reported it.
+    ///
+    /// `None` is "nobody has asked yet". The radio's power is not in the sysfs
+    /// facts, so this is filled from the daemon's answer to `BT STATUS` and
+    /// from the readback that follows a change -- never from the switch the
+    /// user just flicked, which is a request and not a state.
+    pub bt_powered: Option<bool>,
+    /// What the last radio change did, in the interface's own words.
+    pub bt_note: String,
+    /// What the last network change did, in the interface's own words.
+    pub net_note: String,
     /// Which of these have actually been applied to the system, rather than
     /// only recorded here.
     pub applied: Vec<String>,
@@ -796,6 +813,9 @@ impl Default for QuickSettings {
             volume: None,
             muted: false,
             audio_note: String::new(),
+            bt_powered: None,
+            bt_note: String::new(),
+            net_note: String::new(),
             applied: vec![
                 "adaptive_idle".to_owned(),
                 "reduce_motion".to_owned(),
@@ -814,6 +834,98 @@ impl QuickSettings {
     #[must_use]
     pub fn is_applied(&self, key: &str) -> bool {
         self.applied.iter().any(|k| k == key)
+    }
+}
+
+/// What the quick-settings network tile can offer, decided from measured
+/// facts rather than from what the panel would like to draw.
+///
+/// A tile exists only where a provider does: with no interface there is nothing
+/// to bring up, and the tile says so in words instead of drawing a switch that
+/// would do nothing.
+impl Shell {
+    /// The interface the network tile acts on, or `None` when the platform
+    /// reported none.
+    ///
+    /// A policy, and stated as one: loopback is left out because a link to
+    /// itself is not the network, and an interface that is up wins over one that
+    /// is down so that a machine with a dead `wlan0` and a live cable offers the
+    /// cable. Among equals the kernel's own order decides, which makes the choice
+    /// stable across samples instead of following whichever one the facts
+    /// happened to list first this time.
+    #[must_use]
+    pub fn primary_iface(&self) -> Option<&NetIface> {
+        let usable = self
+            .facts
+            .net_ifaces
+            .iter()
+            .filter(|i| i.name != "lo" && !i.name.is_empty());
+        let mut best: Option<&NetIface> = None;
+        for iface in usable {
+            let better = match best {
+                None => true,
+                Some(current) => iface.state == "up" && current.state != "up",
+            };
+            if better {
+                best = Some(iface);
+            }
+        }
+        best
+    }
+
+    /// What the network row says, as one line of prose.
+    #[must_use]
+    pub fn net_summary(&self) -> String {
+        let Some(iface) = self.primary_iface() else {
+            return "no network interface is reported by this machine".to_owned();
+        };
+        let kind = if iface.wireless { "Wi-Fi" } else { "wired" };
+        let name = &iface.name;
+        match iface.state.as_str() {
+            "up" => format!("{name} ({kind}) is up"),
+            "down" => format!("{name} ({kind}) is down"),
+            // The platform writes `unknown` when the driver published no
+            // operstate, which is not the same as a link that is down.
+            _ => format!("{name} ({kind}) did not report its state"),
+        }
+    }
+
+    /// Whether the Bluetooth radio can be asked to change at all.
+    ///
+    /// True only where the platform found a radio, nothing is blocking it and a
+    /// daemon is installed — the three facts that make `BT POWER` able to
+    /// succeed. A blocked radio is offered no switch: `bluetoothctl` cannot
+    /// un-block an rfkill, so a control there would be a control that fails.
+    #[must_use]
+    pub fn bt_controllable(&self) -> bool {
+        self.facts.bt_state.as_deref() == Some("ready")
+    }
+
+    /// What the Bluetooth row says, as one line of prose.
+    #[must_use]
+    pub fn bt_summary(&self) -> String {
+        let adapter = self
+            .facts
+            .bt_adapters
+            .first()
+            .map_or_else(|| "no adapter".to_owned(), |a| a.clone());
+        match self.facts.bt_state.as_deref() {
+            Some("no-adapter") => "this machine reports no Bluetooth radio".to_owned(),
+            Some("blocked") => {
+                "the radio is blocked by rfkill, which this interface cannot undo".to_owned()
+            }
+            Some("no-daemon") => {
+                "a radio is present but this image has no Bluetooth service".to_owned()
+            }
+            Some("ready") => match self.quick.bt_powered {
+                Some(true) => format!("on ({adapter})"),
+                Some(false) => format!("off ({adapter})"),
+                None => format!("on or off has not been measured yet ({adapter})"),
+            },
+            // No reply, or a word this build does not know: say the machine did
+            // not answer rather than guessing at a state.
+            _ => "the system service has not reported a radio".to_owned(),
+        }
     }
 }
 
@@ -980,6 +1092,12 @@ pub struct SystemFacts {
     pub bt_adapters: Vec<String>,
     /// Whether a Bluetooth daemon is installed.
     pub bt_daemon: Option<bool>,
+    /// Whether the Bluetooth radio is powered on, as BlueZ reported it.
+    ///
+    /// `None` until something has asked: unlike every other Bluetooth fact
+    /// here this one is not in sysfs, so it arrives only from the daemon's
+    /// answer to `BT STATUS` or from the readback after a change.
+    pub bt_powered: Option<bool>,
     /// Sound cards, as `card0 HDA Intel PCH`.
     pub audio_cards: Vec<String>,
     /// Whether a sound server is running, as the platform reports it.
@@ -1192,6 +1310,11 @@ impl Shell {
         if let Some(muted) = self.facts.audio_muted {
             self.quick.muted = muted;
         }
+        // The radio's power is the same kind of fact and arrives the same way,
+        // once something has asked BlueZ.
+        if let Some(powered) = self.facts.bt_powered {
+            self.quick.bt_powered = Some(powered);
+        }
     }
 }
 
@@ -1227,6 +1350,24 @@ pub enum Effect {
     Volume(i8),
     /// Adjust the brightness by a step.
     Brightness(i8),
+    /// Bring one network interface up or down.
+    SetLink {
+        /// The kernel name of the interface.
+        iface: String,
+        /// Up (`true`) or down.
+        up: bool,
+    },
+    /// Ask `systemd-networkd` to re-read one interface's configuration.
+    ReconfigureLink(String),
+    /// Turn the Bluetooth radio on or off.
+    SetBluetoothPower(bool),
+    /// Ask the daemon for the values the panel can only show measured: the
+    /// sink's volume and the radio's power.
+    ///
+    /// Both are questions, both cost a process, and neither is asked by the
+    /// two-second facts poll. They are asked when the panel opens, which is the
+    /// moment somebody is about to look at them.
+    ReadPanelState,
     /// A power profile was requested.
     SetPowerProfile(PowerProfile),
     /// A power transition was confirmed by the user and must be carried out.
@@ -5426,6 +5567,28 @@ impl Shell {
             Hot::QuickVolumeUp => vec![Effect::Volume(1)],
             Hot::QuickVolumeDown => vec![Effect::Volume(-1)],
             Hot::QuickVolumeMute => vec![Effect::Volume(0)],
+            // The link switch asks for the state the interface is *not* in,
+            // decided from the last measurement rather than from a local flag:
+            // pressing a switch that is already off must turn the link on.
+            Hot::QuickLinkToggle => match self.primary_iface() {
+                Some(iface) => vec![Effect::SetLink {
+                    iface: iface.name.clone(),
+                    up: iface.state != "up",
+                }],
+                None => Vec::new(),
+            },
+            Hot::QuickLinkReconnect => match self.primary_iface() {
+                Some(iface) => vec![Effect::ReconfigureLink(iface.name.clone())],
+                None => Vec::new(),
+            },
+            // Likewise for the radio, and only from a measured power state: a
+            // switch with no position is not a switch. The panel registers no
+            // hotspot until there is one, so this arm is the second line of
+            // defence rather than the first.
+            Hot::QuickBluetoothPower => match self.quick.bt_powered {
+                Some(on) => vec![Effect::SetBluetoothPower(!on)],
+                None => Vec::new(),
+            },
             Hot::QuickPower(n) => {
                 let profile = PowerProfile::ALL
                     .get(usize::from(n))
@@ -5879,13 +6042,21 @@ impl Shell {
             Action::Open(app) => self.open_app(app),
             Action::ToggleQuickSettings => {
                 self.overlay_damage();
-                let next = if self.overlay == Overlay::QuickSettings {
-                    Overlay::None
-                } else {
+                let opening = self.overlay != Overlay::QuickSettings;
+                let next = if opening {
                     Overlay::QuickSettings
+                } else {
+                    Overlay::None
                 };
                 self.set_overlay(next);
-                Vec::new()
+                // Opening asks the machine what the panel can only show as a
+                // measurement. Closing asks nothing: a question nothing is
+                // about to look at is a process spent for nobody.
+                if opening {
+                    vec![Effect::ReadPanelState]
+                } else {
+                    Vec::new()
+                }
             }
             Action::TogglePowerMenu => {
                 self.overlay_damage();
@@ -7769,6 +7940,145 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn an_iface(name: &str, state: &str, wireless: bool) -> NetIface {
+        NetIface {
+            name: name.to_owned(),
+            state: state.to_owned(),
+            mac: "02:00:00:00:00:01".to_owned(),
+            wireless,
+        }
+    }
+
+    #[test]
+    fn opening_the_panel_asks_for_the_two_measurements_and_closing_asks_nothing() {
+        // The panel can only show a level and a radio state that something has
+        // asked for: neither is in the facts until the daemon has answered. The
+        // question is asked when the panel opens, and only then.
+        let mut s = shell();
+        let opening = s.perform(Action::ToggleQuickSettings);
+        assert_eq!(opening, vec![Effect::ReadPanelState]);
+        let closing = s.perform(Action::ToggleQuickSettings);
+        assert!(
+            closing.is_empty(),
+            "a closed panel has nobody to show an answer to: {closing:?}"
+        );
+    }
+
+    #[test]
+    fn the_network_tile_offers_only_what_the_kernel_reports() {
+        let mut s = shell();
+
+        // No interface at all: nothing to bring up, so the switch asks for
+        // nothing, and the row says what the machine reported.
+        assert_eq!(s.primary_iface(), None);
+        assert!(s.activate(Hot::QuickLinkToggle).is_empty());
+        assert!(s.activate(Hot::QuickLinkReconnect).is_empty());
+        assert!(
+            s.net_summary().contains("no network interface"),
+            "{}",
+            s.net_summary()
+        );
+
+        // An interface that is up: the switch asks for the state it is *not*
+        // in, and the row names the interface the kernel gave.
+        s.facts.net_ifaces = vec![an_iface("enp0s2", "up", false)];
+        assert_eq!(
+            s.activate(Hot::QuickLinkToggle),
+            vec![Effect::SetLink {
+                iface: "enp0s2".to_owned(),
+                up: false,
+            }]
+        );
+        assert_eq!(
+            s.activate(Hot::QuickLinkReconnect),
+            vec![Effect::ReconfigureLink("enp0s2".to_owned())]
+        );
+        assert_eq!(s.net_summary(), "enp0s2 (wired) is up");
+
+        // Loopback is not the network, and an instrument that is up wins over
+        // one that is down: the tile must act on the cable that works.
+        s.facts.net_ifaces = vec![
+            an_iface("lo", "up", false),
+            an_iface("wlan0", "down", true),
+            an_iface("enp0s2", "up", false),
+        ];
+        assert_eq!(s.primary_iface().map(|i| i.name.as_str()), Some("enp0s2"));
+
+        // A down link is offered the other direction, and says Wi-Fi when the
+        // driver published a wireless directory.
+        s.facts.net_ifaces = vec![an_iface("wlan0", "down", true)];
+        assert_eq!(
+            s.activate(Hot::QuickLinkToggle),
+            vec![Effect::SetLink {
+                iface: "wlan0".to_owned(),
+                up: true,
+            }]
+        );
+        assert_eq!(s.net_summary(), "wlan0 (Wi-Fi) is down");
+
+        // A driver that published no operstate is not a link that is down.
+        s.facts.net_ifaces = vec![an_iface("eth0", "unknown", false)];
+        assert_eq!(s.net_summary(), "eth0 (wired) did not report its state");
+    }
+
+    #[test]
+    fn the_radio_switch_needs_a_provider_and_a_measured_position() {
+        let mut s = shell();
+
+        // Nothing reported: no switch, and the row says the service did not
+        // answer rather than inventing a radio.
+        assert!(!s.bt_controllable());
+        assert!(s.activate(Hot::QuickBluetoothPower).is_empty());
+        assert!(s.bt_summary().contains("has not reported"));
+
+        // The four words the platform can report, and what each one says.
+        s.facts.bt_state = Some("no-adapter".to_owned());
+        assert!(!s.bt_controllable());
+        assert!(s.bt_summary().contains("no Bluetooth radio"));
+        s.facts.bt_state = Some("blocked".to_owned());
+        assert!(
+            !s.bt_controllable(),
+            "rfkill is not something bluetoothctl can undo, so there is no control for it"
+        );
+        assert!(s.bt_summary().contains("blocked by rfkill"));
+        s.facts.bt_state = Some("no-daemon".to_owned());
+        assert!(!s.bt_controllable());
+        assert!(s.bt_summary().contains("no Bluetooth service"));
+
+        // A radio that can be controlled, with no measurement yet: the switch
+        // would have no position, so it asks for nothing and the row says so.
+        s.facts.bt_state = Some("ready".to_owned());
+        s.facts.bt_adapters = vec!["hci0 00:1a:7d:da:71:13".to_owned()];
+        assert!(s.bt_controllable());
+        assert!(s.activate(Hot::QuickBluetoothPower).is_empty());
+        assert!(s.bt_summary().contains("has not been measured"));
+
+        // A measured radio: the switch asks for the other state, and the row
+        // repeats what BlueZ said, not what was asked for.
+        s.quick.bt_powered = Some(true);
+        assert_eq!(
+            s.activate(Hot::QuickBluetoothPower),
+            vec![Effect::SetBluetoothPower(false)]
+        );
+        assert!(s.bt_summary().contains("on (hci0"));
+
+        // And a sample from the daemon replaces it: the readback is the state.
+        let polled = |powered: Option<bool>| SystemFacts {
+            bt_state: Some("ready".to_owned()),
+            bt_adapters: vec!["hci0 00:1a:7d:da:71:13".to_owned()],
+            bt_powered: powered,
+            ..SystemFacts::default()
+        };
+        s.sample(polled(Some(false)));
+        assert_eq!(s.quick.bt_powered, Some(false));
+        assert!(s.bt_summary().contains("off (hci0"));
+
+        // A poll that says nothing about the radio leaves the last measurement
+        // standing rather than blanking the row.
+        s.sample(polled(None));
+        assert_eq!(s.quick.bt_powered, Some(false));
+    }
+
     #[test]
     fn stop_is_sent_only_while_a_page_is_actually_arriving() {
         let mut s = shell();

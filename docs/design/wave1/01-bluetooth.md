@@ -7,8 +7,12 @@ address, `rfkill` soft and hard blocks, whether `bluetoothd` is installed at
 all), fixture-tested; the radio's power, discovery, pairing, connecting and
 forgetting are in `src/litric-sysd/src/providers.rs`, run through
 `bluetoothctl`. `bluez` and `bluez-utils` are in the desktop profile as of the
-same change. **Not verified on anything but QEMU, which has no radio at all** —
-§6 says exactly what that does and does not establish.
+same change. Since 2026-10-26 the radio's *power* is a measurement rather than a
+memory: `BT STATUS` asks `bluetoothctl`, the daemon caches the answer and carries
+it in `FACTS` as `bt.powered`, and the quick-settings panel's Bluetooth row shows
+that rather than the switch the user last flicked. **Not verified on anything but
+QEMU, which has no radio at all** — §6 says exactly what that does and does not
+establish.
 **Scope:** adapter presence and state, pairing, connecting a known device, audio
 routing of a Bluetooth headset.
 
@@ -20,6 +24,8 @@ routing of a Bluetooth headset.
 | Budget row | `docs/PERF-budget.md` | added 2026-10-12, with the idle-memory measurement that goes with it recorded in the GATE 01 entry of that date |
 | Adapter facts | `/sys/class/bluetooth/*`, `/sys/class/rfkill/*`, `/usr/bin/bluetoothd` | read by `platform::bluetooth` |
 | Actions | `bluetoothctl` through `providers::BtAction` | implemented 2026-10-12: `BT POWER`, `BT SCAN`, `BT PAIR`, `BT CONNECT`, `BT FORGET` |
+| Radio power, as a fact | `providers::bt_powered`, cached in `Sysd` | **added 2026-10-26**: `BT STATUS` runs `bluetoothctl show` and parses `Powered:`, because the power state is in no file under `/sys`. A question, so no capability; cached, so the twice-a-second `FACTS` poll spawns nothing; refreshed after every applied `BT POWER`. Read back rather than assumed for the same reason the volume is |
+| The switch in quick settings | `src/litric-shell/src/views.rs`, `src/litric-shell/src/main.rs` | **added 2026-10-26**, with the three conditions the row needs: a radio, nothing blocking it and `bluetoothd` installed. Where any of those is missing the row says which one, and there is no switch to press |
 | A Bluetooth device in the test image | — | **absent**, and not fixable in this VM: QEMU emulates no radio, so every action here is unverified against real hardware |
 
 ## 2. The two decisions this note exists to force
@@ -93,6 +99,10 @@ routing of a Bluetooth headset.
   **Implemented**: `platform::bluetooth` asserts the four states, that a blocked
   *wlan* radio does not make the Bluetooth verdict read `blocked`, and that
   `hard` wins over `soft` when both are set.
+- The `Powered:` parse and the cache, on any host: a recording runner answers
+  `bluetoothctl show`, and the tests assert that `FACTS` carries no `bt.powered`
+  until something has asked, that a facts poll runs no tool, and that an applied
+  `BT POWER` is followed by a readback rather than by the requested value.
 
 ## 6. NOT verified, and what it would take
 
@@ -102,6 +112,7 @@ routing of a Bluetooth headset.
 | pairing prompts cannot be bypassed | the implementation, then an adversarial test against it |
 | `bluetoothd` fits the idle budget | BlueZ in a booted image with the memory ledger updated first — **done 2026-10-12**, and the guest's own number is in the GATE 01 entry of that date. What it does *not* include is a radio: no adapter, no traffic, no scanning, which is a floor and not a working figure |
 | the radio actions do what they say | a machine with an adapter. **NOT verified**, and the booted image says so out loud: `bt.state=no-adapter` and the action's own `action-failed` |
+| the quick-settings switch shows a real radio's power | a machine with an adapter; in this VM `BT STATUS` answers `ERR bt-unavailable` because there is no `bluetoothctl` to run, which is the honest path and is what a host test records |
 
 ## 7. Tickets this note implies
 

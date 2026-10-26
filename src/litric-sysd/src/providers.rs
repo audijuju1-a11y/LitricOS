@@ -1064,6 +1064,80 @@ pub fn audio_level(runner: &dyn Runner) -> Result<(u8, bool), String> {
     })
 }
 
+/// The command that asks the Bluetooth daemon whether the radio is on.
+///
+/// A question, not an action, on the same terms as [`audio_level_plan`]: it
+/// changes nothing, needs no capability and writes no file. It is here because
+/// the radio's power state is **not** in sysfs -- `platform::bluetooth` reads
+/// adapters and rfkill, neither of which changes when a controller is powered
+/// off -- so without asking BlueZ the interface could only show the state it
+/// last requested, which is a value the client typed rather than the machine.
+#[must_use]
+pub fn bt_status_plan() -> Plan {
+    // `show` rather than `info`: with no argument it names the default
+    // controller and its properties, which is exactly the question.
+    Plan {
+        program: BLUETOOTHCTL,
+        args: vec!["show".to_owned()],
+        stdin: None,
+        files: Vec::new(),
+        notes: vec!["query=bt.powered".to_owned()],
+        // The same deadline as a sound-server question, and bounded for the
+        // reason `docs/GATES.md` records: this tool waits for a D-Bus name that
+        // never appears on a machine whose `bluetoothd` is not running.
+        timeout_secs: SOCKET_ROUND_TRIP_SECS,
+    }
+}
+
+/// What `bluetoothctl show` prints, read as a power state.
+///
+/// One shape, from BlueZ's own client: a `Powered:` line whose value is `yes` or
+/// `no`. Every other answer is `None`, including the `No default controller
+/// available` a machine with no radio prints -- an unreadable answer is not
+/// "powered off", and a panel that showed one would be describing a radio that
+/// is not there.
+#[must_use]
+pub fn parse_bt_powered(printed: &str) -> Option<bool> {
+    let line = printed
+        .lines()
+        .find(|l| l.trim_start().starts_with("Powered:"))?;
+    match line.split_once(':')?.1.trim() {
+        "yes" => Some(true),
+        "no" => Some(false),
+        _ => None,
+    }
+}
+
+/// Ask the Bluetooth daemon whether the default controller is powered on.
+///
+/// # Errors
+/// A sentence naming what happened: no client tool in this image, a tool that
+/// failed or timed out, or an answer that carries no power state. The daemon
+/// turns this into a reply the interface can show; it never guesses.
+pub fn bt_powered(runner: &dyn Runner) -> Result<bool, String> {
+    let plan = bt_status_plan();
+    let args: Vec<&str> = plan.args.iter().map(String::as_str).collect();
+    let (code, printed) = runner
+        .capture(plan.program, &args, plan.timeout_secs)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::TimedOut {
+                format!("{} did not answer in time", plan.program)
+            } else {
+                format!("{} could not be run: {e}", plan.program)
+            }
+        })?;
+    if code != 0 {
+        return Err(format!("{} exited {code}", plan.program));
+    }
+    parse_bt_powered(&printed).ok_or_else(|| {
+        format!(
+            "{} answered with something that is not a power state: {}",
+            plan.program,
+            printed.trim()
+        )
+    })
+}
+
 /// The reply lines that describe the plan, without the verdict.
 fn describe(action: &SystemAction, plan: &Plan) -> Vec<String> {
     let mut lines = vec![
@@ -1147,6 +1221,52 @@ mod tests {
         // A tool that answered with prose is not a measurement.
         let prose = RecordingRunner::succeeding(0).answering(0, "there is no default sink");
         assert!(audio_level(&prose).is_err_and(|e| e.contains("not a level")));
+    }
+
+    #[test]
+    fn a_power_state_is_read_from_what_bluetoothctl_prints() {
+        // The shape `bluetoothctl show` gives on a machine with a controller.
+        let yes = "Controller 00:1A:7D:DA:71:13 (public)\n\tName: litric\n\tAlias: litric\n\tPowered: yes\n\tDiscoverable: no\n";
+        assert_eq!(parse_bt_powered(yes), Some(true));
+        assert_eq!(parse_bt_powered(&yes.replace("yes", "no")), Some(false));
+        // Two spaces after the colon is what some releases print.
+        assert_eq!(parse_bt_powered("  Powered:  yes\n"), Some(true));
+
+        // A machine with no radio says so, and that is not "powered off": a
+        // panel showing `off` there would describe a controller that is not
+        // there.
+        assert_eq!(parse_bt_powered("No default controller available\n"), None);
+        assert_eq!(parse_bt_powered(""), None);
+        // A value that is neither yes nor no is not a state this build reads.
+        assert_eq!(parse_bt_powered("Powered: maybe\n"), None);
+        assert_eq!(parse_bt_powered("Powered:\n"), None);
+        assert_eq!(parse_bt_powered("Discoverable: no\n"), None);
+    }
+
+    #[test]
+    fn reading_the_radio_asks_the_tool_and_reports_its_answers() {
+        let runner = RecordingRunner::succeeding(0)
+            .answering(0, "Controller 00:1A:7D:DA:71:13 (public)\n\tPowered: no\n");
+        assert_eq!(bt_powered(&runner), Ok(false));
+        assert_eq!(
+            runner.calls(),
+            vec![(BLUETOOTHCTL.to_owned(), vec!["show".to_owned()])],
+            "the question is the one BlueZ's own client answers, and it is asked with no arguments that could change anything"
+        );
+
+        let missing = RecordingRunner::failing(std::io::ErrorKind::NotFound, "no such file");
+        assert!(bt_powered(&missing).is_err_and(|e| e.contains(BLUETOOTHCTL)));
+
+        let failed = RecordingRunner::succeeding(0).answering(1, "");
+        assert!(bt_powered(&failed).is_err_and(|e| e.contains("exited 1")));
+
+        let prose = RecordingRunner::succeeding(0).answering(0, "No default controller available");
+        assert!(bt_powered(&prose).is_err_and(|e| e.contains("not a power state")));
+
+        // A tool that never answers must not hold the daemon: the deadline is
+        // the plan's own, and a timeout is reported as one.
+        let stuck = RecordingRunner::failing(std::io::ErrorKind::TimedOut, "timed out");
+        assert!(bt_powered(&stuck).is_err_and(|e| e.contains("did not answer in time")));
     }
 
     fn audio_volume(percent: u8) -> SystemAction {

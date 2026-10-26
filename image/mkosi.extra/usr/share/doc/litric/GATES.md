@@ -641,7 +641,7 @@ blocked is listed under *not established*, and none of it is wording.
 | Network actions | same (`NetAction`) | `ip link set <iface> up\|down`, `networkctl reconfigure <iface>`, `iwd` credential file + `iwctl station <iface> connect <ssid>`, and forgetting one |
 | Bluetooth | same (`BtAction`), `image/mkosi.profiles/desktop.conf` | `bluez` + `bluez-utils` in the profile; `bluetoothctl` for radio power, discovery, pair, connect, forget; `bluetooth.service` enabled in the chroot |
 | Authentication | same (`AuthAction`), `src/litric-sysd/src/platform/session.rs` | `/usr/bin/unix_chkpwd <user> nonull` with the password on **stdin**; `auth.available` is now read from the filesystem (`unix-chkpwd` or `none`) |
-| Protocol | `src/litric-sysd/src/proto.rs` | `AUDIO VOLUME\|MUTE`, `NET LINK\|RECONFIGURE\|WIFI JOIN\|WIFI FORGET`, `BT POWER\|SCAN\|PAIR\|CONNECT\|FORGET`, `AUTH VERIFY ... CONFIRM` |
+| Protocol | `src/litric-sysd/src/proto.rs` | `AUDIO LEVEL`, `AUDIO VOLUME\|MUTE`, `NET LINK\|RECONFIGURE\|WIFI JOIN\|WIFI FORGET`, `BT STATUS`, `BT POWER\|SCAN\|PAIR\|CONNECT\|FORGET`, `AUTH VERIFY ... CONFIRM` |
 | Capabilities | `src/litric-caps/src/capability.rs`, `src/litric-sysd/src/state.rs` | `audio://` added to the resource schemes; the shell is granted `audio://`, `iface://`, `wifi://`, `bt://` and `lock://`, and each request is still checked and audited |
 | Bounded waits | `src/litric-sysd/src/action.rs` | `Runner::run(program, args, stdin, timeout_secs)`; a tool that outlives its deadline is killed and reported as `reason=timeout` |
 | In-guest probes | `image/mkosi.extra/usr/lib/litric/selftest` | four provider probes and a table of the tools that are actually in the image |

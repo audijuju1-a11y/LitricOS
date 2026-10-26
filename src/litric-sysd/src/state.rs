@@ -27,7 +27,7 @@ use litric_trash::{Retention, Trash};
 use crate::action::{self, PowerAction, Runner, SystemRunner};
 use crate::facts::{read_facts, Facts};
 use crate::proto::{AccessWord, Request, Response};
-use crate::providers::{self, SystemAction};
+use crate::providers::{self, BtAction, SystemAction};
 
 /// The application the local session client is, for capability purposes.
 ///
@@ -100,6 +100,11 @@ pub struct Sysd {
     /// a change or when a panel opens. `None` is not zero — nothing has been
     /// measured, and the interface says so.
     audio: Option<(u8, bool)>,
+    /// Whether the Bluetooth radio is powered on, as BlueZ last answered, on the
+    /// same terms as [`Sysd::audio`] and for a stronger reason: the sysfs facts
+    /// do not carry the radio's power at all, so this cache is the *only* place
+    /// the interface can get a measurement from.
+    bt: Option<bool>,
 }
 
 impl Sysd {
@@ -120,6 +125,7 @@ impl Sysd {
             caps,
             storage: StorageBroker::new(Layout::for_home(home)),
             audio: None,
+            bt: None,
             root: root.to_path_buf(),
             client,
             runner: Box::new(SystemRunner),
@@ -207,9 +213,16 @@ impl Sysd {
                         u8::from(muted)
                     ));
                 }
+                // The same rule as the volume: a line exists only when a
+                // measurement does, so `bt.powered=0` always means a radio BlueZ
+                // said is off.
+                if let Some(powered) = self.bt {
+                    lines.push(format!("bt.powered={}", u8::from(powered)));
+                }
                 Response::ok(lines)
             }
             Request::AudioLevel => self.audio_level(),
+            Request::BtStatus => self.bt_status(),
             Request::EnvList => Response::ok(self.env_list()),
             Request::EnvPlan(token) => self.env_plan(token),
             Request::EnvSwitch(token) => self.env_switch(token),
@@ -238,6 +251,21 @@ impl Sysd {
                 )])
             }
             Err(reason) => Response::err("audio-unavailable", reason),
+        }
+    }
+
+    /// Ask BlueZ whether the radio is on, and remember the answer.
+    ///
+    /// Allowed to anyone who can reach the socket, exactly as
+    /// [`Sysd::audio_level`] is: it is a question about the machine this process
+    /// runs on, it changes nothing, and the socket is mode 0600 and owned by root.
+    fn bt_status(&mut self) -> Response {
+        match providers::bt_powered(self.runner.as_ref()) {
+            Ok(powered) => {
+                self.bt = Some(powered);
+                Response::ok(vec![format!("bt.powered={}", u8::from(powered))])
+            }
+            Err(reason) => Response::err("bt-unavailable", reason),
         }
     }
 
@@ -324,6 +352,15 @@ impl Sysd {
             if matches!(action, SystemAction::Audio(_)) {
                 if let Ok(level) = providers::audio_level(self.runner.as_ref()) {
                     self.audio = Some(level);
+                }
+            }
+            // A radio that accepted the request is not the same as a radio that
+            // is on: `bluetoothctl` returns when BlueZ has taken the property,
+            // and the property is what the panel must show. Only a power change
+            // is re-read; a scan or a pairing says nothing about power.
+            if matches!(action, SystemAction::Bluetooth(BtAction::Power(_))) {
+                if let Ok(powered) = providers::bt_powered(self.runner.as_ref()) {
+                    self.bt = Some(powered);
                 }
             }
             return Response::ok(outcome.lines);
@@ -658,6 +695,95 @@ mod tests {
             Some(&"audio.level volume=35 muted=1".to_owned()),
             "the readback is the measurement, not the requested number"
         );
+    }
+
+    #[test]
+    fn the_radio_power_is_a_measurement_and_not_an_echo() {
+        // `bluetoothctl show` says the controller exists and is powered off.
+        let runner = RecordingRunner::succeeding(0)
+            .answering(0, "Controller 00:1A:7D:DA:71:13 (public)\n\tPowered: no\n");
+        let mut s = sysd_with(&runner);
+        // Nothing has been asked yet: the sysfs facts carry no radio power, so
+        // there is no line until BlueZ answers. A `bt.powered=0` invented here
+        // would be this daemon describing a radio it has not looked at.
+        let before = s.handle(&Request::Facts, NOW);
+        assert!(
+            line(&before, "bt.powered").is_none(),
+            "{:?}",
+            before.lines()
+        );
+
+        let asked = s.handle(&Request::BtStatus, NOW);
+        assert!(asked.is_ok(), "{}", asked.encode());
+        assert_eq!(line(&asked, "bt.powered"), Some(&"bt.powered=0".to_owned()));
+
+        // The twice-a-second poll carries the measurement without running a
+        // tool: the question costs a process, and a poll must not.
+        let calls = runner.calls().len();
+        let after = s.handle(&Request::Facts, NOW);
+        assert_eq!(line(&after, "bt.powered"), Some(&"bt.powered=0".to_owned()));
+        assert_eq!(
+            runner.calls().len(),
+            calls,
+            "a facts poll must not run a tool"
+        );
+    }
+
+    #[test]
+    fn a_radio_that_cannot_be_asked_says_so() {
+        let runner = RecordingRunner::failing(std::io::ErrorKind::NotFound, "no bluetoothctl");
+        let mut s = sysd_with(&runner);
+        let reply = s.handle(&Request::BtStatus, NOW);
+        assert!(!reply.is_ok());
+        assert!(
+            reply.encode().starts_with("ERR bt-unavailable"),
+            "{}",
+            reply.encode()
+        );
+        assert!(line(&reply, "bt.powered").is_none());
+        // A machine whose radio cannot be read has no power state, and the
+        // facts say nothing rather than saying off.
+        let facts = s.handle(&Request::Facts, NOW);
+        assert!(line(&facts, "bt.powered").is_none());
+    }
+
+    #[test]
+    fn a_radio_change_is_read_back_rather_than_assumed() {
+        use crate::providers::BtAction;
+        // The tool accepts `power on`, and BlueZ then reports the radio on. The
+        // request is not the state; the answer to the question that follows is.
+        let runner = RecordingRunner::succeeding(0)
+            .answering(0, "Controller 00:1A:7D:DA:71:13 (public)\n\tPowered: yes\n");
+        let mut s = sysd_with(&runner);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Bluetooth(BtAction::Power(true)),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        let facts = s.handle(&Request::Facts, NOW);
+        assert_eq!(line(&facts, "bt.powered"), Some(&"bt.powered=1".to_owned()));
+
+        // A change that is not a power change says nothing about power, so the
+        // last measurement stands rather than being replaced by a guess.
+        let before = runner.calls().len();
+        let scan = s.handle(
+            &Request::Action {
+                action: SystemAction::Bluetooth(BtAction::Scan(true)),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(scan.is_ok(), "{}", scan.encode());
+        assert_eq!(
+            runner.calls().len(),
+            before.saturating_add(1),
+            "a scan is one call and no readback"
+        );
+        let facts = s.handle(&Request::Facts, NOW);
+        assert_eq!(line(&facts, "bt.powered"), Some(&"bt.powered=1".to_owned()));
     }
 
     #[test]
