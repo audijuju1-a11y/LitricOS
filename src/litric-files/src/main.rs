@@ -60,6 +60,9 @@ enum Mode {
 struct Args {
     mode: Mode,
     root: PathBuf,
+    /// The one directory `IMPORT` may read a staged file from, and only by bare
+    /// name. `None` disables IMPORT with a reason instead of guessing.
+    import_dir: Option<PathBuf>,
 }
 
 const USAGE: &str = "\
@@ -75,6 +78,7 @@ OPTIONS:
     --socket <path>   bind this socket and accept connections (standalone)
     --info            print what would be served, then exit
     --root <dir>      the user storage root          (default: /var/lib/litric-files/root)
+    --import-dir <d>  where IMPORT may read a staged download from, by bare name
     -h, --help        print this text
     -V, --version     print the version";
 
@@ -85,6 +89,7 @@ OPTIONS:
 fn parse_args(raw: &[String]) -> Result<Option<Args>, String> {
     let mut mode: Option<Mode> = None;
     let mut root = PathBuf::from(DEFAULT_ROOT);
+    let mut import_dir: Option<PathBuf> = None;
     let mut i = 0;
     while let Some(arg) = raw.get(i) {
         match arg.as_str() {
@@ -109,6 +114,13 @@ fn parse_args(raw: &[String]) -> Result<Option<Args>, String> {
                 root = PathBuf::from(dir);
                 i = i.saturating_add(1);
             }
+            "--import-dir" => {
+                let Some(dir) = raw.get(i.saturating_add(1)) else {
+                    return Err("--import-dir needs a directory".to_owned());
+                };
+                import_dir = Some(PathBuf::from(dir));
+                i = i.saturating_add(1);
+            }
             other => {
                 return Err(format!("unrecognised argument: {other}"));
             }
@@ -116,7 +128,11 @@ fn parse_args(raw: &[String]) -> Result<Option<Args>, String> {
         i = i.saturating_add(1);
     }
     match mode {
-        Some(mode) => Ok(Some(Args { mode, root })),
+        Some(mode) => Ok(Some(Args {
+            mode,
+            root,
+            import_dir,
+        })),
         None => Err("one of --stdio, --socket or --info is required".to_owned()),
     }
 }
@@ -167,7 +183,7 @@ fn main() -> ExitCode {
 
 fn run(args: &Args) -> Result<(), String> {
     if args.mode == Mode::Info {
-        return info(&args.root);
+        return info(&args.root, args.import_dir.as_deref());
     }
     serve(args)
 }
@@ -188,8 +204,12 @@ fn serve(args: &Args) -> Result<(), String> {
             args.root.display()
         )
     })?;
-    let root = Root::open(&args.root, zone())
+    let mut root = Root::open(&args.root, zone())
         .map_err(|e| format!("cannot serve {}: {e}", args.root.display()))?;
+    // `--import-dir` is the only directory outside the root this daemon will
+    // read from, and only one bare file name at a time (IMPORT). Not required:
+    // a machine whose browser never downloads nothing into it needs no staging.
+    root.set_import_dir(args.import_dir.clone());
     match &args.mode {
         Mode::Stdio => {
             // The file descriptor systemd handed over IS the connection; there
@@ -207,7 +227,7 @@ fn serve(args: &Args) -> Result<(), String> {
             );
             serve_unix(path, root).map_err(|e| format!("socket {}: {e}", path.display()))
         }
-        Mode::Info => info(&args.root),
+        Mode::Info => info(&args.root, args.import_dir.as_deref()),
     }
 }
 
@@ -228,11 +248,15 @@ fn serve(args: &Args) -> Result<(), String> {
 }
 
 /// Print what this daemon would serve.
-fn info(root: &Path) -> Result<(), String> {
+fn info(root: &Path, import_dir: Option<&Path>) -> Result<(), String> {
     println!("version={VERSION}");
     println!("root={}", root.display());
     println!("socket={DEFAULT_SOCKET}");
     println!("protocol=1");
+    match import_dir {
+        Some(dir) => println!("import={}", dir.display()),
+        None => println!("import=none"),
+    }
     println!("zone={}", zone().name());
     for name in litric_files::STANDARD_DIRS {
         let present = root.join(name).is_dir();

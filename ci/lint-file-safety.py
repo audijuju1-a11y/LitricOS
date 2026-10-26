@@ -48,6 +48,7 @@ import tempfile
 ALLOWED = {
     "src/litric-files/src/ops.rs": {
         "remove_host": "the one choke point for deleting a path under the daemon root (ADR-0019 section 3)",
+        "import_file": "rolls back the destination it created exclusively when the copy from the staging directory failed part-way; the file is the import's own, and a document that was already there was never opened (ADR-0019, bringing a browser download in)",
     },
     "src/litric-files/src/trash.rs": {
         "put": "rolls back the .trashinfo reservation when the move failed, so nothing left its place (BUG-0011)",
@@ -67,6 +68,10 @@ ALLOWED = {
     },
     "src/litric-browser/src/bin/browserd.rs": {
         "run": "unlinks a stale socket file before bind; never a user path",
+        "drop_staged": "removes one finished download the shell has imported, from the broker's own --downloads staging directory: the name must be one segment and is symlink_metadata-checked to be a regular file, so a link or a directory is refused (ADR-0018 DROP)",
+        "staging": "test helper: removes the scratch staging directory this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
+        "a_staged_download_can_be_dropped_by_name": "test cleanup: removes the scratch staging directory it created under the system temp directory, after asserting the file was dropped",
+        "dropping_refuses_a_path_a_link_and_a_directory": "test cleanup: removes the scratch staging directory it created under the system temp directory, after asserting nothing was removed by the refusals",
     },
     "src/litric-sysd/src/server.rs": {
         "bind": "replaces a stale socket file after a symlink_metadata check; never a user path",

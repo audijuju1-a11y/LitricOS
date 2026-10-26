@@ -36,6 +36,13 @@ pub const WALK_CAP: usize = 50_000;
 /// drive the stack.
 const COPY_DEPTH_CAP: usize = 64;
 
+/// Largest file `IMPORT` will bring out of the staging directory (4 GiB).
+///
+/// A browser download can be large; a number has to exist so a runaway source
+/// cannot fill the user's disk in one request. It matches the archive output
+/// limit, which is the other place this workspace accepts bulk bytes.
+const MAX_IMPORT: u64 = 4 * 1024 * 1024 * 1024;
+
 /// The kind a filesystem object is, as the protocol spells it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
@@ -89,6 +96,11 @@ pub struct StatInfo {
 pub struct Root {
     host_root: PathBuf,
     zone: litric_locale::TimeZone,
+    /// The one directory outside the root this daemon may read a file from, and
+    /// only by bare name, for `IMPORT` (ADR-0019). `None` -- what a daemon
+    /// started without `--import-dir` has -- fails every `IMPORT` with a reason
+    /// rather than guessing a staging area.
+    import_dir: Option<PathBuf>,
 }
 
 impl Root {
@@ -117,6 +129,7 @@ impl Root {
         Ok(Self {
             host_root: host.to_path_buf(),
             zone,
+            import_dir: None,
         })
     }
 
@@ -203,6 +216,139 @@ impl Root {
             .ok_or_else(|| Error::new(ErrorKind::NotADirectory, "the root has no parent"))?;
         let dir = self.resolve(&parent)?;
         Ok((dir, logical.file_name().to_owned()))
+    }
+
+    /// Name the one directory this daemon may read a staged file from.
+    ///
+    /// Set from `--import-dir`. It exists for exactly one caller: the browser
+    /// broker stages a completed download in its own runtime directory, and
+    /// `IMPORT` copies it into the user's `/Downloads`. Nothing else reads it,
+    /// and nothing can reach any other host path through it — the request names
+    /// a bare file name, never a path.
+    pub fn set_import_dir(&mut self, dir: Option<PathBuf>) {
+        self.import_dir = dir;
+    }
+
+    /// The import directory, if this daemon was given one.
+    #[must_use]
+    pub fn import_dir(&self) -> Option<&Path> {
+        self.import_dir.as_deref()
+    }
+
+    /// Copy `staging` — a bare file name inside the import directory — to
+    /// `parent/name` in the served tree.
+    ///
+    /// This is how a browser download reaches the Files application without the
+    /// broker (or the shell) ever writing into the user's documents: Chromium
+    /// writes the file where it can, the daemon moves it where the user keeps
+    /// documents, and neither has the other's permission.
+    ///
+    /// The source is confined by construction:
+    ///
+    /// * `staging` is validated as one path segment, so `../x` is a bad name and
+    ///   not a path;
+    /// * it is joined onto the configured directory, which is a literal on the
+    ///   daemon's command line, not something a client sends;
+    /// * it must be a **regular file**, checked with `symlink_metadata` — a
+    ///   symlink in the staging area is refused rather than followed, so a
+    ///   download cannot become a read of `/etc/shadow`;
+    /// * the destination is created exclusively, so an import never overwrites
+    ///   a document that is already there.
+    ///
+    /// # Errors
+    /// `bad-request` when no import directory is configured; `invalid-name` for a
+    /// name that is not one segment; `not-found` when the staged file is gone;
+    /// `symlink-refused` / `is-a-directory` for the wrong kind of source;
+    /// `exists` when the destination is taken; `too-large` past 4 GiB; I/O.
+    pub fn import_file(
+        &self,
+        staging: &str,
+        parent: &LogicalPath,
+        name: &str,
+        mut on_progress: impl FnMut(u64, u64),
+    ) -> Result<(), Error> {
+        let Some(dir) = self.import_dir.as_ref() else {
+            return Err(Error::new(
+                ErrorKind::BadRequest,
+                "this file service was started without an import directory, so it \
+                 cannot take a staged download",
+            ));
+        };
+        Self::validate_segment(staging)?;
+        let source = dir.join(staging);
+        // Not `metadata`: a symlink there must be seen as a symlink.
+        let meta =
+            fs::symlink_metadata(&source).map_err(|e| Error::from_io("import source", &e))?;
+        if meta.file_type().is_symlink() {
+            return Err(Error::new(
+                ErrorKind::SymlinkRefused,
+                format!("the staged download {staging} is a symbolic link"),
+            ));
+        }
+        if meta.is_dir() {
+            return Err(Error::new(
+                ErrorKind::IsADirectory,
+                format!("the staged download {staging} is a directory"),
+            ));
+        }
+        if !meta.is_file() {
+            return Err(Error::new(
+                ErrorKind::BadRequest,
+                format!("the staged download {staging} is not a regular file"),
+            ));
+        }
+        let total = meta.len();
+        if total > MAX_IMPORT {
+            return Err(Error::new(
+                ErrorKind::TooLarge,
+                format!("{staging} is {total} bytes; the import limit is {MAX_IMPORT}"),
+            ));
+        }
+        // `new_file` reserves the destination exclusively, so an import never
+        // replaces a document the user already has under that name.
+        let target = self.new_file(parent, name)?;
+        let copied = (|| -> Result<(), Error> {
+            let mut reader =
+                fs::File::open(&source).map_err(|e| Error::from_io("import open", &e))?;
+            let mut writer = fs::OpenOptions::new()
+                .write(true)
+                .open(&target)
+                .map_err(|e| Error::from_io("import target", &e))?;
+            let mut buffer = vec![0u8; 64 * 1024];
+            let mut done = 0u64;
+            loop {
+                let n = std::io::Read::read(&mut reader, &mut buffer)
+                    .map_err(|e| Error::from_io("import read", &e))?;
+                if n == 0 {
+                    break;
+                }
+                // `get` rather than `[..n]`: the workspace denies indexing, and a
+                // read that claimed more bytes than the buffer holds is a fault
+                // to report, not a panic in the daemon.
+                let chunk = buffer.get(..n).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Io,
+                        format!(
+                            "import read returned {n} bytes for a {}-byte buffer",
+                            buffer.len()
+                        ),
+                    )
+                })?;
+                std::io::Write::write_all(&mut writer, chunk)
+                    .map_err(|e| Error::from_io("import write", &e))?;
+                done = done.saturating_add(n as u64);
+                on_progress(done, total);
+            }
+            std::io::Write::flush(&mut writer).map_err(|e| Error::from_io("import write", &e))?;
+            Ok(())
+        })();
+        if let Err(error) = copied {
+            // The file this call created is removed again: a half-written
+            // document under the user's own name is worse than no document.
+            let _ = fs::remove_file(&target);
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// The host directory for a logical directory, creating it when missing.

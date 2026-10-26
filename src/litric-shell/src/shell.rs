@@ -1384,6 +1384,9 @@ impl Shell {
             return;
         }
         let mut closed = None;
+        // Finished downloads the engine has staged, in the order it named them.
+        let mut staged: Vec<(String, u64)> = Vec::new();
+        let mut downloads_reported = false;
         for m in messages {
             match m {
                 Incoming::Payload { header, bytes } => self.accept_frame(&header, bytes),
@@ -1395,12 +1398,7 @@ impl Shell {
                     } else if let Some(rest) = line.strip_prefix("ERR ") {
                         self.apply_engine_error(rest);
                     } else if line.starts_with("DOWNLOADS ") {
-                        let total = line
-                            .split_whitespace()
-                            .nth(1)
-                            .and_then(|count| count.parse::<usize>().ok())
-                            .unwrap_or(0);
-                        self.browser.downloads_status = Some(format!("{total} file(s)"));
+                        downloads_reported = true;
                     } else if let Some(rest) = line.strip_prefix("DOWNLOAD ") {
                         let mut parts = rest.split_whitespace();
                         let name = parts
@@ -1411,20 +1409,120 @@ impl Shell {
                             .next()
                             .and_then(|value| value.parse().ok())
                             .unwrap_or(0);
-                        if !name.is_empty() {
-                            self.browser
-                                .downloads
-                                .push(crate::apps::BrowserDownload { name, size });
+                        // One name once: two `DOWNLOADS` replies read in the
+                        // same batch would otherwise offer the same file twice,
+                        // and the second import would report "already there"
+                        // about a file this very batch had just brought in.
+                        if !name.is_empty() && !staged.iter().any(|(seen, _)| seen == &name) {
+                            staged.push((name, size));
                         }
                     }
                 }
                 Incoming::Closed(why) => closed = Some(why),
             }
         }
+        if downloads_reported {
+            self.adopt_browser_downloads(&staged);
+        }
         if let Some(why) = closed {
             self.browser_session = None;
             self.browser.status = format!("engine session ended ({why})");
             self.request_full_redraw();
+        }
+    }
+
+    /// Take every finished download the engine staged and put it in `/Downloads`
+    /// through the file service, then show the folder as it actually is.
+    ///
+    /// The engine writes into its own runtime directory because that is the only
+    /// place it may write: it has no access to the user's documents, and it is
+    /// not supposed to. The import is the handover — the daemon owns the
+    /// destination, the broker owns the staging file, and this process writes
+    /// neither. A staged copy is dropped only after the import succeeded, so a
+    /// failed import leaves the download where it can be retried.
+    fn adopt_browser_downloads(&mut self, staged: &[(String, u64)]) {
+        if staged.is_empty() {
+            self.refresh_downloads_panel();
+            return;
+        }
+        let zone = self.regional.zone.clone();
+        let bridge = match self.try_files_bridge(zone) {
+            Ok(bridge) => bridge,
+            Err(error) => {
+                self.browser.downloads_status = Some(format!("Unavailable: {error}"));
+                return;
+            }
+        };
+        let mut imported = 0usize;
+        let mut kept: Vec<String> = Vec::new();
+        for (name, _size) in staged {
+            match bridge.import("/Downloads", name, name) {
+                Ok(()) => {
+                    imported = imported.saturating_add(1);
+                    // The staged copy has served its purpose. The broker deletes
+                    // it because it is the broker's directory, not ours.
+                    let request = format!("DROP {}", litric_core::pct::encode_field(name));
+                    if let Some(link) = self.browser_session.as_mut() {
+                        let _ = link.send_line(&request);
+                    }
+                }
+                // The name is taken. Never overwrite a document the user has;
+                // leave the staged copy for them (or the next download) to sort
+                // out, and say so rather than pretending it landed.
+                Err(crate::fsbridge::FsError::Exists) => kept.push(name.clone()),
+                Err(error) => {
+                    self.browser.downloads_status = Some(format!("{name}: {error}"));
+                }
+            }
+        }
+        self.refresh_downloads_panel();
+        if imported > 0 || !kept.is_empty() {
+            let mut message = format!("{imported} download(s) saved to /Downloads");
+            if !kept.is_empty() {
+                message.push_str(&format!(
+                    "; {} already there, left in the browser's staging area",
+                    kept.len()
+                ));
+            }
+            self.browser.downloads_status = Some(message);
+        }
+    }
+
+    /// Show `/Downloads` as the file service reports it.
+    ///
+    /// This is the folder the user sees in the Files application, so the panel
+    /// and the folder are the same list. Before the daemon owned it, the panel
+    /// listed the broker's tmpfs directory and said "this session" because that
+    /// was the truth.
+    pub fn refresh_downloads_panel(&mut self) {
+        let zone = self.regional.zone.clone();
+        let bridge = match self.try_files_bridge(zone) {
+            Ok(bridge) => bridge,
+            Err(error) => {
+                self.browser.downloads_status = Some(format!("Unavailable: {error}"));
+                self.browser.downloads.clear();
+                return;
+            }
+        };
+        match bridge.list_dir("/Downloads") {
+            Ok(entries) => {
+                self.browser.downloads = entries
+                    .into_iter()
+                    .filter(|entry| entry.kind == crate::apps::FileKind::File)
+                    .map(|entry| crate::apps::BrowserDownload {
+                        name: entry.name,
+                        size: entry.size,
+                    })
+                    .collect();
+                self.browser.downloads_status = Some(format!(
+                    "{} file(s) in /Downloads",
+                    self.browser.downloads.len()
+                ));
+            }
+            Err(error) => {
+                self.browser.downloads.clear();
+                self.browser.downloads_status = Some(format!("Unavailable: {error}"));
+            }
         }
     }
 
@@ -5342,15 +5440,14 @@ impl Shell {
             }
             Hot::BrowserDownloads => {
                 self.browser.panel = crate::apps::BrowserPanel::Downloads;
-                self.browser.downloads.clear();
-                self.browser.downloads_status = Some("Loading…".to_owned());
+                // The folder is shown from the file service even when no engine
+                // is connected: what is in `/Downloads` does not depend on the
+                // browser being open.
+                self.refresh_downloads_panel();
                 if let Some(link) = self.browser_session.as_mut() {
                     if let Err(error) = link.send_line("DOWNLOADS") {
                         self.browser.downloads_status = Some(format!("Unavailable: {error}"));
                     }
-                } else {
-                    self.browser.downloads_status =
-                        Some("Browser engine session is not connected".to_owned());
                 }
                 Vec::new()
             }

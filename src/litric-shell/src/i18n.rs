@@ -158,7 +158,7 @@ pub fn text<'a>(english: &'a str) -> Cow<'a, str> {
         "Site" => "เว็บไซต์",
         "No pages visited yet" => "ยังไม่มีประวัติการเข้าชม",
         "No bookmarks saved yet" => "ยังไม่มีที่คั่นหน้า",
-        "No downloads reported by the browser engine yet" => "ยังไม่มีรายการดาวน์โหลดจากเบราว์เซอร์",
+        "Nothing has been downloaded yet" => "ยังไม่มีรายการดาวน์โหลด",
         "Site controls" => "สิทธิ์ของเว็บไซต์",
         "This engine does not surface site permission requests to LitricOS, so this page cannot grant device access." => "เอนจินนี้ยังไม่ส่งคำขอสิทธิ์เว็บไซต์ให้ LitricOS จึงยังอนุญาตการเข้าถึงอุปกรณ์จากหน้านี้ไม่ได้",
         "Search processes" => "ค้นหาโปรเซส",

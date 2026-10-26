@@ -272,6 +272,21 @@ impl Daemon {
         .map(|_| ())
     }
 
+    /// `IMPORT <parent> <name> <staged-name>`: a finished browser download
+    /// into the user's tree.
+    ///
+    /// The staged file is named by one segment and read from the daemon's own
+    /// `--import-dir`; nothing here can name a path outside it.
+    pub fn import(&self, parent: &str, name: &str, staged: &str) -> Result<(), FsError> {
+        self.call(&format!(
+            "IMPORT {} {} {}",
+            wire_path(parent),
+            pct::encode_field(name),
+            pct::encode_field(staged)
+        ))
+        .map(|_| ())
+    }
+
     /// `RENAME <path> <new-name>`.
     pub fn rename(&self, parent: &str, old: &str, new: &str) -> Result<(), FsError> {
         self.call(&format!(
@@ -545,10 +560,15 @@ mod tests {
     }
 
     /// Start a daemon on a socket under `root`, and wait until it accepts.
-    fn serve(root: &Path, socket: &Path) -> std::thread::JoinHandle<()> {
+    fn serve_staged(
+        root: &Path,
+        socket: &Path,
+        import_dir: Option<&Path>,
+    ) -> std::thread::JoinHandle<()> {
         litric_files::ensure_storage(root).expect("storage root");
-        let opened = litric_files::Root::open(root, litric_locale::TimeZone::utc("test"))
+        let mut opened = litric_files::Root::open(root, litric_locale::TimeZone::utc("test"))
             .expect("root opens");
+        opened.set_import_dir(import_dir.map(Path::to_path_buf));
         let path = socket.to_path_buf();
         let handle = std::thread::spawn(move || {
             let _ = litric_files::server::serve_unix(&path, opened);
@@ -564,6 +584,10 @@ mod tests {
             "the test daemon never started listening on {}",
             socket.display()
         );
+    }
+
+    fn serve(root: &Path, socket: &Path) -> std::thread::JoinHandle<()> {
+        serve_staged(root, socket, None)
     }
 
     fn bridge(root: &Path, socket: &Path) -> crate::fsbridge::FsBridge {
@@ -650,6 +674,55 @@ mod tests {
         assert_eq!(b.trash_empty().expect("empty"), 1);
         assert!(b.trash_list().expect("list").is_empty());
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_staged_download_reaches_downloads_through_the_daemon() {
+        let base = scratch("import-download");
+        let root = base.join("root");
+        let staging = base.join("staging");
+        let socket = base.join("files.sock");
+        std::fs::create_dir_all(&staging).expect("staging");
+        std::fs::write(staging.join("report.pdf"), b"%PDF-1.7 body").expect("stage");
+        // A link in the staging area is not a download: the import must refuse
+        // it rather than follow it out of the directory.
+        std::os::unix::fs::symlink("/etc/hostname", staging.join("link")).expect("symlink");
+        let _server = serve_staged(&root, &socket, Some(&staging));
+        let b = bridge(&root, &socket);
+
+        b.import("/Downloads", "report.pdf", "report.pdf")
+            .expect("import");
+        assert_eq!(
+            std::fs::read(root.join("Downloads/report.pdf")).expect("imported"),
+            b"%PDF-1.7 body"
+        );
+        // The staged copy is still there: the broker owns it, and it is dropped
+        // only after the import is confirmed.
+        assert!(staging.join("report.pdf").is_file());
+        // The panel's list is the same call the Files window makes.
+        let listed = b.list_dir("/Downloads").expect("list");
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!(listed[0].name, "report.pdf");
+
+        // The same name again is refused: a download never replaces a document.
+        assert_eq!(
+            b.import("/Downloads", "report.pdf", "report.pdf")
+                .expect_err("refused"),
+            FsError::Exists
+        );
+        // A link is not a download, and a path is not a name.
+        assert_eq!(
+            b.import("/Downloads", "stolen", "link")
+                .expect_err("refused"),
+            FsError::Denied
+        );
+        assert_eq!(
+            b.import("/Downloads", "escape", "../escape")
+                .expect_err("refused"),
+            FsError::BadName
+        );
+        assert!(!root.join("Downloads/stolen").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 

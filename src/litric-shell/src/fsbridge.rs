@@ -468,6 +468,30 @@ impl FsBridge {
         }
     }
 
+    /// Bring a staged browser download into `parent` under `name`.
+    ///
+    /// Only the daemon can do this: it owns the destination, and the staging
+    /// directory is named on its command line. A bridge without a daemon says
+    /// so instead of copying the file itself, because copying it here is the
+    /// in-process write this arrangement exists to remove.
+    ///
+    /// # Errors
+    /// [`FsError::Io`] when there is no daemon; otherwise as the daemon replies
+    /// (`Exists` when the name is taken, `NotFound` when the staged file is
+    /// gone, `BadName` for a name that is not one segment).
+    pub fn import(&self, parent: &str, name: &str, staged: &str) -> Result<(), FsError> {
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            return daemon.import(parent, name, staged);
+        }
+        let _ = (parent, name, staged);
+        Err(FsError::Io(
+            "a staged download can only be imported by the file service, and this \
+             host has none"
+                .to_owned(),
+        ))
+    }
+
     /// Rename within `parent`. Never overwrites.
     ///
     /// # Errors

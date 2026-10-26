@@ -311,6 +311,23 @@ mod broker {
             .as_ref()
     }
 
+    /// Remove one finished download from the staging directory.
+    ///
+    /// The name must be one plain segment: this is the only place the broker
+    /// deletes anything, and `../` in a download's name would be a way out of
+    /// its own directory even though it created that directory itself.
+    pub(super) fn drop_staged(dir: &std::path::Path, name: &str) -> Result<(), String> {
+        if name.is_empty() || name.contains('/') || name == "." || name == ".." {
+            return Err("that is not a download name".to_owned());
+        }
+        let path = dir.join(name);
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Err("that is not a staged download".to_owned());
+        }
+        std::fs::remove_file(&path).map_err(|e| e.to_string())
+    }
+
     /// Read one JSON value from the NUL-delimited CDP pipe.
     fn read_json_value(
         reader: &mut BufReader<std::fs::File>,
@@ -1385,7 +1402,15 @@ mod broker {
                                 let Ok(metadata) = entry.metadata() else {
                                     continue;
                                 };
-                                if metadata.is_file() && !name.starts_with('.') {
+                                // Chromium writes `<name>.crdownload` until the
+                                // download is complete. Listing those would show
+                                // the user a file that cannot be opened, and the
+                                // importer would move a half-written document
+                                // into their Downloads folder.
+                                let finished = metadata.is_file()
+                                    && !name.starts_with('.')
+                                    && !name.ends_with(".crdownload");
+                                if finished {
                                     files.push((name, metadata.len()));
                                 }
                             }
@@ -1399,6 +1424,24 @@ mod broker {
                         Err(error) => {
                             Some(format!("ERR {}", super::pct_encode(&error.to_string())))
                         }
+                    }
+                }
+                "DROP" => {
+                    // The shell removed an imported download from the user's
+                    // folder; the staged copy has no further purpose. It is
+                    // this broker's own directory, so deleting here is its own
+                    // authority and nobody else's.
+                    let name = super::pct_decode(parts.next().unwrap_or("-"));
+                    let Some(dir) = downloads_dir() else {
+                        return writeln!(out, "ERR downloads%20are%20not%20configured").is_ok();
+                    };
+                    // Not `DOWNLOADS 0`: a listing reply would be taken by the
+                    // shell as the start of a download report and would clear
+                    // the panel's status line for a reason the user never
+                    // caused.
+                    match drop_staged(dir, &name) {
+                        Ok(()) => Some(format!("DROPPED {}", super::pct_encode(&name))),
+                        Err(reason) => Some(format!("ERR {}", super::pct_encode(&reason))),
                     }
                 }
                 _ => Some("ERR bad-request unknown%20command".to_owned()),
@@ -1556,7 +1599,7 @@ fn main() {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::broker::{find_chromium, Broker};
+    use super::broker::{drop_staged, find_chromium, Broker};
     use super::{pct_decode, pct_encode};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -1682,5 +1725,37 @@ mod tests {
         );
         let fields: Vec<&str> = header.split(' ').collect();
         assert_eq!(fields, ["FRAME", "3", "1280", "800", "4096000"]);
+    }
+
+    fn staging(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("litric-browserd-drop-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("staging");
+        dir
+    }
+
+    #[test]
+    fn a_staged_download_can_be_dropped_by_name() {
+        let dir = staging("ok");
+        std::fs::write(dir.join("report.pdf"), b"payload").expect("stage");
+        drop_staged(&dir, "report.pdf").expect("drops");
+        assert!(!dir.join("report.pdf").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dropping_refuses_a_path_a_link_and_a_directory() {
+        let dir = staging("refuse");
+        std::fs::create_dir_all(dir.join("folder")).expect("folder");
+        std::os::unix::fs::symlink("/etc/hostname", dir.join("link")).expect("symlink");
+        assert!(drop_staged(&dir, "../escape").is_err());
+        assert!(drop_staged(&dir, "..").is_err());
+        assert!(drop_staged(&dir, "folder").is_err());
+        assert!(drop_staged(&dir, "link").is_err());
+        // Nothing was removed on the way to those refusals.
+        assert!(dir.join("folder").is_dir());
+        assert!(dir.join("link").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -80,6 +80,7 @@ impl Connection {
             "MKDIR" => self.make(&request, Kind::Dir),
             "NEWFILE" => self.make(&request, Kind::File),
             "WRITETEXT" => self.write_text(&request),
+            "IMPORT" => self.import(&request, progress),
             "RENAME" => self.rename(&request),
             "CONFLICTS" => self.conflicts(&request),
             "COPY" => self.transfer(&request, Move::Copy, progress),
@@ -300,6 +301,52 @@ impl Connection {
                 Err(e) => Outcome::Fail(invalid(e)),
             },
             Err(e) => Outcome::Fail(Error::from_io("writetext", &e)),
+        }
+    }
+
+    /// `IMPORT <parent> <name> <staged-name>` — a finished browser download
+    /// into the user's tree.
+    ///
+    /// The staged file is named by one segment and read from the daemon's
+    /// `--import-dir`; the destination is a logical path like every other
+    /// command. This is the only way bytes enter the tree without a client
+    /// writing them, and it is bounded to one directory on one side and one
+    /// exclusive create on the other.
+    fn import(&self, request: &Request, progress: &mut dyn FnMut(u64, u64)) -> Outcome {
+        let (Some(parent), Some(raw_name), Some(raw_staged)) = (
+            request.fields.first(),
+            request.fields.get(1),
+            request.fields.get(2),
+        ) else {
+            return Outcome::Fail(Error::new(
+                ErrorKind::BadRequest,
+                "IMPORT takes a parent path, a name and the staged file's name",
+            ));
+        };
+        if request.fields.len() > 3 {
+            return Outcome::Fail(Error::new(
+                ErrorKind::BadRequest,
+                "IMPORT takes exactly three fields",
+            ));
+        }
+        let name = match proto::decode_field(raw_name) {
+            Ok(n) => n,
+            Err(e) => return Outcome::Fail(e),
+        };
+        let staged = match proto::decode_field(raw_staged) {
+            Ok(n) => n,
+            Err(e) => return Outcome::Fail(e),
+        };
+        let parent = match logical_path(parent) {
+            Ok(p) => p,
+            Err(e) => return Outcome::Fail(e),
+        };
+        match self.root.import_file(&staged, &parent, &name, progress) {
+            Ok(()) => match parent.join(&name) {
+                Ok(placed) => Outcome::Reply(vec![proto::entry(&[("path", placed.as_str())])]),
+                Err(e) => Outcome::Fail(invalid(e)),
+            },
+            Err(e) => Outcome::Fail(e),
         }
     }
 
@@ -1292,6 +1339,89 @@ mod tests {
             fs::read_to_string(dir.join("Documents/my notes.txt")).expect("restored"),
             "bye"
         );
+    }
+
+    fn open_root_with_import(tag: &str) -> (PathBuf, PathBuf, Root) {
+        let dir = temp_root(tag);
+        let staging = dir.join("..staging");
+        fs::create_dir_all(&staging).expect("staging");
+        let mut root = Root::open(&dir, TimeZone::utc("test")).expect("root opens");
+        root.set_import_dir(Some(staging.clone()));
+        (dir, staging, root)
+    }
+
+    #[test]
+    fn import_brings_a_staged_download_into_the_tree() {
+        let (dir, staging, root) = open_root_with_import("import");
+        fs::write(staging.join("report.pdf"), b"%PDF-1.7 payload").expect("stage");
+        let mut conn = Connection::new(root);
+        let line = one_line(&mut conn, "IMPORT /Documents report.pdf report.pdf");
+        assert_eq!(line, "path=%2FDocuments%2Freport.pdf");
+        assert_eq!(
+            fs::read(dir.join("Documents/report.pdf")).expect("imported"),
+            b"%PDF-1.7 payload"
+        );
+        // The staged copy is the broker's to remove, not the daemon's.
+        assert!(staging.join("report.pdf").is_file());
+    }
+
+    #[test]
+    fn import_never_overwrites_and_never_leaves_a_partial_file() {
+        let (dir, staging, root) = open_root_with_import("import-exists");
+        fs::write(dir.join("Documents/report.pdf"), b"the original").expect("original");
+        fs::write(staging.join("report.pdf"), b"a newer download").expect("stage");
+        let mut conn = Connection::new(root);
+        match conn.dispatch("IMPORT /Documents report.pdf report.pdf", &mut |_, _| {}) {
+            Outcome::Fail(e) => assert_eq!(e.kind(), ErrorKind::Exists),
+            other => panic!("not a refusal: {other:?}"),
+        }
+        assert_eq!(
+            fs::read(dir.join("Documents/report.pdf")).expect("original kept"),
+            b"the original"
+        );
+        // A missing source leaves nothing behind either.
+        match conn.dispatch("IMPORT /Documents gone.zip gone.zip", &mut |_, _| {}) {
+            Outcome::Fail(e) => assert_eq!(e.kind(), ErrorKind::NotFound),
+            other => panic!("not a refusal: {other:?}"),
+        }
+        assert!(!dir.join("Documents/gone.zip").exists());
+    }
+
+    #[test]
+    fn import_refuses_every_way_out_of_the_staging_directory() {
+        let (dir, staging, root) = open_root_with_import("import-escape");
+        fs::write(staging.join("real.bin"), b"x").expect("stage");
+        // A symlink out of the staging area, a directory, and a traversal name.
+        std::os::unix::fs::symlink("/etc/passwd", staging.join("link")).expect("symlink");
+        fs::create_dir_all(staging.join("folder")).expect("dir");
+        let mut conn = Connection::new(root);
+        match conn.dispatch("IMPORT /Documents stolen link", &mut |_, _| {}) {
+            Outcome::Fail(e) => assert_eq!(e.kind(), ErrorKind::SymlinkRefused),
+            other => panic!("not a refusal: {other:?}"),
+        }
+        match conn.dispatch("IMPORT /Documents folder folder", &mut |_, _| {}) {
+            Outcome::Fail(e) => assert_eq!(e.kind(), ErrorKind::IsADirectory),
+            other => panic!("not a refusal: {other:?}"),
+        }
+        match conn.dispatch(
+            "IMPORT /Documents escape ..%2F..%2Fetc%2Fpasswd",
+            &mut |_, _| {},
+        ) {
+            Outcome::Fail(e) => assert_eq!(e.kind(), ErrorKind::InvalidName),
+            other => panic!("not a refusal: {other:?}"),
+        }
+        assert!(!dir.join("Documents/stolen").exists());
+        assert!(!dir.join("Documents/folder").exists());
+    }
+
+    #[test]
+    fn import_without_a_configured_directory_says_so() {
+        let (_dir, root) = open_root("import-unconfigured");
+        let mut conn = Connection::new(root);
+        match conn.dispatch("IMPORT /Documents a.txt a.txt", &mut |_, _| {}) {
+            Outcome::Fail(e) => assert_eq!(e.kind(), ErrorKind::BadRequest),
+            other => panic!("not a refusal: {other:?}"),
+        }
     }
 
     #[test]

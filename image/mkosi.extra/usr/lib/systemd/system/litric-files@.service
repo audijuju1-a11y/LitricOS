@@ -10,7 +10,7 @@ CollectMode=inactive-or-failed
 # reported as failed at the moment the shell connects, instead of a connection
 # that is accepted and then closed for no stated reason.
 Type=exec
-ExecStart=/usr/bin/litric-filesd --stdio --root /var/lib/litric-files/root
+ExecStart=/usr/bin/litric-filesd --stdio --root /var/lib/litric-files/root --import-dir /run/litric-browser/Downloads
 # The accepted connection IS stdin/stdout. Nothing listens in this process: the
 # socket unit owns the listening side, which is why there is no port to protect
 # and no accept loop to get wrong.
@@ -33,6 +33,13 @@ Group=litric
 StateDirectory=litric-files
 StateDirectoryMode=0700
 ReadWritePaths=/var/lib/litric-files
+
+# The browser's staging directory, READ ONLY, and only for `IMPORT`: a finished
+# download is a bare file name in there, and the daemon copies it into
+# `/Downloads`. `-` because the browser may never have run, and a missing staging
+# directory must not stop this daemon. It is not on `ReadWritePaths`: deleting a
+# staged file belongs to the broker that wrote it (`DROP`), not to this daemon.
+ReadOnlyPaths=-/run/litric-browser/Downloads
 
 # --- sandbox ---------------------------------------------------------------
 # It reads and writes the user's documents and nothing else, needs no network,

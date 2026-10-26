@@ -84,6 +84,8 @@ header is followed immediately by its binary payload.
 | `WHEEL <tab> <x> <y> <dx> <dy>` | Scroll, in pixels. |
 | `KEY <tab> <down\|up> <key-pct> <code-pct> <vk> <mods> <text-pct\|->` | DOM `key`, DOM `code`, Windows virtual-key code, modifiers, produced text. |
 | `TEXT <tab> <text-pct>` | Insert text (paste, IME, non-Latin input). |
+| `DOWNLOADS` | List finished files in the staging directory: `DOWNLOADS <n>` then `DOWNLOAD <name-pct> <bytes>` per file, or `ERR downloads-are-not-configured`. Names ending `.crdownload` are Chromium's partial writes and are not listed. |
+| `DROP <name-pct>` | Remove one staged file after the shell has imported it. The name is one segment; a symlink or a directory is refused. Reply `DROPPED <name-pct>`. |
 | `PING` | Reply `PONG`. |
 | `QUIT` | Close the connection; the broker stops Chromium and exits. |
 
@@ -117,7 +119,7 @@ per-frame acknowledgement and back-pressure remains the planned Phase B; it is
 | No filesystem access | `file:` is refused before the engine is asked; the broker has no grant to the user's files (see the unit's `ProtectHome=yes`, `ProtectSystem=strict` and the single `ReadWritePaths`). | Every navigation. |
 | No arbitrary schemes | Anything that is not `http`/`https`/`about:` is refused, so `javascript:`, `data:` and external protocols never reach the engine. | Every navigation. |
 | TLS is real | Chromium's own verification runs with its own trust store; the broker passes no `--ignore-certificate-errors` and refuses to add one. | All HTTPS. |
-| Downloads | `Browser.setDownloadBehavior` points at the broker's private directory (`--downloads`), and `DOWNLOADS` lists what is there. Without that argument downloads are not configured and the shell says so. | Browser-wide. |
+| Downloads | `Browser.setDownloadBehavior` points at `--downloads`, which is a **staging** directory on the broker's tmpfs, not the user's Downloads folder. `DOWNLOADS` lists finished files there; the shell hands each one to `litric-filesd` (`IMPORT`, ADR-0019), and only after the daemon confirms the copy does it send `DROP` to the broker. Neither the broker nor the shell writes into `/Downloads`, and a failed import leaves the staged file to be retried rather than losing it. Without `--downloads` downloads are not configured and the shell says so. | Browser-wide. |
 | Site permissions | Not surfaced. Headless Chromium has no prompt UI, so a page asking for camera, microphone or location gets nothing; LitricOS does not grant them on the user's behalf. | Browser-wide. |
 | Remote debugging | `--remote-debugging-pipe` only. No TCP debugging port is ever opened. | Process-wide. |
 | Engine sandbox | Chromium's sandbox is left ON. The unit runs the broker as `litric`, does not set `RestrictNamespaces`, and a Chromium that cannot start its sandbox is reported as an engine failure rather than silently downgraded with `--no-sandbox`. | Process-wide. |

@@ -5,6 +5,10 @@ CollectMode=inactive-or-failed
 
 [Service]
 Type=simple
+# `--downloads` is a STAGING directory, not where downloads are kept: it lives on
+# tmpfs, the shell imports each finished file into the user's `/Downloads` through
+# `litric-filesd` and then asks the broker to drop the staged copy. The broker
+# never touches the document root, which is why it needs no path there.
 ExecStart=/usr/bin/litric-browserd --stdio --profile /run/litric-browser/profile --downloads /run/litric-browser/Downloads
 StandardInput=socket
 StandardOutput=socket

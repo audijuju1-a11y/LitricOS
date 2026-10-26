@@ -1792,10 +1792,12 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         crate::apps::BrowserPanel::Downloads => {
             font::draw(
                 canvas,
-                // These files live in the broker's /run directory, which is
-                // tmpfs: they survive a window close and disappear at reboot.
-                // Calling the panel just "Downloads" made that look permanent.
-                "Downloads (this session)",
+                // The same folder the Files window shows: the browser's
+                // downloads are imported into the user's `/Downloads` by the
+                // file service, so they survive a reboot and can be opened from
+                // either window. It said "(this session)" while they lived in
+                // the broker's tmpfs directory.
+                "Downloads",
                 page.x + t.sp(Space::Md),
                 page.y + t.px(28.0),
                 &s_head,
@@ -1804,7 +1806,7 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
                 let message = app
                     .downloads_status
                     .as_deref()
-                    .unwrap_or("No downloads reported by the browser engine yet");
+                    .unwrap_or("Nothing has been downloaded yet");
                 font::draw(
                     canvas,
                     &ui::elide(message, &s_body, page.w - t.sp(Space::Md) * 2.0),

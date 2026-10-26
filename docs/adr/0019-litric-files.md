@@ -94,6 +94,7 @@ host path in a message is a sandbox detail leaking into the interface.
 | `RECENT` | the 100 most recently modified files under the root, excluding Trash |
 | `VOLUMES` | `v target=<pct> fstype= size= used= avail=` |
 | `READTEXT <path>` | `binary=<0\|1> truncated=<0\|1> text=<pct>` — first 64 KiB, for preview |
+| `IMPORT <parent> <name> <staged-name>` | `path=<pct>` — copy one finished browser download from the daemon's `--import-dir` into `parent` under `name`. Both names are single segments; the source must be a regular file (`symlink-refused`, `is-a-directory` otherwise); the destination is created exclusively (`exists` — an import never overwrites a document); 4 GiB cap (`too-large`); `bad-request` when the daemon was started without an import directory |
 | `QUIT` | closes |
 
 Error kinds: `bad-request`, `invalid-name`, `not-found`, `exists`, `not-a-directory`,
@@ -119,6 +120,28 @@ symlinks, hard links and device nodes. Limits: 100 000 entries, 4 GiB total outp
 and a compression ratio above 1000:1 on any entry larger than 1 MiB. A ZIP whose
 central directory points two entries at overlapping data is refused as a bomb.
 Output that exceeds its declared size stops the extraction.
+
+### Bringing a browser download in
+
+Neither the browser broker nor the shell writes into the user's `/Downloads`. Chromium
+writes the finished file into the broker's staging directory (`--downloads`, on the
+broker's tmpfs), `DOWNLOADS` lists it (ADR-0018), and the shell asks this daemon to
+`IMPORT` it. The daemon reads the staged file and creates the destination itself, so
+the bytes cross the boundary exactly once, in the direction the sandbox allows:
+
+* `--import-dir` names the one directory outside the root this daemon will read from,
+  and it comes from the daemon's command line (`litric-files@.service`), never from a
+  request;
+* a request can only name a bare file inside it — `../`, an absolute path or a
+  two-segment name is `invalid-name`, and a symlink there is refused, so a download
+  cannot become a read of another file;
+* the import is a fresh, exclusive create, so a download with the same name as an
+  existing document is reported (`exists`) and the document is left alone;
+* the broker deletes the staged copy only after the shell confirms the import
+  (`DROP`), so a failed import is retryable rather than lost.
+
+Without `--import-dir` the daemon answers `IMPORT` with `bad-request` and says why;
+it never guesses a staging area.
 
 ## Verification record
 
