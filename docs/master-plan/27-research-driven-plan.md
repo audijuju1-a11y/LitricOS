@@ -321,6 +321,27 @@ What remains outside the ledger is research, not decisions: the `PENDING`
 chapters (`F` 28, `H` 21, `I` 12, `J` 9 and eight Linux desktops of 15) cannot
 be cited until their status is final, so they are Track R's work and not rows.
 
+### Track R queue, first pass (2026-10-26)
+
+193 checklist items are `PENDING`, and none of them may be cited. A first pass
+over the corpus -- does the item's own title appear as a heading in any research
+part -- finds 56 of them written up already:
+
+| Chapter | `PENDING` | Title found as a heading |
+|---|---:|---:|
+| `F` shared component catalogue | 28 | 12 |
+| `H` workflows & edge cases | 21 | 7 |
+| `I` technical feasibility | 12 | 1 |
+| `J` source register & audit | 9 | 2 |
+| each of `LB`–`LX` (8 desktops) | 15 | 4 |
+
+A heading match is **not** a status: it says a researcher wrote something under
+that name, not that the item has a source, a note and a final status. The 56 are
+where a status review is cheapest to start -- read the section, decide whether it
+answers the item, then set `COMPLETE` or `PARTIAL` on the checklist, at which
+point the row can be cited. The 137 without a heading are research that has not
+been done, and no amount of checking will find them.
+
 Each batch produces ledger-ready rows, not prose: a research batch is done when
 its checklist status is final and its rows carry evidence tiers.
 
