@@ -1,0 +1,73 @@
+#!/bin/sh
+# =============================================================================
+# LitricOS — write a machine-readable memory snapshot of a running system.
+#
+# Run this INSIDE a booted LitricOS image, with the desktop settled:
+#
+#   /usr/lib/litric/budget-snapshot > /run/litric-budget.txt
+#
+# Then, on the host, check it against the ledger:
+#
+#   ci/check-memory-snapshot.py --snapshot /run/litric-budget.txt
+#
+# This exists because docs/PERF-budget.md has per-line targets and a TOTAL, and
+# nothing on a running machine ever added the lines up. `MemoryMax=` is a
+# ceiling, not usage: a service can sit at a tenth of its cap, and the sum of
+# the caps is not the resident cost of the desktop.
+#
+# The format is one `key=value` per line, no spaces around `=`:
+#
+#   snapshot=litric-budget/1
+#   mem.total_kb=3994340
+#   unit.litric-sysd.present=1
+#   unit.litric-sysd.cgroup_current_kb=2048
+#   unit.litric-sysd.pss_kb=1984
+#
+# A unit that is installed but not running (socket-activated) is reported with
+# present=0 and zeroes, so the checker can tell "not running" from "not in the
+# ledger". Nothing here is inferred: a value this script cannot read is printed
+# as absent, and the checker reports it.
+# =============================================================================
+set -u
+
+echo "snapshot=litric-budget/1"
+echo "snapshot.at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "system.tasks=$(find /proc -maxdepth 1 -type d -regex '/proc/[0-9]+' 2>/dev/null | wc -l)"
+
+# MemAvailable is the kernel's own answer to "how much can be handed out
+# without swapping"; `used` alone counts reclaimable cache as spent.
+while read -r key value _; do
+    case "$key" in
+        MemTotal:|MemAvailable:|MemFree:|Cached:|SReclaimable:|Slab:|SwapTotal:|SwapFree:)
+            name=$(printf '%s' "$key" | tr -d ':' | tr 'A-Z' 'a-z')
+            printf 'mem.%s_kb=%s\n' "$name" "$value"
+            ;;
+    esac
+done < /proc/meminfo
+
+# Resident services the profile must account for. litric-shell is the largest;
+# the daemons are enabled at boot and were previously absent from the total.
+for unit in litric-shell litric-sysd litric-envd litric-notifyd; do
+    cg=$(systemctl show -p ControlGroup --value "$unit" 2>/dev/null)
+    pid=$(systemctl show -p MainPID --value "$unit" 2>/dev/null)
+    if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+        printf 'unit.%s.present=0\n' "$unit"
+        continue
+    fi
+    printf 'unit.%s.present=1\n' "$unit"
+    printf 'unit.%s.pid=%s\n' "$unit" "$pid"
+    if [ -n "$cg" ] && [ -r "/sys/fs/cgroup$cg/memory.current" ]; then
+        printf 'unit.%s.cgroup_current_kb=%s\n' "$unit" \
+            "$(( $(cat "/sys/fs/cgroup$cg/memory.current") / 1024 ))"
+    fi
+    if [ -n "$cg" ] && [ -r "/sys/fs/cgroup$cg/memory.peak" ]; then
+        printf 'unit.%s.cgroup_peak_kb=%s\n' "$unit" \
+            "$(( $(cat "/sys/fs/cgroup$cg/memory.peak") / 1024 ))"
+    fi
+    if [ -r "/proc/$pid/smaps_rollup" ]; then
+        pss=$(awk '/^Pss:/ {print $2}' "/proc/$pid/smaps_rollup")
+        rss=$(awk '/^Rss:/ {print $2}' "/proc/$pid/smaps_rollup")
+        [ -n "$pss" ] && printf 'unit.%s.pss_kb=%s\n' "$unit" "$pss"
+        [ -n "$rss" ] && printf 'unit.%s.rss_kb=%s\n' "$unit" "$rss"
+    fi
+done

@@ -202,6 +202,12 @@ if [[ -n "$PY" ]]; then
         "$PY" ci/check-memory-budget.py
     check "memory checker detects an ungrounded claim" \
         "$PY" ci/check-memory-budget.py --self-test
+    # The runtime half: the reader that turns a booted machine's own numbers
+    # into a verdict. Only its self-test can run here -- there is no booted
+    # image on this host -- so this PASS says the checker works, not that any
+    # machine is inside its budget.
+    check "runtime memory checker rejects a bad snapshot" \
+        "$PY" ci/check-memory-snapshot.py --self-test
 else
     skip "memory budget" "no python interpreter on PATH"
 fi

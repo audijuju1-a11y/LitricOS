@@ -4,13 +4,24 @@
 Reduce idle desktop RAM from **786MB → ≤320MB** on a 4GB QEMU VM.
 
 ## Result
-**Achieved: ~295MB idle RAM** (after drop-caches) ✅
+
+**~295 MB `used`, measured after flushing the page cache — not a whole-system
+resident-memory measurement.**
+
+The boot-time `drop_caches` service that produced that number was removed on
+2026-10-27. Page cache is reclaimable by the kernel when memory is needed, and
+forcing it out at boot only makes the first launch of every application re-read
+it from disk; the `used` column then reads low without the system using less
+memory. The current image therefore has **no measured idle figure** until the
+runtime budget test described in `docs/PERF-budget.md` runs on a booted build.
+Treat the numbers below as the record of an experiment, not as the current
+state of the OS.
 
 ---
 
 ## Root Cause Analysis
 
-| Metric | Before | After | Change |
+| Metric | Before | After (post-flush) | Change |
 |--------|--------|-------|--------|
 | Used (free -h) | 786MB | ~295MB | **-491MB (-62%)** |
 | Page cache | 432MB | 0 (dropped) | -432MB |
@@ -41,17 +52,23 @@ Reduce idle desktop RAM from **786MB → ≤320MB** on a 4GB QEMU VM.
 
 **Impact:** Frees ~88MB of kernel reserves. On a 4GB system with MGLRU + zram, the OOM killer activates before page allocation failure, so the large reserve is unnecessary.
 
-### 2. Service: Drop Page Cache (`litric-drop-caches.service`)
+### 2. Service: Drop Page Cache (`litric-drop-caches.service`) — REMOVED
 
-New systemd service that runs after `multi-user.target`:
+The unit used to run after `multi-user.target`:
+
 ```ini
-[Service]
-Type=oneshot
 ExecStart=/bin/sh -c 'echo 3 > /proc/sys/vm/drop_caches'
-ExecStart=/bin/sh -c 'cat /proc/meminfo | head -5 | logger -t litric-drop-caches'
 ```
 
-**Impact:** Frees ~432MB of page cache at boot. The cache is rebuilt on-demand as apps load.
+It was removed on 2026-10-27, together with its enablement in
+`image/mkosi.postinst.chroot`. The kernel documentation for `drop_caches` says
+these caches are reclaimed automatically under memory pressure, and that
+dropping them causes performance problems because the data has to be read back
+in. A boot-time flush changes what `free` reports; it does not change what the
+system needs. Reproducible benchmarks now come from two explicit modes — cold
+cache and steady state with cache intact — and report `MemAvailable`, process
+RSS/PSS, cgroup `memory.current` and page cache separately, never `MemFree`
+alone.
 
 ### 3. Service Masks (8 services disabled)
 
@@ -98,11 +115,11 @@ selftest at t=17.0s:
   litric.mem.used_mb=720
   litric.mem.avail_mb=3179
 
-drop-caches at t=18.4s:
+drop-caches at t=18.4s (historical: the unit has since been removed):
   echo 3 > /proc/sys/vm/drop_caches  (confirmed by audit)
 ```
 
-### Post-Drop Calculation
+### Post-Drop Calculation (historical, not a resident-memory measure)
 ```
 Before drop: used=731MB, cached=436MB
 After drop:  used=731-436=295MB, buff/cache=~0
@@ -123,7 +140,7 @@ Mem:           3.8Gi       295Mi       3.5Gi        16Mi        55Mi       3.5Gi
 |--------|---------|------|
 | swappiness=0 | No swap thrashing at idle | Apps may OOM sooner under pressure (oomd handles this) |
 | min_free=8192 | 56MB more usable RAM | Smaller OOM buffer (oomd compensates) |
-| Drop page cache | 432MB freed at boot | Apps re-read from disk on first launch (slower cold start) |
+| Drop page cache (removed) | Lower `used` in `free -h` | Apps re-read from disk on first launch; the memory was reclaimable anyway |
 | THP never | 50MB saved, no khugepaged overhead | Large allocations may fragment (madvise opt-in still works) |
 | Masked services | Fewer processes, less RAM | No tmpfiles-clean (read-only root, no impact) |
 
@@ -144,15 +161,15 @@ Mem:           3.8Gi       295Mi       3.5Gi        16Mi        55Mi       3.5Gi
 | File | Change |
 |------|--------|
 | `image/mkosi.extra/usr/lib/sysctl.d/10-litric-mm.conf` | swappiness, watermarks, min_free, compaction |
-| `image/mkosi.extra/usr/lib/systemd/system/litric-drop-caches.service` | New service |
+| litric-drop-caches.service (deleted) | Removed 2026-10-27; a boot-time cache flush is not an optimisation |
 | `image/mkosi.extra/usr/lib/systemd/system/*.service` (8 masks) | Masked to /dev/null |
-| `image/mkosi.postinst.chroot` | Enable drop-caches service |
+| `image/mkosi.postinst.chroot` | Drop-caches enablement removed 2026-10-27 |
 | `image/mkosi.conf` | Add transparent_hugepage=never to cmdline |
 | `image/mkosi.extra/usr/lib/litric/mm-tune` | Conditional THP based on RAM |
 
 ---
 
-*Last updated: 2026-08-30*
+*Last updated: 2026-10-27 (drop-caches removed; measurements marked)*
 *Measured on: QEMU q35, KVM, 4 CPU, 4GB RAM*
 
 ---

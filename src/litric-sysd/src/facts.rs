@@ -595,14 +595,32 @@ pub fn read_processes(root: &Path, limit: usize) -> Vec<ProcessFacts> {
     let Ok(entries) = fs::read_dir(root.join("proc")) else {
         return Vec::new();
     };
-    let mut pids: Vec<u32> = entries
-        .flatten()
-        .filter_map(|e| e.file_name().to_string_lossy().into_owned().into())
-        .filter(|n: &String| is_pid(n))
-        .filter_map(|n| n.parse::<u32>().ok())
-        .collect();
+    if limit == 0 {
+        return Vec::new();
+    }
+    // Keep only the lowest `limit` PIDs while walking, rather than collecting
+    // every PID on the machine and truncating afterwards. The list used to grow
+    // with the machine, not with the limit: on a host with tens of thousands of
+    // threads that is a large allocation for a bounded report. A max-heap of
+    // capacity `limit` keeps exactly the lowest ids.
+    let mut pids: std::collections::BinaryHeap<u32> = std::collections::BinaryHeap::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !is_pid(&name) {
+            continue;
+        }
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
+        if pids.len() < limit {
+            pids.push(pid);
+        } else if pids.peek().is_some_and(|&highest| pid < highest) {
+            pids.pop();
+            pids.push(pid);
+        }
+    }
+    let mut pids = pids.into_vec();
     pids.sort_unstable();
-    pids.truncate(limit);
     pids.into_iter()
         .filter_map(|pid| read_process(root, pid))
         .collect()
@@ -628,11 +646,17 @@ pub fn cpu_shares(
     if machine_ticks == 0 {
         return Vec::new();
     }
+    // Every earlier sample in a lookup table, once. This used to scan the whole
+    // earlier list for each current process: 512 rows is a quarter of a million
+    // PID comparisons per sample, on the daemon's sampler thread.
+    let mut before_ticks = std::collections::HashMap::with_capacity(earlier.len());
+    for before in earlier {
+        before_ticks.insert(before.pid, before.ticks());
+    }
     let mut out = Vec::with_capacity(later.len());
     for now in later {
-        let before = earlier.iter().find(|p| p.pid == now.pid);
-        let delta = match before {
-            Some(b) if now.ticks() >= b.ticks() => now.ticks().saturating_sub(b.ticks()),
+        let delta = match before_ticks.get(&now.pid) {
+            Some(&before) if now.ticks() >= before => now.ticks().saturating_sub(before),
             // A pid that was reused: the difference is meaningless, so it is not
             // reported as a spike.
             _ => 0,
@@ -1196,6 +1220,29 @@ tmpfs /run tmpfs rw,nosuid,nodev,size=102400k 0 0
     const ODD_STAT: &str = "4242 (my (odd) name) S 1 4242 4242 0 -1 4194560 100 0 0 0 \
                            12 34 0 0 20 0 3 0 12345 67890123 456 \
                            18446744073709551615 1 1 0 0 0 0 0 0 0 0 0 0 17 2 0 0 0 0 0 0 0 0 0 0 0 0 0";
+
+    #[test]
+    fn the_process_list_is_bounded_while_it_is_collected() {
+        let root = std::env::temp_dir().join("litric-sysd-proc-bounded");
+        let proc = root.join("proc");
+        fs::remove_dir_all(&root).ok();
+        for pid in [50u32, 10, 30, 20, 40, 60] {
+            let dir = proc.join(pid.to_string());
+            fs::create_dir_all(&dir).expect("pid dir");
+            fs::write(dir.join("stat"), ODD_STAT).expect("stat");
+        }
+        let pids: Vec<u32> = read_processes(&root, 3).iter().map(|p| p.pid).collect();
+        assert_eq!(
+            pids,
+            [10, 20, 30],
+            "the limit keeps the lowest sorted PIDs, not the first three found"
+        );
+        assert!(
+            read_processes(&root, 0).is_empty(),
+            "a zero limit reports nothing rather than everything"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn a_process_name_with_spaces_and_parens_does_not_shift_the_fields() {

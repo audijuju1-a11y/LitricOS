@@ -47,18 +47,71 @@ pub struct FileViewer {
     pub text: String,
     /// First visible line.
     pub scroll: usize,
+    /// Byte offset of each line's first character, built once at open.
+    ///
+    /// `window()` used to collect the whole text into a `Vec<String>` on every
+    /// redraw, and `draw_viewer` cloned the viewer first: a 64 KiB file was
+    /// split into owned lines about sixty times a second to show the twenty
+    /// that fit. The offsets never change after the file is read, so they are
+    /// indexed once, and a page is a slice of the text that is already there.
+    line_starts: Vec<usize>,
 }
 
 impl FileViewer {
-    /// The visible lines, given how many fit. Returns owned lines so the
-    /// window can lay them out without borrowing the model.
+    /// A viewer over `text`, with its line index built.
     #[must_use]
-    pub fn window(&self, rows: usize) -> (Vec<String>, usize) {
-        let lines: Vec<String> = self.text.lines().map(String::from).collect();
-        let total = lines.len();
+    pub fn new(path: String, text: String) -> Self {
+        let mut line_starts = Vec::new();
+        if !text.is_empty() {
+            line_starts.push(0);
+            for (i, _) in text.match_indices('\n') {
+                // A newline at the very end does not open a line: `lines()`
+                // and every editor show "a\n" as one line, not two.
+                let next = i.saturating_add(1);
+                if next < text.len() {
+                    line_starts.push(next);
+                }
+            }
+        }
+        Self {
+            path,
+            text,
+            scroll: 0,
+            line_starts,
+        }
+    }
+
+    /// The visible lines, given how many fit, and the line count.
+    ///
+    /// The returned slices borrow this viewer, so a caller that needs to mutate
+    /// the shell while drawing copies only the handful of lines it shows.
+    #[must_use]
+    pub fn window(&self, rows: usize) -> (Vec<&str>, usize) {
+        let total = self.line_starts.len();
+        if total == 0 {
+            return (Vec::new(), 0);
+        }
         let start = self.scroll.min(total.saturating_sub(1));
         let end = start.saturating_add(rows).min(total);
-        (lines.get(start..end).unwrap_or(&[]).to_vec(), total)
+        let mut lines = Vec::with_capacity(end.saturating_sub(start));
+        for i in start..end {
+            let from = match self.line_starts.get(i) {
+                Some(&at) => at,
+                None => break,
+            };
+            let to = self
+                .line_starts
+                .get(i.saturating_add(1))
+                .map_or(self.text.len(), |next| next.saturating_sub(1));
+            // The last line's end is the end of the file, which may itself be a
+            // newline; the others end just before theirs. Either way the line
+            // ending is not content, and a CRLF file would otherwise draw a
+            // stray glyph at every row end.
+            let line = self.text.get(from..to).unwrap_or_default();
+            let line = line.strip_suffix('\n').unwrap_or(line);
+            lines.push(line.strip_suffix('\r').unwrap_or(line));
+        }
+        (lines, total)
     }
 }
 
@@ -570,12 +623,23 @@ impl FilesApp {
     #[must_use]
     pub fn selected_paths(&self) -> Vec<String> {
         let rows = self.visible();
+        self.selected_paths_in(&rows)
+    }
+
+    /// [`Self::selected_paths`] over a row list the caller already built.
+    ///
+    /// `visible()` filters, sorts and allocates over the whole listing, so a
+    /// view that needs the selection for a readout must not call
+    /// `selected_paths()` after it has already built the ordered rows: that is
+    /// a second full sort per frame for a number.
+    #[must_use]
+    pub fn selected_paths_in(&self, rows: &[&FileRow]) -> Vec<String> {
         let selected = if self.selected_rows.is_empty() {
             self.selected_name
                 .clone()
                 .or_else(|| {
                     self.selected
-                        .and_then(|index| rows.get(index).map(|row| row.name.clone()))
+                        .and_then(|index| rows.get(index).map(|r| r.name.clone()))
                 })
                 .into_iter()
                 .collect::<std::collections::BTreeSet<_>>()
@@ -583,10 +647,9 @@ impl FilesApp {
             self.selected_rows.clone()
         };
         let base = self.path.trim_end_matches('/');
-        rows.into_iter()
-            .enumerate()
-            .filter(|(_, row)| selected.contains(&row.name))
-            .map(|(_, row)| {
+        rows.iter()
+            .filter(|row| selected.contains(&row.name))
+            .map(|row| {
                 if base.is_empty() {
                     format!("/{}", row.name)
                 } else {
@@ -599,7 +662,19 @@ impl FilesApp {
     /// Whether a visible row is part of the multi-selection.
     #[must_use]
     pub fn row_is_selected(&self, index: usize) -> bool {
-        self.visible().get(index).is_some_and(|row| {
+        let rows = self.visible();
+        self.row_is_selected_in(&rows, index)
+    }
+
+    /// [`Self::row_is_selected`] over a row list the caller already built.
+    ///
+    /// The Files view asks this for every drawn row. Asking `row_is_selected`
+    /// did the filter-and-sort for each one -- up to 24 full sorts of a
+    /// 10,000-entry listing per frame, with two lowercased temporaries per name
+    /// comparison. The view now sorts once and passes the list in.
+    #[must_use]
+    pub fn row_is_selected_in(&self, rows: &[&FileRow], index: usize) -> bool {
+        rows.get(index).is_some_and(|row| {
             self.selected_rows.contains(&row.name)
                 || (self.selected_rows.is_empty()
                     && (self.selected_name.as_deref() == Some(row.name.as_str())
@@ -2493,6 +2568,92 @@ mod tests {
         assert_eq!(g2.selected, None, "an out-of-range click selects nothing");
         g2.select(None);
         assert_eq!(g2.selected, None);
+    }
+
+    #[test]
+    fn a_viewer_shows_only_the_lines_that_fit() {
+        let text: String = (0..100).map(|i| format!("line {i}\n")).collect();
+        let mut v = FileViewer::new("/Documents/long.txt".to_owned(), text);
+        v.scroll = 50;
+        let (lines, total) = v.window(5);
+        assert_eq!(total, 100, "every line is counted without materializing it");
+        assert_eq!(
+            lines,
+            ["line 50", "line 51", "line 52", "line 53", "line 54"]
+        );
+
+        v.scroll = 98;
+        let (lines, total) = v.window(10);
+        assert_eq!(total, 100);
+        assert_eq!(lines, ["line 98", "line 99"], "the page clamps at the end");
+
+        v.scroll = 9_999;
+        let (lines, _) = v.window(3);
+        assert_eq!(
+            lines,
+            ["line 99"],
+            "a scroll past the end shows the last page"
+        );
+    }
+
+    #[test]
+    fn a_viewer_counts_lines_the_way_an_editor_does() {
+        // A trailing newline ends the last line rather than opening an empty
+        // one, CRLF keeps no carriage return in the drawn text, and an empty
+        // file has no lines at all.
+        let v = FileViewer::new("a".to_owned(), "one\ntwo\n".to_owned());
+        assert_eq!(v.window(10).1, 2);
+        assert_eq!(v.window(10).0, ["one", "two"]);
+
+        let v = FileViewer::new("b".to_owned(), "one\r\ntwo\r\n".to_owned());
+        assert_eq!(v.window(10).0, ["one", "two"]);
+
+        let v = FileViewer::new("c".to_owned(), String::new());
+        let (lines, total) = v.window(10);
+        assert_eq!(total, 0);
+        assert!(lines.is_empty());
+
+        let v = FileViewer::new("d".to_owned(), "\n".to_owned());
+        assert_eq!(v.window(10).1, 1, "one empty line, not two");
+    }
+
+    #[test]
+    fn a_viewer_slices_multibyte_lines_on_their_boundaries() {
+        // The index is in bytes, and a slice that started one byte inside a
+        // Thai character would panic or lose text. `get` on the str keeps that
+        // impossible, but the test holds it to the UTF-8 contract.
+        let v = FileViewer::new("ไทย.txt".to_owned(), "ไทย\nภาษาไทย\nok".to_owned());
+        let (lines, total) = v.window(3);
+        assert_eq!(total, 3);
+        assert_eq!(lines, ["ไทย", "ภาษาไทย", "ok"]);
+    }
+
+    #[test]
+    fn selection_asked_once_per_built_list_matches_the_one_shot_query() {
+        let mut f = FilesApp {
+            path: "/Documents".to_owned(),
+            ..FilesApp::default()
+        };
+        for (name, size) in [("b.txt", 3u64), ("A.txt", 1), ("c.txt", 2)] {
+            f.rows.push(FileRow {
+                name: name.to_owned(),
+                kind: FileKind::File,
+                size,
+                mtime: 0,
+            });
+        }
+        f.filter = "t".to_owned();
+        f.select_row(2);
+        let rows = f.visible();
+        assert_eq!(rows.len(), 3);
+        for i in 0..rows.len() {
+            assert_eq!(
+                f.row_is_selected_in(&rows, i),
+                f.row_is_selected(i),
+                "row {i} answered differently from the one-shot query"
+            );
+        }
+        assert_eq!(f.selected_paths_in(&rows), f.selected_paths());
     }
 
     #[test]

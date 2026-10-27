@@ -2697,11 +2697,7 @@ impl Shell {
         {
             match bridge.read_text(path) {
                 Ok(text) => {
-                    self.files.viewer = Some(crate::apps::FileViewer {
-                        path: path.to_owned(),
-                        text,
-                        scroll: 0,
-                    });
+                    self.files.viewer = Some(crate::apps::FileViewer::new(path.to_owned(), text));
                 }
                 Err(e) => {
                     self.files.dialog = Some(crate::apps::DialogKind::Error(e.to_string()));

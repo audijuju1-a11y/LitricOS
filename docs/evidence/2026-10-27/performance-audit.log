@@ -1,0 +1,26 @@
+# cargo test --offline --workspace
+passed=1615 failed=0
+
+# focused runs
+test server::tests::read_capped_keeps_short_files_whole ... ok
+test server::tests::read_capped_never_reads_past_the_cap ... ok
+test server::tests::readtext_reports_text_and_binary ... ok
+test server::tests::readtext_caps_a_file_larger_than_the_viewer_limit ... ok
+test apps::tests::a_viewer_shows_only_the_lines_that_fit ... ok
+test apps::tests::a_viewer_counts_lines_the_way_an_editor_does ... ok
+test apps::tests::a_viewer_slices_multibyte_lines_on_their_boundaries ... ok
+test apps::tests::selection_asked_once_per_built_list_matches_the_one_shot_query ... ok
+test present::tests::an_oversize_card_mode_falls_back_and_says_why ... ok
+test present::tests::an_oversize_framebuffer_is_refused_before_it_is_opened ... ok
+test present::tests::requiring_an_oversize_card_mode_is_an_error ... ok
+test present::tests::the_surface_budget_names_the_mode_and_why_it_is_over ... ok
+test shell::browser_tab_keys::ctrl_digits_choose_a_tab_and_nine_is_the_last ... ok
+test shell::browser_tab_keys::ctrl_t_is_new_tab_in_the_browser_and_not_a_theme_cycle_in_settings ... ok
+test shell::browser_tab_keys::ctrl_t_opens_a_tab_and_ctrl_w_closes_it ... ok
+test shell::browser_tab_keys::ctrl_tab_cycles_and_wraps_in_both_directions ... ok
+test shell::browser_tab_keys::a_selected_tab_draws_a_second_state_channel ... ok
+test shell::browser_tab_strip::a_strip_that_fits_has_no_bumpers ... ok
+test shell::browser_tab_strip::closing_back_to_one_tab_resets_the_strip_offset ... ok
+test shell::browser_tab_strip::selecting_a_tab_past_the_edge_reveals_it ... ok
+test shell::browser_tab_strip::the_right_bumper_reaches_a_tab_past_the_window_edge ... ok
+test facts::tests::the_process_list_is_bounded_while_it_is_collected ... ok

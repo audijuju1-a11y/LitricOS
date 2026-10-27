@@ -19,7 +19,7 @@ use crate::proto::{self, Request};
 use crate::trash::DiskTrash;
 use crate::{Error, ErrorKind, Policy};
 use litric_core::pct;
-use std::io::{self, BufRead, BufWriter, Write};
+use std::io::{self, BufRead, BufWriter, Read as _, Write};
 use std::path::{Path, PathBuf};
 
 /// `READTEXT` reads at most this many bytes (ADR-0019: first 64 KiB).
@@ -816,12 +816,18 @@ impl Connection {
         if meta.is_dir() {
             return Outcome::Fail(Error::new(ErrorKind::IsADirectory, "that is a directory"));
         }
-        let bytes = match std::fs::read(&host) {
-            Ok(b) => b,
+        // The cap has to bound the read, not the reply. Reading the whole file
+        // and truncating afterwards allocated the file's full size inside the
+        // daemon -- the 256 MiB cgroup cap was the only thing between a large
+        // log and an OOM kill, while the reply looked capped the whole time.
+        let source = match std::fs::File::open(&host) {
+            Ok(f) => f,
             Err(e) => return Outcome::Fail(Error::from_io("readtext", &e)),
         };
-        let truncated = bytes.len() > TEXT_CAP;
-        let slice: Vec<u8> = bytes.iter().take(TEXT_CAP).copied().collect();
+        let (slice, truncated) = match read_capped(source, TEXT_CAP) {
+            Ok(read) => read,
+            Err(e) => return Outcome::Fail(Error::from_io("readtext", &e)),
+        };
         let binary = slice.iter().take(BINARY_PROBE).any(|&b| b == 0);
         if binary {
             return Outcome::Reply(vec![proto::entry(&[
@@ -837,6 +843,21 @@ impl Connection {
             ("text", &text),
         ])])
     }
+}
+
+/// Read at most `cap` bytes from `source`, and say whether it held more.
+///
+/// The reader is bounded with [`Read::take`] rather than read to the end and
+/// sliced afterwards: a cap that only limits the reply limits nothing about
+/// the daemon's peak memory. `cap + 1` is requested so "exactly cap" and "more
+/// than cap" stay distinguishable without a second read.
+fn read_capped(source: impl io::Read, cap: usize) -> io::Result<(Vec<u8>, bool)> {
+    let mut bytes = Vec::with_capacity(cap.saturating_add(1));
+    let mut bounded = source.take((cap as u64).saturating_add(1));
+    bounded.read_to_end(&mut bytes)?;
+    let truncated = bytes.len() > cap;
+    bytes.truncate(cap);
+    Ok((bytes, truncated))
 }
 
 /// What [`Connection::make`] creates.
@@ -1706,6 +1727,76 @@ mod tests {
         );
         let line = one_line(&mut conn, "READTEXT /Documents/bin.dat");
         assert!(line.starts_with("binary=1"), "got: {line}");
+    }
+
+    #[test]
+    fn read_capped_never_reads_past_the_cap() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        /// A source that reports how many bytes were actually taken from it.
+        struct Counting {
+            left: usize,
+            taken: Rc<Cell<usize>>,
+        }
+
+        impl io::Read for Counting {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                let n = buf.len().min(self.left).min(7_919);
+                self.left -= n;
+                for slot in buf.iter_mut().take(n) {
+                    *slot = b'x';
+                }
+                self.taken.set(self.taken.get() + n);
+                Ok(n)
+            }
+        }
+
+        let taken = Rc::new(Cell::new(0));
+        let (bytes, truncated) = read_capped(
+            Counting {
+                left: 8 * 1024 * 1024,
+                taken: Rc::clone(&taken),
+            },
+            TEXT_CAP,
+        )
+        .expect("the read succeeds");
+        assert_eq!(bytes.len(), TEXT_CAP, "the reply carries the cap");
+        assert!(truncated, "an 8 MiB source is truncated");
+        assert_eq!(
+            taken.get(),
+            TEXT_CAP + 1,
+            "the source is asked for one byte past the cap and no more"
+        );
+    }
+
+    #[test]
+    fn read_capped_keeps_short_files_whole() {
+        let source = io::Cursor::new(b"short".to_vec());
+        let (bytes, truncated) = read_capped(source, TEXT_CAP).expect("read");
+        assert_eq!(bytes, b"short");
+        assert!(!truncated, "a file under the cap is not truncated");
+    }
+
+    #[test]
+    fn readtext_caps_a_file_larger_than_the_viewer_limit() {
+        let (dir_path, root) = open_root("readtext-cap");
+        let mut conn = Connection::new(root);
+        let body = vec![b'a'; TEXT_CAP + 4_096];
+        fs::write(dir_path.join("Documents").join("big.log"), body).expect("write");
+        let line = one_line(&mut conn, "READTEXT /Documents/big.log");
+        // `a` is unreserved, so the encoded text is exactly the bytes kept.
+        let head = "binary=0 truncated=1 text=";
+        assert!(
+            line.starts_with(head),
+            "got: {}",
+            &line[..head.len().min(line.len())]
+        );
+        assert_eq!(
+            line.len() - head.len(),
+            TEXT_CAP,
+            "a truncated reply carries exactly the cap"
+        );
     }
 
     #[test]

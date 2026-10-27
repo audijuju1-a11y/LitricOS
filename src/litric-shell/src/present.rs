@@ -47,6 +47,36 @@ impl Choice {
     }
 }
 
+/// The largest screen the shell accepts, in pixels.
+///
+/// The compositor keeps three full-screen 32-bit canvases (wallpaper, scene and
+/// the cached glass backdrop) and the lock screen can add two more. At four
+/// bytes a pixel that is five times the pixel count, and the shell slice's
+/// `MemoryMax` is 140 MiB. 2560x1600 (4,096,000 px) costs 78 MiB across those
+/// five, leaving the text atlas, the browser frame and the allocator room; a
+/// 4K mode would cost 158 MiB before anything else is allocated, so it is
+/// refused rather than accepted and then killed by the cgroup at the first
+/// lock screen. `docs/PERF-budget.md` §3d carries the table this comes from.
+pub const MAX_SURFACE_PIXELS: u32 = 2560 * 1600;
+
+/// Whether a mode fits the shell's surface budget.
+///
+/// # Errors
+/// The mode is larger than [`MAX_SURFACE_PIXELS`]; the message names the mode,
+/// its pixel count, the budget and why the budget exists, because the only
+/// place it surfaces is a headless status line.
+pub fn surface_budget(width: u32, height: u32) -> Result<(), String> {
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if pixels > u64::from(MAX_SURFACE_PIXELS) {
+        return Err(format!(
+            "{width}x{height} is {pixels} pixels, past the shell's {MAX_SURFACE_PIXELS} px surface \
+             budget (2560x1600 at 32 bpp): five 32-bit canvases at this size would not fit the \
+             140 MiB litric-shell slice"
+        ));
+    }
+    Ok(())
+}
+
 /// An open display surface.
 #[derive(Debug)]
 pub enum Output {
@@ -176,6 +206,16 @@ pub fn open_with(
     if choice != Choice::Fbdev {
         match open_drm(root, helper) {
             Ok((presenter, card)) => {
+                if let Err(why) = surface_budget(presenter.info().width, presenter.info().height) {
+                    // Drop the presenter (which stops the helper) before
+                    // deciding, so a refused mode leaves no process behind.
+                    drop(presenter);
+                    if choice == Choice::Drm {
+                        return Err(format!("drm output requested but {why}"));
+                    }
+                    lines.push(format!("present=drm-skipped({why})"));
+                    return open_fbdev(root, format, lines);
+                }
                 lines.push("present=drm".to_owned());
                 lines.push(format!("drm.card={}", card.display()));
                 lines.push(format!("drm={}", presenter.info().summary()));
@@ -196,6 +236,15 @@ pub fn open_with(
         }
     }
 
+    open_fbdev(root, format, lines)
+}
+
+/// The compatibility path, with the same surface budget as the card path.
+fn open_fbdev(
+    root: &Path,
+    format: Option<PixelFormat>,
+    mut lines: Vec<String>,
+) -> Result<Opened, String> {
     let Some((sys, dev, mut info)) = fb::discover(root) else {
         let reason = if lines.is_empty() {
             "no framebuffer found".to_owned()
@@ -204,6 +253,13 @@ pub fn open_with(
         };
         return Err(reason);
     };
+    // Checked before `Framebuffer::open` and before any canvas exists: the
+    // budget exists to keep the shell from allocating itself past its cgroup
+    // limit, so checking it after the first full-screen allocation would be
+    // checking too late.
+    if let Err(why) = surface_budget(info.width, info.height) {
+        return Err(format!("framebuffer {why}"));
+    }
     if let Some(f) = format {
         info.format = f;
     }
@@ -370,6 +426,76 @@ mod tests {
             opened.lines.iter().all(|l| !l.starts_with("present=drm")),
             "a forced framebuffer must not start the card"
         );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    fn framebuffer_sized(root: &Path, width: u32, height: u32) {
+        let sys = root.join("sys/class/graphics/fb0");
+        fs::create_dir_all(&sys).expect("sysfs fixture");
+        fs::create_dir_all(root.join("dev")).expect("dev fixture");
+        fs::write(sys.join("virtual_size"), format!("{width},{height}\n")).expect("size");
+        fs::write(sys.join("bits_per_pixel"), "32\n").expect("bpp");
+        fs::write(sys.join("stride"), format!("{}\n", width.saturating_mul(4))).expect("stride");
+        fs::write(sys.join("name"), "fixturefb\n").expect("name");
+        // The device only has to exist: the budget is checked before it opens.
+        fs::write(root.join("dev/fb0"), b"").expect("device");
+    }
+
+    #[test]
+    fn the_surface_budget_names_the_mode_and_why_it_is_over() {
+        assert!(surface_budget(1920, 1200).is_ok());
+        assert!(
+            surface_budget(2560, 1600).is_ok(),
+            "the limit itself is supported"
+        );
+        let err = surface_budget(3840, 2160).expect_err("4K is over the budget");
+        assert!(err.contains("3840x2160"), "{err}");
+        assert!(err.contains(&MAX_SURFACE_PIXELS.to_string()), "{err}");
+        assert!(err.contains("2560x1600"), "{err}");
+        assert!(err.contains("140 MiB"), "the reason names the cap: {err}");
+        assert!(
+            surface_budget(4097, 1000).is_err(),
+            "one pixel past the budget is past it"
+        );
+    }
+
+    #[test]
+    fn an_oversize_framebuffer_is_refused_before_it_is_opened() {
+        let dir = fixture("oversize-fb");
+        framebuffer_sized(&dir, 3840, 2160);
+        let helper = dir.join("absent-drmpresent");
+        let err = open_with(&dir, Choice::Auto, None, &helper).expect_err("must refuse");
+        assert!(err.contains("3840x2160"), "{err}");
+        assert!(err.contains("surface budget"), "{err}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_oversize_card_mode_falls_back_and_says_why() {
+        let dir = fixture("oversize-drm");
+        framebuffer_at(&dir);
+        card_node(&dir);
+        let helper = stub(&dir, "LITRIC-DRM/1 3840 2160 15360 eDP-1");
+        let opened = open_with(&dir, Choice::Auto, None, &helper).expect("falls back to fb");
+        assert_eq!(opened.output.kind(), "fbdev");
+        assert!(
+            opened.lines[0].starts_with("present=drm-skipped(")
+                && opened.lines[0].contains("3840x2160"),
+            "{}",
+            opened.lines[0]
+        );
+        drop(opened);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn requiring_an_oversize_card_mode_is_an_error() {
+        let dir = fixture("oversize-drm-required");
+        card_node(&dir);
+        let helper = stub(&dir, "LITRIC-DRM/1 3840 2160 15360 eDP-1");
+        let err = open_with(&dir, Choice::Drm, None, &helper).expect_err("must refuse");
+        assert!(err.contains("past the shell's"), "{err}");
+        assert!(err.contains("3840x2160"), "{err}");
         fs::remove_dir_all(&dir).ok();
     }
 

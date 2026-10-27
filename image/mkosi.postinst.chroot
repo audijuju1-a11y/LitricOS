@@ -67,7 +67,6 @@ enable_unit litric-envd.service     multi-user.target
 # running waits here, on disk, until the shell takes it at startup.
 enable_unit litric-notifyd.service  multi-user.target
 enable_unit litric-shell.service    multi-user.target
-enable_unit litric-drop-caches.service  multi-user.target
 # Socket-activated per connection (ADR-0018, ADR-0019): enabling the socket is
 # what makes the daemon reachable; the @.service template is never enabled.
 enable_unit litric-browser.socket   sockets.target

@@ -952,6 +952,11 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     refresh_files(shell);
     let t = shell.tokens.clone();
     let app = shell.files.clone();
+    // The ordered rows for this frame, built once. The readout, the table and
+    // each row's selection state all read this list; before, each of the 24
+    // drawn rows called `visible()` again, which re-filtered and re-sorted the
+    // whole listing and allocated a lowercased copy of every compared name.
+    let vis = app.visible();
 
     // Layout: places | main column (crumbs, commands, table) | details.
     let places_w = t.px(132.0);
@@ -1034,15 +1039,15 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let filter_note = if app.filter.is_empty() {
         format!(
             "{} items · {} selected",
-            app.visible().len(),
-            app.selected_paths().len()
+            vis.len(),
+            app.selected_paths_in(&vis).len()
         )
     } else {
         format!(
             "filter: {} ({} items · {} selected)",
             app.filter,
-            app.visible().len(),
-            app.selected_paths().len()
+            vis.len(),
+            app.selected_paths_in(&vis).len()
         )
     };
     // Where the Details toggle will be, decided before the buttons are drawn:
@@ -1202,10 +1207,9 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         return;
     }
 
-    let vis = app.visible();
     for (i, row) in vis.iter().enumerate().take(24) {
         let y = table.y + head_h + (i as f32) * row_h;
-        let selected = app.row_is_selected(i);
+        let selected = app.row_is_selected_in(&vis, i);
         let row_rect = Rect::new(table.x, y, table.w, row_h);
         if selected {
             canvas.fill_round_rect(row_rect, t.radius(Radius::Sm), with_alpha(t.text(), 0.08));
@@ -1479,15 +1483,38 @@ fn draw_files_dialog_body(
 
 /// The text viewer: a pane over the Files window with page scrolling.
 fn draw_viewer(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
-    let Some(viewer) = shell.files.viewer.clone() else {
+    let t = shell.tokens.clone();
+    let panel = body.inflate(-t.sp(Space::Lg));
+
+    let text_area = Rect::new(
+        panel.x + t.sp(Space::Sm),
+        panel.y + t.px(32.0),
+        panel.w - t.sp(Space::Sm) * 2.0,
+        panel.h - t.px(70.0),
+    );
+    let line_h = t.px(16.0);
+    let rows = ((text_area.h / line_h) as usize).max(1);
+
+    // Take what the frame needs and let the borrow end here. Cloning the viewer
+    // copied the whole file -- text and line index -- into every frame, and the
+    // old `window()` then re-split the entire text into owned lines just to
+    // draw the twenty-odd that fit.
+    let Some((path, scroll, lines, total)) = shell.files.viewer.as_ref().map(|v| {
+        let (lines, total) = v.window(rows);
+        let lines: Vec<String> = lines.into_iter().map(str::to_owned).collect();
+        (v.path.clone(), v.scroll, lines, total)
+    }) else {
+        // Nothing to show: draw nothing. The scrim and panel used to be
+        // painted before this check, which left a dark rectangle over the
+        // Files window whenever the viewer was closed.
         return;
     };
-    let t = shell.tokens.clone();
+
     ui::surface(canvas, &t, body, 0.0, Material::Scrim);
-    let panel = body.inflate(-t.sp(Space::Lg));
     ui::surface(canvas, &t, panel, t.radius(Radius::Md), Material::Popover);
+
     let s_title = t.style_label();
-    let shown_title = ui::elide(&viewer.path, &s_title, panel.w - t.px(90.0));
+    let shown_title = ui::elide(&path, &s_title, panel.w - t.px(90.0));
     font::draw(
         canvas,
         &shown_title,
@@ -1506,15 +1533,6 @@ fn draw_viewer(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         .hotspots_mut()
         .push(close_r, Hot::Files(FilesHot::ViewerClose));
 
-    let text_area = Rect::new(
-        panel.x + t.sp(Space::Sm),
-        panel.y + t.px(32.0),
-        panel.w - t.sp(Space::Sm) * 2.0,
-        panel.h - t.px(70.0),
-    );
-    let line_h = t.px(16.0);
-    let rows = ((text_area.h / line_h) as usize).max(1);
-    let (lines, total) = viewer.window(rows);
     let saved = canvas.push_clip(text_area);
     let s = Style::new(t.text_px(TypeStep::Caption), t.text());
     let mut ly = text_area.y + t.px(11.0);
@@ -1548,7 +1566,7 @@ fn draw_viewer(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         .hotspots_mut()
         .push(down, Hot::Files(FilesHot::ViewerDown));
     let s_page = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
-    let page = format!("line {} of {total}", viewer.scroll.saturating_add(1));
+    let page = format!("line {} of {total}", scroll.saturating_add(1));
     let pw = font::measure(&page, &s_page);
     font::draw(
         canvas,
@@ -1558,7 +1576,6 @@ fn draw_viewer(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         &s_page,
     );
 }
-
 /// Human sizes, the way file managers round them.
 fn format_size(bytes: u64) -> String {
     const KB: u64 = 1_024;

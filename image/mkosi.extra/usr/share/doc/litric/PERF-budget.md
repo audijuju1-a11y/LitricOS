@@ -98,10 +98,12 @@ below surfaced.
 | 11 | litric-aid (AI, model unloaded) | 8 MB | `MemoryMax=12M` [ACK: `litric-ai.slice` carries it, but no shipped unit joins that slice and no AI service is in the image, so it governs nothing - BUG-0008] | socket-activated; **0 MB until first request** |
 | 12 | portals (xdg-desktop-portal) | 0 MB idle | dbus-activated | resident only while a portal dialog is open |
 | 13 | headroom / slack | 27 MB | — | absorbs kernel version drift |
-| 14 | litric-sysd | unset | `MemoryMax=64M` | enabled at boot, so resident at idle, and it has **no budget line** - BUG-0008 |
-| 15 | litric-envd | unset | `MemoryMax=128M` | enabled at boot, so resident at idle, and it has **no budget line** - BUG-0008 |
+| 14 | litric-sysd | unset | `MemoryMax=64M` | enabled at boot, so resident at idle, and it has **no target** until a snapshot measures it - BUG-0008. Its PSS is read by `budget-snapshot` and the runtime checker fails if it is missing (3c) |
+| 15 | litric-envd | unset | `MemoryMax=128M` | enabled at boot, so resident at idle, and it has **no target** until a snapshot measures it - BUG-0008. Its PSS is read by `budget-snapshot` and the runtime checker fails if it is missing (3c) |
+| 17 | litric-notifyd | unset | `MemoryMax=32M` | added 2026-10-26 with the notification queue. Enabled at boot, so resident at idle, and it has **no target** - BUG-0008. The cap is a ceiling, not a measurement: the queue is at most 64 notes of a few hundred bytes, and nothing on this host has run the daemon inside the image yet. `budget-snapshot` measures it, and the runtime checker fails when it is absent (3c) |
+| 18 | litric-filesd | unset | `MemoryMax=256M` | added 2026-10-26 with the Files daemon (ADR-0019). Socket-activated (`Accept=yes`), so **0 MB until the Files application opens a folder**, and the cap is a ceiling, not a measurement - BUG-0008 |
 | 16 | bluetoothd (`bluez`) | 5 MB | TARGET (not enforced: no drop-in supplies it - BUG-0008) | added 2026-10-12 with the wave-1 write half. Enabled at boot, so resident at idle. **The 320 MB TOTAL below was written before this row**, so it is 5 MB optimistic until the headroom row (13) is re-derived; the guest's own `mem.used_mb` in the GATE 01 entry of 2026-10-12 is the measurement, and it is a floor — no radio, no scanning, no traffic |
-| | **TOTAL** | **320 MB** | `ci/check-memory-budget.py` — static policy presence, not a runtime measurement | |
+| | **TOTAL** | **320 MB** | `ci/check-memory-budget.py` — static policy presence, not a runtime measurement. The runtime total is `ci/check-memory-snapshot.py` over a snapshot from a booted image (NOT RUN; see 3c) | |
 
 #### Correction — 2026-10-09 (later the same day): what the checker found
 
@@ -134,9 +136,12 @@ Two of the three gaps this correction named are now closed, on 2026-10-09:
 Still open, and the reason this table's total may not be quoted as a
 measurement:
 
-  * **Nothing measures the running system.** Reading `memory.current` per slice
-    or `systemd-cgtop` from a booted image and failing on the total is runtime
-    work, and it is NOT RUN. No static check can substitute for it.
+  * **Nothing has measured the running system yet.** The reader now exists —
+    `image/mkosi.extra/usr/lib/litric/budget-snapshot` writes a snapshot inside
+    the image and `ci/check-memory-snapshot.py` turns it into a verdict (see
+    3c) — but no booted image has been measured on this host, so it is NOT RUN.
+    A self-test PASS says the checker works, never that a machine is inside its
+    budget.
   * **Two resident services have no budget line at all** — `litric-sysd`
     (`MemoryMax=64M`) and `litric-envd` (`MemoryMax=128M`) are both enabled at
     boot and are therefore part of an idle desktop, but the 320 MB above has no
@@ -165,6 +170,70 @@ comment says applications are what the machine is for, and per-app limits come
 from the manifest's resource class applied by `litric-capd` at launch. That is a
 documented absence rather than an oversight, and the checker reads an unlisted
 *cap* as an error, not an unlisted absence.
+
+### 3c. The runtime measurement: `budget-snapshot` and `check-memory-snapshot.py`
+
+The static checker above proves the ledger and the units agree. It cannot prove
+a machine stays inside the total, because a `MemoryMax=` is a ceiling and the
+ledger needs usage. Two pieces close that, and both exist now:
+
+**Inside the image** — `/usr/lib/litric/budget-snapshot` (shipped from
+`image/mkosi.extra/usr/lib/litric/budget-snapshot`) runs on a booted, settled
+desktop and prints one `key=value` line at a time:
+
+```
+snapshot=litric-budget/1
+mem.total_kb=…          mem.available_kb=…
+unit.litric-shell.present=1
+unit.litric-shell.cgroup_current_kb=…   unit.litric-shell.cgroup_peak_kb=…
+unit.litric-shell.pss_kb=…              unit.litric-shell.rss_kb=…
+```
+
+`MemAvailable` is used rather than `MemFree` because the kernel can reclaim
+cache; `used = MemTotal - MemAvailable` is the number the budget is about. The
+script reads the units' cgroup files and `smaps_rollup`, so it measures PSS
+rather than summing RSS (which double-counts shared pages).
+
+**On the host** — `ci/check-memory-snapshot.py --snapshot <file>` parses it,
+sums the resident units' PSS, computes the unaccounted remainder (kernel, slab
+and page tables have no cgroup of their own), and fails when:
+
+* the whole-system `used` is over `--limit` (320 MB by default);
+* a resident unit (`litric-shell`, `litric-sysd`, `litric-envd`,
+  `litric-notifyd`) is missing or not running — a quiet unit must not silently
+  shrink the total;
+* a unit has no PSS or no `memory.current`, or its `memory.peak` is below its
+  current value;
+* the snapshot names a protocol this checker does not know.
+
+`ci/check-memory-snapshot.py --self-test` proves all of that without a machine,
+and `ci/verify.sh` runs it. **The snapshot itself is NOT RUN here**: this host
+has no booted LitricOS image. Until one is measured, the ledger's TOTAL remains
+a target over the lines written down, not a whole-system measurement.
+
+### 3d. Surface budget: the largest mode the shell accepts
+
+The compositor holds three full-screen 32-bit canvases (wallpaper, scene and the
+cached glass backdrop), and the lock screen can add two more. Those are the
+largest allocations in the shell, so the mode is itself a budget decision. Raw
+pixel payload only — not RSS, not a measurement:
+
+| Mode | One canvas | Three canvases | Five, with the lock caches |
+|---|---:|---:|---:|
+| 1920×1080 | 7.9 MiB | 23.7 MiB | 39.6 MiB |
+| 2560×1600 | 15.6 MiB | 46.9 MiB | 78.1 MiB |
+| 3840×2160 | 31.6 MiB | 94.9 MiB | 158.2 MiB |
+
+`litric-shell.slice` sets `MemoryMax=140M`, so five canvases at 4K exceed the
+cap before the text atlas, the browser frame or the allocator are counted.
+`litric-shell` therefore states one ceiling, `present::MAX_SURFACE_PIXELS` =
+2560×1600, and refuses a larger mode with a status line that names it. A refused
+DRM mode falls back to fbdev; a refused fbdev mode is a headless boot with the
+reason recorded, not a decorative desktop that dies at the first lock screen.
+
+This is a stated limit, not a solution for 4K. Raising it requires either a
+measured cgroup increase or region/tile caches instead of full-screen ones, and
+neither has been done.
 
 ---
 
@@ -272,64 +341,6 @@ The 16.67 ms gate above is the desktop's. A locked session asks its own loop for
 33 ms (`lock.interval_ms=33`, which `render_bench` prints) and is measured against
 that. Pixels: a locked frame paints 1 909 744 where it painted 10 426 249. Raw
 lines: [`docs/evidence/2026-10-15/bug0018-bench-final.log`](evidence/2026-10-15/bug0018-bench-final.log).
-
-#### Measured through the loop's own repaint path — 2026-10-18
-
-The rows above came from a benchmark that drew the way the loop drew *at the
-time it was written*: restore the wallpaper, then draw the whole desktop
-unclipped. The loop has drawn through `Compositor::repaint` since — each damage
-region restored and drawn over with the clip set to it — so the benchmark was
-timing a path nothing runs. It now draws through the compositor, exactly as
-`main.rs` does, and prints where each frame's pixels went
-(`*.sites_per_frame=` lines).
-
-What putting the benchmark on the real path exposed, in one sentence: **a
-spring that moved was a full redraw** (`Shell::tick`, BUG-0019's damage at the
-wrong granularity). Switching windows repainted all 1 024 000 pixels of a
-1280x800 desktop to move one shadow. `anim::ShellAnims::step` now reports *what*
-moved — an overlay reveal (still a whole-frame repaint: overlays are large and
-can move, the same call `overlay_damage` makes) or the ids of windows whose
-focus elevation moved, whose frames are damaged with the shadow's reach. The
-proof that targeted damage is not a shortcut is
-`main::tests::a_partial_redraw_is_pixel_identical_to_a_full_redraw`, which
-compares partial frames to full redraws pixel by pixel across the journeys it
-drives; it is green on every gate in this row.
-
-Tool: `cargo run --release -p litric-shell --example render_bench`, 15 runs per
-line, release build, 1280x800, WSL2 on the development machine (8 vCPU),
-software renderer, no GPU in the path. The rows are this host only; the two
-hosts in the rows above differ by roughly 2x, so compare levels within a table,
-never across.
-
-| Frame | median | mean ± stddev | pixels visited | Status |
-|---|---:|---:|---:|---|
-| Desktop, full redraw | 41.084 ms | 40.789 ± 3.333 ms | 3 704 646 | **NOT MET** — 2.5x over 16.67 ms |
-| Pointer move, settled | 16.179 ms | 14.290 ± 5.228 ms | 23 428 | mixed by design: frames spent while a spring flies repaint one window (1.2M px); a settled one repaints 23k px in 0.997 ms |
-| Open a window | 65.996 ms | 67.529 ± 4.489 ms | 5 495 632 | **NOT MET** — its regions cover more than half the screen, so the plan is a full repaint |
-| Locked, one due frame | 8.399 ms | 12.272 ± 14.293 ms | 1 684 139 | meets the lock's 33 ms interval |
-| Locked, customize sheet | 36.695 ms | 36.669 ± 1.393 ms | 3 199 475 | **NOT MET** — 1.11x over 33 ms |
-| Locked, still, nothing owed | 0.000 ms | — | 0 | no frame is drawn; the benchmark asserts it |
-| Full-screen blur, two passes (r10) | 66.141 ms | 70.493 ± 10.379 ms | — | still the largest single primitive |
-| Present a full frame (4 096 000 B) | 3.488 ms | 3.568 ± 0.169 ms | — | not the bottleneck |
-| Present one damage band (46 080 B) | 0.141 ms | 0.143 ± 0.007 ms | — | not the bottleneck |
-
-The second and sixth rows are the two things this measurement changed about the
-story. Switching windows now costs one window's shadow, not the desktop: the
-same tool, same host and same scenario measured 43.922 ms median before the
-fix and 16.179 ms after, and the settled frame draws 23 428 pixels where the
-bug drew 2.8M. And the shipped lock look — Still motion, the configuration
-every machine boots into — owes *no* frame between a keypress and the next
-clock change: the tick draws nothing at all. The four lock rows above are each
-one **due** frame, which is what those events cost.
-
-The customize sheet's row also carries the soft-shadow rewrite: one shadow went
-from 4 060 000 pixel writes per frame (the 2026-10-15 note) to 373 120 — the
-same squared falloff, composed from one signed-distance pass instead of twelve
-rings over the bounding box. That is the largest part of the sheet's fall from
-185.718 ms (on the other host) to 36.695 ms here; the level is not comparable
-across the two hosts, the pixel counts are.
-
-Raw lines: [`docs/evidence/2026-10-18/render-bench-realpath.log`](evidence/2026-10-18/render-bench-realpath.log).
 
 ---
 
