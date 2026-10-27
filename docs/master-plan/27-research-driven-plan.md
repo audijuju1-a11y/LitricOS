@@ -31,8 +31,9 @@ implemented from — not a design document and not a specification.
 | `Research-Deep-all/LitricOS UI UX Research Part 13 F Tabs Sidebars and Toolbars.md` | chapter `F`, layout containers: tabs (`F.08`), sidebars (`F.10`) and toolbars (`F.11`), compared against the browser tab strip, the two sidebars and the three command rows | 329 lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 14 F Menus and Context Menus.md` | chapter `F`, the two menu items: menus (`F.12`) and context menus (`F.13`), compared against the bar's three labels, the two popover menus and the six context-menu surfaces | 380 lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 15 F Dialogs and Confirmation Flows.md` | chapter `F`, the mechanism and the decision: dialogs (`F.15`) and confirmation flows (`F.27`), compared against ten dialog presentations, three implementations and eleven confirmation call sites, with four probe results | 338 lines |
+| `Research-Deep-all/LitricOS UI UX Research Part 16 F Tooltips and Notifications.md` | chapter `F`, the two feedback surfaces: tooltips (`F.14`), which the shell does not have at all, and notifications (`F.17`), which it has in four layers, compared against Windows 26H2 and GNOME 51 at page depth and macOS at summary depth, with a notification probe | 301 lines |
 | `Research-Deep-all/LitricOS Coverage Checklist.csv` | the ledger behind all of it | 597 items |
-| `Research-Deep-all/LitricOS Source Register.csv` | every source URL with tier and status | 4,120 rows |
+| `Research-Deep-all/LitricOS Source Register.csv` | every source URL with tier and status | 4,128 rows |
 | `Research-Deep-all/Fluent Token Register.csv` | measured Fluent tokens | 3,553 rows |
 | `Research-Deep-all/macOS Design Token Register.csv` | measured macOS tokens | 1,805 rows |
 | `Research-Deep-all/Windows Keyboard Shortcut Register.csv` | Windows shortcuts | 365 rows |
@@ -48,8 +49,8 @@ unfinished:
 | Status | Items | Share |
 |---|---:|---:|
 | `COMPLETE` | 18 | 3 % |
-| `PARTIAL` | 400 | 67 % |
-| `PENDING` (not yet researched) | 175 | 29 % |
+| `PARTIAL` | 402 | 67 % |
+| `PENDING` (not yet researched) | 173 | 29 % |
 | `NOT APPLICABLE` | 3 | — |
 | `NOT FOUND` | 1 | — |
 
@@ -57,7 +58,7 @@ By section, the shape is: Windows shell (`WA`) 97 partial, Windows Settings
 (`WB`) 141 partial, macOS desktop (`MC`) 62 partial, macOS Settings (`MD`) 38
 partial, Fluent (`WC`) 12 partial, tokens (`G`) 19 partial — while the whole
 Linux-desktop comparison (`LG`–`LR`, eight systems × 15 items = 120), the shared
-component catalogue (`F`, 9 of 27), workflows (`H`, 21), technical feasibility
+component catalogue (`F`, 7 of 27), workflows (`H`, 21), technical feasibility
 (`I`, 12) and the final audit (`J`, 9) are **still `PENDING`**.
 
 That single table decides the plan's shape: **the research cannot be treated as
@@ -330,14 +331,14 @@ be cited until their status is final, so they are Track R's work and not rows.
 
 ### Track R queue, first pass (2026-10-26)
 
-175 checklist items are `PENDING`, and none of them may be cited. The first pass
+173 checklist items are `PENDING`, and none of them may be cited. The first pass
 counted any heading that *contained* an item's title and found 56; that number was
 wrong, and the chapter `F` review below is how it was found out. Counting only
 headings that name the item -- its id, or its whole title -- leaves 24:
 
 | Chapter | `PENDING` | A section names it |
 |---|---:|---:|
-| `F` shared component catalogue | 10 | 18 |
+| `F` shared component catalogue | 7 | 20 |
 | `H` workflows & edge cases | 21 | 2 |
 | `I` technical feasibility | 12 | 1 |
 | `J` source register & audit | 9 | 1 |
@@ -345,9 +346,9 @@ headings that name the item -- its id, or its whole title -- leaves 24:
 
 A section is **not** a status either: it says someone wrote something under that
 name, not that it answers the item with a source. Chapter `F` is now the worked
-example: eighteen of its rows carry a section, and ten are still unread. The
-parts below record what each of those sections found; the remaining 165 `PENDING`
-items in the other chapters are research that has not been done.
+example: twenty of its rows carry a section, and seven are still unread. The
+parts below record what each of those sections found; the `PENDING` items in the
+other chapters are research that has not been done.
 
 #### Chapter `F`, reviewed (2026-10-26)
 
@@ -528,6 +529,30 @@ came through a mirror), no dialog was opened on a booted image, and neither item
 has a decision. The decision `F.27` is really asking for — which actions get a
 prompt, which get an undo, and where the undo lives — needs a backend the shell
 does not have.
+
+#### Part 16: tooltips and notifications (2026-10-27)
+
+The same question from opposite ends. `Part 16` compares Windows 26H2 and GNOME 51
+at page depth and macOS at summary depth against the two feedback surfaces, and
+sets `F.14` tooltips and `F.17` notifications to `PARTIAL`.
+
+| Finding | Evidence |
+|---|---|
+| The shell has **no tooltip system**: one comment is the only occurrence of the word | `views.rs` line 75 |
+| **Nine glyph-only controls** (the status row's icons and three window buttons) have no tooltip and no accessible name; the window glyphs appear only on hover | `views.rs` lines 481–487, 756–771 |
+| Hover is the only possible trigger, so **no keyboard path** exists to learn what an icon means — Windows raises a tooltip on focus | platform rule; `views.rs` |
+| Explanations are pushed as **notifications** instead: 32 call sites, several informational | `main.rs`; `shell.rs` 6316 |
+| The notification model has **no action, app icon, group or default action** — five of GNOME's six elements | `shell.rs` lines 465–480 |
+| **Banners are not interactive**: 0 hotspots and a click changes neither the queue nor the overlay | probe |
+| **A critical banner is permanent and undismissable in place**: no expiry by design, no close control, no hotspot | probe; `views.rs` 5511–5515 |
+| The **centre drops the body**; it shows title and source. The body exists only in the banner | `views.rs` 5472–5488 |
+| The centre answers **Escape only**; Down leaves it open and moves nothing | probe; `shell.rs` 4729 |
+| **TTL is per call site** (6 s ×10, 8 s ×3, 10 s ×3…) with no default; no TTL means never expires | `main.rs`; `src/litric-notifyd/src/proto.rs` 157 |
+| What is right: persistence across the shell being down, adoption without a banner, critical surviving DND and eviction, a `9+` badge | `shell.rs` 540–589, 645 |
+
+Why `PARTIAL` and not `COMPLETE`: Microsoft's UX-guidance page and the body of both
+Apple pages did not load, and neither item has a decision. `F.17`'s missing half is
+**actions**; `F.14`'s missing half is the **whole component**.
 
 Each batch produces ledger-ready rows, not prose: a research batch is done when
 its checklist status is final and its rows carry evidence tiers.

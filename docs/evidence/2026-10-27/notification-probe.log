@@ -1,0 +1,33 @@
+# Notification-surface probe, 2026-10-27.
+#
+# A temporary test in src/litric-shell/src/e2e.rs drove the shell's real input
+# path, printed the states below, and was then removed (the tree is clean of it:
+# `git checkout -- src/litric-shell/src/e2e.rs`). Command:
+#
+#   cargo test -p litric-shell --lib probe_notification_surfaces -- --nocapture
+#
+# The banner sample is read from the rendered canvas at (screen.w - 160,
+# top_bar.h + 40) before and after four notifications, with thirty 16 ms ticks
+# in between: the banner arrives on a spring, so a single frame after `notify`
+# legitimately shows nothing yet.
+
+probe.tooltip_state=none (no tooltip code exists)
+probe.bell_before=None
+probe.count_after_four=4
+probe.peak=Some(Critical)
+probe.banner_rect_sample=Some(4279309080) vs Some(4279440665)
+probe.banner_pixel_changed=true
+probe.banner_hotspots=0
+probe.click_on_banner: overlay=None count 4 -> 4
+probe.overlay_open=Notifications
+probe.centre_row0=Some(Rect { x: 936.0, y: 80.0, w: 324.0, h: 56.0 })
+probe.centre_row1=Some(Rect { x: 936.0, y: 138.0, w: 324.0, h: 56.0 })
+probe.centre_row2=Some(Rect { x: 936.0, y: 196.0, w: 324.0, h: 56.0 })
+probe.centre_row3=Some(Rect { x: 936.0, y: 254.0, w: 324.0, h: 56.0 })
+probe.centre_row4=None
+probe.clear_all=Some(Rect { x: 1184.0, y: 46.0, w: 72.0, h: 22.0 })
+probe.row0_and_row1_same_rect=false
+probe.dnd_normal_banners=false dnd_critical_banners=true
+probe.expiry_removed=2
+probe.arrow_kept_overlay_open=Notifications
+probe.escape_closed=None

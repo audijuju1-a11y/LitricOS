@@ -2322,3 +2322,74 @@ Revert this commit. The shell returns to the framebuffer as its only output
 path, the service requires `/dev/fb0` again, the image stops carrying
 `litric-drmpresent`, and ADR-0026 disappears — leaving W8 open and the
 execution plan's "framebuffer shell, not DRM/KMS" row accurate again.
+
+## 2026-10-27 — a queue that survives a reboot, and a button with no name
+
+`Part 16` of the research corpus takes the two feedback surfaces together because
+the shell answers the same question — *how do you say something the user did not
+ask for?* — in two opposite ways. Tooltips do not exist. Notifications exist
+four times over: a model, a banner layer, a centre panel and a daemon.
+
+This entry records what was found, what was measured, and what was changed. The
+product code in this branch changed in the preceding commit for a different
+reason (the KMS output path); nothing in `Part 16` altered a surface.
+
+### What was found
+
+| Finding | Where |
+|---|---|
+| **No tooltip system exists.** The word appears once in the whole shell, in a comment about client windows | `views.rs` line 75 |
+| **Nine glyph-only controls** have no tooltip and no accessible name: the status row's audio/network/battery/power/bell (and the Defender shield from the same loop) and three window buttons whose glyph appears **only on hover** | `views.rs` lines 481–487, 756–771 |
+| Hover is the only possible trigger, so a keyboard user cannot learn what any icon means — the opposite of Windows, which raises a tooltip on focus | platform rule; `views.rs` |
+| Explanations are pushed as **notifications** instead: 32 call sites, several of them informational ("Input: No keyboard found") | `main.rs` 1101, 1139; `shell.rs` 6316 |
+| The notification model has **no action, no app icon, no group and no default action** — five of GNOME's six standard elements | `shell.rs` lines 465–480 |
+| **Banners are not interactive**: 0 hotspots, and a click on one changes neither the queue nor the overlay | probe, `notification-probe.log` |
+| **A critical banner is permanent and cannot be dismissed where it is**: criticals never expire, the banner draws no close control and registers no hotspot, so the centre is the only way out | `views.rs` 5511–5515; `shell.rs` 645; probe |
+| The **centre drops the body** — it shows title and source; the body exists only in a banner that may already be gone | `views.rs` 5472–5488 |
+| The centre answers **Escape only**; Down leaves it open and moves nothing, while the launcher, switcher and menus all have a selection index | `shell.rs` 4729; probe |
+| **TTL is a per-call-site decision with no default** (6 s ×10, 8 s ×3, 10 s ×3, …), and no TTL means never expires in both the shell and the daemon | `main.rs`; `src/litric-notifyd/src/proto.rs` 157 |
+| What is right and should not be undone: end-to-end persistence across the desktop being down, adoption without a banner, critical surviving DND and eviction, and a `9+` badge on the bell | `shell.rs` 540–589, 645; `views.rs` 649–657 |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `Research-Deep-all/LitricOS UI UX Research Part 16 F Tooltips and Notifications.md` | new: 301 lines, 17 findings (F14.01–F14.06, F17.01–F17.11), 0 decisions |
+| `Research-Deep-all/LitricOS Coverage Checklist.csv` | `F.14` and `F.17` set to `PARTIAL` with notes naming the part and the findings |
+| `Research-Deep-all/LitricOS Source Register.csv` | 8 new rows (S3806–S3813): Microsoft Learn tooltips and app notifications, GNOME tooltips and notifications, Apple offering-help and notifications, GTK `GtkTooltip`, GIO `GNotification` |
+| `docs/evidence/2026-10-27/notification-probe.log` | the probe output, including the two states the findings rest on (banner drawn, banner not interactive) |
+| `docs/master-plan/27-research-driven-plan.md` | file table, counts (402/173), source count 4,128, Track R queue and its chapter-`F` arithmetic, and a Part 16 subsection |
+| `docs/parity/README.md` | `PENDING` count 175 → 173 |
+| `docs/GATES.md` | this entry |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| checklist statuses | `PARTIAL` 400 → 402, `PENDING` 175 → 173, total still 597 |
+| the probe | 19 printed states captured in `docs/evidence/2026-10-27/notification-probe.log`; the test that produced it was removed (`git checkout -- src/litric-shell/src/e2e.rs`) |
+| `python3 ci/lint-parity.py` | exit 0 — 389 rows, 597 research items |
+| `python3 ci/lint-doc-refs.py` | OK — 715 citations across 142 documents |
+| `python3 ci/lint-line-endings.py` | OK — 341 files, all LF |
+| `python3 ci/check-python-syntax.py` | OK — 49 files parse |
+| `python3 ci/lint-file-safety.py` | exit 0 |
+| `cargo test -p litric-shell` | 604 pass across five targets (the probe ran inside this and was removed before the commit) |
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the Windows notification layout or timing is as described | the UX-guidance page 404'd on three attempts and the overview is an index. No Windows timing number is quoted in the part |
+| that Apple's rules are as described | both Apple pages returned only a title and their own summary sentence to the scraper; marked summary depth |
+| that the critical banner always wins the top-right corner | the probe read one pixel and one hotspot set, not the full composition; no image was captured |
+| that notification strings bypass the dictionary | not measured here. `F.15` found the dialog strings doing it and the same suspicion applies, but it is untested |
+| that the centre is unusable with a screen reader | there is no accessibility tree in this shell to inspect; the absence of keyboard navigation is described, not measured against assistive technology |
+| that `F` is nearly done | 7 of 27 items remain `PENDING`, 20 are `PARTIAL`, none is `COMPLETE` |
+
+### Rollback
+
+Revert this commit. `Part 16` disappears with its 8 sources, the two statuses
+return to `PENDING`, the plan returns to 175/400, and a reviewer is left with the
+static reading that the shell has notifications — without the record that banners
+cannot be clicked, that a critical banner cannot be dismissed where it appears,
+and that nine controls on screen have no name at all.
