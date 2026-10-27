@@ -14,7 +14,7 @@ CH00.11,CH00,Budgie,COMPLETE,Budgie 10.10.3 (2026-09-27)
 CH00.12,CH00,ChromeOS stable,COMPLETE,16805.33.0 / browser 154.0.8037.151 (2026-10-09); later M156 rollout reported by third party only
 F,,Research F — Shared component catalog,PENDING,
 F.01,F,Buttons,PARTIAL,"Part 10 §F.01. Windows 26H2 and GNOME 51 guidance compared against ui.rs::button and ui::icon_button; macOS pages read at summary depth only. Found: icon_button has no call site, keyboard focus draws as the hover picture, targets below both platforms' minimums."
-F.02,F,Text fields,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.02,F,Text fields,PARTIAL,"Part 11 §F.02. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against ui::text_field and the shell's input path. Found: TextEdit (caret, selection, Home/End, Ctrl+A) reaches one Backspace in one dialog; every other field appends at the end; the renderer cannot show a caret index or a selection; a magnifier is drawn in New Folder and Rename fields; no clip, no error/disabled state and no limit tied to the 255-byte name rule."
 F.03,F,Switches,PARTIAL,"Part 10 §F.03. Windows 26H2 and GNOME 51 guidance compared against ui.rs::toggle; macOS pages read at summary depth only. Found: a disabled off switch renders identical to an enabled off switch, and Error/Loading/Selected are accepted and ignored."
 F.04,F,Checkboxes,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
 F.05,F,Radio controls,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
@@ -30,15 +30,15 @@ F.14,F,Tooltips,PENDING,Reviewed 2026-10-26: the corpus has no section for this 
 F.15,F,Dialogs,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
 F.16,F,Sheets,PARTIAL,"macOS sheets: Apple HIG, 8 elements and 4 guidelines, Part 6 §MC.04.06. Windows and Linux sheets were not compared, so this is one platform of three."
 F.17,F,Notifications/banners/toasts,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
-F.18,F,Progress indicators,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.18,F,Progress indicators,PARTIAL,"Part 11 §F.18. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against ui::progress and its one call site. Found: the Defender scan bar is the only progress in the product (6 px, with a count label); there is no indeterminate/activity form and no spinner anywhere; total==0 renders an empty track during a live scan; ui::badge (a tone-coded status pill) has no call site."
 F.19,F,Lists,PARTIAL,"Part 10 §F.19. Windows 26H2 and GNOME 51 guidance compared against ui.rs::list_item; macOS pages read at summary depth only. Found: three keyboard models in one shell, 30 px rows in Settings, no accessible names (G.15)."
 F.20,F,Trees,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
 F.21,F,Grids/tables,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
 F.22,F,Cards,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
-F.23,F,Search fields,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.23,F,Search fields,PARTIAL,"Part 11 §F.23. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against the product's five search surfaces. Found: there is no search component; no filter field has a clear affordance; the launcher's ✕ closes the launcher instead of clearing the query; Ctrl+F in Files focuses the table, not the filter; the start-page placeholder names Google regardless of the selected engine; Hot::LauncherSearch is a dead hotspot."
 F.24,F,Empty states,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
 F.25,F,Loading states,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
-F.26,F,Errors/validation,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.26,F,Errors/validation,PARTIAL,"Part 11 §F.26. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against fsbridge::valid_name and the two error surfaces. Found: validation runs after submit (and after the daemon on a booted image); a failure replaces the form and loses the typed name; the error detail is elided to one line; the acknowledge button is danger-toned; the Files table's inline error line exists but validation never uses it."
 F.27,F,Confirmation flows,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
 G,,Research G — Tokens & accessibility,PARTIAL,"Windows evidence for G.01–G.11, G.14 (Part 4)."
 G.01,G,Color tokens,PARTIAL,macOS evidence added in Part 7. Linux pending.

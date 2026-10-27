@@ -26,6 +26,7 @@ implemented from — not a design document and not a specification.
 | `Research-Deep-all/LitricOS UI UX Research Part 5  macOS 27 System Settings.md` | macOS Settings catalogue `MD.01`–`MD.28+` | 2,700+ lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 6  macOS 27 Desktop Model.md` | menu bar, Dock, Finder, window model, Spaces, Spotlight, Control Center, dialogs, input, session | 5,726 lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 10 F Shared Component Catalogue.md` | chapter `F`, the shared component catalogue: the four controls the shell has (`F.01` buttons, `F.03` switches, `F.06` sliders, `F.19` lists) compared against `src/litric-shell/src/ui.rs` | 422 lines |
+| `Research-Deep-all/LitricOS UI UX Research Part 11 F Text Progress Search and Errors.md` | chapter `F`, continued: text fields (`F.02`), progress (`F.18`), search fields (`F.23`) and errors/validation (`F.26`), compared against the field renderer, the input path and the five search surfaces | 457 lines |
 | `Research-Deep-all/LitricOS Coverage Checklist.csv` | the ledger behind all of it | 597 items |
 | `Research-Deep-all/LitricOS Source Register.csv` | every source URL with tier and status | 3,979 rows |
 | `Research-Deep-all/Fluent Token Register.csv` | measured Fluent tokens | 3,553 rows |
@@ -43,8 +44,8 @@ unfinished:
 | Status | Items | Share |
 |---|---:|---:|
 | `COMPLETE` | 18 | 3 % |
-| `PARTIAL` | 387 | 65 % |
-| `PENDING` (not yet researched) | 188 | 31 % |
+| `PARTIAL` | 391 | 66 % |
+| `PENDING` (not yet researched) | 184 | 31 % |
 | `NOT APPLICABLE` | 3 | — |
 | `NOT FOUND` | 1 | — |
 
@@ -52,7 +53,7 @@ By section, the shape is: Windows shell (`WA`) 97 partial, Windows Settings
 (`WB`) 141 partial, macOS desktop (`MC`) 62 partial, macOS Settings (`MD`) 38
 partial, Fluent (`WC`) 12 partial, tokens (`G`) 19 partial — while the whole
 Linux-desktop comparison (`LG`–`LR`, eight systems × 15 items = 120), the shared
-component catalogue (`F`, 23 of 28), workflows (`H`, 21), technical feasibility
+component catalogue (`F`, 19 of 27), workflows (`H`, 21), technical feasibility
 (`I`, 12) and the final audit (`J`, 9) are **still `PENDING`**.
 
 That single table decides the plan's shape: **the research cannot be treated as
@@ -297,7 +298,7 @@ completion is work, scheduled beside the build:
 
 ### Coverage today (2026-10-26)
 
-The checklist holds 597 items; 405 are `COMPLETE` or `PARTIAL` and therefore
+The checklist holds 597 items; 409 are `COMPLETE` or `PARTIAL` and therefore
 citable, and `docs/parity/ledger.csv` decides 389 of them -- every one that is a
 surface. Per chapter:
 
@@ -310,7 +311,7 @@ surface. Per chapter:
 | `G` tokens & accessibility | 19 | 19 |
 | `WC` Fluent / WinUI design system | 14 | 14 |
 | `MG` macOS HIG | 11 | 11 |
-| `F` shared component catalogue | 5 | 1 (4 newly citable; their decisions are not written, 23 are `PENDING`) |
+| `F` shared component catalogue | 9 | 1 (8 newly citable; their decisions are not written, 19 are `PENDING`) |
 | `CH00` version baseline | 12 | 0 (not a surface; see the ledger README) |
 
 The 389 rows split 169 `ADAPT`, 126 `DEFER`, 88 `REJECT`, 6 `ADOPT`. `DEFER` is
@@ -320,27 +321,27 @@ and accessibility ones, `M5` the capability and privacy ones, and `M6` the ones
 that will have to become `REJECT` or be built.
 
 What remains outside the ledger is research, not decisions: the `PENDING`
-chapters (`F` 28, `H` 21, `I` 12, `J` 9 and eight Linux desktops of 15) cannot
+chapters (`F` 19, `H` 21, `I` 12, `J` 9 and eight Linux desktops of 15) cannot
 be cited until their status is final, so they are Track R's work and not rows.
 
 ### Track R queue, first pass (2026-10-26)
 
-188 checklist items are `PENDING`, and none of them may be cited. The first pass
+184 checklist items are `PENDING`, and none of them may be cited. The first pass
 counted any heading that *contained* an item's title and found 56; that number was
 wrong, and the chapter `F` review below is how it was found out. Counting only
 headings that name the item -- its id, or its whole title -- leaves 24:
 
 | Chapter | `PENDING` | A section names it |
 |---|---:|---:|
-| `F` shared component catalogue | 23 | 5 |
+| `F` shared component catalogue | 19 | 5 |
 | `H` workflows & edge cases | 21 | 2 |
 | `I` technical feasibility | 12 | 1 |
 | `J` source register & audit | 9 | 1 |
 | each of `LB`–`LX` (8 desktops) | 15 | 2 |
 
 A section is **not** a status either: it says someone wrote something under that
-name, not that it answers the item with a source. So the queue is 24 reviews, and
-the other 164 items are research that has not been done.
+name, not that it answers the item with a source.So the queue is 20 reviews, and the other 164 items are research that has not
+been done.
 
 #### Chapter `F`, reviewed (2026-10-26)
 
@@ -379,6 +380,32 @@ and summaries to a reader, so the macOS column is the weakest of the three and o
 item's detail came through a third-party mirror. Why it is citable at all: the
 comparison is against code in this repository, so a reader can open the file and
 disagree with a specific sentence.
+
+#### Part 11: text, progress, search and errors (2026-10-26)
+
+Batch B9 continued on the four `F` items that are either the last two primitives in
+the component layer or the places where a primitive is missing from the product.
+`Part 11` compares Windows 26H2, macOS 27 and GNOME 51 guidance with
+`ui::text_field`, `ui::progress`, the shell's input path and its five search
+surfaces, and sets `F.02` text fields, `F.18` progress indicators, `F.23` search
+fields and `F.26` errors/validation to `PARTIAL`.
+
+It found sixteen things, and none of them is a ledger row yet:
+
+| Finding | Evidence |
+|---|---|
+| The shell has a text editor and does not use it. `TextEdit` (caret, selection, Home/End, word delete, 8192-char limit) reaches **one Backspace in one dialog**; every other field is a `String` appended at the end | `apps.rs` line 1832, `shell.rs` line 4774, `push_str` at six sites |
+| The field renderer takes `(text, placeholder, focused)` and cannot show a caret index or a selection, so the one dialog that has the model still draws its caret at the end | `ui.rs` line 599 |
+| A magnifier is drawn in the New Folder and Rename fields, and the generic field is the only search affordance the two filter fields have | `views.rs` lines 339, 1450 |
+| No filter has a clear button; the launcher's ✕ is `Hot::DockCollapse` and closes the launcher instead of clearing the query | `shell.rs` line 5521 |
+| `Ctrl+F` in Files focuses the table, not the filter | `shell.rs` line 4896 |
+| Progress is one determinate bar and a `total == 0` guard that draws an empty track during a live scan; there is no indeterminate form and no spinner anywhere | `views.rs` line 4072 |
+| Validation is a round-trip, and a failure replaces the form, loses the typed name, and shows an elided one-line detail with a danger-toned OK button | `views.rs` lines 1405, 1435 |
+
+Why these are `PARTIAL` and not `COMPLETE`: the macOS column is again the
+weakest (every Apple page returned a title and a summary), and none of the four
+has a decision, a backend or a test. Why they are citable at all: each item's
+claims name a line in this repository that a reader can open.
 
 Each batch produces ledger-ready rows, not prose: a research batch is done when
 its checklist status is final and its rows carry evidence tiers.
@@ -452,5 +479,5 @@ one measured strip inside the layout pass.
   what people expect.
 - It does not implement a control whose backend does not exist, and does not
   hide a missing backend behind a disabled-looking row.
-- It does not treat the research as complete. 188 items are unread, and the
+- It does not treat the research as complete. 184 items are unread, and the
   build may not use them until they are not.

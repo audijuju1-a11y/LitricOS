@@ -1762,3 +1762,67 @@ Revert this commit. The four statuses return to `PENDING` with their audit notes
 to 192/383 -- along with the four comparisons, including the one that found the
 dead slider, which the next reviewer would have had to rediscover by counting call
 sites that nobody had counted.
+
+## 2026-10-26 — text, progress, search and errors, read against the layer that draws them
+
+Part 11 of the research corpus continues chapter `F` on the four items that are
+either the last two primitives in the component layer or the places where a
+primitive is missing. It compares Windows 26H2, macOS 27 and GNOME 51 guidance
+with `ui::text_field`, `ui::progress`, the shell's input path and its five search
+surfaces, and sets `F.02`, `F.18`, `F.23` and `F.26` to `PARTIAL`.
+
+### What it found
+
+| Finding | Where |
+|---|---|
+| The shell has a full single-line editor (`TextEdit`: caret, selection, Home/End, word delete, 8192-char limit) and reaches it with **one Backspace in one dialog**. Every other field is a `String` appended at the end, so clicking mid-name and typing puts the character at the end, and Home/End/Ctrl+A/Delete do nothing | `apps.rs` line 1832, `shell.rs` line 4774, six `push_str` sites |
+| The field renderer takes `(text, placeholder, focused)` and cannot be told where the caret is or what is selected. The one dialog with a caret model still draws its caret at the end | `ui.rs` line 599 |
+| A magnifier is drawn in New Folder and Rename; the generic field is the only search affordance the two filter fields have | `views.rs` lines 339, 1450 |
+| No filter field has a clear button, and the launcher's ✕ (`Hot::DockCollapse`) closes the launcher instead of clearing the query | `shell.rs` line 5521 |
+| `Ctrl+F` in Files focuses the table, not the filter; no search surface has a keyboard route | `shell.rs` line 4896 |
+| Progress is one determinate bar with a count label, no indeterminate form and no spinner; the `total == 0` guard draws an empty track during a live scan, and `ui::badge` has no call site | `views.rs` line 4072, `ui.rs` line 509 |
+| Validation is a round-trip (and, on a booted image, the daemon's): a failure replaces the form, loses the typed name, elides the reason to one line and acknowledges with a danger-toned OK | `shell.rs` line 2360, `views.rs` lines 1422, 1442 |
+| No limit ties the name field to the filesystem's 255-byte segment; the live path is unbounded | `fsbridge.rs` line 94, `textedit.rs` line 53 |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `Research-Deep-all/LitricOS UI UX Research Part 11 F Text Progress Search and Errors.md` | new: 457 lines, 16 findings, 0 decisions |
+| `Research-Deep-all/LitricOS Coverage Checklist.csv` | `F.02`, `F.18`, `F.23`, `F.26` set to `PARTIAL` with notes that name the part and the finding |
+| `Research-Deep-all/LitricOS Source Register.csv` | 24 new rows (Windows, Apple and GNOME/GTK sources; rows that Part 10 had already registered were merged rather than re-added); 13 existing rows had `F.02`/`F.18`/`F.23`/`F.26` added to their checklist ids |
+| `Research-Deep-all/LitricOS UI UX Research Part1.md` | chapter 40's index row names both parts and the eight researched items |
+| `docs/master-plan/27-research-driven-plan.md` | file table, status counts, citable-by-chapter row, Track R queue and a Part 11 subsection |
+| `docs/parity/README.md` | `PENDING` count 188 -> 184 |
+| `docs/GATES.md` | this entry |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| checklist statuses | `PARTIAL` 387 -> 391, `PENDING` 188 -> 184, total still 597 |
+| `python3 ci/lint-parity.py` | PASS -- 389 rows, 0 problems |
+| `python3 ci/lint-doc-refs.py` | OK -- 673 citations across 138 documents |
+| `python3 ci/lint-line-endings.py` | OK -- 338 files, all LF |
+| `python3 ci/check-python-syntax.py` | OK -- 48 files parse |
+
+No code changed, so `cargo test`, `clippy` and `ci/verify.sh` were not re-run.
+Every claim in Part 11 is a reading of a named line; the two that would need a
+keyboard (mid-text editing and Ctrl+F) were read from the handlers, not typed.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that any of the four items is correct | the part compared guidance with an implementation and decided nothing. Sixteen findings, zero decisions |
+| that the macOS column is as good as the other two | every Apple page returned a title and a summary; no Apple number or state rule is reported as verified |
+| that Thai can be typed | the model documents per-`char` editing and there is no preedit surface. No IME test ran |
+| that anything was seen on screen | no image was booted and no pixel measured. Every rendering claim is a claim about the code that draws it |
+
+### Rollback
+
+Revert this commit. The four statuses return to `PENDING` with their audit notes,
+`Part 11` disappears, the 24 source rows go with it, and the plan's counts return
+to 188/387 -- along with the comparison that found the editor model unused, which
+the next reviewer would have had to rediscover by reading six call sites one at a
+time.
