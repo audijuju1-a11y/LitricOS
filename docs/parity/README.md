@@ -57,7 +57,7 @@ finished may not be cited, so they become rows when their status does.
    is looked up in `Research-Deep-all/LitricOS Coverage Checklist.csv`, and its
    status must be `COMPLETE` or `PARTIAL`. A `PENDING` item has not been
    researched yet, so a row citing it has no source — it is an idea wearing a
-   citation. 184 of the 597 checklist items are `PENDING` today.
+   citation. 182 of the 597 checklist items are `PENDING` today.
 3. **No inert control.** `ADOPT` and `ADAPT` must name a `backend` other than
    `none`. This is the gate matrix's own condition, and the reason the shell has
    no Back/Forward buttons that do nothing.

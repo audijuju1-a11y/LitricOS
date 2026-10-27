@@ -1802,7 +1802,7 @@ surfaces, and sets `F.02`, `F.18`, `F.23` and `F.26` to `PARTIAL`.
 |---|---|
 | checklist statuses | `PARTIAL` 387 -> 391, `PENDING` 188 -> 184, total still 597 |
 | `python3 ci/lint-parity.py` | PASS -- 389 rows, 0 problems |
-| `python3 ci/lint-doc-refs.py` | OK -- 673 citations across 138 documents |
+| `python3 ci/lint-doc-refs.py` | OK -- 677 citations across 138 documents |
 | `python3 ci/lint-line-endings.py` | OK -- 338 files, all LF |
 | `python3 ci/check-python-syntax.py` | OK -- 48 files parse |
 
@@ -1826,3 +1826,75 @@ Revert this commit. The four statuses return to `PENDING` with their audit notes
 to 188/387 -- along with the comparison that found the editor model unused, which
 the next reviewer would have had to rediscover by reading six call sites one at a
 time.
+
+## 2026-10-26 — the checkbox that is a circle, and the radio that does not exist
+
+Part 12 continues chapter `F` on the two selection controls. It compares Windows
+26H2 and GNOME 51 at page depth (Apple's checkbox and radio pages returned titles
+and summaries only, so the macOS column is an API capability and nothing more)
+with the single hand-drawn checkbox in the product and the chip-based single-select
+surfaces that stand in for a radio group. `F.04` checkboxes and `F.05` radio
+controls become `PARTIAL`.
+
+### What it found
+
+| Finding | Where |
+|---|---|
+| The only multi-select checkbox is a **circle**: a 12 x 12 box at `Radius::Sm` = 6, which is half the side | `views.rs` line 1243 |
+| Its hit target is 18 x 18 px, inside a 24 px row | `views.rs` line 1281, 1147 |
+| No indeterminate/mixed state and no header/select-all box; `Ctrl+A` selects all but has no visible control | `views.rs` lines 1243-1280; `apps.rs` line 653 |
+| Space does not toggle it. Enter activates the focused hotspot; the shell's only Space handling is the lock screen's wake | `shell.rs` line 3933 |
+| Two Tab stops per row (the row and its box): a 24-row folder is 48 stops, and there is no arrow-key list model | `shell.rs` line 445; `views.rs` lines 1242, 1277 |
+| No shift-range or ctrl-click selection; the click path takes no modifiers | `apps.rs` line 621 |
+| **No radio control exists at all**, and no dot-in-ring is drawn; the strings `radio`/`Radio` in the shell mean the Bluetooth radio | grep: no radio control, no `stroke_circle` |
+| The three-way search-engine choice has two chip designs (96 x 26 on the start page, 18 px in Settings) and only one has a group label | `views.rs` lines 1986-2010, 2064-2100 |
+| Both chip designs rest on colour alone, and the start-page comment claims a check glyph that the loop never draws | `views.rs` line 1985 vs lines 1986-2010 |
+| Three chips are three Tab stops, with no arrow navigation and no selection-follows-focus | both chip loops; `shell.rs` line 445 |
+| "Reduce motion" is a switch in Quick settings and a state-in-label accent button in Settings and first-run | `views.rs` lines 2930, 4907, 5654 |
+
+The shape mismatch is the item's headline: a control whose form says "choose one"
+and whose behaviour says "choose several", sitting in the one table that also has a
+single-selection state. It is recorded, not changed.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `Research-Deep-all/LitricOS UI UX Research Part 12 F Checkboxes and Radio Controls.md` | new: 331 lines, 13 findings (25-37), 0 decisions |
+| `Research-Deep-all/LitricOS Coverage Checklist.csv` | `F.04` and `F.05` set to `PARTIAL` with notes that name the part and the findings |
+| `Research-Deep-all/LitricOS Source Register.csv` | 17 new rows (Windows, GNOME, GTK, Apple, two standards); 18 existing rows gained `F.04`/`F.05` in their checklist ids |
+| `Research-Deep-all/LitricOS UI UX Research Part1.md` | chapter 40's index row names all three parts and the ten researched items |
+| `docs/master-plan/27-research-driven-plan.md` | file table, status counts, citable-by-chapter row, Track R queue and a Part 12 subsection |
+| `docs/parity/README.md` | `PENDING` count 184 -> 182 |
+| `docs/GATES.md` | this entry |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| checklist statuses | `PARTIAL` 391 -> 393, `PENDING` 184 -> 182, total still 597 |
+| `python3 ci/lint-parity.py` | PASS -- 389 rows, 0 problems |
+| `python3 ci/lint-doc-refs.py` | OK -- 677 citations across 138 documents |
+| `python3 ci/lint-line-endings.py` | OK -- 338 files, all LF |
+| `python3 ci/check-python-syntax.py` | OK -- 48 files parse |
+
+No code changed, so `cargo test`, `clippy` and `ci/verify.sh` were not re-run. The
+one behavioural test that touches the checkbox (`e2e.rs` line 317) was not run for
+this documentation-only commit; nothing here alters the code it exercises.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that a circular checkbox is wrong | the part records the mismatch with every platform's square box and with the control's own multi-select behaviour. A deliberate disc is possible, just undocumented |
+| that chips should be radios | chips are a legitimate single-select pattern. The finding is that they are the only one the shell has |
+| that the macOS position is known | Apple's checkbox and radio pages did not load; only the toggles summary and the NSButton mixed-state API were readable |
+| that a screen reader would mis-announce the box | there is no accessibility tree. The claim is that it cannot announce it, not that a failure was observed |
+| that `F` is nearly done | 17 of 27 items remain `PENDING`, ten are `PARTIAL`, none is `COMPLETE` |
+
+### Rollback
+
+Revert this commit. The two statuses return to `PENDING` with their audit notes,
+`Part 12` disappears, the 17 source rows go with it, and the plan's counts return
+to 184/391 -- along with the comparison that found the circle, which the next
+reviewer would have had to notice by reading a radius argument against a width.

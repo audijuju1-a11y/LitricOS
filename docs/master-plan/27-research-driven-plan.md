@@ -27,6 +27,7 @@ implemented from — not a design document and not a specification.
 | `Research-Deep-all/LitricOS UI UX Research Part 6  macOS 27 Desktop Model.md` | menu bar, Dock, Finder, window model, Spaces, Spotlight, Control Center, dialogs, input, session | 5,726 lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 10 F Shared Component Catalogue.md` | chapter `F`, the shared component catalogue: the four controls the shell has (`F.01` buttons, `F.03` switches, `F.06` sliders, `F.19` lists) compared against `src/litric-shell/src/ui.rs` | 422 lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 11 F Text Progress Search and Errors.md` | chapter `F`, continued: text fields (`F.02`), progress (`F.18`), search fields (`F.23`) and errors/validation (`F.26`), compared against the field renderer, the input path and the five search surfaces | 457 lines |
+| `Research-Deep-all/LitricOS UI UX Research Part 12 F Checkboxes and Radio Controls.md` | chapter `F`, selection controls: checkboxes (`F.04`) and radio controls (`F.05`), compared against the hand-drawn Files checkbox and the chip-based single-select surfaces | 331 lines |
 | `Research-Deep-all/LitricOS Coverage Checklist.csv` | the ledger behind all of it | 597 items |
 | `Research-Deep-all/LitricOS Source Register.csv` | every source URL with tier and status | 3,979 rows |
 | `Research-Deep-all/Fluent Token Register.csv` | measured Fluent tokens | 3,553 rows |
@@ -44,8 +45,8 @@ unfinished:
 | Status | Items | Share |
 |---|---:|---:|
 | `COMPLETE` | 18 | 3 % |
-| `PARTIAL` | 391 | 66 % |
-| `PENDING` (not yet researched) | 184 | 31 % |
+| `PARTIAL` | 393 | 66 % |
+| `PENDING` (not yet researched) | 182 | 30 % |
 | `NOT APPLICABLE` | 3 | — |
 | `NOT FOUND` | 1 | — |
 
@@ -53,7 +54,7 @@ By section, the shape is: Windows shell (`WA`) 97 partial, Windows Settings
 (`WB`) 141 partial, macOS desktop (`MC`) 62 partial, macOS Settings (`MD`) 38
 partial, Fluent (`WC`) 12 partial, tokens (`G`) 19 partial — while the whole
 Linux-desktop comparison (`LG`–`LR`, eight systems × 15 items = 120), the shared
-component catalogue (`F`, 19 of 27), workflows (`H`, 21), technical feasibility
+component catalogue (`F`, 17 of 27), workflows (`H`, 21), technical feasibility
 (`I`, 12) and the final audit (`J`, 9) are **still `PENDING`**.
 
 That single table decides the plan's shape: **the research cannot be treated as
@@ -298,7 +299,7 @@ completion is work, scheduled beside the build:
 
 ### Coverage today (2026-10-26)
 
-The checklist holds 597 items; 409 are `COMPLETE` or `PARTIAL` and therefore
+The checklist holds 597 items; 411 are `COMPLETE` or `PARTIAL` and therefore
 citable, and `docs/parity/ledger.csv` decides 389 of them -- every one that is a
 surface. Per chapter:
 
@@ -311,7 +312,7 @@ surface. Per chapter:
 | `G` tokens & accessibility | 19 | 19 |
 | `WC` Fluent / WinUI design system | 14 | 14 |
 | `MG` macOS HIG | 11 | 11 |
-| `F` shared component catalogue | 9 | 1 (8 newly citable; their decisions are not written, 19 are `PENDING`) |
+| `F` shared component catalogue | 11 | 1 (10 newly citable; their decisions are not written, 17 are `PENDING`) |
 | `CH00` version baseline | 12 | 0 (not a surface; see the ledger README) |
 
 The 389 rows split 169 `ADAPT`, 126 `DEFER`, 88 `REJECT`, 6 `ADOPT`. `DEFER` is
@@ -321,26 +322,26 @@ and accessibility ones, `M5` the capability and privacy ones, and `M6` the ones
 that will have to become `REJECT` or be built.
 
 What remains outside the ledger is research, not decisions: the `PENDING`
-chapters (`F` 19, `H` 21, `I` 12, `J` 9 and eight Linux desktops of 15) cannot
+chapters (`F` 17, `H` 21, `I` 12, `J` 9 and eight Linux desktops of 15) cannot
 be cited until their status is final, so they are Track R's work and not rows.
 
 ### Track R queue, first pass (2026-10-26)
 
-184 checklist items are `PENDING`, and none of them may be cited. The first pass
+182 checklist items are `PENDING`, and none of them may be cited. The first pass
 counted any heading that *contained* an item's title and found 56; that number was
 wrong, and the chapter `F` review below is how it was found out. Counting only
 headings that name the item -- its id, or its whole title -- leaves 24:
 
 | Chapter | `PENDING` | A section names it |
 |---|---:|---:|
-| `F` shared component catalogue | 19 | 5 |
+| `F` shared component catalogue | 17 | 5 |
 | `H` workflows & edge cases | 21 | 2 |
 | `I` technical feasibility | 12 | 1 |
 | `J` source register & audit | 9 | 1 |
 | each of `LB`–`LX` (8 desktops) | 15 | 2 |
 
 A section is **not** a status either: it says someone wrote something under that
-name, not that it answers the item with a source.So the queue is 20 reviews, and the other 164 items are research that has not
+name, not that it answers the item with a source.So the queue is 18 reviews, and the other 164 items are research that has not
 been done.
 
 #### Chapter `F`, reviewed (2026-10-26)
@@ -406,6 +407,30 @@ Why these are `PARTIAL` and not `COMPLETE`: the macOS column is again the
 weakest (every Apple page returned a title and a summary), and none of the four
 has a decision, a backend or a test. Why they are citable at all: each item's
 claims name a line in this repository that a reader can open.
+
+#### Part 12: checkboxes and radio controls (2026-10-26)
+
+The last pair of selection controls, and the pair with the strangest inventory in
+the product. `Part 12` compares Windows 26H2 and GNOME 51 at page depth (Apple's
+checkbox and radio pages did not load, so the macOS column is an API summary and
+nothing more) with the one hand-drawn checkbox in the shell and the chip-based
+single-select surfaces that stand in for a radio group. `F.04` checkboxes and
+`F.05` radio controls become `PARTIAL`.
+
+| Finding | Evidence |
+|---|---|
+| The product's only multi-select checkbox is **a circle**: a 12 x 12 box at radius 6, with an 18 x 18 hit target | `views.rs` lines 1243, 1250, 1281 |
+| No indeterminate/mixed state and no header/select-all box; `Ctrl+A` is keyboard-only and has no control | `views.rs` lines 1243-1280; `apps.rs` line 653 |
+| Space does not toggle a checkbox — the only Space in the shell is the lock screen's wake; Enter activates | `shell.rs` line 3933 |
+| Two Tab stops per Files row (the row and its box), so a 24-row folder is 48 stops | `shell.rs` line 445; `views.rs` lines 1242, 1277 |
+| **No radio control exists at all**, and no dot-in-ring drawing; single-select choices are chips | grep: no radio control, no `stroke_circle` |
+| The same three-way choice has two chip designs, and the selected chip is colour-only even though the start-page comment claims a check glyph | `views.rs` line 1985 vs lines 1986-2010; lines 2064-2100 |
+| Three chips are three Tab stops, with no arrow navigation and no selection-follows-focus | both chip loops; `shell.rs` line 445 |
+| "Reduce motion" is a switch in Quick settings and a state-in-label button in Settings and first-run | `views.rs` lines 2930, 4907, 5654 |
+
+The shape mismatch is the item's headline: a control whose form says "choose one"
+and whose behaviour says "choose several", in a table that also has a
+single-selection state. It is recorded, not changed.
 
 Each batch produces ledger-ready rows, not prose: a research batch is done when
 its checklist status is final and its rows carry evidence tiers.
@@ -479,5 +504,5 @@ one measured strip inside the layout pass.
   what people expect.
 - It does not implement a control whose backend does not exist, and does not
   hide a missing backend behind a disabled-looking row.
-- It does not treat the research as complete. 184 items are unread, and the
+- It does not treat the research as complete. 182 items are unread, and the
   build may not use them until they are not.
