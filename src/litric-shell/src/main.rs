@@ -41,7 +41,8 @@ use litric_input::keys::layout_by_name;
 use litric_locale::Regional;
 use litric_shell::canvas::{Canvas, Rect, Repaint};
 use litric_shell::desktop;
-use litric_shell::fb::{self, PixelFormat};
+use litric_shell::fb::PixelFormat;
+use litric_shell::present::{self, Choice};
 use litric_shell::shell::{
     DesktopMode, Effect, EnvRow, InputDevice, NetIface, Priority, ProcRow, Shell, SystemFacts,
 };
@@ -88,6 +89,9 @@ struct Args {
     status: PathBuf,
     png: Option<PathBuf>,
     format: Option<PixelFormat>,
+    /// Which output path to take. The default prefers DRM/KMS and accepts
+    /// the framebuffer, stating which one it got.
+    presenter: Choice,
     theme: ThemeKind,
     theme_explicit: bool,
     size: Option<(u32, u32)>,
@@ -107,6 +111,7 @@ impl Default for Args {
             status: PathBuf::from(STATUS_PATH),
             png: None,
             format: None,
+            presenter: Choice::Auto,
             theme: ThemeKind::Dark,
             theme_explicit: false,
             size: None,
@@ -133,6 +138,8 @@ OPTIONS:
     --scale N         Logical-to-physical scale factor (default from the display).
     --theme NAME      dark, light, high-contrast-dark, high-contrast-light.
     --format NAME     Framebuffer byte order: xrgb8888, xbgr8888, rgb565.
+    --presenter NAME  Output path: auto (default), drm, fbdev. drm needs a
+                      KMS card and the native helper; fbdev never starts one.
     --socket PATH     litric-sysd socket (default /run/litric/sysd.sock).
     --status PATH     Where to write the status report.
     --root DIR        Where /proc, /sys and /dev are rooted. For testing.
@@ -190,6 +197,10 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
                 let v = need("--format")?;
                 a.format =
                     Some(PixelFormat::parse(&v).ok_or_else(|| format!("no such format: {v}"))?);
+            }
+            "--presenter" => {
+                let v = need("--presenter")?;
+                a.presenter = Choice::parse(&v).ok_or_else(|| format!("no such presenter: {v}"))?;
             }
             "--socket" => a.socket = PathBuf::from(need("--socket")?),
             "--status" => a.status = PathBuf::from(need("--status")?),
@@ -2051,19 +2062,27 @@ fn run_png(args: &Args) -> Result<Vec<String>, String> {
 
 fn run_display(args: &Args) -> Result<Vec<String>, String> {
     let console = take_console(&args.root);
-    let Some((sys, dev, mut info)) = fb::discover(&args.root) else {
-        // Headless is not a failure. The machine boots, the daemon runs, and
-        // the shell says why there is nothing to look at.
-        return Ok(vec![
-            "target=none".to_owned(),
-            "mode=headless(no framebuffer found)".to_owned(),
-            "drawn=0".to_owned(),
-        ]);
+    // The surface is chosen before anything is composed, because its geometry
+    // decides the canvas: a mode set by the card and a framebuffer's sysfs
+    // size are different sources of truth and the desktop must be built for
+    // the one that is actually being scanned out.
+    let opened = match present::open(&args.root, args.presenter, args.format) {
+        Ok(opened) => opened,
+        Err(why) => {
+            // Headless is not a failure. The machine boots, the daemon runs,
+            // and the shell says why there is nothing to look at.
+            return Ok(vec![
+                "target=none".to_owned(),
+                format!("mode=headless({why})"),
+                "drawn=0".to_owned(),
+            ]);
+        }
     };
-    if let Some(f) = args.format {
-        info.format = f;
-    }
-    let (w, h) = (info.width, info.height);
+    let present::Opened {
+        output: mut display,
+        lines: present_lines,
+    } = opened;
+    let (w, h) = (display.width(), display.height());
     let scale = args
         .scale
         .unwrap_or_else(|| ((w as f32) / 1280.0).clamp(0.75, 3.0));
@@ -2090,15 +2109,8 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
         }
     };
 
-    let mut display = fb::Framebuffer::open(&dev, info)
-        .map_err(|e| format!("cannot open {}: {e}", dev.display()))?;
-
-    session.lines.push("target=framebuffer".to_owned());
+    session.lines.extend(present_lines);
     session.lines.push(format!("fbcon={console}"));
-    session
-        .lines
-        .push(format!("fb={}", display.info().summary()));
-    session.lines.push(format!("fb.sysfs={}", sys.display()));
     session.lines.extend(report_in.lines());
     // External applications need a Wayland socket in the session's runtime
     // directory. The desktop is complete without one — its own windows are
@@ -2158,7 +2170,7 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
     let _ = session.shell.take_damage();
     display
         .present(&session.compositor.scene)
-        .map_err(|e| format!("cannot write {}: {e}", dev.display()))?;
+        .map_err(|e| format!("cannot present the first frame: {e}"))?;
     session.lines.push("drawn=1".to_owned());
     report(&args.status, &session.lines);
 
@@ -2285,7 +2297,7 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
             if let Some(plan) = session.compositor.move_cursor(&session.shell, from, to) {
                 let scene = &session.compositor.scene;
                 let rows = match &plan {
-                    Repaint::Full => display.present(scene).map(|()| display.info().height),
+                    Repaint::Full => display.present(scene),
                     Repaint::Regions(regions) => display.present_damage(scene, regions),
                 }
                 .map_err(|e| format!("present failed: {e}"))?;
@@ -2313,7 +2325,7 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
             let plan = render(&mut session, full, &damage);
             let scene = &session.compositor.scene;
             let rows = match &plan {
-                Repaint::Full => display.present(scene).map(|()| display.info().height),
+                Repaint::Full => display.present(scene),
                 Repaint::Regions(regions) => display.present_damage(scene, regions),
             }
             .map_err(|e| format!("present failed: {e}"))?;

@@ -1,10 +1,17 @@
 # ADR-0017 — The desktop is drawn in software, on `/dev/fb0`, with no `unsafe`
 
-- **Status:** Accepted, implemented, verified on a booted image
+- **Status:** Accepted, implemented, verified on a booted image. **The output
+  surface only is superseded** by ADR-0026, which presents over KMS where a
+  card exists and keeps this path as the fallback. Everything else here — the
+  software raster, the stroke typeface, the solved glass, the fbcon release —
+  is unchanged and still current.
 - **Date:** 2026-08-29
 - **Extends:** ADR-0005 (compositor), ADR-0009 (unified shell process)
 - **Does not supersede** either: this is the first stage of the shell they
   describe, not a replacement for it.
+- **Output surface superseded by:** [ADR-0026](0026-kms-output-path.md)
+  (2026-10-27), which explains why `write(2)` on fbdev was not enough and
+  confines the DRM ioctls to one native helper.
 
 ---
 

@@ -236,6 +236,22 @@ if command -v cargo >/dev/null 2>&1; then
         chmod 0755 "${STAGE}/litric-fbpresent"
         log "staged litric-fbpresent"
     fi
+    # The KMS output path (ADR-0026). The Rust shell starts this only when a
+    # card node exists and falls back to fbdev with the reason when it does
+    # not, so a host without kernel DRM headers produces an image whose status
+    # file says which path it took rather than one that quietly looks the same.
+    DRM_SOURCE="${PROJECT_ROOT}/src/litric-shell/src/drmpresent.c"
+    if [[ -f "$DRM_SOURCE" ]]; then
+        if printf '#include <drm/drm.h>\n#include <drm/drm_mode.h>\n' | cc -std=c17 -E - >/dev/null 2>&1; then
+            cc -std=c17 -O2 -Wall -Wextra -Werror "$DRM_SOURCE" -o "${STAGE}/litric-drmpresent"
+            chmod 0755 "${STAGE}/litric-drmpresent"
+            log "staged litric-drmpresent"
+        else
+            warn "kernel DRM headers (<drm/drm.h>) are missing on this build host.
+  litric-drmpresent will NOT be in the image, and the shell will present through
+  fbdev instead. Install linux-api-headers and rebuild to ship the KMS path."
+        fi
+    fi
     if (( staged == 0 )); then
         warn "no LitricOS system binaries were staged."
     fi

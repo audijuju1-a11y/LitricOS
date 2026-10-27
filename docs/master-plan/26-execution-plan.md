@@ -39,7 +39,7 @@ re-derive them:
 | P02 Core | GATE 02 | partial: units, sandbox, cgroup slices; **no oomd policy, no zram tuning, no recovery target** | `image/mkosi.extra/usr/lib/systemd/system/`; the pack's P02 task list |
 | P03 Storage | GATE 03 | erofs + dm-verity in the image; **no Btrfs policy, no LUKS2/TPM2, no recovery environment** | `tools/build.sh`, `image/mkosi.conf` (`cryptsetup` installed, unused) |
 | P04 Network | GATE 04 | no provider code; no D-Bus client in any crate | gate matrix row; `src/` has no network crate |
-| P05 Graphics | GATE 05 | framebuffer shell, not DRM/KMS | `src/litric-shell/src/fb.rs`; ADR-0017 |
+| P05 Graphics | GATE 05 | software raster on a KMS scanout path with fbdev as fallback; **nothing measured on a real card** | `src/litric-shell/src/{drm,present}.rs`, `drmpresent.c`; ADR-0026 |
 | P06 Desktop | GATE 06 | shell is far along (lock, browser, files UI, overview, settings); **no notifications daemon, no crash-restart proof, no soak test** | `docs/DESKTOP-2.0.md` §5; `src/litric-shell` |
 | P07 Security + Defender | GATE 07 | `litric-defender` is a library; **no daemon, no on-access hook**; capability grants are in memory | `src/litric-defender`, `src/litric-sysd/src/state.rs` |
 | P08 Update | GATE 08 | **nothing** | no `update/` subtree, no sysupdate transfer |
@@ -176,9 +176,17 @@ means a Linux host with `tools/provision-builder.sh` applied.
   for Beta, or move to DRM/KMS with `unsafe` ioctls confined to one audited
   module. The gate cannot pass on framebuffer-only, and the current
   `unsafe_code = "forbid"` in the shell rules the move out without a decision.
+- **Decided 2026-10-27:** move to DRM/KMS. [ADR-0026](../adr/0026-kms-output-path.md)
+  confines every ioctl to `drmpresent.c`, keeps the shell in safe Rust, presents
+  damage bands with a hardware page flip, and states the output path in the
+  status file. The **raster is unchanged**: this moves the present cost, not
+  the draw cost, and BUG-0015 is still open.
 - **Gate:** GATE 05.
 - **Acceptance:** decision recorded in an ADR with its cost; until then the
   product statement says single-surface, no VRR, no multi-monitor mode setting.
+  The decision is recorded; the gate is **not** passed, because the KMS path has
+  never run on a card. The next step is a desktop image on hardware, reading
+  `present=drm` and `drm.mode` from `litric-shell.status`.
 
 ### W9 — Performance budget (P02/P13)
 

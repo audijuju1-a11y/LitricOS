@@ -2253,3 +2253,72 @@ return to `PENDING`, the plan returns to 177/398, and a reviewer is left with th
 static reading that the shell has dialogs and confirmations — without the record
 that Enter accepts neither dialog, that a click passes through a Files dialog's
 scrim, and that eleven confirmations exist with no undo behind any of them.
+
+## 2026-10-27 — the desktop presents over KMS, and the raster is still software
+
+W8 of [the execution plan](master-plan/26-execution-plan.md) asked for one thing:
+a recorded decision between staying on `/dev/fb0` for Beta and moving to
+DRM/KMS with the unsafe ioctls confined to one audited module. This entry
+records the decision, the code that follows from it, and — separately — what has
+and has not been run. [ADR-0026](adr/0026-kms-output-path.md) is the decision;
+this is its evidence.
+
+### What was wrong with the only output path there was
+
+| Finding | Where |
+|---|---|
+| `write(2)` to fbdev has no notion of a frame, so nothing the shell does says "show this now" | `fb.rs`, module docs |
+| QEMU's DRM fbdev bridge accepts the write and can leave the scanout unchanged, which is why a `mmap` helper existed at all | `fb.rs` lines 1–20; `fbpresent.c` line 1–10 |
+| The mapped helper receives complete fixed-size frames over a pipe: a pointer move that changes two rectangles still moved 4 MB at 1280×800 | `fb.rs` `present_damage` mapped branch |
+| `litric-shell.service` required `/dev/fb0`, so a machine whose card has KMS and no fbdev node could not start the desktop | `litric-shell.service` `ConditionPathExists` |
+| The image built the fbdev helper but nothing that could talk to a card, and the selftest reported `drm.cards` without ever asking whether the shell could drive one | `tools/build.sh`; `image/mkosi.extra/usr/lib/litric/selftest` |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/drmpresent.c` | new: KMS helper — connector/mode selection, two dumb buffers, `ADDFB2`, `SETCRTC`, band commands and hardware page flips; every ioctl in the output path lives here |
+| `src/litric-shell/src/drm.rs` | new: handshake and protocol, damage → merged row bands, pitch-correct `XRGB8888` encoding, card discovery, bounded handshake and flip waits; 14 tests |
+| `src/litric-shell/src/present.rs` | new: `--presenter` with `auto`, `drm` or `fbdev`, DRM-first selection with the fallback reason recorded in the status file; 7 tests |
+| `src/litric-shell/src/main.rs` | the surface is chosen before the canvas is built, and `present=` lines report which one was used |
+| `image/mkosi.extra/usr/lib/systemd/system/litric-shell.service` | display condition is an OR over `/dev/fb0` and `/dev/dri/card0` or `card1`, with the reason written next to it |
+| `tools/build.sh` | compiles and stages `litric-drmpresent`, and warns in the build log when the host has no kernel DRM headers instead of shipping an image that silently falls back |
+| `image/mkosi.extra/usr/lib/litric/selftest` | `drm.presenter` and `drm.mode`, the mode reported by `--check` without taking the screen |
+| `docs/adr/0026-kms-output-path.md` | new: the decision, the protocol, the unsafe boundary, and what it is not |
+| `docs/adr/0017-framebuffer-shell.md` | header states that the output surface is superseded, and that the raster, typeface, glass and fbcon release are not |
+| `docs/master-plan/26-execution-plan.md` | P05 row and W8 record the decision without claiming the gate |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cc -std=c17 -O2 -Wall -Wextra -Werror src/litric-shell/src/drmpresent.c` | compiles clean |
+| `litric-drmpresent --check /dev/dri/card0` with no card present | exits 1: `open card: No such file or directory` |
+| `litric-drmpresent /tmp/fake-card0` (a regular file, not a device) | exits 1: `get resources: Inappropriate ioctl for device`. No hang, no master taken |
+| `cargo test -p litric-shell --lib drm::` | 14 pass — handshake parsing and twelve refusals, band merging/clipping, padded pitch, protocol capture against a stand-in helper, a silent helper timing out at 5 s, an exiting helper, a nonsense handshake, card discovery |
+| `cargo test -p litric-shell --lib present::` | 7 pass — DRM preferred, fbdev fallback with the machine's reason, a required path that is missing being an error, a broken helper degrading, a forced framebuffer never starting the card, neither surface reporting both |
+| `cargo test -p litric-shell` | 604 pass across five targets (555 lib, 32, 4, 10, 3), 0 failed |
+| `cargo clippy -p litric-shell --all-targets` | no warnings |
+| `cargo fmt --check` | clean |
+| fixture root, `--presenter auto --once --root <fixture>` | status: `present=drm-skipped(no card node under /dev/dri)`, then `present=fbdev`, `fb=320x200 32bpp stride=1280 format=Xrgb8888 driver=fixturefb`; 256,000 bytes of real pixels arrived at the fixture device |
+| `--presenter nope` | rejected: `no such presenter: nope` |
+| booted image with a real card | **NOT RUN** |
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the KMS path works on a card | no card node exists on the build host and no image was booted with this code. The protocol is tested against a stand-in process; the ioctls are compiled, not run |
+| that presenting is faster | nothing was measured on hardware. On the host the present path is unchanged for fbdev and the DRM path cannot run, so there is no before/after number |
+| that the desktop is faster | it is not. The raster is untouched: a full frame is still 71.4 ms and a frame with a window open is still 151.9 ms at 1280×800. BUG-0015 stays open |
+| that this is GPU rendering | the display controller does the flip; the CPU still shades every pixel. A GL/Vulkan rasteriser, dmabuf import and plane composition are named as absent in ADR-0026 |
+| that page flips are tear-free on this hardware | the flip is requested with a completion event and an unstable timeout of 100 ms, but no frame was captured on a monitor |
+| that multi-monitor, VRR or HDR work | one connector, one CRTC, one plane. None of those was attempted |
+| that GATE 05 passes | it does not. The decision W8 asked for now exists; the gate needs a booted image on hardware |
+
+### Rollback
+
+Revert this commit. The shell returns to the framebuffer as its only output
+path, the service requires `/dev/fb0` again, the image stops carrying
+`litric-drmpresent`, and ADR-0026 disappears — leaving W8 open and the
+execution plan's "framebuffer shell, not DRM/KMS" row accurate again.

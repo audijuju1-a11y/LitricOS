@@ -29,9 +29,15 @@ Wants=litric-sysd.service
 # because two programs owning tty1 is a fight neither wins.
 Conflicts=getty@tty1.service
 
-# Without a framebuffer there is nothing to draw on, and starting anyway would
+# Without a display there is nothing to draw on, and starting anyway would
 # produce a failed unit on every headless CI boot. That is noise, not a finding.
-ConditionPathExists=/dev/fb0
+#
+# The leading pipe makes these OR rather than AND. A machine whose card has a
+# KMS driver and no fbdev node is exactly the machine the DRM/KMS path exists
+# for (ADR-0026); requiring /dev/fb0 would refuse to start the desktop on it.
+ConditionPathExists=|/dev/fb0
+ConditionPathExists=|/dev/dri/card0
+ConditionPathExists=|/dev/dri/card1
 
 [Service]
 Type=simple

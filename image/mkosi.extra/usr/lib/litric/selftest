@@ -266,6 +266,22 @@ kv "drm.cards" "$(ls -1 /dev/dri/card* 2>/dev/null | tr '
 ' ' ' || echo none)"
 kv "drm.modules" "$(lsmod 2>/dev/null | awk '/^(bochs|virtio_gpu|simpledrm|drm)/{printf "%s ", $1}' || echo none)"
 
+# The output path is DRM/KMS when a card and the helper are both present, and
+# fbdev otherwise (ADR-0026). --check asks the helper what it would set without
+# taking the screen or DRM master, so this line can be read from a running
+# desktop and it names the mode the shell is actually driving.
+if [[ -x /usr/bin/litric-drmpresent ]]; then
+    kv "drm.presenter" "present"
+    card="$(ls -1 /dev/dri/card* 2>/dev/null | head -1)"
+    if [[ -n "$card" ]]; then
+        kv "drm.mode" "$(/usr/bin/litric-drmpresent --check "$card" 2>&1 | head -1 || echo unavailable)"
+    else
+        kv "drm.mode" "no card node"
+    fi
+else
+    kv "drm.presenter" "absent (the shell will present through fbdev)"
+fi
+
 # --- litric-browser: is the engine actually in this image? ------------------
 #
 # The broker can be installed and the socket enabled while the engine package
