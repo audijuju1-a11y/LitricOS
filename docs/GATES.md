@@ -1898,3 +1898,75 @@ Revert this commit. The two statuses return to `PENDING` with their audit notes,
 `Part 12` disappears, the 17 source rows go with it, and the plan's counts return
 to 184/391 -- along with the comparison that found the circle, which the next
 reviewer would have had to notice by reading a radius argument against a width.
+
+## 2026-10-26 — five implementations of three containers, and no shared component
+
+`Part 13` of the research corpus compares Windows 26H2, macOS 27 and GNOME 51
+guidance for tabs, sidebars and toolbars with the five places the shell draws them,
+and sets `F.08`, `F.10` and `F.11` to `PARTIAL`. This entry records what it found
+and what was run; no source file changed.
+
+### What was found
+
+| Finding | Where |
+|---|---|
+| The tab strip is fixed 150 px with **no overflow policy**: no scroll, no cap, no clip, so the `+` button leaves the window past roughly `body.w / 152` tabs | `views.rs` lines 1575–1621 |
+| Tab active state is a material fill only; same 13 px text, same weight, no accent edge or underline | `views.rs` lines 1584–1592 |
+| No tab keyboard model: `app_key` handles Escape and Enter; no Ctrl+T/W, Ctrl+Tab, Ctrl+1–9 or arrow movement, and **Ctrl+T cycles the theme in Settings** | `shell.rs` line 4699; `views.rs` lines 1608, 1618 |
+| The tab context menu has exactly two items (Reload, Close tab); no duplicate, pin, mute, move-to-window, reorder or tear-out | `apps.rs` lines 1738–1741 |
+| Title truncation is by **character count** (20 -> 17 + `...`), not measured width, so 17 wide glyphs overflow a 150 px tab | `views.rs` lines 1601–1607 |
+| Two sidebars with no shared component: Files 132 px / 20 px rows / fill-only vs Settings 36 % / 30 px rows / icon + marker | `views.rs` lines 957, 2337 |
+| The Settings sidebar is 36 % of the body with no collapse, resize or scroll, over 414 px of rows | `views.rs` lines 2337–2360 |
+| Neither sidebar has an arrow-key model; one Tab stop per row | `shell.rs` line 445; `views.rs` lines 980, 2341 |
+| Three toolbars, three overflow policies: wrap + scale (browser), silent drop (Files), fixed widths (Trash) | `views.rs` lines 1702–1723, 1083, 4172 |
+| Browser overflow splits by half the item count (`div_ceil(len/2)`), not by importance, and scaling shrinks the target with the label | `views.rs` lines 1702, 1723 |
+| Files removes controls that do not fit and draws inapplicable actions (Paste, Compress, Extract, Empty) as enabled | `views.rs` lines 1083, 1102–1136 |
+| Toolbars are label-only at 22–24 px with no tooltips, access keys, accelerators or separators | `views.rs` lines 1676–1755, 1032–1136 |
+| "Empty permanently?" and "Delete forever?" are longer than their 112 px fixed-width buttons and are centred with overhang | `views.rs` lines 4189–4200; `ui::button` |
+
+The structural finding: `ui.rs` exists so two windows cannot invent two versions of
+one control, and both the sidebars and the toolbars did exactly that.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `Research-Deep-all/LitricOS UI UX Research Part 13 F Tabs Sidebars and Toolbars.md` | new: 329 lines, 12 findings (38–49), 0 decisions |
+| `Research-Deep-all/LitricOS Coverage Checklist.csv` | `F.08`, `F.10`, `F.11` set to `PARTIAL` with notes naming the part and the findings |
+| `Research-Deep-all/LitricOS Source Register.csv` | 27 new rows (Windows, GNOME, GTK, Apple); 12 existing rows gained the three ids |
+| `Research-Deep-all/LitricOS UI UX Research Part1.md` | chapter 40's index row names Parts 10–13 and the thirteen researched items |
+| `docs/master-plan/27-research-driven-plan.md` | file table, status counts, citable-by-chapter row, Track R queue, a Part 13 subsection, and a missing space repaired |
+| `docs/parity/README.md` | `PENDING` count 182 -> 179 |
+| `docs/GATES.md` | this entry |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| checklist statuses | `PARTIAL` 393 -> 396, `PENDING` 182 -> 179, total still 597 |
+| `python3 ci/lint-parity.py` | exit 0 -- 389 rows (169 `ADAPT`, 126 `DEFER`, 88 `REJECT`, 6 `ADOPT`), no problems reported |
+| `python3 ci/lint-doc-refs.py` | OK -- 681 citations across 138 documents |
+| `python3 ci/lint-line-endings.py` | OK -- 338 files, all LF |
+| `python3 ci/check-python-syntax.py` | OK -- 48 files parse |
+
+No code changed, so `cargo test`, `clippy` and `ci/verify.sh` were not run. Nothing
+here exercises a compiled path.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that tabs visibly run off the screen | the loop was read, not a resized window. The claim is that nothing bounds the strip; the pixels follow from the window clip |
+| that a sidebar should be 320 px | Windows' 320 DIP is a default, not a rule; libadwaita's 180–280sp is not HIG. The finding is that the shell has no width policy in either direction |
+| that the toolbars should be icon-first | GNOME prefers backgroundless icons; Windows keeps icon + label and hides the label when compact. The finding is that there is no overflow at all, not that labels are wrong |
+| that macOS agrees with any of this | every Apple page returned a title and a summary, and the toolbar-items page returned 404. No macOS number is reported as verified |
+| that any of it was keyboard- or screen-reader-tested | no keyboard was used; the claims are readings of `app_key` and the hotspot table |
+| that `F` is nearly done | 14 of 27 items remain `PENDING`, thirteen are `PARTIAL`, none is `COMPLETE` |
+
+### Rollback
+
+Revert this commit. The three statuses return to `PENDING`, `Part 13` disappears
+with its 27 source rows, and the plan returns to 182/393 -- along with the record
+that the shell draws five containers with no shared component and has no tab
+overflow policy, which the next reviewer would have to rediscover by reading
+`draw_browser`'s strip loop against the body width.
