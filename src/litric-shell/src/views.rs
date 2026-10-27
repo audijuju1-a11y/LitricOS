@@ -1578,13 +1578,68 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let app = shell.browser.clone();
 
     // --- tab strip ---
+    //
+    // The strip scrolls instead of growing past the window. Windows names
+    // scroll bumpers for exactly this case and libadwaita's AdwTabBar scrolls;
+    // this strip did neither, so past about `body.w / 152` tabs the right-hand
+    // tabs and the + button were laid out beyond the window edge with no way to
+    // reach them (finding 38). The keyboard model in `Shell::app_key` can name
+    // a tab whether or not its pixels fit; the bumpers are how the pointer
+    // reaches one, and selecting a tab the pointer cannot click reveals it.
     let strip_h = t.px(30.0);
-    let mut tx = body.x + t.px(4.0);
+    let gap = t.px(2.0);
+    let tab_w = t.px(150.0);
+    let inset = t.px(4.0);
+    let plus_w = t.px(28.0);
+    let bumper_w = t.px(20.0);
+    let content_w = inset + app.tabs.len() as f32 * (tab_w + gap) + plus_w;
+    let overflow = content_w > body.w;
+    // Bumpers exist only while the strip overflows: the 20 px they take must
+    // not shrink a strip that never needed to scroll.
+    let bumper = if overflow { bumper_w } else { 0.0 };
+    let area = Rect::new(
+        body.x + bumper,
+        body.y,
+        (body.w - 2.0 * bumper).max(0.0),
+        strip_h,
+    );
+    let max_scroll = (content_w - area.w).max(0.0);
+    let mut scroll = app.strip_scroll;
+    if app.reveal_active {
+        // Bring the focused tab fully inside the strip. Only selection sets
+        // this, so a bumper click is never undone by a reveal here.
+        let left = inset + app.active as f32 * (tab_w + gap);
+        let right = left + tab_w;
+        if left < scroll {
+            scroll = left;
+        }
+        if right > scroll + area.w {
+            scroll = right - area.w;
+        }
+        shell.browser.reveal_active = false;
+    }
+    scroll = if scroll < 0.0 {
+        0.0
+    } else if scroll > max_scroll {
+        max_scroll
+    } else {
+        scroll
+    };
+    shell.browser.strip_scroll = scroll;
+
+    let clip = canvas.push_clip(area);
+    let mut tx = area.x + inset - scroll;
     let s_tab = Style::new(t.text_px(TypeStep::Footnote), t.text());
     for (i, tab) in app.tabs.iter().enumerate() {
         let active_tab = i == app.active;
-        let w = t.px(150.0);
-        let r = Rect::new(tx, body.y + t.px(2.0), w, strip_h - t.px(4.0));
+        let r = Rect::new(tx, area.y + t.px(2.0), tab_w, strip_h - t.px(4.0));
+        tx += tab_w + gap;
+        // A tab the strip has scrolled past is neither drawn nor clickable. The
+        // clip covers the pixels; a rect wholly outside the strip would still
+        // answer a click that never lands inside the window otherwise.
+        if r.right() <= area.x || r.x >= area.right() {
+            continue;
+        }
         ui::surface(
             canvas,
             &t,
@@ -1596,6 +1651,22 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
                 ui::Material::Flat
             },
         );
+        if active_tab {
+            // A material difference alone is one channel, and the shell's own
+            // control contract asks for two. Two pixels of accent along the
+            // tab's bottom edge still say which page is on screen in a theme
+            // where both materials read alike.
+            canvas.fill_round_rect(
+                Rect::new(
+                    r.x + t.px(6.0),
+                    r.bottom() - t.px(2.0),
+                    r.w - t.px(12.0),
+                    t.px(2.0),
+                ),
+                t.px(1.0),
+                t.tone(Tone::Accent),
+            );
+        }
         // A tab strip shows titles, falling back to the address only while a
         // page has none: `https://` in every tab tells the user nothing about
         // which of six pages is which.
@@ -1604,36 +1675,71 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         } else {
             tab.title.clone()
         };
-        let shown = if label.chars().count() > 20 {
-            let head: String = label.chars().take(17).collect();
-            format!("{head}…")
-        } else {
-            label
-        };
+        // Ellipsized by measured width, not character count: seventeen Latin
+        // characters fit a 150 px tab and seventeen CJK glyphs do not.
+        let shown = ui::elide(&label, &s_tab, tab_w - t.px(32.0));
         font::draw(canvas, &shown, r.x + t.px(8.0), r.y + t.px(14.0), &s_tab);
         shell.hotspots_mut().push(r, Hot::BrowserTab(i));
-        // Close ✕.
+        // Close ✕, 20 px rather than 15: a 15 px target is a third of the
+        // general 40 px guidance, and it is the control that ends a page.
         let cr = Rect::new(
-            r.right() - t.px(18.0),
+            r.right() - t.px(23.0),
             r.y + t.px(3.0),
-            t.px(15.0),
-            t.px(15.0),
+            t.px(20.0),
+            t.px(20.0),
         );
-        let s_x = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
-        font::draw(canvas, "✕", cr.x + t.px(3.0), cr.y + t.px(10.0), &s_x);
-        shell.hotspots_mut().push(cr, Hot::BrowserCloseTab(i));
-        tx += w + t.px(2.0);
+        // A close button a bumper covers is not a target, and neither is half
+        // of one: the ✕ is only drawn when it is wholly on screen.
+        if cr.x >= area.x && cr.right() <= area.right() {
+            let s_x = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            font::draw(canvas, "✕", cr.x + t.px(5.0), cr.y + t.px(12.0), &s_x);
+            shell.hotspots_mut().push(cr, Hot::BrowserCloseTab(i));
+        }
     }
-    let plus = Rect::new(tx, body.y + t.px(5.0), t.px(24.0), t.px(20.0));
-    let s_plus = Style::new(t.text_px(TypeStep::Body), t.text_dim());
-    font::draw(
-        canvas,
-        "+",
-        plus.x + t.px(7.0),
-        plus.y + t.px(14.0),
-        &s_plus,
-    );
-    shell.hotspots_mut().push(plus, Hot::BrowserNewTab);
+    let plus = Rect::new(tx, area.y + t.px(5.0), t.px(24.0), t.px(20.0));
+    if plus.x >= area.x && plus.right() <= area.right() {
+        let s_plus = Style::new(t.text_px(TypeStep::Body), t.text_dim());
+        font::draw(
+            canvas,
+            "+",
+            plus.x + t.px(7.0),
+            plus.y + t.px(14.0),
+            &s_plus,
+        );
+        shell.hotspots_mut().push(plus, Hot::BrowserNewTab);
+    }
+    canvas.set_clip(clip);
+
+    if overflow {
+        // The bumpers. A chevron is drawn with two strokes rather than a glyph:
+        // the shell's bitmap face has no arrow characters, and an unknown
+        // character draws a box, which is not an affordance.
+        let mid = area.y + strip_h / 2.0;
+        let dy = t.px(4.0);
+        let dx = t.px(5.0);
+        let back = Rect::new(body.x, area.y, bumper_w, strip_h);
+        let forward = Rect::new(body.right() - bumper_w, area.y, bumper_w, strip_h);
+        for (rect, points_forward, enabled, hot) in [
+            (back, false, scroll > 0.5, Hot::BrowserStripLeft),
+            (
+                forward,
+                true,
+                scroll < max_scroll - 0.5,
+                Hot::BrowserStripRight,
+            ),
+        ] {
+            ui::surface(canvas, &t, rect, 0.0, ui::Material::Flat);
+            if !enabled {
+                continue;
+            }
+            let cx = rect.x + bumper_w / 2.0;
+            let tip = if points_forward { cx + dx } else { cx - dx };
+            let tail = if points_forward { cx - dx } else { cx + dx };
+            canvas.stroke_line(tail, mid - dy, tip, mid, 1.5, t.text());
+            canvas.stroke_line(tip, mid, tail, mid + dy, 1.5, t.text());
+            shell.hotspots_mut().push(rect, hot);
+        }
+    }
 
     // --- omnibox row ---
     let bar = Rect::new(body.x, body.y + strip_h, body.w, t.px(30.0));
@@ -3094,7 +3200,7 @@ fn draw_settings_page(
         let hint = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
         font::draw(
             canvas,
-            "Ctrl+T theme · Ctrl+A accent · Ctrl+W wallpaper · Ctrl+L language · Ctrl+M motion · Tab next control",
+            "Ctrl+Alt+T theme · Ctrl+A accent · Ctrl+W wallpaper · Ctrl+L language · Ctrl+M motion · Tab next control",
             pane.x + t.sp(Space::Lg),
             pane.bottom() - t.px(8.0),
             &hint,

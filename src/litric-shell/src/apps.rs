@@ -913,6 +913,23 @@ pub struct BrowserApp {
     /// The next stable engine tab id to hand out. Monotonic: an id is never
     /// reused, so a late frame can never land on a newer tab.
     next_engine_tab: u32,
+    /// How far the tab strip is scrolled, in device pixels from the first
+    /// tab's left edge.
+    ///
+    /// Only the view knows the strip's width, so the view clamps this before
+    /// laying the strip out. The model deliberately keeps whatever offset it
+    /// was given: a model that clamped on its own would need the window width,
+    /// and would still hold an offset after the window grew wide enough to
+    /// show every tab.
+    pub strip_scroll: f32,
+    /// Set when the focused tab changed without the pointer, so the view has
+    /// to bring it into the visible part of the strip.
+    ///
+    /// The pointer can only click a tab that is already on screen, so this is
+    /// set by the selection methods only: `Ctrl+9` must reveal the tab it
+    /// selected, and a bumper click must not be undone by a reveal of the tab
+    /// that was already focused.
+    pub reveal_active: bool,
 }
 
 impl Default for BrowserApp {
@@ -941,6 +958,8 @@ impl Default for BrowserApp {
             downloads_status: None,
             loading: false,
             next_engine_tab: 2,
+            strip_scroll: 0.0,
+            reveal_active: false,
         }
     }
 }
@@ -971,10 +990,27 @@ impl BrowserApp {
     /// Select a tab; the omnibox shows its address.
     pub fn select(&mut self, i: usize) {
         if let Some(t) = self.tabs.get(i) {
+            // Selecting is the one action that may name a tab the strip has
+            // scrolled past, so it is also the one that asks the view to
+            // reveal it. Re-selecting the focused tab must not move the strip.
+            if i != self.active {
+                self.reveal_active = true;
+            }
             self.active = i;
             self.omnibox = t.url.clone();
             self.omnibox_focus = true;
             self.panel = BrowserPanel::Page;
+        }
+    }
+
+    /// Move the strip's scroll by `dx` pixels.
+    ///
+    /// The view clamps the result against the strip's real width, so this
+    /// cannot scroll past the last tab for long enough to be drawn there.
+    pub fn scroll_strip_by(&mut self, dx: f32) {
+        self.strip_scroll += dx;
+        if self.strip_scroll < 0.0 {
+            self.strip_scroll = 0.0;
         }
     }
 
@@ -1004,10 +1040,15 @@ impl BrowserApp {
             self.omnibox.clear();
             self.omnibox_focus = false;
             self.panel = BrowserPanel::Page;
+            // One tab always fits: an offset left from the strip that closed
+            // would otherwise hide that tab behind the left bumper.
+            self.strip_scroll = 0.0;
+            self.reveal_active = true;
             return;
         }
         if was_active {
             self.active = i.min(self.tabs.len().saturating_sub(1));
+            self.reveal_active = true;
         } else if i < self.active {
             self.active = self.active.saturating_sub(1);
         }

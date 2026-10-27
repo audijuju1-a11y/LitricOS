@@ -1,0 +1,24 @@
+# cargo test --offline -p litric-shell browser_tab_strip
+test shell::browser_tab_strip::a_strip_that_fits_has_no_bumpers ... ok
+test shell::browser_tab_strip::selecting_a_tab_past_the_edge_reveals_it ... ok
+test shell::browser_tab_strip::closing_back_to_one_tab_resets_the_strip_offset ... ok
+test shell::browser_tab_strip::the_right_bumper_reaches_a_tab_past_the_window_edge ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 566 filtered out; finished in 6.32s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+# cargo test --offline -p litric-shell browser_tab (BUG-0028 + BUG-0029)
+test shell::browser_tab_keys::ctrl_tab_cycles_and_wraps_in_both_directions ... ok
+test shell::browser_tab_keys::ctrl_t_is_new_tab_in_the_browser_and_not_a_theme_cycle_in_settings ... ok
+test shell::browser_tab_keys::ctrl_t_opens_a_tab_and_ctrl_w_closes_it ... ok
+test shell::browser_tab_keys::ctrl_digits_choose_a_tab_and_nine_is_the_last ... ok
+test shell::browser_tab_strip::a_strip_that_fits_has_no_bumpers ... ok
+test shell::browser_tab_keys::a_selected_tab_draws_a_second_state_channel ... ok
+test shell::browser_tab_strip::closing_back_to_one_tab_resets_the_strip_offset ... ok
+test shell::browser_tab_strip::selecting_a_tab_past_the_edge_reveals_it ... ok
+test shell::browser_tab_strip::the_right_bumper_reaches_a_tab_past_the_window_edge ... ok
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 560 filtered out; finished in 6.23s

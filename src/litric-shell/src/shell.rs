@@ -328,6 +328,10 @@ pub enum Hot {
     QuickBluetoothPower,
     /// The browser's new-tab button.
     BrowserNewTab,
+    /// Scroll the browser's tab strip toward its first tab, one page.
+    BrowserStripLeft,
+    /// Scroll the browser's tab strip toward its last tab, one page.
+    BrowserStripRight,
     /// Navigate the active browser tab backward.
     BrowserBack,
     /// Navigate the active browser tab forward.
@@ -1982,6 +1986,19 @@ impl Shell {
         }
         // Alt+Tab is the window switcher even while a page is focused.
         if mods.alt && key == Key::Tab {
+            return false;
+        }
+        // The browser's own chords stay with the shell. Chromium would take
+        // Ctrl+T, Ctrl+W, Ctrl+Tab and Ctrl+1-9 as page shortcuts, which is why
+        // the tab strip had no keyboard model at all: every one of them was
+        // delivered to the page instead. A tab the pointer cannot reach is a
+        // tab the keyboard must be able to name.
+        if mods.ctrl
+            && matches!(
+                key,
+                Key::Tab | Key::PageUp | Key::PageDown | Key::Char('t' | 'w' | '1'..='9')
+            )
+        {
             return false;
         }
         self.browser_page_focused()
@@ -4837,13 +4854,61 @@ impl Shell {
         match app_id.as_str() {
             "com.litric.settings" => match key {
                 Key::Char('l') if mods.ctrl => Some(self.toggle_language()),
-                Key::Char('t') if mods.ctrl => Some(self.cycle_theme()),
+                // Ctrl+T is the browser's new tab, on every platform and in
+                // every browser. A theme cycle that answered the same chord in
+                // the window next door taught the wrong reflex, so it moved to
+                // Ctrl+Alt+T.
+                Key::Char('t') if mods.ctrl && mods.alt => Some(self.cycle_theme()),
                 Key::Char('a') if mods.ctrl => Some(self.cycle_accent()),
                 Key::Char('w') if mods.ctrl => Some(self.cycle_wallpaper()),
                 Key::Char('m') if mods.ctrl => Some(self.toggle_reduced_motion()),
                 _ => None,
             },
             "com.litric.browser" => match key {
+                // The tab keyboard model. Every pointer path below has a key
+                // here, so a tab can be opened, closed and chosen without a
+                // pointer — which is also the only way to reach a tab whose
+                // pixels have run past the window edge.
+                Key::Char('t') if mods.ctrl && !mods.alt && !mods.shift => {
+                    Some(self.activate(Hot::BrowserNewTab))
+                }
+                Key::Char('w') if mods.ctrl && !mods.alt => {
+                    let active = self.browser.active;
+                    Some(self.activate(Hot::BrowserCloseTab(active)))
+                }
+                Key::Char('9') if mods.ctrl => {
+                    let last = self.browser.tabs.len().saturating_sub(1);
+                    Some(self.activate(Hot::BrowserTab(last)))
+                }
+                Key::Char(d @ '1'..='8') if mods.ctrl => {
+                    let i = usize::from((d as u8).saturating_sub(b'1'));
+                    if i < self.browser.tabs.len() {
+                        Some(self.activate(Hot::BrowserTab(i)))
+                    } else {
+                        None
+                    }
+                }
+                Key::Tab | Key::PageDown | Key::PageUp if mods.ctrl => {
+                    let len = self.browser.tabs.len();
+                    if len < 2 {
+                        return Some(Vec::new());
+                    }
+                    let forward = matches!(key, Key::Tab | Key::PageDown);
+                    let step = if forward != mods.shift {
+                        1
+                    } else {
+                        len.saturating_sub(1)
+                    };
+                    // `active < len` and `step < len`, so one subtraction is
+                    // enough to wrap. Written out rather than with `%` because
+                    // the rem operator on a runtime divisor is an unwrap-shaped
+                    // hazard this codebase bans in system code.
+                    let mut next = self.browser.active.saturating_add(step);
+                    if next >= len {
+                        next = next.saturating_sub(len);
+                    }
+                    Some(self.activate(Hot::BrowserTab(next)))
+                }
                 Key::Escape => {
                     self.browser.omnibox_focus = false;
                     Some(Vec::new())
@@ -5850,6 +5915,19 @@ impl Shell {
                     self.browser_navigate(&url);
                     return vec![Effect::PersistBrowserData];
                 }
+                Vec::new()
+            }
+            // The strip's scroll bumpers. One page is three tabs: more than a
+            // single tab, so twenty tabs is not twenty clicks, and less than a
+            // window's worth, so no tab can move past the far edge unseen.
+            Hot::BrowserStripLeft => {
+                self.browser.scroll_strip_by(-self.tokens.px(3.0 * 150.0));
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::BrowserStripRight => {
+                self.browser.scroll_strip_by(self.tokens.px(3.0 * 150.0));
+                self.request_full_redraw();
                 Vec::new()
             }
             // Tabs are the engine's tabs: the model and the broker are told
@@ -9608,5 +9686,463 @@ mod scan_worker_tests {
             1,
             "opening the centre dismissed the note it was asked to show"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The browser's tab keyboard model
+//
+// F.08's finding 39: every tab switch was a pointer click, the strip offered
+// two Tab stops per tab, and Ctrl+T — the first shortcut a browser user tries —
+// cycled the theme in the Settings window next door. These tests hold the
+// keyboard model to the platform guidance and keep the two windows' chords
+// from colliding again.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod browser_tab_keys {
+    use super::*;
+    use crate::shortcuts::App;
+    use crate::ui::{Tokens, Tone};
+    use litric_design::{Theme, ThemeKind};
+    use litric_input::event::InputEvent;
+    use litric_input::keys::{Key, Modifiers};
+    use litric_locale::Regional;
+
+    fn shell() -> Shell {
+        let tokens = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
+        let mut s = Shell::new(tokens, 1280.0, 800.0, Regional::fallback("test"));
+        s.mode = DesktopMode::Ready;
+        s
+    }
+
+    fn key(s: &mut Shell, key: Key, mods: Modifiers) {
+        s.handle(
+            &InputEvent::KeyDown {
+                key,
+                code: 0,
+                mods,
+                repeat: false,
+            },
+            1_200,
+        );
+        s.handle(
+            &InputEvent::KeyUp {
+                key,
+                code: 0,
+                mods: Modifiers::NONE,
+            },
+            1_210,
+        );
+    }
+
+    const CTRL: Modifiers = Modifiers {
+        ctrl: true,
+        ..Modifiers::NONE
+    };
+
+    fn ctrl_shift() -> Modifiers {
+        Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Modifiers::NONE
+        }
+    }
+
+    fn browser() -> Shell {
+        let mut s = shell();
+        s.open_app(App::Browser);
+        s
+    }
+
+    #[test]
+    fn ctrl_t_opens_a_tab_and_ctrl_w_closes_it() {
+        let mut s = browser();
+        assert_eq!(s.browser.tabs.len(), 1);
+        key(&mut s, Key::Char('t'), CTRL);
+        assert_eq!(s.browser.tabs.len(), 2, "Ctrl+T opens a tab");
+        assert_eq!(
+            s.browser.tabs.get(s.browser.active).map(|t| t.url.as_str()),
+            Some("litric://about"),
+            "the new tab starts on the start page"
+        );
+
+        key(&mut s, Key::Char('w'), CTRL);
+        assert_eq!(s.browser.tabs.len(), 1, "Ctrl+W closes the active tab");
+
+        // Closing the last tab leaves one fresh tab, never zero: the window has
+        // no state in which there is nothing to show.
+        key(&mut s, Key::Char('w'), CTRL);
+        assert_eq!(s.browser.tabs.len(), 1);
+        assert_eq!(s.browser.active, 0);
+    }
+
+    #[test]
+    fn ctrl_tab_cycles_and_wraps_in_both_directions() {
+        let mut s = browser();
+        for _ in 0..2 {
+            key(&mut s, Key::Char('t'), CTRL);
+        }
+        assert_eq!(s.browser.tabs.len(), 3);
+        assert_eq!(s.browser.active, 2, "a new tab takes focus");
+
+        key(&mut s, Key::Tab, CTRL);
+        assert_eq!(s.browser.active, 0, "Ctrl+Tab wraps past the last tab");
+        key(&mut s, Key::Tab, CTRL);
+        assert_eq!(s.browser.active, 1);
+        key(&mut s, Key::Tab, ctrl_shift());
+        assert_eq!(s.browser.active, 0, "Ctrl+Shift+Tab goes back");
+        key(&mut s, Key::PageDown, CTRL);
+        assert_eq!(s.browser.active, 1, "Ctrl+PageDown is the same step");
+    }
+
+    #[test]
+    fn ctrl_digits_choose_a_tab_and_nine_is_the_last() {
+        let mut s = browser();
+        for _ in 0..4 {
+            key(&mut s, Key::Char('t'), CTRL);
+        }
+        assert_eq!(s.browser.tabs.len(), 5);
+
+        key(&mut s, Key::Char('3'), CTRL);
+        assert_eq!(s.browser.active, 2, "Ctrl+3 is the third tab");
+
+        key(&mut s, Key::Char('9'), CTRL);
+        assert_eq!(s.browser.active, 4, "Ctrl+9 is the last tab");
+
+        key(&mut s, Key::Char('7'), CTRL);
+        assert_eq!(
+            s.browser.active, 4,
+            "a digit past the strip changes nothing"
+        );
+    }
+
+    #[test]
+    fn ctrl_t_is_new_tab_in_the_browser_and_not_a_theme_cycle_in_settings() {
+        // The collision finding 39 records: the same chord meant two things in
+        // two adjacent windows.
+        let mut s = browser();
+        let before = s.settings.preferences.theme;
+        key(&mut s, Key::Char('t'), CTRL);
+        assert_eq!(s.browser.tabs.len(), 2);
+        assert_eq!(
+            s.settings.preferences.theme, before,
+            "Ctrl+T in the browser changed the theme"
+        );
+
+        s.open_app(App::Settings);
+        let before = s.settings.preferences.theme;
+        key(&mut s, Key::Char('t'), CTRL);
+        assert_eq!(
+            s.settings.preferences.theme, before,
+            "Ctrl+T must not cycle the theme any more"
+        );
+        key(
+            &mut s,
+            Key::Char('t'),
+            Modifiers {
+                ctrl: true,
+                alt: true,
+                ..Modifiers::NONE
+            },
+        );
+        assert_ne!(
+            s.settings.preferences.theme, before,
+            "Ctrl+Alt+T is where the theme cycle lives now"
+        );
+    }
+
+    #[test]
+    fn a_selected_tab_draws_a_second_state_channel() {
+        let mut s = browser();
+        key(&mut s, Key::Char('t'), CTRL);
+        let mut c = crate::canvas::Canvas::new(1280, 800, crate::canvas::rgb(0x000000));
+        s.tick_after(16);
+        crate::views::draw(&mut c, &mut s);
+        let tab = s
+            .hotspots()
+            .rect_of(Hot::BrowserTab(s.browser.active))
+            .expect("the active tab is a target");
+        let other = s
+            .hotspots()
+            .rect_of(Hot::BrowserTab(0))
+            .expect("the other tab is a target");
+        let accent = s.tokens.tone(Tone::Accent);
+        let count = |r: crate::canvas::Rect| {
+            let mut n = 0;
+            for y in (r.y as i64)..(r.bottom() as i64) {
+                for x in (r.x as i64)..(r.right() as i64) {
+                    if c.get(x, y) == Some(accent) {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        assert!(
+            count(tab) > 0,
+            "the active tab must carry the accent, not only a material difference"
+        );
+        assert_eq!(
+            count(other),
+            0,
+            "an inactive tab must not carry the active tab's accent"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The tab strip's overflow model
+//
+// F.08's finding 38: the strip laid out a fixed 150 px per tab with no cap, so
+// past roughly `body.w / 152` tabs the right-hand tabs and the + button were
+// drawn outside the window with no way to reach them. Windows names scroll
+// bumpers for this case and libadwaita's AdwTabBar scrolls; these tests hold the
+// strip to the property those models share: every tab is either on screen or
+// one bumper press away, and the strip never scrolls past its last tab.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod browser_tab_strip {
+    use super::*;
+    use crate::shortcuts::App;
+    use crate::ui::Tokens;
+    use litric_design::{Theme, ThemeKind};
+    use litric_input::event::{InputEvent, Point, PointerButton};
+    use litric_input::keys::{Key, Modifiers};
+    use litric_locale::Regional;
+
+    fn shell() -> Shell {
+        let tokens = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
+        let mut s = Shell::new(tokens, 1280.0, 800.0, Regional::fallback("test"));
+        s.mode = DesktopMode::Ready;
+        s
+    }
+
+    fn browser() -> Shell {
+        let mut s = shell();
+        s.open_app(App::Browser);
+        s
+    }
+
+    /// One frame, drawn the way the compositor draws it.
+    fn draw(s: &mut Shell) {
+        s.tick_after(16);
+        let mut c = crate::canvas::Canvas::new(1280, 800, crate::canvas::rgb(0x000000));
+        crate::views::draw(&mut c, s);
+    }
+
+    fn key(s: &mut Shell, key: Key, mods: Modifiers) {
+        s.handle(
+            &InputEvent::KeyDown {
+                key,
+                code: 0,
+                mods,
+                repeat: false,
+            },
+            1_200,
+        );
+        s.handle(
+            &InputEvent::KeyUp {
+                key,
+                code: 0,
+                mods: Modifiers::NONE,
+            },
+            1_210,
+        );
+    }
+
+    fn click(s: &mut Shell, at: crate::canvas::Rect) {
+        let p = Point::new(at.x + at.w / 2.0, at.y + at.h / 2.0);
+        s.handle(
+            &InputEvent::PointerMove {
+                at: p,
+                delta: Point::new(1.0, 1.0),
+            },
+            1_000,
+        );
+        s.handle(
+            &InputEvent::PointerButton {
+                button: PointerButton::Primary,
+                pressed: true,
+                at: p,
+                clicks: 1,
+                mods: Modifiers::NONE,
+            },
+            1_010,
+        );
+        s.handle(
+            &InputEvent::PointerButton {
+                button: PointerButton::Primary,
+                pressed: false,
+                at: p,
+                clicks: 1,
+                mods: Modifiers::NONE,
+            },
+            1_020,
+        );
+    }
+
+    const CTRL: Modifiers = Modifiers {
+        ctrl: true,
+        ..Modifiers::NONE
+    };
+
+    /// The right edge of the browser window's body, read from a control the
+    /// view always draws: the omnibox is inset 8 px on each side.
+    fn body_right(s: &Shell) -> f32 {
+        let field = s
+            .hotspots()
+            .rect_of(Hot::BrowserOmnibox)
+            .expect("the omnibox is drawn");
+        field.right() + 8.0
+    }
+
+    fn open_tabs(s: &mut Shell, extra: usize) {
+        for _ in 0..extra {
+            key(s, Key::Char('t'), CTRL);
+        }
+    }
+
+    #[test]
+    fn a_strip_that_fits_has_no_bumpers() {
+        let mut s = browser();
+        draw(&mut s);
+        assert_eq!(s.browser.strip_scroll, 0.0);
+        assert!(
+            s.hotspots().rect_of(Hot::BrowserStripLeft).is_none(),
+            "a strip with one tab has nothing to scroll back to"
+        );
+        assert!(
+            s.hotspots().rect_of(Hot::BrowserStripRight).is_none(),
+            "a strip with one tab has nothing to scroll forward to"
+        );
+        assert!(
+            s.hotspots().rect_of(Hot::BrowserNewTab).is_some(),
+            "the + button is drawn when the tabs fit"
+        );
+        let tab = s
+            .hotspots()
+            .rect_of(Hot::BrowserTab(0))
+            .expect("the only tab is drawn");
+        let field = s.hotspots().rect_of(Hot::BrowserOmnibox).unwrap();
+        assert!(
+            (tab.x - (field.x - 8.0 + 4.0)).abs() < 0.5,
+            "a strip that fits starts at the body's left inset, not offset"
+        );
+    }
+
+    #[test]
+    fn the_right_bumper_reaches_a_tab_past_the_window_edge() {
+        let mut s = browser();
+        open_tabs(&mut s, 11);
+        // Start from the state a restored window has: no offset, and nothing
+        // asking to reveal the focused tab.
+        s.browser.strip_scroll = 0.0;
+        s.browser.reveal_active = false;
+        draw(&mut s);
+        let right = body_right(&s);
+
+        assert!(
+            s.hotspots().rect_of(Hot::BrowserStripRight).is_some(),
+            "twelve 150 px tabs overflow a 1280 px window"
+        );
+        assert!(
+            s.hotspots().rect_of(Hot::BrowserTab(11)).is_none(),
+            "a tab scrolled past the edge must not be a target"
+        );
+
+        let mut presses = 0;
+        while let Some(bumper) = s.hotspots().rect_of(Hot::BrowserStripRight) {
+            click(&mut s, bumper);
+            draw(&mut s);
+            presses += 1;
+            assert!(presses < 20, "the strip never reached its last tab");
+        }
+        assert!(presses > 0, "the strip scrolled at least one page");
+
+        let last = s
+            .hotspots()
+            .rect_of(Hot::BrowserTab(11))
+            .expect("the last tab is on screen at the end of the strip");
+        assert!(
+            last.right() <= right - 20.0 + 0.5,
+            "the last tab sits inside the strip, not under the bumper: {last:?}"
+        );
+        assert!(
+            s.hotspots().rect_of(Hot::BrowserNewTab).is_some(),
+            "the + button comes back with the end of the strip"
+        );
+        assert!(
+            s.hotspots().rect_of(Hot::BrowserStripLeft).is_some(),
+            "at the end of the strip the way back is offered"
+        );
+
+        // Asking for more scroll than exists is clamped, not remembered: the
+        // next frame must not draw the strip past its last tab.
+        let at_end = s.browser.strip_scroll;
+        s.browser.scroll_strip_by(5_000.0);
+        draw(&mut s);
+        assert_eq!(
+            s.browser.strip_scroll, at_end,
+            "an over-scroll is clamped to the strip's end"
+        );
+    }
+
+    #[test]
+    fn selecting_a_tab_past_the_edge_reveals_it() {
+        let mut s = browser();
+        open_tabs(&mut s, 11);
+        s.browser.strip_scroll = 0.0;
+        s.browser.reveal_active = false;
+        draw(&mut s);
+        assert!(s.browser.strip_scroll < 1.0, "the strip starts at its left");
+
+        // Focus the first tab: Ctrl+9 only reveals when it changes the
+        // selection, which is the point (re-selecting must not move the strip).
+        key(&mut s, Key::Char('1'), CTRL);
+        draw(&mut s);
+        assert_eq!(s.browser.active, 0);
+        key(&mut s, Key::Char('9'), CTRL);
+        draw(&mut s);
+        let right = body_right(&s);
+        let last = s
+            .hotspots()
+            .rect_of(Hot::BrowserTab(11))
+            .expect("Ctrl+9 selected the last tab, so the strip revealed it");
+        assert!(
+            last.right() <= right - 20.0 + 0.5,
+            "the selected tab is drawn inside the strip: {last:?}"
+        );
+        assert!(
+            s.hotspots().hit(last.x + 4.0, last.y + 4.0) == Some(Hot::BrowserTab(11)),
+            "the revealed tab answers a click at its own top-left corner"
+        );
+    }
+
+    #[test]
+    fn closing_back_to_one_tab_resets_the_strip_offset() {
+        let mut s = browser();
+        open_tabs(&mut s, 11);
+        draw(&mut s);
+        let mut presses = 0;
+        while let Some(bumper) = s.hotspots().rect_of(Hot::BrowserStripRight) {
+            click(&mut s, bumper);
+            draw(&mut s);
+            presses += 1;
+            assert!(presses < 20);
+        }
+        assert!(s.browser.strip_scroll > 0.0);
+
+        for _ in 0..11 {
+            key(&mut s, Key::Char('w'), CTRL);
+        }
+        draw(&mut s);
+        assert_eq!(
+            s.browser.strip_scroll, 0.0,
+            "one tab always fits, so an offset left from the closed strip would hide it"
+        );
+        assert!(s.hotspots().rect_of(Hot::BrowserStripRight).is_none());
+        assert!(s.hotspots().rect_of(Hot::BrowserTab(0)).is_some());
     }
 }
