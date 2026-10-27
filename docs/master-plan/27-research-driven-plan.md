@@ -29,8 +29,9 @@ implemented from — not a design document and not a specification.
 | `Research-Deep-all/LitricOS UI UX Research Part 11 F Text Progress Search and Errors.md` | chapter `F`, continued: text fields (`F.02`), progress (`F.18`), search fields (`F.23`) and errors/validation (`F.26`), compared against the field renderer, the input path and the five search surfaces | 457 lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 12 F Checkboxes and Radio Controls.md` | chapter `F`, selection controls: checkboxes (`F.04`) and radio controls (`F.05`), compared against the hand-drawn Files checkbox and the chip-based single-select surfaces | 331 lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 13 F Tabs Sidebars and Toolbars.md` | chapter `F`, layout containers: tabs (`F.08`), sidebars (`F.10`) and toolbars (`F.11`), compared against the browser tab strip, the two sidebars and the three command rows | 329 lines |
+| `Research-Deep-all/LitricOS UI UX Research Part 14 F Menus and Context Menus.md` | chapter `F`, the two menu items: menus (`F.12`) and context menus (`F.13`), compared against the bar's three labels, the two popover menus and the six context-menu surfaces | 377 lines |
 | `Research-Deep-all/LitricOS Coverage Checklist.csv` | the ledger behind all of it | 597 items |
-| `Research-Deep-all/LitricOS Source Register.csv` | every source URL with tier and status | 3,979 rows |
+| `Research-Deep-all/LitricOS Source Register.csv` | every source URL with tier and status | 4,105 rows |
 | `Research-Deep-all/Fluent Token Register.csv` | measured Fluent tokens | 3,553 rows |
 | `Research-Deep-all/macOS Design Token Register.csv` | measured macOS tokens | 1,805 rows |
 | `Research-Deep-all/Windows Keyboard Shortcut Register.csv` | Windows shortcuts | 365 rows |
@@ -46,8 +47,8 @@ unfinished:
 | Status | Items | Share |
 |---|---:|---:|
 | `COMPLETE` | 18 | 3 % |
-| `PARTIAL` | 396 | 66 % |
-| `PENDING` (not yet researched) | 179 | 30 % |
+| `PARTIAL` | 398 | 67 % |
+| `PENDING` (not yet researched) | 177 | 30 % |
 | `NOT APPLICABLE` | 3 | — |
 | `NOT FOUND` | 1 | — |
 
@@ -55,7 +56,7 @@ By section, the shape is: Windows shell (`WA`) 97 partial, Windows Settings
 (`WB`) 141 partial, macOS desktop (`MC`) 62 partial, macOS Settings (`MD`) 38
 partial, Fluent (`WC`) 12 partial, tokens (`G`) 19 partial — while the whole
 Linux-desktop comparison (`LG`–`LR`, eight systems × 15 items = 120), the shared
-component catalogue (`F`, 14 of 27), workflows (`H`, 21), technical feasibility
+component catalogue (`F`, 11 of 27), workflows (`H`, 21), technical feasibility
 (`I`, 12) and the final audit (`J`, 9) are **still `PENDING`**.
 
 That single table decides the plan's shape: **the research cannot be treated as
@@ -295,12 +296,12 @@ because every later row depends on the registry existing.
 
 ## 6. Track R — finishing the research
 
-The corpus is 30 % unresearched and 66 % partial. The build may not cite it, so
+The corpus is 30 % unresearched and 67 % partial. The build may not cite it, so
 completion is work, scheduled beside the build:
 
-### Coverage today (2026-10-26)
+### Coverage today (2026-10-27)
 
-The checklist holds 597 items; 414 are `COMPLETE` or `PARTIAL` and therefore
+The checklist holds 597 items; 416 are `COMPLETE` or `PARTIAL` and therefore
 citable, and `docs/parity/ledger.csv` decides 389 of them -- every one that is a
 surface. Per chapter:
 
@@ -313,7 +314,7 @@ surface. Per chapter:
 | `G` tokens & accessibility | 19 | 19 |
 | `WC` Fluent / WinUI design system | 14 | 14 |
 | `MG` macOS HIG | 11 | 11 |
-| `F` shared component catalogue | 14 | 1 (13 newly citable; their decisions are not written, 14 are `PENDING`) |
+| `F` shared component catalogue | 16 | 1 (15 newly citable; their decisions are not written, 12 are `PENDING`) |
 | `CH00` version baseline | 12 | 0 (not a surface; see the ledger README) |
 
 The 389 rows split 169 `ADAPT`, 126 `DEFER`, 88 `REJECT`, 6 `ADOPT`. `DEFER` is
@@ -323,27 +324,29 @@ and accessibility ones, `M5` the capability and privacy ones, and `M6` the ones
 that will have to become `REJECT` or be built.
 
 What remains outside the ledger is research, not decisions: the `PENDING`
-chapters (`F` 14, `H` 21, `I` 12, `J` 9 and eight Linux desktops of 15) cannot
+chapters (`F` 12, `H` 21, `I` 12, `J` 9 and eight Linux desktops of 15) cannot
 be cited until their status is final, so they are Track R's work and not rows.
 
 ### Track R queue, first pass (2026-10-26)
 
-179 checklist items are `PENDING`, and none of them may be cited. The first pass
+177 checklist items are `PENDING`, and none of them may be cited. The first pass
 counted any heading that *contained* an item's title and found 56; that number was
 wrong, and the chapter `F` review below is how it was found out. Counting only
 headings that name the item -- its id, or its whole title -- leaves 24:
 
 | Chapter | `PENDING` | A section names it |
 |---|---:|---:|
-| `F` shared component catalogue | 14 | 5 |
+| `F` shared component catalogue | 12 | 16 |
 | `H` workflows & edge cases | 21 | 2 |
 | `I` technical feasibility | 12 | 1 |
 | `J` source register & audit | 9 | 1 |
 | each of `LB`–`LX` (8 desktops) | 15 | 2 |
 
 A section is **not** a status either: it says someone wrote something under that
-name, not that it answers the item with a source. So the queue is 15 reviews, and the other 164 items are research that has not
-been done.
+name, not that it answers the item with a source. Chapter `F` is now the worked
+example: sixteen of its rows carry a section, and twelve are still unread. The
+parts below record what each of those sections found; the remaining 165 `PENDING`
+items in the other chapters are research that has not been done.
 
 #### Chapter `F`, reviewed (2026-10-26)
 
@@ -461,6 +464,34 @@ Apple's pages returned titles and summaries again, and no layout test at two win
 widths has been run, so each overflow claim is a reading of a loop rather than a
 resized frame.
 
+#### Part 14: menus and context menus (2026-10-27)
+
+The two items that share a row vocabulary, in a shell that has three of them.
+`Part 14` compares Windows 26H2 and GNOME 51 at page depth with the bar's three
+labels, the two popover menus and the six context-menu surfaces, and sets `F.12`
+menus and `F.13` context menus to `PARTIAL`. It is the first part measured against
+the shell's own specification as well as the platforms': `DESIGN-SYSTEM-v3` names
+a disabled item as part of the context menu, and forbids opening a window from the
+bar.
+
+| Finding | Evidence |
+|---|---|
+| Three labels in menu position open **no menu**: a launcher overlay, the Activity window, the quick-settings panel | `views.rs` lines 527–568; `shell.rs` lines 5357–5358, 5423–5424 |
+| "Workspace" opens a window from the bar, which the shell's own spec forbids | `shell.rs` line 5423; `DESIGN-SYSTEM-v3/03-SHELL-SYSTEM.md` line 30 |
+| Labels that do not fit are replaced by one `›` whose hotspot opens the launcher, so a dropped label is unreachable | `views.rs` lines 566–579 |
+| The two real menus (2 and 4 rows) have **no keyboard binding**, no open state on their trigger, no grouping, no disabled or checked row, and one glyph for sleep, shut down and restart | `views.rs` lines 5267–5405; `shortcuts.rs` line 563 |
+| **No keyboard path into or out of a context menu**: `Key::Menu` and `F10` unbound, Shift+F10 resolves to nothing, Escape closes overlays only | `keys.rs` line 71; `shortcuts.rs` line 690; `shell.rs` line 5900 |
+| Only a wallpaper click or a chosen row dismisses a context menu; a second right-click re-derives the surface under the pointer | `shell.rs` lines 5782–5796, 5841–5879 |
+| Files "New folder" writes `/Documents` from the toolbar and both menus, because dispatch reads the `context_menu` the click already cleared | `shell.rs` lines 5793–5796, 2371–2384, 2652–2663 |
+| No disabled, checked or radio state in any of the 28 rows; no icon, shortcut or ellipsis; destructive rows mid-menu and untinted | `apps.rs` lines 1595–1601, 1702–1747 |
+| Two menu metrics: 26 px / 13 px / 190 px / 9 % on the desktop against 34 px / 15 px / measured / 6 % at the bar | `views.rs` lines 184–232, 5291, 5379 |
+| Context-menu labels bypass i18n; `"New folder"` is in the Thai dictionary and drawn in English at five call sites | `apps.rs` lines 1702–1747; `i18n.rs` line 130 |
+| The row test asserts no panic rather than an effect, so a silent no-op row passes | `e2e.rs` lines 1371–1393 |
+
+Why `PARTIAL` and not `COMPLETE`: Apple's pages returned titles and summaries
+again, no menu was opened on a booted image, and neither item has a decision. Why
+citable: every claim names a line a reader can open and disagree with.
+
 Each batch produces ledger-ready rows, not prose: a research batch is done when
 its checklist status is final and its rows carry evidence tiers.
 
@@ -533,5 +564,5 @@ one measured strip inside the layout pass.
   what people expect.
 - It does not implement a control whose backend does not exist, and does not
   hide a missing backend behind a disabled-looking row.
-- It does not treat the research as complete. 179 items are unread, and the
+- It does not treat the research as complete. 177 items are unread, and the
   build may not use them until they are not.

@@ -1970,3 +1970,79 @@ with its 27 source rows, and the plan returns to 182/393 -- along with the recor
 that the shell draws five containers with no shared component and has no tab
 overflow policy, which the next reviewer would have to rediscover by reading
 `draw_browser`'s strip loop against the body width.
+
+## 2026-10-27 — a menu bar with no menus, and six context menus the keyboard cannot open
+
+`Part 14` of the research corpus compares Windows 26H2, macOS 27 and GNOME 51
+guidance for menus and context menus with the three menu surfaces the shell draws,
+and sets `F.12` menus and `F.13` context menus to `PARTIAL`. It is the first part
+measured against the shell's own specification (`docs/DESIGN-SYSTEM-v3/`) as well
+as the platforms'. This entry records what it found and what was run; no source
+file changed.
+
+### What was found
+
+| Finding | Where |
+|---|---|
+| Three labels in menu position open **no menu**: Apps opens the launcher overlay, Workspace opens the Activity window, Environment opens the quick-settings panel | `views.rs` lines 527–568; `shell.rs` lines 5357–5358, 5423–5424 |
+| "Workspace" opens a window from the bar, which the shell's own spec forbids: "click opens a popover — never a new window from the bar" | `shell.rs` line 5423; `DESIGN-SYSTEM-v3/03-SHELL-SYSTEM.md` line 30 |
+| Labels that do not fit are replaced by one `›` whose hotspot is `Hot::MenuApps`, so a dropped label is unreachable from the bar | `views.rs` lines 566–579 |
+| The two real menus (LitricOS 2 rows, Power 4 rows, 34 px) have **no keyboard binding**, no open state on their trigger, no grouping, no disabled or checked row, one Power glyph for sleep/shut down/restart, and no ellipsis on the three rows that confirm | `views.rs` lines 5267–5405; `shortcuts.rs` lines 563, 681 |
+| **No keyboard path into or out of a context menu**: `Key::Menu` and `F10` are decoded and unbound, Shift+F10 resolves to nothing, and Escape resolves to `CloseOverlay`, which does not touch `context_menu` | `keys.rs` line 76; `shortcuts.rs` line 690; `shell.rs` line 5900 |
+| Only a wallpaper click or a chosen row dismisses a context menu; clicking a window leaves it floating, and a second right-click re-derives the surface under the pointer | `shell.rs` lines 5782–5796, 5841–5879 |
+| Files "New folder" — toolbar and both menus — always writes `/Documents`, because `perform_menu` reads the `context_menu` that `Hot::MenuRow` cleared one line earlier; `Ctrl+Shift+N` is the only correct path | `shell.rs` lines 5793–5796, 2371–2384, 2652–2663; `views.rs` line 1096 |
+| No disabled, checked or radio state in any of the 28 rows; no icon, shortcut or access key; four rows that confirm carry no ellipsis; destructive rows sit mid-menu and untinted | `apps.rs` lines 1595–1601, 1702–1747; `views.rs` lines 216–238 |
+| Two menu metrics and two hover alphas: 26 px / 13 px / fixed 190 px / 9 % on the desktop against 34 px / 15 px / measured / 6 % at the bar | `views.rs` lines 184–232, 5291, 5379 |
+| Context-menu labels bypass i18n entirely; `"New folder"` is in the Thai dictionary and drawn in English at five call sites, and the bar menus miss five of their six labels | `apps.rs` lines 1702–1747; `i18n.rs` lines 109–130, 298 |
+| The row test asserts no panic rather than an effect, so a silent no-op row (Restore with nothing selected) passes | `e2e.rs` lines 1371–1393 |
+| A right-click on a live page goes to Chromium; the same gesture opens the shell's Browser menu when no frame exists | `shell.rs` lines 5199–5202, 1947–1965 |
+
+The structural finding: menus are the surface the shell uses most and names least.
+There is no menu component in `ui.rs`; three bespoke loops produce three row
+metrics, and the one dismissal mechanism every platform shares — Escape — exists
+for popovers and not for context menus.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `Research-Deep-all/LitricOS UI UX Research Part 14 F Menus and Context Menus.md` | new: 377 lines, 17 findings (50–66), 0 decisions |
+| `Research-Deep-all/LitricOS Coverage Checklist.csv` | `F.12`, `F.13` set to `PARTIAL` with notes naming the part and the findings |
+| `Research-Deep-all/LitricOS Source Register.csv` | 27 new rows (Microsoft Learn, Apple HIG and Apple Support, GNOME HIG) |
+| `Research-Deep-all/LitricOS UI UX Research Part1.md` | chapter 40's index row names Parts 10–14 and Part 6's `F.16`, with 11 items `PENDING` |
+| `docs/master-plan/27-research-driven-plan.md` | file table, status counts and shares, citable-by-chapter row, Track R queue and its stale total, a Part 14 subsection, and the source-register count corrected 3,979 -> 4,105 |
+| `docs/parity/README.md` | `PENDING` count 179 -> 177 |
+| `docs/GATES.md` | this entry |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| checklist statuses | `PARTIAL` 396 -> 398, `PENDING` 179 -> 177, total still 597 |
+| `python3 ci/lint-parity.py` | exit 0 -- 389 rows (169 `ADAPT`, 126 `DEFER`, 88 `REJECT`, 6 `ADOPT`), no problems reported |
+| `python3 ci/lint-doc-refs.py` | OK -- 687 citations across 138 documents |
+| `python3 ci/lint-line-endings.py` | OK -- 338 files, all LF |
+| `python3 ci/check-python-syntax.py` | OK -- 48 files parse |
+
+No code changed, so `cargo test`, `clippy` and `ci/verify.sh` were not run. Nothing
+here exercises a compiled path.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the bar labels read as menus to a user | no user was asked. The finding is what they do, not how they look |
+| that a bar label is dropped at a plausible window width | the layout loop was read, not a resized window; the claim is that nothing in the loop preserves the label |
+| that the Files "New folder" bug was captured on a booted image | the code path is unambiguous but untested; it is recorded as a reading of `perform_menu` and `submit_desktop_dialog` |
+| that Escape leaves a menu open in every focus state | the call sites that clear `context_menu` are exhaustive for the code as written, not observed on a frame |
+| that macOS agrees with any of this | every Apple HIG page returned a title and a summary; the macOS column is roles plus two indexed rules, both marked `SNIPPET_ONLY` |
+| that `F` is nearly done | 11 of 27 items remain `PENDING`, sixteen are `PARTIAL`, none is `COMPLETE` |
+
+### Rollback
+
+Revert this commit. The two statuses return to `PENDING`, `Part 14` disappears with
+its 27 source rows, and the plan returns to 179/396 -- along with the record that
+the bar's three labels open no menu, that neither popover menu has a key, and that
+Files "New folder" writes `/Documents` regardless of the folder on screen, all of
+which the next reviewer would have to rediscover by reading `menu_surface_at`
+against `perform_menu`.
