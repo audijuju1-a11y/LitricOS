@@ -5503,7 +5503,10 @@ fn draw_banners(canvas: &mut Canvas, shell: &mut Shell) {
     }
     let t = shell.tokens.clone();
     let screen = shell.wm.screen();
-    let mut rows: Vec<(u32, String, String, Priority)> = shell
+    // The fifth field says whether the banner is still live. A retiring
+    // banner is a picture of something that has already gone; it must not
+    // answer a click, because its id is no longer in the queue.
+    let mut rows: Vec<(u32, String, String, Priority, bool)> = shell
         .notifications
         .items()
         .iter()
@@ -5513,7 +5516,7 @@ fn draw_banners(canvas: &mut Canvas, shell: &mut Shell) {
         // does not stop being wrong five seconds later.
         .filter(|n| n.expires_ms.is_some() || n.priority == Priority::Critical)
         .take(3)
-        .map(|n| (n.id, n.title.clone(), n.body.clone(), n.priority))
+        .map(|n| (n.id, n.title.clone(), n.body.clone(), n.priority, true))
         .collect();
     // A dismissed banner keeps its pixels for the length of its exit spring.
     // The live queue is authoritative for everything else, which is why this
@@ -5525,13 +5528,14 @@ fn draw_banners(canvas: &mut Canvas, shell: &mut Shell) {
                 banner.title.clone(),
                 banner.body.clone(),
                 banner.priority,
+                false,
             ));
         }
     }
 
     let w = t.px(300.0).min(screen.w * 0.6);
     let mut y = shell.top_bar().h + t.px(10.0);
-    for (id, title, body, priority) in rows {
+    for (id, title, body, priority, live) in rows {
         let reveal = shell.anims().banner_reveal(id).clamp(0.0, 1.0);
         if reveal <= 0.0 {
             continue;
@@ -5564,11 +5568,40 @@ fn draw_banners(canvas: &mut Canvas, shell: &mut Shell) {
             t.tone(tone),
             1.0,
         );
+        // Text stops short of the close box rather than running under it.
+        let text_w = r.w - t.px(76.0);
         let ts = Style::new(t.text_px(TypeStep::Footnote), t.text());
-        font::draw(canvas, &title, r.x + t.px(38.0), r.y + t.px(25.0), &ts);
+        font::draw(
+            canvas,
+            &ui::elide(&title, &ts, text_w),
+            r.x + t.px(38.0),
+            r.y + t.px(25.0),
+            &ts,
+        );
         let bs = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
-        let shown = ui::elide(&body, &bs, r.w - t.px(50.0));
+        let shown = ui::elide(&body, &bs, text_w);
         font::draw(canvas, &shown, r.x + t.px(38.0), r.y + t.px(43.0), &bs);
+        // A banner is a summary, so it answers what a summary invites: the
+        // body opens the centre to read the rest, and the close box takes
+        // this one away without hunting for it in a list. A banner already
+        // on its way out answers neither — its id has left the queue, and a
+        // click on a leaving rectangle must not act on a different note.
+        if live {
+            let close = Rect::new(
+                r.right() - t.px(26.0),
+                r.y + t.px(8.0),
+                t.px(18.0),
+                t.px(18.0),
+            );
+            let state = if shell.is_highlighted(Hot::BannerClose(id)) {
+                State::Hover
+            } else {
+                State::Normal
+            };
+            ui::icon_button(canvas, &t, close, Icon::Close, state, Tone::Neutral);
+            shell.hotspots_mut().push(r, Hot::BannerOpen(id));
+            shell.hotspots_mut().push(close, Hot::BannerClose(id));
+        }
         y += r.h + t.px(8.0);
     }
 }

@@ -1,0 +1,28 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/litric_shell-3b78ea8b55cb5557)
+running 6 tests
+test shell::scan_worker_tests::a_file_past_the_read_ceiling_is_reported_as_unread_not_clean ... ok
+test shell::scan_worker_tests::one_engine_makes_a_second_scan_of_the_same_file_a_cache_hit ... ok
+test shell::scan_worker_tests::a_finished_scan_says_what_it_did_not_cover ... ok
+test shell::scan_worker_tests::the_pump_moves_a_bounded_number_of_verdicts_per_frame ... ok
+test shell::scan_worker_tests::a_terminal_line_arrives_while_the_command_is_still_running ... ok
+test shell::scan_worker_tests::a_banner_closes_from_its_own_box_and_opens_the_centre_from_its_body ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 555 filtered out; finished in 2.19s
+     Running unittests src/main.rs (target/debug/deps/litric_shell-4bb53e7fc48360ea)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s
+     Running tests/design_lint.rs (target/debug/deps/design_lint-c04787d095ff13cc)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+     Running tests/font_standards.rs (target/debug/deps/font_standards-c8f70ff6f22394f2)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+     Running tests/foreign_clients.rs (target/debug/deps/foreign_clients-4192624641d1521d)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+     Running tests/overflow_audit.rs (target/debug/deps/overflow_audit-90511ecd080e7ff4)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+     Running tests/text_layout_audit.rs (target/debug/deps/text_layout_audit-fb764b224305d800)
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s

@@ -15,9 +15,10 @@
 //! ```
 
 use std::collections::VecDeque;
+use std::io::Read as _;
 #[cfg(unix)]
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(unix)]
 use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
 #[cfg(unix)]
@@ -432,6 +433,10 @@ pub enum Hot {
     DialogCancel,
     /// A notification.
     NotificationItem(usize),
+    /// A banner's body: opens the centre, where the whole note is.
+    BannerOpen(u32),
+    /// A banner's close box: dismisses that one notification.
+    BannerClose(u32),
     /// Dismiss-all in the notification list.
     NotificationsClear,
     /// The wallpaper.
@@ -1388,10 +1393,12 @@ pub enum Effect {
 pub struct DefenderState {
     /// What the window shows.
     pub app: crate::apps::DefenderApp,
-    /// Queue of logical paths still to scan in this run.
-    pub queue: Vec<String>,
-    /// Path being scanned right now, for the status line.
-    pub current: Option<String>,
+    /// The live worker, when one is running.
+    pub shared: Option<Arc<ScanShared>>,
+    /// Entries the folder walk refused to enter because it hit its count or
+    /// depth cap. Reported in the result, never silently dropped: "the scan
+    /// finished" and "the scan finished over everything" are different claims.
+    pub skipped: usize,
     /// Whether a scan is running (worker alive).
     pub running: bool,
 }
@@ -1408,11 +1415,21 @@ pub struct ScanResult {
 /// Shared between the shell and the scan worker thread.
 #[derive(Debug, Default)]
 pub struct ScanShared {
-    /// Results waiting for the shell to collect.
-    pub results: Mutex<Vec<ScanResult>>,
+    /// Results waiting for the shell to collect, in the order they were made.
+    pub results: Mutex<VecDeque<ScanResult>>,
+    /// Files the scanner could not read: too large, or an I/O error.
+    pub unread: AtomicUsize,
     /// The worker sets this when the queue is exhausted.
     pub done: AtomicBool,
 }
+
+/// The largest file the on-demand scanner will read into memory.
+///
+/// A scan is not a reason to lose the desktop. 64 MiB is one file the scanner
+/// can hold without competing with the compositor for the machine's memory;
+/// anything larger is reported as skipped rather than counted clean, because
+/// "we did not look" and "we looked and found nothing" are different answers.
+pub const MAX_SCAN_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 impl Shell {
     /// Queue the standard scan: the home folders a user actually keeps
@@ -1423,6 +1440,8 @@ impl Shell {
         }
         let zone = self.regional.zone.clone();
         let mut queue = Vec::new();
+        let mut skipped = 0usize;
+        let jobs: Vec<(String, std::path::PathBuf)>;
         {
             let Ok(bridge) = self.try_files_bridge(zone) else {
                 self.defender.app.message =
@@ -1441,19 +1460,40 @@ impl Shell {
                     for e in entries {
                         let p = format!("{}/{}", dir.trim_end_matches('/'), e.name);
                         if e.kind == crate::apps::FileKind::Dir {
-                            collect_files(&bridge, &p, &mut queue, 0);
+                            collect_files(&bridge, &p, &mut queue, 0, &mut skipped);
                         } else if e.kind == crate::apps::FileKind::File {
                             queue.push(p);
                         }
                     }
                 }
             }
+            // Host paths are resolved here, on the thread that owns the bridge,
+            // so the worker needs nothing but std::fs and cannot reach through
+            // the file layer at all.
+            jobs = queue
+                .into_iter()
+                .filter_map(|p| bridge.host_path(&p).ok().map(|host| (p, host)))
+                .collect();
         }
-        let total = queue.len();
+        let total = jobs.len();
         self.defender.app.start(total);
-        self.defender.queue = queue;
+        if skipped > 0 {
+            self.defender.app.message = format!(
+                "Scanning {total} files · {skipped} entries not walked (count or depth cap)"
+            );
+        }
+        self.defender.skipped = skipped;
         self.defender.running = true;
-        self.defender.current = None;
+        let shared = Arc::new(ScanShared::default());
+        self.defender.shared = Some(Arc::clone(&shared));
+        let spawned = std::thread::Builder::new()
+            .name("litric-defender-scan".to_owned())
+            .spawn(move || scan_worker(jobs, shared));
+        if let Err(e) = spawned {
+            self.defender.running = false;
+            self.defender.shared = None;
+            self.defender.app.message = format!("cannot start the scan worker: {e}");
+        }
         self.request_full_redraw();
         Vec::new()
     }
@@ -1477,60 +1517,66 @@ impl Shell {
         crate::fsbridge::FsBridge::open(&self.files_root, zone)
     }
 
-    /// Scan a bounded slice of the queue synchronously. Called between
-    /// frames, so a scan never costs the desktop more than a slice of one
-    /// frame per tick; the budget keeps 60 fps honest on a big folder.
+    /// Collect finished verdicts from the scan worker.
+    ///
+    /// The draw thread reads no file. The worker does the I/O and this only
+    /// moves already-decided verdicts into the model, `budget` at a time, so a
+    /// scan cannot lengthen a frame — which is what it used to do, because it
+    /// read whole files here on the tick with a fresh engine every time. That
+    /// threw the verdict cache away every frame and could spend a frame on a
+    /// single large file.
     pub fn scan_step(&mut self, budget: usize) {
-        if !self.defender.running {
-            return;
-        }
-        let zone = self.regional.zone.clone();
-        let Ok(bridge) = self.try_files_bridge(zone) else {
+        let Some(shared) = self.defender.shared.clone() else {
             self.defender.running = false;
-            self.defender.app.message = "the file service is not available".to_owned();
             return;
         };
-        let mut engine = litric_defender::engine::Engine::new();
-        engine.load_denylist(eicar_denylist());
-        let mut done = 0usize;
-        while done < budget {
-            if self.defender.current.is_none() {
-                self.defender.current = self.defender.queue.pop();
-                if self.defender.current.is_none() {
-                    self.defender.app.finish();
-                    self.defender.running = false;
-                    self.notify_defender();
-                    self.request_full_redraw();
-                    return;
-                }
-            }
-            let Some(path) = self.defender.current.take() else {
-                return;
-            };
-            let host = bridge.host_path(&path).unwrap_or_default();
-            let report = match std::fs::read(&host) {
-                Ok(bytes) => {
-                    let mtime = std::fs::metadata(&host)
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    engine.scan(&path, bytes.len() as u64, mtime, &bytes)
-                }
-                Err(e) => litric_defender::engine::ScanReport {
-                    decision: litric_defender::verdict::Decision::AllowUnknown {
-                        reason: format!("read: {e}"),
-                    },
-                    digest_hex: String::new(),
-                    size: 0,
-                    from_cache: false,
-                },
-            };
-            self.defender.app.record(&path, &report.decision);
-            done = done.saturating_add(1);
+        let mut taken = 0usize;
+        while taken < budget {
+            let next = shared
+                .results
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pop_front();
+            let Some(result) = next else { break };
+            self.defender
+                .app
+                .record(&result.path, &result.report.decision);
+            taken = taken.saturating_add(1);
         }
-        self.request_full_redraw();
+        let remaining = shared
+            .results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        if remaining == 0 && shared.done.load(Ordering::Acquire) {
+            let unread = shared.unread.load(Ordering::Acquire);
+            self.defender.running = false;
+            self.defender.shared = None;
+            self.defender.app.finish();
+            // The result says what it did not cover. A folder tree that hit the
+            // walk's caps, or files too large to read, are named in the same
+            // sentence as the count of files that were scanned.
+            let mut caveats: Vec<String> = Vec::new();
+            if unread > 0 {
+                caveats.push(format!(
+                    "{unread} file(s) not read (over the {MAX_SCAN_FILE_BYTES} byte limit or an I/O error)"
+                ));
+            }
+            if self.defender.skipped > 0 {
+                caveats.push(format!(
+                    "{} entries not walked (count or depth cap)",
+                    self.defender.skipped
+                ));
+            }
+            if !caveats.is_empty() {
+                self.defender.app.message =
+                    format!("{} · {}", self.defender.app.message, caveats.join(" · "));
+            }
+            self.notify_defender();
+            self.request_full_redraw();
+        } else if taken > 0 {
+            self.request_full_redraw();
+        }
     }
 
     /// Post the end-of-scan notification, with the banner the user asked for.
@@ -2147,26 +2193,58 @@ impl Shell {
             let spawn = std::thread::Builder::new()
                 .name("litric-terminal".to_owned())
                 .spawn(move || {
-                    let out = std::process::Command::new("timeout")
+                    use std::io::{BufRead, BufReader};
+                    use std::process::Stdio;
+                    let child = std::process::Command::new("timeout")
                         .args(["30", "/bin/sh", "-c", &cmd])
                         .envs(envs)
-                        .output();
-                    match out {
-                        Ok(o) => {
-                            let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
-                            text.push_str(&String::from_utf8_lossy(&o.stderr));
-                            for line in text.lines().take(300) {
-                                if tx.send(line.to_owned()).is_err() {
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .spawn();
+                    let mut child = match child {
+                        Ok(child) => child,
+                        Err(e) => {
+                            let _ = tx.send(format!("litric: cannot run: {e}"));
+                            let _ = tx.send("\u{0}DONE".to_owned());
+                            return;
+                        }
+                    };
+                    // A line reaches the scrollback as it is printed, not when
+                    // the program exits. `output()` held everything back until
+                    // the command finished, so a one-minute build looked like a
+                    // one-minute freeze with nothing on screen to prove it was
+                    // still working. Each pipe gets its own reader: a process
+                    // that fills its stderr buffer while we are blocked reading
+                    // stdout would otherwise deadlock on itself.
+                    let (out, err) = (child.stdout.take(), child.stderr.take());
+                    let err_tx = tx.clone();
+                    let stderr_reader = std::thread::spawn(move || {
+                        if let Some(pipe) = err {
+                            for line in BufReader::new(pipe).lines() {
+                                let Ok(line) = line else { break };
+                                if err_tx.send(line).is_err() {
                                     break;
                                 }
                             }
-                            if !o.status.success() {
-                                let _ =
-                                    tx.send(format!("[exit {:?}]", o.status.code().unwrap_or(-1)));
+                        }
+                    });
+                    if let Some(pipe) = out {
+                        for line in BufReader::new(pipe).lines() {
+                            let Ok(line) = line else { break };
+                            if tx.send(line).is_err() {
+                                break;
                             }
                         }
+                    }
+                    let _ = stderr_reader.join();
+                    match child.wait() {
+                        Ok(status) if !status.success() => {
+                            let _ = tx.send(format!("[exit {:?}]", status.code().unwrap_or(-1)));
+                        }
+                        Ok(_) => {}
                         Err(e) => {
-                            let _ = tx.send(format!("litric: cannot run: {e}"));
+                            let _ = tx.send(format!("litric: cannot wait for the command: {e}"));
                         }
                     }
                     let _ = tx.send("\u{0}DONE".to_owned());
@@ -5847,6 +5925,19 @@ impl Shell {
                 }
                 Vec::new()
             }
+            Hot::BannerClose(id) => {
+                self.dismiss_notification(id);
+                Vec::new()
+            }
+            Hot::BannerOpen(_) => {
+                // The banner is the summary; the centre is where the note is
+                // read. Toggling only when the centre is closed keeps a click
+                // from dismissing the very list it just asked for.
+                if self.overlay != Overlay::Notifications {
+                    self.perform(Action::ToggleNotifications);
+                }
+                Vec::new()
+            }
             Hot::NotificationsClear => {
                 self.clear_notifications();
                 Vec::new()
@@ -6676,13 +6767,24 @@ fn engine_key(key: Key) -> (String, String, i64, String) {
 }
 
 /// Depth-limited file collection for the Defender's queue.
+///
+/// `skipped` counts the entries the caps refused to descend into, so the
+/// caller can say how much of the folder tree was not looked at. A cap that
+/// is applied silently turns "we scanned your Documents" into a claim about
+/// files nobody opened.
 fn collect_files(
     bridge: &crate::fsbridge::FsBridge,
     dir: &str,
     out: &mut Vec<String>,
     depth: usize,
+    skipped: &mut usize,
 ) {
-    if out.len() >= 2_000 || depth > 8 {
+    if out.len() >= 2_000 {
+        *skipped = skipped.saturating_add(1);
+        return;
+    }
+    if depth > 8 {
+        *skipped = skipped.saturating_add(1);
         return;
     }
     let Ok(entries) = bridge.list_dir(dir) else {
@@ -6690,15 +6792,108 @@ fn collect_files(
     };
     for e in entries {
         if out.len() >= 2_000 {
+            *skipped = skipped.saturating_add(1);
             return;
         }
         let p = format!("{dir}/{}", e.name);
         match e.kind {
-            crate::apps::FileKind::Dir => collect_files(bridge, &p, out, depth.saturating_add(1)),
+            crate::apps::FileKind::Dir => {
+                collect_files(bridge, &p, out, depth.saturating_add(1), skipped);
+            }
             crate::apps::FileKind::File => out.push(p),
             _ => {}
         }
     }
+}
+
+/// Scan one file, with a ceiling on how much of it is ever in memory.
+///
+/// Returns a report rather than an error: the window needs a row either way,
+/// and a file that could not be read is `Unknown` with the reason attached, not
+/// a clean verdict.
+fn scan_one(
+    engine: &mut litric_defender::engine::Engine,
+    path: &str,
+    host: &std::path::Path,
+) -> litric_defender::engine::ScanReport {
+    let unknown = |reason: String| litric_defender::engine::ScanReport {
+        decision: litric_defender::verdict::Decision::AllowUnknown { reason },
+        digest_hex: String::new(),
+        size: 0,
+        from_cache: false,
+    };
+    let meta = match std::fs::metadata(host) {
+        Ok(meta) => meta,
+        Err(e) => return unknown(format!("stat: {e}")),
+    };
+    if !meta.is_file() {
+        return unknown("stat: not a regular file".to_owned());
+    }
+    let size = meta.len();
+    if size > MAX_SCAN_FILE_BYTES {
+        return unknown(format!(
+            "skipped: {size} bytes is over the {MAX_SCAN_FILE_BYTES} byte scan limit"
+        ));
+    }
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let file = match std::fs::File::open(host) {
+        Ok(file) => file,
+        Err(e) => return unknown(format!("read: {e}")),
+    };
+    // The file may grow between the stat and the read. Taking one byte more
+    // than the ceiling is enough to notice that without trusting `size`.
+    let mut bytes = Vec::new();
+    if let Err(e) = file
+        .take(MAX_SCAN_FILE_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+    {
+        return unknown(format!("read: {e}"));
+    }
+    if bytes.len() as u64 > MAX_SCAN_FILE_BYTES {
+        return unknown(format!(
+            "skipped: grew past the {MAX_SCAN_FILE_BYTES} byte scan limit while reading"
+        ));
+    }
+    engine.scan(path, bytes.len() as u64, mtime, &bytes)
+}
+
+/// Whether a report means "this file was never looked at".
+fn scan_was_skipped(report: &litric_defender::engine::ScanReport) -> bool {
+    matches!(
+        &report.decision,
+        litric_defender::verdict::Decision::AllowUnknown { reason }
+            if reason.starts_with("skipped:") || reason.starts_with("read:") || reason.starts_with("stat:")
+    )
+}
+
+/// Scan every queued file on a thread of its own, with **one** engine.
+///
+/// One engine for the whole run is the point: the verdict cache is what makes
+/// a second scan of the same folder cheap (ADR-0022), and the previous shape --
+/// a fresh engine per tick -- guaranteed it could never hit.
+fn scan_worker(jobs: Vec<(String, std::path::PathBuf)>, shared: Arc<ScanShared>) {
+    let mut engine = litric_defender::engine::Engine::new();
+    engine.load_denylist(eicar_denylist());
+    for (logical, host) in jobs {
+        let report = scan_one(&mut engine, &logical, &host);
+        if scan_was_skipped(&report) {
+            shared.unread.fetch_add(1, Ordering::Relaxed);
+        }
+        shared
+            .results
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(ScanResult {
+                path: logical,
+                report,
+            });
+    }
+    shared.done.store(true, Ordering::Release);
 }
 
 // ---------------------------------------------------------------------------
@@ -9066,6 +9261,352 @@ mod tests {
         assert!(
             s.retiring_banners().is_empty(),
             "a banner outlived its exit spring"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The on-demand scan: worker, pump, and what the result admits
+//
+// The scan used to run on the frame thread, one file read between two frames
+// and a fresh engine each time — which threw the verdict cache away every
+// frame and could stall a frame on a single large file. These tests hold the
+// replacement to what it promises: one engine for the run, a bounded read per
+// file, a bounded number of verdicts per frame, and a result that names what it
+// did not cover instead of counting it clean.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod scan_worker_tests {
+    use super::*;
+    use crate::apps::ScanState;
+    use crate::canvas::{rgb, Canvas};
+    use crate::ui::Tokens;
+    use litric_design::{Theme, ThemeKind};
+    use litric_input::event::{InputEvent, Point, PointerButton};
+    use litric_input::keys::Modifiers;
+    use litric_locale::Regional;
+    use std::sync::atomic::Ordering;
+
+    fn scan_shell() -> Shell {
+        let tokens = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
+        let mut s = Shell::new(tokens, 1280.0, 800.0, Regional::fallback("test"));
+        s.mode = DesktopMode::Ready;
+        s
+    }
+
+    fn engine() -> litric_defender::engine::Engine {
+        let mut engine = litric_defender::engine::Engine::new();
+        engine.load_denylist(eicar_denylist());
+        engine
+    }
+
+    fn temp_root(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("litric-shell-scan-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a fixture root");
+        dir
+    }
+
+    fn allow() -> litric_defender::verdict::Decision {
+        litric_defender::verdict::Decision::Allow
+    }
+
+    fn deny() -> litric_defender::verdict::Decision {
+        litric_defender::verdict::Decision::Deny {
+            tier: litric_defender::verdict::Tier::Hash,
+            id: "eicar-test-file".to_owned(),
+        }
+    }
+
+    fn report(decision: litric_defender::verdict::Decision) -> litric_defender::engine::ScanReport {
+        litric_defender::engine::ScanReport {
+            decision,
+            digest_hex: String::new(),
+            size: 0,
+            from_cache: false,
+        }
+    }
+
+    fn result(path: &str, decision: litric_defender::verdict::Decision) -> ScanResult {
+        ScanResult {
+            path: path.to_owned(),
+            report: report(decision),
+        }
+    }
+
+    fn click_at(s: &mut Shell, x: f32, y: f32) {
+        let at = Point::new(x, y);
+        s.handle(
+            &InputEvent::PointerMove {
+                at,
+                delta: Point::new(1.0, 1.0),
+            },
+            1_000,
+        );
+        s.handle(
+            &InputEvent::PointerButton {
+                button: PointerButton::Primary,
+                pressed: true,
+                at,
+                clicks: 1,
+                mods: Modifiers::NONE,
+            },
+            1_010,
+        );
+        s.handle(
+            &InputEvent::PointerButton {
+                button: PointerButton::Primary,
+                pressed: false,
+                at,
+                clicks: 1,
+                mods: Modifiers::NONE,
+            },
+            1_020,
+        );
+    }
+
+    /// Draw frames until `done` says the overlay has settled, so a test never
+    /// depends on how many springs happen to have finished on the first frame.
+    fn draw_until(s: &mut Shell, done: impl Fn(&Shell) -> bool) {
+        for _ in 0..240 {
+            s.tick_after(16);
+            let mut c = Canvas::new(1280, 800, rgb(0x000000));
+            crate::views::draw(&mut c, s);
+            if done(s) {
+                return;
+            }
+        }
+        panic!("the frame never reached the state under test");
+    }
+
+    #[test]
+    fn one_engine_makes_a_second_scan_of_the_same_file_a_cache_hit() {
+        let root = temp_root("cache");
+        let host = root.join("note.txt");
+        std::fs::write(&host, b"hello").expect("a fixture file");
+        let mut engine = engine();
+        let first = scan_one(&mut engine, "/Documents/note.txt", &host);
+        assert!(!first.from_cache, "the first read cannot be a cache hit");
+        let second = scan_one(&mut engine, "/Documents/note.txt", &host);
+        assert!(
+            second.from_cache,
+            "one engine for the whole run is what makes a rescan cheap; a \
+             fresh engine per file could never hit"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_file_past_the_read_ceiling_is_reported_as_unread_not_clean() {
+        let root = temp_root("oversize");
+        let host = root.join("large.bin");
+        let file = std::fs::File::create(&host).expect("a sparse fixture file");
+        file.set_len(MAX_SCAN_FILE_BYTES + 1).expect("a length");
+        drop(file);
+        let mut engine = engine();
+        let report = scan_one(&mut engine, "/Downloads/large.bin", &host);
+        assert!(
+            scan_was_skipped(&report),
+            "a file the scanner did not read must be counted as unread"
+        );
+        match report.decision {
+            litric_defender::verdict::Decision::AllowUnknown { reason } => {
+                assert!(reason.contains("over the"), "{reason}");
+                assert!(reason.contains("scan limit"), "{reason}");
+            }
+            other => panic!("a file nobody read was called {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_pump_moves_a_bounded_number_of_verdicts_per_frame() {
+        let mut s = scan_shell();
+        s.defender.app.start(3);
+        s.defender.running = true;
+        let shared = std::sync::Arc::new(ScanShared::default());
+        {
+            let mut queue = shared
+                .results
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for name in ["a", "b", "c"] {
+                queue.push_back(result(&format!("/Documents/{name}.txt"), allow()));
+            }
+        }
+        s.defender.shared = Some(std::sync::Arc::clone(&shared));
+
+        s.scan_step(2);
+        assert!(s.defender.running, "the worker has not finished");
+        assert_eq!(
+            s.defender.app.state,
+            ScanState::Scanning { done: 2, total: 3 },
+            "a budget of two must move exactly two verdicts into the window"
+        );
+
+        // The queue is empty but the worker has not said it is finished, so
+        // the scan is still running: "no results yet" is not "done".
+        s.scan_step(8);
+        assert!(
+            s.defender.running,
+            "an empty queue with a live worker must not end the scan"
+        );
+
+        shared.done.store(true, Ordering::Release);
+        s.scan_step(8);
+        assert!(!s.defender.running, "the worker's last word ends the scan");
+        assert_eq!(
+            s.defender.app.state,
+            ScanState::Done {
+                scanned: 3,
+                threats: 0
+            }
+        );
+        assert!(s.defender.shared.is_none(), "the finished run is let go");
+    }
+
+    #[test]
+    fn a_finished_scan_says_what_it_did_not_cover() {
+        let mut s = scan_shell();
+        s.defender.app.start(2);
+        s.defender.running = true;
+        s.defender.skipped = 7;
+        let shared = std::sync::Arc::new(ScanShared::default());
+        {
+            let mut queue = shared
+                .results
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            queue.push_back(result("/Documents/eicar.com", deny()));
+            queue.push_back(result(
+                "/Downloads/export.iso",
+                litric_defender::verdict::Decision::AllowUnknown {
+                    reason: "read: over the scan limit".to_owned(),
+                },
+            ));
+        }
+        shared.unread.store(1, Ordering::Release);
+        shared.done.store(true, Ordering::Release);
+        s.defender.shared = Some(shared);
+
+        s.scan_step(8);
+
+        let msg = s.defender.app.message.clone();
+        assert!(msg.contains("1 threat"), "{msg}");
+        assert!(
+            msg.contains("1 file(s) not read"),
+            "a file nobody read is named, not counted clean: {msg}"
+        );
+        assert!(
+            msg.contains("7 entries not walked"),
+            "the walk caps are named in the same sentence: {msg}"
+        );
+        assert!(
+            matches!(s.defender.app.state, ScanState::Done { threats: 1, .. }),
+            "{:?}",
+            s.defender.app.state
+        );
+        assert!(
+            s.notifications
+                .items()
+                .iter()
+                .any(|n| n.title == "Litric Defender" && n.priority == Priority::Critical),
+            "a detection raises a critical notification"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_terminal_line_arrives_while_the_command_is_still_running() {
+        let mut s = scan_shell();
+        s.terminal.input = "echo first; sleep 1; echo second".to_owned();
+        s.terminal_run();
+        let start = std::time::Instant::now();
+        let mut first_seen_while_busy = None;
+        loop {
+            s.tick_after(16);
+            if first_seen_while_busy.is_none()
+                && s.terminal.lines.iter().any(|l| l.trim() == "first")
+            {
+                first_seen_while_busy = Some(s.terminal.busy);
+            }
+            if !s.terminal.busy {
+                break;
+            }
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(30),
+                "the command never finished"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            first_seen_while_busy,
+            Some(true),
+            "the first line must reach the scrollback before the command exits; \
+             buffering the whole run is what `output()` did"
+        );
+        assert!(
+            s.terminal.lines.iter().any(|l| l.trim() == "second"),
+            "{:?}",
+            s.terminal.lines
+        );
+    }
+
+    #[test]
+    fn a_banner_closes_from_its_own_box_and_opens_the_centre_from_its_body() {
+        let mut s = scan_shell();
+        let id = s.notify(
+            "Test",
+            "Saved",
+            "the file was saved",
+            Priority::Normal,
+            Some(60_000),
+        );
+        draw_until(&mut s, |s| {
+            s.hotspots().rect_of(Hot::BannerClose(id)).is_some()
+        });
+        let close = s
+            .hotspots()
+            .rect_of(Hot::BannerClose(id))
+            .expect("the close box is drawn");
+        assert!(
+            s.hotspots().rect_of(Hot::BannerOpen(id)).is_some(),
+            "the banner body is a target"
+        );
+
+        click_at(&mut s, close.center().0, close.center().1);
+        assert!(
+            s.notifications.is_empty(),
+            "the close box did not dismiss the banner's note"
+        );
+        assert_eq!(s.overlay, Overlay::None, "closing a banner opened a panel");
+
+        let second = s.notify(
+            "Test",
+            "Downloaded",
+            "export.iso",
+            Priority::Normal,
+            Some(60_000),
+        );
+        draw_until(&mut s, |s| {
+            s.hotspots().rect_of(Hot::BannerOpen(second)).is_some()
+        });
+        let body = s
+            .hotspots()
+            .rect_of(Hot::BannerOpen(second))
+            .expect("the banner body is a target");
+        click_at(&mut s, body.center().0, body.center().1);
+        assert_eq!(
+            s.overlay,
+            Overlay::Notifications,
+            "the body opens the centre where the note is read"
+        );
+        assert_eq!(
+            s.notifications.len(),
+            1,
+            "opening the centre dismissed the note it was asked to show"
         );
     }
 }
