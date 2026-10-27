@@ -109,6 +109,9 @@ ALLOWED = {
         "journey_defender_scans_and_reports_eicar_end_to_end": "removes the temporary root this journey created",
         "journey_trash_window_restores_after_files_trash": "removes the temporary root this journey created",
         "journey_right_click_desktop_menu_creates_a_folder_via_dialog": "removes the temporary root this journey created",
+        "journey_new_folder_from_the_files_menu_lands_in_the_open_folder": "removes the temporary root this journey created (BUG-0025: the row used to create in /Documents; the test asserts the folder landed in the open folder and that /Documents was untouched before cleaning up)",
+        "journey_files_context_menu_creates_its_folder_in_the_open_folder": "removes the temporary root this journey created (BUG-0025, the context-menu route: it asserts the folder exists in the open folder and not in /Documents before cleaning up)",
+        "journey_right_click_trash_row_targets_that_row": "removes the temporary root this journey created (BUG-0025, the Trash rows: it asserts the clicked row was the one restored and the previously selected row was not touched before cleaning up)",
         "journey_viewer_opens_text_files_with_scrolling": "removes the temporary root this journey created",
     },
     "src/litric-sysd/src/providers.rs": {
