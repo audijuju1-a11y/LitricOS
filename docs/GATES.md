@@ -2170,3 +2170,86 @@ fixes — recorded as [BUG-0025](../bugs/BUG-0025-menu-rows-acted-on-what-was-se
 Revert this commit. Trash rows return to acting on the previous selection, the tab
 menu closes and reloads the focused tab, and closing an earlier tab moves focus to
 its neighbour — the states BUG-0025 records.
+
+## 2026-10-27 — two dialog implementations, and a confirmation the keyboard cannot answer
+
+`Part 15` of the research corpus compares Windows 26H2, macOS 27 and GNOME 51
+guidance for dialogs and confirmation flows with the shell's two dialog
+implementations and eleven confirmation call sites, and sets `F.15` dialogs and
+`F.27` confirmation flows to `PARTIAL`. Unlike Parts 10–14 this part ran a probe:
+a temporary test drove the real input path and printed the state after each key
+and click, then was removed. It found the two defects the static reading had
+predicted and one it had not.
+
+### What was found
+
+| Finding | Where |
+|---|---|
+| Ten dialog presentations — 5 Files kinds, 3 desktop kinds, 2 Trash toolbar states — drawn by **three** implementations, with two button metrics (76 × 26 against 100 × 28) and two exits (instant against spring) | `views.rs` lines 256, 1378, 4194 |
+| **Enter does not accept a Files dialog.** With New folder open over a listing whose first row is `Pictures`, Enter navigated into `/Documents/Pictures` and left the dialog open | probe; `shell.rs` line 4967 |
+| **Desktop dialogs answer no key.** Escape and Enter both leave the new-folder dialog open; Escape is bound to `CloseOverlay`, which closes overlays only | probe; `shell.rs` line 5971; `shortcuts.rs` line 690 |
+| **The Files dialog is not modal to the pointer.** A click on row 1 behind the scrim selected it while the dialog stayed; the scrim paints but registers no hotspot | probe; `views.rs` line 1385 |
+| **The desktop dialog's dismissal is inverted.** Clicking its own panel cancels it; clicking the wallpaper outside does not | probe; `views.rs` line 331 |
+| One affirmative label per dialog *kind*: eleven confirmation sites share the word `Confirm`, so the verb lives in the title and the button says nothing | `views.rs` line 1438; `shell.rs` 2376–4950 |
+| 23 distinct dialog strings, **none** through the dictionary, though four are already translated in it | `views.rs` 1378–1478; `i18n.rs` 130, 143–145 |
+| Error dialogs put the error type's `Display` under "Could not finish" | `views.rs` line 1405; `shell.rs` 2228, 2586, 2664 |
+| Eleven confirmation call sites, seven prompts; **five of the seven guard routine work** (paste, copy, move, extract, compress) that all three platforms say should not prompt | `shell.rs` 2376–6205; `apps.rs` 1544–1566 |
+| **No undo exists anywhere.** `notify` posts source, title, body, priority and TTL — no action; the only recovery is Trash restore, itself behind a confirmation | `shell.rs` line 6316 |
+| Permanent delete names a count; Trash's purge says "Delete forever?" with no object and is not a dialog at all | `shell.rs` 4897; `views.rs` 4194–4224 |
+
+The probe's output, kept as `docs/evidence/2026-10-27/dialog-probe.log`:
+
+```
+PROBE files-enter: dialog=Some(NewFolder) path=/Documents/Pictures
+PROBE desktop-open: dialog=Some(NewFolder)
+PROBE desktop-escape: dialog=Some(NewFolder)
+PROBE desktop-enter: dialog=Some(NewFolder)
+PROBE files-click-behind: selection=Some(1) dialog=Some(NewFolder)
+PROBE desktop-click-panel: dialog=None
+PROBE desktop-click-outside: dialog=Some(NewFolder)
+```
+
+### What changed
+
+| File | Change |
+|---|---|
+| `Research-Deep-all/LitricOS UI UX Research Part 15 F Dialogs and Confirmation Flows.md` | new: 338 lines, 13 findings (70–82), 0 decisions |
+| `Research-Deep-all/LitricOS Coverage Checklist.csv` | `F.15` and `F.27` set to `PARTIAL` with notes naming the part, the probe and the findings |
+| `Research-Deep-all/LitricOS Source Register.csv` | 15 new rows (Microsoft Learn, Fluent 2, GNOME HIG, Libadwaita, Apple HIG and AppKit, one marked mirror) |
+| `Research-Deep-all/LitricOS UI UX Research Part1.md` | chapter 40's index row names Parts 10–15 and Part 6's `F.16`, with 9 items `PENDING` |
+| `docs/master-plan/27-research-driven-plan.md` | file table, status counts and shares, citable-by-chapter row, Track R queue and its stale counts, a Part 15 subsection, and the source-register count 4,105 → 4,120 |
+| `docs/parity/README.md` | `PENDING` count 177 → 175 |
+| `docs/GATES.md` | this entry |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| checklist statuses | `PARTIAL` 398 → 400, `PENDING` 177 → 175, total still 597 |
+| the probe | seven printed states, captured in `docs/evidence/2026-10-27/dialog-probe.log`; the test that produced it was removed |
+| `python3 ci/lint-parity.py` | exit 0 — 389 rows, 597 research items |
+| `python3 ci/lint-doc-refs.py` | OK — 699 citations across 141 documents |
+| `python3 ci/lint-line-endings.py` | OK — 338 files, all LF |
+| `python3 ci/check-python-syntax.py` | OK — 48 files parse |
+
+No product code changed, so `cargo test`, `clippy` and `ci/verify.sh` were not run.
+Nothing here exercises a compiled path; the probe was compiled, run and removed.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the dialogs look right | no image was booted and no frame was captured. The probe prints state, not pixels |
+| that a person reads a confirmation before clicking it | no user was asked; the finding is that the prompt exists, not that it is read |
+| that the macOS alert rules are current | Apple's HIG body did not load. The quoted alert text is a mirror, marked secondary; the `NSAlert` Return/Escape behaviour is Apple's own documentation, cited separately |
+| that a long dialog title overflows or clips | the title is not elided and the panel is fixed at 360, but no over-long title was driven |
+| that assistive technology cannot reach the dialog | there is no accessibility tree in this shell to inspect; the absence of roles and announcements is described, not measured against a screen reader |
+| that `F` is nearly done | 9 of 27 items remain `PENDING`, 18 are `PARTIAL`, none is `COMPLETE` |
+
+### Rollback
+
+Revert this commit. `Part 15` disappears with its 15 sources, the two statuses
+return to `PENDING`, the plan returns to 177/398, and a reviewer is left with the
+static reading that the shell has dialogs and confirmations — without the record
+that Enter accepts neither dialog, that a click passes through a Files dialog's
+scrim, and that eleven confirmations exist with no undo behind any of them.

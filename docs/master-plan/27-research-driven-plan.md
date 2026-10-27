@@ -29,9 +29,10 @@ implemented from — not a design document and not a specification.
 | `Research-Deep-all/LitricOS UI UX Research Part 11 F Text Progress Search and Errors.md` | chapter `F`, continued: text fields (`F.02`), progress (`F.18`), search fields (`F.23`) and errors/validation (`F.26`), compared against the field renderer, the input path and the five search surfaces | 457 lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 12 F Checkboxes and Radio Controls.md` | chapter `F`, selection controls: checkboxes (`F.04`) and radio controls (`F.05`), compared against the hand-drawn Files checkbox and the chip-based single-select surfaces | 331 lines |
 | `Research-Deep-all/LitricOS UI UX Research Part 13 F Tabs Sidebars and Toolbars.md` | chapter `F`, layout containers: tabs (`F.08`), sidebars (`F.10`) and toolbars (`F.11`), compared against the browser tab strip, the two sidebars and the three command rows | 329 lines |
-| `Research-Deep-all/LitricOS UI UX Research Part 14 F Menus and Context Menus.md` | chapter `F`, the two menu items: menus (`F.12`) and context menus (`F.13`), compared against the bar's three labels, the two popover menus and the six context-menu surfaces | 377 lines |
+| `Research-Deep-all/LitricOS UI UX Research Part 14 F Menus and Context Menus.md` | chapter `F`, the two menu items: menus (`F.12`) and context menus (`F.13`), compared against the bar's three labels, the two popover menus and the six context-menu surfaces | 380 lines |
+| `Research-Deep-all/LitricOS UI UX Research Part 15 F Dialogs and Confirmation Flows.md` | chapter `F`, the mechanism and the decision: dialogs (`F.15`) and confirmation flows (`F.27`), compared against ten dialog presentations, three implementations and eleven confirmation call sites, with four probe results | 338 lines |
 | `Research-Deep-all/LitricOS Coverage Checklist.csv` | the ledger behind all of it | 597 items |
-| `Research-Deep-all/LitricOS Source Register.csv` | every source URL with tier and status | 4,105 rows |
+| `Research-Deep-all/LitricOS Source Register.csv` | every source URL with tier and status | 4,120 rows |
 | `Research-Deep-all/Fluent Token Register.csv` | measured Fluent tokens | 3,553 rows |
 | `Research-Deep-all/macOS Design Token Register.csv` | measured macOS tokens | 1,805 rows |
 | `Research-Deep-all/Windows Keyboard Shortcut Register.csv` | Windows shortcuts | 365 rows |
@@ -47,8 +48,8 @@ unfinished:
 | Status | Items | Share |
 |---|---:|---:|
 | `COMPLETE` | 18 | 3 % |
-| `PARTIAL` | 398 | 67 % |
-| `PENDING` (not yet researched) | 177 | 30 % |
+| `PARTIAL` | 400 | 67 % |
+| `PENDING` (not yet researched) | 175 | 29 % |
 | `NOT APPLICABLE` | 3 | — |
 | `NOT FOUND` | 1 | — |
 
@@ -56,7 +57,7 @@ By section, the shape is: Windows shell (`WA`) 97 partial, Windows Settings
 (`WB`) 141 partial, macOS desktop (`MC`) 62 partial, macOS Settings (`MD`) 38
 partial, Fluent (`WC`) 12 partial, tokens (`G`) 19 partial — while the whole
 Linux-desktop comparison (`LG`–`LR`, eight systems × 15 items = 120), the shared
-component catalogue (`F`, 11 of 27), workflows (`H`, 21), technical feasibility
+component catalogue (`F`, 9 of 27), workflows (`H`, 21), technical feasibility
 (`I`, 12) and the final audit (`J`, 9) are **still `PENDING`**.
 
 That single table decides the plan's shape: **the research cannot be treated as
@@ -296,12 +297,12 @@ because every later row depends on the registry existing.
 
 ## 6. Track R — finishing the research
 
-The corpus is 30 % unresearched and 67 % partial. The build may not cite it, so
+The corpus is 29 % unresearched and 67 % partial. The build may not cite it, so
 completion is work, scheduled beside the build:
 
 ### Coverage today (2026-10-27)
 
-The checklist holds 597 items; 416 are `COMPLETE` or `PARTIAL` and therefore
+The checklist holds 597 items; 418 are `COMPLETE` or `PARTIAL` and therefore
 citable, and `docs/parity/ledger.csv` decides 389 of them -- every one that is a
 surface. Per chapter:
 
@@ -314,7 +315,7 @@ surface. Per chapter:
 | `G` tokens & accessibility | 19 | 19 |
 | `WC` Fluent / WinUI design system | 14 | 14 |
 | `MG` macOS HIG | 11 | 11 |
-| `F` shared component catalogue | 16 | 1 (15 newly citable; their decisions are not written, 12 are `PENDING`) |
+| `F` shared component catalogue | 18 | 1 (17 newly citable; their decisions are not written, 10 are `PENDING`) |
 | `CH00` version baseline | 12 | 0 (not a surface; see the ledger README) |
 
 The 389 rows split 169 `ADAPT`, 126 `DEFER`, 88 `REJECT`, 6 `ADOPT`. `DEFER` is
@@ -324,19 +325,19 @@ and accessibility ones, `M5` the capability and privacy ones, and `M6` the ones
 that will have to become `REJECT` or be built.
 
 What remains outside the ledger is research, not decisions: the `PENDING`
-chapters (`F` 12, `H` 21, `I` 12, `J` 9 and eight Linux desktops of 15) cannot
+chapters (`F` 10, `H` 21, `I` 12, `J` 9 and eight Linux desktops of 15) cannot
 be cited until their status is final, so they are Track R's work and not rows.
 
 ### Track R queue, first pass (2026-10-26)
 
-177 checklist items are `PENDING`, and none of them may be cited. The first pass
+175 checklist items are `PENDING`, and none of them may be cited. The first pass
 counted any heading that *contained* an item's title and found 56; that number was
 wrong, and the chapter `F` review below is how it was found out. Counting only
 headings that name the item -- its id, or its whole title -- leaves 24:
 
 | Chapter | `PENDING` | A section names it |
 |---|---:|---:|
-| `F` shared component catalogue | 12 | 16 |
+| `F` shared component catalogue | 10 | 18 |
 | `H` workflows & edge cases | 21 | 2 |
 | `I` technical feasibility | 12 | 1 |
 | `J` source register & audit | 9 | 1 |
@@ -344,7 +345,7 @@ headings that name the item -- its id, or its whole title -- leaves 24:
 
 A section is **not** a status either: it says someone wrote something under that
 name, not that it answers the item with a source. Chapter `F` is now the worked
-example: sixteen of its rows carry a section, and twelve are still unread. The
+example: eighteen of its rows carry a section, and ten are still unread. The
 parts below record what each of those sections found; the remaining 165 `PENDING`
 items in the other chapters are research that has not been done.
 
@@ -501,6 +502,32 @@ with three journeys guarding the flow and the desktop's own row. The rest of the
 part's findings stand as findings: a menu label that opens a launcher, a context
 menu no key can reach, and 28 rows with no state model are decisions about what
 the shell should be, not bugs to patch.
+
+#### Part 15: dialogs and confirmation flows (2026-10-27)
+
+The mechanism and the decision, in a shell that has ten of one and seven of the
+other. `Part 15` compares Windows 26H2 and GNOME 51 at page depth, and macOS
+through a HIG mirror plus Apple's `NSAlert` reference, with the two dialog
+implementations and the eleven confirmation call sites, and sets `F.15` dialogs
+and `F.27` confirmation flows to `PARTIAL`.
+
+| Finding | Evidence |
+|---|---|
+| Ten dialog presentations in three implementations; two button metrics (76 × 26 against 100 × 28) and two exits (instant against spring) | `views.rs` lines 256, 1378, 4194 |
+| **Enter does not accept a Files dialog** — it navigates the folder behind it, measured | probe; `shell.rs` line 4967 |
+| **Desktop dialogs answer no key**: Escape and Enter both leave the dialog open | probe; `shell.rs` line 5971 |
+| **The Files dialog is not modal to the pointer**: a click behind the scrim selects a row | probe; `views.rs` line 1385 |
+| **The desktop dialog cancels when its own panel is clicked, not when the desktop is** | probe; `views.rs` line 331 |
+| 23 dialog strings, **none** through the dictionary, four already translated in it | `views.rs` 1378–1478; `i18n.rs` 130, 143–145 |
+| 11 confirmation sites, 7 prompts; **5 of 7 guard routine work** that undo should cover | `shell.rs` 2376–6205; `apps.rs` 1544–1566 |
+| **No undo anywhere** — `notify` carries no action; Trash restore is the only recovery | `shell.rs` 6316 |
+| Permanent delete names a count; Trash's purge names nothing and is a toolbar swap, not a dialog | `shell.rs` 4897; `views.rs` 4194 |
+
+Why `PARTIAL` and not `COMPLETE`: Apple's pages returned summaries (the alert body
+came through a mirror), no dialog was opened on a booted image, and neither item
+has a decision. The decision `F.27` is really asking for — which actions get a
+prompt, which get an undo, and where the undo lives — needs a backend the shell
+does not have.
 
 Each batch produces ledger-ready rows, not prose: a research batch is done when
 its checklist status is final and its rows carry evidence tiers.
