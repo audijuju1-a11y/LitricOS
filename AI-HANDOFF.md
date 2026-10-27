@@ -10,10 +10,11 @@
 - Date: 27/10/69 (2026-10-27)
 - Repository: `https://github.com/audijuju1-a11y/LitricOS` — branch `main`, commit `cf6b523`
 - This package: `LitricOS-27-10-69.tar.gz` — a snapshot of every folder and file
-  of the workspace at this date. The earlier root-level archives
-  (`my-backup.tar.gz`, `my-LitricOS.tar.gz`, `all-files.tar.gz`,
-  `package-f10.tar.gz`) are older, redundant backups of this same tree and are
-  not repeated inside; nothing else from the tree is missing.
+  of the workspace at this date, including the earlier root-level backup
+  archives (`my-backup.tar.gz`, `my-LitricOS.tar.gz`, `all-files.tar.gz`,
+  `package-f10.tar.gz`), which are older backups of this same tree. The only
+  things outside the archive are the archive itself, its generated file list
+  (`LitricOS-27-10-69.filelist.txt`) and its checksum file.
 
 ## What you must do
 
