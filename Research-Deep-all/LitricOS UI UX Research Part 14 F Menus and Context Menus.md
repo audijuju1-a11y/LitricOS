@@ -296,7 +296,7 @@ decision with a backend and a justification that a research note does not have.
 | 55 | The LitricOS and Power menus have no keyboard binding; `Key::Menu` and `F10` are decoded and unbound; Escape closes panels but not context menus | `shortcuts.rs` lines 563, 681, 690; `keys.rs` line 76 | `F.12` / `F.13` / `G.14` |
 | 56 | The Power menu draws one glyph for sleep, shut down and restart, groups nothing, tints nothing and marks no row as needing confirmation | `views.rs` lines 5267–5330 | `F.12` |
 | 57 | The LitricOS menu has two rows and the spec asked for five (About, Settings, Lock, Restart, Shutdown) | `views.rs` lines 5335–5405; spec §3 line 28 | `F.12` |
-| 58 | Files "New folder" — toolbar and both menus — writes `/Documents` regardless of the folder on screen, because dispatch reads a field the click cleared | `shell.rs` lines 5793–5796, 2371–2384, 2652–2663; `views.rs` line 1096 | `F.13` / `F.27` |
+| 58 | ~~Files "New folder" — toolbar and both menus — writes `/Documents` regardless of the folder on screen~~ **fixed 2026-10-27**: the row now asks which window is in front, and the Files dialog took the window's own folder; the test `journey_new_folder_from_the_files_menu_lands_in_the_open_folder` fails on the old code | `shell.rs` `new_folder_from_menu`, `files_has_focus`; `e2e.rs` | `F.13` / `F.27` |
 | 59 | Context menus cannot be opened, navigated or dismissed from the keyboard; only a wallpaper click or a chosen row closes one | `shell.rs` lines 5221–5245, 5782–5796, 5900 | `F.13` / `G.14` |
 | 60 | No disabled, checked or radio state in any of the 28 rows; no menu can show a current sort, a toggle or an unavailable action | `apps.rs` lines 1595–1601, 1702–1747; `views.rs` lines 216–238 | `F.13` decision |
 | 61 | Four rows that end in a confirmation carry no ellipsis | `apps.rs` lines 1710–1745; `views.rs` lines 5271 | `F.13` / `F.27` |
@@ -305,6 +305,9 @@ decision with a backend and a justification that a research note does not have.
 | 64 | Context-menu labels bypass i18n entirely; `"New folder"` is translated in the dictionary and drawn in English in six places, and the bar menus miss five of their six labels | `apps.rs` lines 1702–1747; `i18n.rs` lines 109–130, 298 | `F.12` / `F.13` / `G` |
 | 65 | `journey_context_menu_rows_all_do_something` asserts no panic rather than an effect, so a silent no-op row passes | `e2e.rs` lines 1371–1393 | `F.13` / `J` |
 | 66 | A right-click on a live page goes to Chromium; the same gesture opens the shell's Browser menu when there is no frame | `shell.rs` lines 5199–5202, 1947–1965 | `F.13` |
+| 67 | **Fixed 2026-10-27:** with the details pane open and no row selected, `draw_files` returned before the dialog and viewer, so a Files dialog drew nothing and had no button to press | `views.rs` `draw_files` (details-pane `None` arm); test `journey_new_folder_from_the_files_menu_lands_in_the_open_folder` | `F.13` / `F.15` |
+| 68 | **Fixed 2026-10-27:** the Trash rows restore or delete the previously selected entry, because a right-click on a row did not select it, and the tab menu's Close tab and Reload acted on the focused tab rather than the tab under the pointer | `shell.rs` right-click branch, `perform_menu`; tests `journey_right_click_trash_row_targets_that_row`, `journey_right_click_background_tab_closes_that_tab` | `F.13` / `F.08` |
+| 69 | **Fixed 2026-10-27:** closing a tab in front of the focused one handed focus to the tab that took its index, so the page changed without a request | `apps.rs` `BrowserApp::close`; test `browser_close_keeps_the_focused_tab_focused` | `F.08` |
 
 ## 6. What this part does not establish
 
@@ -314,7 +317,7 @@ decision with a backend and a justification that a research note does not have.
 | that a bar label is actually dropped at a plausible width | the layout loop was read, not a resized window; the claim is that nothing in the loop preserves the label |
 | that Escape leaves the menu open in every focus state | the call sites that clear `context_menu` are exhaustive for the code as written; the claim is that no key path clears it, not that a particular frame was observed |
 | that menus were visually checked | no image was booted and no frame was captured. Every geometry number is read from the drawing code |
-| that the Files "New folder" bug is reproducible on a booted image | the code path is unambiguous, but no test asserts it and no image was run. It is recorded as a reading of `perform_menu` and `submit_desktop_dialog`, not as a captured failure |
+| that the Files "New folder" bug reproduces on a booted image | the reading was turned into a failing journey (`journey_files_context_menu_creates_its_folder_in_the_open_folder`) and fixed as [BUG-0023](../../docs/bugs/BUG-0023-a-menu-row-read-a-menu-the-click-had-already-closed.md), and the empty details pane blocked the same flow as [BUG-0024](../../docs/bugs/BUG-0024-the-details-panes-empty-state-ended-the-window.md); neither was seen on a booted image |
 | that macOS agrees with any of this | every Apple HIG page returned a title and a summary. The macOS column is roles plus two indexed rules (`SNIPPET_ONLY`) |
 | that `F` is nearly done | 11 of 27 items remain `PENDING`; 16 are `PARTIAL`; none is `COMPLETE` |
 
@@ -323,7 +326,7 @@ decision with a backend and a justification that a research note does not have.
 | Item | Before | After | What is still missing |
 |---|---|---|---|
 | `F.12` Menus | `PENDING` | `PARTIAL` | macOS at any depth; a decision on what the bar's three labels are (menus, buttons, or a primary menu), a decision on the item set of the session menu, and a keyboard route to every menu |
-| `F.13` Context menus | `PENDING` | `PARTIAL` | macOS at any depth; a decision on the row state model (disabled, checked, radio), a keyboard model (Shift+F10, arrows, Esc), a dismissal rule, and a rule for dispatch that does not depend on the surface that opened the menu |
+| `F.13` Context menus | `PENDING` | `PARTIAL` | macOS at any depth; a decision on the row state model (disabled, checked, radio), a keyboard model (Shift+F10, arrows, Esc), and a dismissal rule. Dispatch no longer depends on a live menu: the surface is read from the menu's retiring snapshot (BUG-0023) |
 
 What would move each to `COMPLETE`: Apple's pages read in full, one decision per
 item with a backend and a milestone, and — for both — one shared menu component in

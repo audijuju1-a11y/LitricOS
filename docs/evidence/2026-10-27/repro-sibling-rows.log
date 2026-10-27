@@ -1,0 +1,12 @@
+test apps::tests::browser_close_keeps_the_focused_tab_focused ... FAILED
+test e2e::journey_right_click_trash_row_targets_that_row ... FAILED
+test e2e::journey_right_click_background_tab_closes_that_tab ... FAILED
+test e2e::journey_right_click_background_tab_reloads_that_tab ... FAILED
+thread 'apps::tests::browser_close_keeps_the_focused_tab_focused' (61657) panicked at litric-shell/src/apps.rs:2272:9:
+assertion `left == right` failed: closing an earlier tab must not hand focus to the next one
+thread 'e2e::journey_right_click_trash_row_targets_that_row' (61660) panicked at litric-shell/src/e2e.rs:1044:5:
+assertion `left == right` failed: the row under the pointer is the row the menu is about
+thread 'e2e::journey_right_click_background_tab_closes_that_tab' (61658) panicked at litric-shell/src/e2e.rs:1088:5:
+assertion `left == right` failed: the menu records the tab it is about
+thread 'e2e::journey_right_click_background_tab_reloads_that_tab' (61659) panicked at litric-shell/src/e2e.rs:1130:5:
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 530 filtered out; finished in 3.28s

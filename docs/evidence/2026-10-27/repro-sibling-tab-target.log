@@ -1,0 +1,12 @@
+test e2e::journey_right_click_background_tab_reloads_that_tab ... FAILED
+test e2e::journey_right_click_background_tab_closes_that_tab ... FAILED
+---- e2e::journey_right_click_background_tab_reloads_that_tab stdout ----
+thread 'e2e::journey_right_click_background_tab_reloads_that_tab' (62024) panicked at litric-shell/src/e2e.rs:1130:5:
+---- e2e::journey_right_click_background_tab_closes_that_tab stdout ----
+thread 'e2e::journey_right_click_background_tab_closes_that_tab' (62023) panicked at litric-shell/src/e2e.rs:1101:5:
+assertion `left == right` failed: the tab under the pointer closed, not the focused one
+  left: ["https://two.example", "https://three.example"]
+ right: ["https://one.example", "https://two.example"]
+    e2e::journey_right_click_background_tab_closes_that_tab
+    e2e::journey_right_click_background_tab_reloads_that_tab
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 532 filtered out; finished in 3.30s

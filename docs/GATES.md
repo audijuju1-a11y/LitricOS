@@ -2046,3 +2046,127 @@ the bar's three labels open no menu, that neither popover menu has a key, and th
 Files "New folder" writes `/Documents` regardless of the folder on screen, all of
 which the next reviewer would have to rediscover by reading `menu_surface_at`
 against `perform_menu`.
+
+## 2026-10-27 — two blockers in one flow: a row read a closed menu, a pane ended the window
+
+`Part 14` of the research corpus recorded that Files' **New folder** — the
+toolbar button and the row in both menus — always wrote `/Documents`, whatever
+folder the window was showing. This entry takes that reading to a journey that
+fails, finds a second defect standing behind the first, and fixes both. It is the
+first repair the research corpus has produced rather than recorded: the finding
+existed as prose, and prose cannot be run.
+
+### What was wrong
+
+| # | Defect | Where |
+|---|---|---|
+| 1 | `perform_menu` asked `self.context_menu` which surface drew the row, but the click had already closed the menu — `set_context_menu(None)` keeps the closed menu as `retiring_context_menu` — so `is_some_and(...)` was always `false` and every row opened the **desktop's** dialog, which writes `/Documents` | `shell.rs` `perform_menu`, `set_context_menu` |
+| 2 | With the details pane open and no row selected, `draw_files` returned from inside the pane, before `draw_files_dialog` and `draw_viewer`; the dialog that `shell.rs` had opened was state with no panel, no **Create** button and no hotspot | `views.rs` `draw_files` |
+
+The two compound: the wrong dialog was opened, and then it could not be drawn.
+Fixing either alone still leaves **New folder** unable to create a folder in the
+folder on screen.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/shell.rs` | `new_folder_from_menu` reads the surface from the live menu or its retiring snapshot; a row with no menu behind it (the toolbar button) falls back to the focused Files window. `files_has_focus` added |
+| `src/litric-shell/src/views.rs` | the details pane's empty state draws the dialog and the text viewer before returning, with a comment saying why |
+| `src/litric-shell/src/e2e.rs` | three journeys: the Files context-menu row lands in the open folder; the toolbar row lands there too; the desktop's row stays the desktop's while Files is in front. Plus `wallpaper_point`, which right-clicks a point no window covers |
+| `docs/bugs/BUG-0023-a-menu-row-read-a-menu-the-click-had-already-closed.md` | new: dispatch defect, with the failing assertion and the fix |
+| `docs/bugs/BUG-0024-the-details-panes-empty-state-ended-the-window.md` | new: renderer defect, with the failing assertion and the fix |
+| `Research-Deep-all/LitricOS Coverage Checklist.csv` | `F.13`'s note records both fixes and their bug ids |
+| `Research-Deep-all/LitricOS UI UX Research Part 14 F Menus and Context Menus.md` | the finding row marks the fix, the delta table gains finding 67, and the "does not establish" and "still missing" rows no longer claim the dispatch rule is undecided |
+| `docs/GATES.md` | this entry |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test -p litric-shell --locked` | PASS — 595 tests (534 lib, 32 main, 4 design-lint, 10 font, 3 foreign-clients, 3 overflow, 9 text-layout), 0 failed. Log: `docs/evidence/2026-10-27/files-newfolder.log` |
+| the same journey with **both** fixes reverted | FAILED — `the Files dialog must own the row: None`; log: `docs/evidence/2026-10-27/repro-both-reverted.log` |
+| the same journey with only the renderer reverted | FAILED — `the dialog drew its Create button`; log: `docs/evidence/2026-10-27/repro-views-only-reverted.log` |
+| `cargo clippy -p litric-shell --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt -p litric-shell -- --check` | exit 0 |
+| `python3 ci/lint-parity.py` | exit 0 — 389 rows, 597 research items |
+| `python3 ci/lint-doc-refs.py` | OK — 687 citations across 140 documents |
+| `python3 ci/lint-line-endings.py` | OK — 338 files, all LF |
+| `python3 ci/check-python-syntax.py` | OK — 48 files parse |
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the fix was seen on a booted image | no image was built. The journeys drive the shell's own input path, which is more than a reading but less than a desktop |
+| that the two menu labels and the bar's menus work | untouched here; `F.12`'s findings stand |
+| that the row's label reaches the dictionary | `F.13`'s i18n finding stands; the fix moved no label |
+| that a deferred dispatch is safe | the retiring snapshot is only readable while the row's action runs, which is why the fallback exists rather than an `expect` |
+
+### Rollback
+
+Revert this commit. The two journeys return to failing, `New folder` writes
+`/Documents` again, and a Files dialog opened with the details pane visible draws
+no button — the states BUG-0023 and BUG-0024 record.
+
+## 2026-10-27 — the rows around it: three more dispatches that named a target nobody chose
+
+The repair above ended with a question: if one menu row read a menu the click had
+closed, which other rows run against state the click did not set? This entry is
+the audit of every arm of `perform_menu`, the three defects it found, and their
+fixes — recorded as [BUG-0025](../bugs/BUG-0025-menu-rows-acted-on-what-was-selected-before.md).
+
+### The audit
+
+| Rows | Target | Verdict |
+|---|---|---|
+| `NewFolder` | the menu's surface, or focus for the toolbar | fixed as BUG-0023 |
+| `NewFile`, `Paste`, `Rename`, `Copy`, `Cut`, `Trash`, `Compress`, `Extract` | the Files selection | sound — a `FilesRow` right-click selects the row first |
+| `SortName`, `SortSize`, `SortModified`, `ToggleDetails` | Files' own view state | sound — `Files` menu only |
+| `EmptyTrash` | the confirmation state, not a row | sound |
+| `Restore`, `PurgeTrashItem` | the Trash selection | **wrong** — right-clicking a Trash row selected nothing |
+| `BrowserCloseTab`, `BrowserReload` | the active tab | **wrong** — the tab under the pointer is what the row names, and Chrome does not switch tabs on a right-click |
+| `ScanNow`, `OpenTrash`, `NextWallpaper`, `DisplaySettings`, `BrowserStart`, `EngineGoogle/DuckDuckGo/Bing` | none | sound |
+| `OpenSelection` | `desktop_icons.selected`, then the Files selection | the first branch is dead: the V6 desktop draws no icon hotspots, so nothing sets it |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/apps.rs` | `ContextMenu` records `tab: Option<usize>` (with `for_tab`); `BrowserApp::close` keeps the focused tab focused when an earlier tab closes; `navigate_tab(i)` reloads a named tab and `navigate_active` delegates |
+| `src/litric-shell/src/shell.rs` | the right-click branch selects a Trash row and records a tab; `menu_tab` reads the tab back through the retiring menu; the tab rows close and reload that tab, and a background reload leaves the visible page's status alone |
+| `src/litric-shell/src/e2e.rs` | three journeys: Trash row restores the row that was right-clicked, a background tab is the one closed, a background tab is the one reloaded |
+| `src/litric-shell/src/apps.rs` (tests) | `browser_close_keeps_the_focused_tab_focused` |
+| `docs/bugs/BUG-0025-menu-rows-acted-on-what-was-selected-before.md` | new: the class, its three instances, the fixes, the residual state-model gap |
+| `Research-Deep-all/LitricOS Coverage Checklist.csv` | `F.13` records the Trash and tab targeting fix; `F.08` records the close-focus defect and its fix |
+| `Research-Deep-all/LitricOS UI UX Research Part 14 F Menus and Context Menus.md` | findings 68 and 69 |
+| `docs/GATES.md` | this entry |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test -p litric-shell --locked` | PASS — 595 tests, 0 failed. Log: `docs/evidence/2026-10-27/files-newfolder.log` |
+| the four new tests with their fixes reverted | all four FAIL at their own assertions: `docs/evidence/2026-10-27/repro-sibling-rows.log` |
+| the tab journeys with only the targeting reverted | FAIL — the closed tab is the focused one: `left: ["https://two.example", "https://three.example"]`; log: `docs/evidence/2026-10-27/repro-sibling-tab-target.log` |
+| `cargo clippy -p litric-shell --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt -p litric-shell -- --check` | exit 0 |
+| `python3 ci/lint-parity.py` | exit 0 |
+| `python3 ci/lint-doc-refs.py` | OK |
+| `python3 ci/lint-line-endings.py` | OK |
+| `python3 ci/check-python-syntax.py` | OK |
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the menu metrics, keyboard model or row states changed | untouched. The rows still have no disabled or checked state, so Restore on an empty Trash is still drawn and still does nothing |
+| that a background reload is visibly acknowledged | it is sent to the engine; the status line stays with the visible page, and a per-tab indicator is part of the missing tab state model |
+| that the audit is exhaustive for the shell | it covers every arm of `perform_menu`. Other clicks that dispatch against model state (toolbar buttons, keyboard actions) were not audited in this pass |
+| that the fix was seen on a booted image | no image was built; the journeys drive the shell's own input path |
+
+### Rollback
+
+Revert this commit. Trash rows return to acting on the previous selection, the tab
+menu closes and reloads the focused tab, and closing an earlier tab moves focus to
+its neighbour — the states BUG-0025 records.

@@ -275,6 +275,187 @@ fn journey_right_click_desktop_menu_creates_a_folder_via_dialog() {
     drop(frame);
 }
 
+#[cfg(unix)]
+#[test]
+fn journey_new_folder_from_the_files_menu_lands_in_the_open_folder() {
+    let mut s = shell();
+    let root = e2e_root("files-menu-newfolder");
+    std::fs::create_dir_all(root.join("Documents")).unwrap();
+    std::fs::create_dir_all(root.join("Pictures")).unwrap();
+    s.files_root = root.clone();
+    s.open_app(crate::shortcuts::App::Files);
+    s.files.path = "/Pictures".to_owned();
+    s.files.listed = None;
+
+    // The toolbar's New folder and both context-menu rows are one hotspot, and
+    // by the time it runs the menu that drew it has already been cleared. This
+    // is that exact state: no menu, Files in front, the row's action.
+    assert!(s.context_menu.is_none());
+    s.perform_menu(MenuAction::NewFolder);
+
+    // The folder belongs to Files, not to the desktop.
+    assert!(
+        matches!(s.files.dialog, Some(DialogKind::NewFolder)),
+        "the Files dialog must own the row: {:?}",
+        s.files.dialog
+    );
+    assert!(
+        s.desktop_dialog.is_none(),
+        "the desktop's dialog must not open over Files"
+    );
+
+    type_text(&mut s, "Holiday");
+    let _ = draw_frame(&mut s);
+    assert_eq!(
+        s.files.dialog_field, "Holiday",
+        "the name reached the field"
+    );
+    let ok = s
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the dialog drew its Create button");
+    click(&mut s, ok.center().0, ok.center().1);
+
+    assert!(
+        s.files.dialog.is_none(),
+        "the confirmation failed: {:?}",
+        s.files.dialog
+    );
+    let zone = s.regional.zone.clone();
+    let bridge = crate::fsbridge::FsBridge::open(&root, zone).unwrap();
+    assert!(
+        bridge.exists("/Pictures/Holiday").unwrap(),
+        "the folder was created in the folder the window was showing (path {:?})",
+        s.files.path
+    );
+    assert!(
+        !root.join("Documents").join("Holiday").exists(),
+        "the desktop's /Documents must be untouched"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A point on the wallpaper that no window covers.
+///
+/// A journey that right-clicks the desktop needs the desktop, so the window in
+/// front is asked for its frame rather than assumed: if Files ever opens
+/// somewhere else, this test must still right-click wallpaper and not a table.
+fn wallpaper_point(s: &Shell) -> (f32, f32) {
+    // The display `shell()` builds. The point is checked against every frame
+    // below, so a wrong constant fails loudly instead of clicking a window.
+    let (w, h) = (1280.0, 800.0);
+    for (x, y) in [
+        (20.0, h * 0.3),
+        (w - 20.0, h * 0.3),
+        (w * 0.5, h * 0.15),
+        (20.0, h * 0.6),
+    ] {
+        let covered = s.wm.all().iter().any(|win| {
+            let f = win.frame;
+            x >= f.x && x <= f.x + f.w && y >= f.y && y <= f.y + f.h
+        });
+        if !covered {
+            return (x, y);
+        }
+    }
+    panic!("no wallpaper left to right-click");
+}
+
+#[test]
+fn journey_desktop_menu_keeps_its_folder_on_the_desktop_with_files_in_front() {
+    let mut s = shell();
+    s.open_app(App::Files);
+    let (x, y) = wallpaper_point(&s);
+    right_click(&mut s, x, y);
+    assert_eq!(
+        s.context_menu.as_ref().map(|m| m.surface),
+        Some(crate::apps::MenuSurface::Desktop),
+        "the right-click at ({x}, {y}) did not land on the wallpaper"
+    );
+    let _ = draw_frame(&mut s);
+    let row = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::NewFolder))
+        .expect("the desktop's menu drew a New folder row");
+    click(&mut s, row.center().0, row.center().1);
+    // The desktop's row is the desktop's: a Files window being in front does
+    // not turn the wallpaper into the folder Files is showing.
+    assert!(
+        matches!(
+            s.desktop_dialog,
+            Some(crate::apps::DesktopDialog::NewFolder)
+        ),
+        "the desktop's dialog did not open: {:?}",
+        s.desktop_dialog
+    );
+    assert!(
+        s.files.dialog.is_none(),
+        "a desktop row opened the Files dialog: {:?}",
+        s.files.dialog
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn journey_files_context_menu_creates_its_folder_in_the_open_folder() {
+    let mut s = shell();
+    let root = e2e_root("files-row-newfolder");
+    std::fs::create_dir_all(root.join("Pictures")).unwrap();
+    s.files_root = root.clone();
+    s.open_app(App::Files);
+    s.files.path = "/Pictures".to_owned();
+    s.files.listed = None;
+
+    // Right-click the middle of the window: the table, not the details pane.
+    let frame =
+        s.wm.all()
+            .iter()
+            .find(|w| w.app_id == App::Files.app_id())
+            .expect("the Files window is open")
+            .frame;
+    right_click(&mut s, frame.x + frame.w * 0.4, frame.y + frame.h * 0.5);
+    assert!(
+        matches!(
+            s.context_menu.as_ref().map(|m| m.surface),
+            Some(crate::apps::MenuSurface::Files) | Some(crate::apps::MenuSurface::FilesRow)
+        ),
+        "the right-click landed on {:?}",
+        s.context_menu.as_ref().map(|m| m.surface)
+    );
+
+    let _ = draw_frame(&mut s);
+    let row = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::NewFolder))
+        .expect("the Files menu drew a New folder row");
+    click(&mut s, row.center().0, row.center().1);
+    assert!(
+        matches!(s.files.dialog, Some(DialogKind::NewFolder)),
+        "the Files dialog must own its own row: {:?}",
+        s.files.dialog
+    );
+    assert!(s.desktop_dialog.is_none());
+
+    type_text(&mut s, "Poster");
+    let _ = draw_frame(&mut s);
+    let ok = s
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the dialog drew its Create button");
+    click(&mut s, ok.center().0, ok.center().1);
+    assert!(s.files.dialog.is_none(), "{:?}", s.files.dialog);
+
+    let zone = s.regional.zone.clone();
+    let bridge = crate::fsbridge::FsBridge::open(&root, zone).unwrap();
+    assert!(
+        bridge.exists("/Pictures/Poster").unwrap(),
+        "the folder was created somewhere else: {:?}",
+        s.files.path
+    );
+    assert!(!root.join("Documents").join("Poster").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn journey_files_window_is_drawn_with_places_rows_and_commands() {
     let mut s = shell();
@@ -820,6 +1001,149 @@ fn journey_right_click_files_row_shows_row_menu() {
         .expect("the row menu drew Copy");
     click(&mut s, r.center().0, r.center().1);
     assert!(s.files.clipboard.is_some(), "copy ran from the menu");
+}
+
+#[cfg(unix)]
+#[test]
+fn journey_right_click_trash_row_targets_that_row() {
+    let mut s = shell();
+    let root = e2e_root("trash-row-target");
+    std::fs::create_dir_all(&root).unwrap();
+    let zone = s.regional.zone.clone();
+    {
+        let bridge = crate::fsbridge::FsBridge::open(&root, zone.clone()).unwrap();
+        bridge.write_text("/", "a.txt", "a").unwrap();
+        bridge.write_text("/", "b.txt", "b").unwrap();
+        bridge.trash("/a.txt", 1_900_000_000).unwrap();
+        bridge.trash("/b.txt", 1_900_000_000).unwrap();
+    }
+    s.files_root = root.clone();
+    s.open_app(App::Trash);
+    s.trash.entries = vec![
+        (
+            "a.txt".to_owned(),
+            "2026-01-01".to_owned(),
+            "/".to_owned(),
+            false,
+        ),
+        (
+            "b.txt".to_owned(),
+            "2026-01-01".to_owned(),
+            "/".to_owned(),
+            false,
+        ),
+    ];
+    s.trash.listed = true;
+    s.trash.selected = Some(0);
+    let _ = draw_frame(&mut s);
+    let row = s
+        .hotspots()
+        .rect_of(Hot::TrashRow(1))
+        .expect("the trash drew row 1");
+    right_click(&mut s, row.center().0, row.center().1);
+    assert_eq!(
+        s.trash.selected,
+        Some(1),
+        "the row under the pointer is the row the menu is about"
+    );
+    let _ = draw_frame(&mut s);
+    let restore = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::Restore))
+        .expect("the trash menu drew Restore");
+    click(&mut s, restore.center().0, restore.center().1);
+    let bridge = crate::fsbridge::FsBridge::open(&root, zone).unwrap();
+    assert_eq!(
+        bridge.trash_list().unwrap().len(),
+        1,
+        "restoring one entry leaves the other in the trash"
+    );
+    assert!(
+        bridge.exists("/b.txt").unwrap(),
+        "the row that was right-clicked is the one restored"
+    );
+    assert!(
+        !root.join("a.txt").exists(),
+        "the previously selected row must not be touched"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn journey_right_click_background_tab_closes_that_tab() {
+    let mut s = shell();
+    s.open_app(App::Browser);
+    s.browser.new_tab();
+    s.browser.new_tab();
+    s.browser.select(0);
+    for (i, url) in [
+        "https://one.example",
+        "https://two.example",
+        "https://three.example",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        s.browser.tabs.get_mut(i).expect("the tab was opened").url = url.to_owned();
+    }
+    let _ = draw_frame(&mut s);
+    let tab = s
+        .hotspots()
+        .rect_of(Hot::BrowserTab(2))
+        .expect("the strip drew tab 2");
+    right_click(&mut s, tab.center().0, tab.center().1);
+    assert_eq!(
+        s.context_menu.as_ref().and_then(|m| m.tab),
+        Some(2),
+        "the menu records the tab it is about"
+    );
+    assert_eq!(s.browser.active, 0, "a right-click does not switch tabs");
+    let _ = draw_frame(&mut s);
+    let close = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::BrowserCloseTab))
+        .expect("the tab menu drew Close tab");
+    click(&mut s, close.center().0, close.center().1);
+    let urls: Vec<&str> = s.browser.tabs.iter().map(|t| t.url.as_str()).collect();
+    assert_eq!(
+        urls,
+        ["https://one.example", "https://two.example"],
+        "the tab under the pointer closed, not the focused one"
+    );
+    assert_eq!(s.browser.active, 0, "the focused tab stayed focused");
+}
+
+#[test]
+fn journey_right_click_background_tab_reloads_that_tab() {
+    let mut s = shell();
+    s.open_app(App::Browser);
+    s.browser.new_tab();
+    s.browser.select(0);
+    s.browser.tabs.get_mut(0).expect("tab 0").url = "https://one.example".to_owned();
+    let second = s.browser.tabs.get_mut(1).expect("tab 1");
+    second.url = "https://two.example".to_owned();
+    second.error = true;
+    let _ = draw_frame(&mut s);
+    let tab = s
+        .hotspots()
+        .rect_of(Hot::BrowserTab(1))
+        .expect("the strip drew tab 1");
+    right_click(&mut s, tab.center().0, tab.center().1);
+    let _ = draw_frame(&mut s);
+    let reload = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::BrowserReload))
+        .expect("the tab menu drew Reload");
+    click(&mut s, reload.center().0, reload.center().1);
+    assert!(
+        s.browser.tabs.get(1).is_some_and(|t| !t.error),
+        "reload cleared the error on the tab it was opened for"
+    );
+    assert_eq!(s.browser.active, 0, "reloading did not switch tabs");
+    assert!(
+        s.browser.status.is_empty(),
+        "a background reload must not claim the visible page is loading"
+    );
 }
 
 // ---------------------------------------------------------------------------

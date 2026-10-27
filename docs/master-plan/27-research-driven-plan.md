@@ -482,7 +482,7 @@ bar.
 | The two real menus (2 and 4 rows) have **no keyboard binding**, no open state on their trigger, no grouping, no disabled or checked row, and one glyph for sleep, shut down and restart | `views.rs` lines 5267–5405; `shortcuts.rs` line 563 |
 | **No keyboard path into or out of a context menu**: `Key::Menu` and `F10` unbound, Shift+F10 resolves to nothing, Escape closes overlays only | `keys.rs` line 71; `shortcuts.rs` line 690; `shell.rs` line 5900 |
 | Only a wallpaper click or a chosen row dismisses a context menu; a second right-click re-derives the surface under the pointer | `shell.rs` lines 5782–5796, 5841–5879 |
-| Files "New folder" writes `/Documents` from the toolbar and both menus, because dispatch reads the `context_menu` the click already cleared | `shell.rs` lines 5793–5796, 2371–2384, 2652–2663 |
+| Files "New folder" wrote `/Documents` from the toolbar and both menus, because dispatch read the `context_menu` the click had already closed; **fixed 2026-10-27** with the details-pane blocker behind it | `shell.rs` `perform_menu` → `new_folder_from_menu`; `e2e.rs` `journey_files_context_menu_creates_its_folder_in_the_open_folder` |
 | No disabled, checked or radio state in any of the 28 rows; no icon, shortcut or ellipsis; destructive rows mid-menu and untinted | `apps.rs` lines 1595–1601, 1702–1747 |
 | Two menu metrics: 26 px / 13 px / 190 px / 9 % on the desktop against 34 px / 15 px / measured / 6 % at the bar | `views.rs` lines 184–232, 5291, 5379 |
 | Context-menu labels bypass i18n; `"New folder"` is in the Thai dictionary and drawn in English at five call sites | `apps.rs` lines 1702–1747; `i18n.rs` line 130 |
@@ -491,6 +491,16 @@ bar.
 Why `PARTIAL` and not `COMPLETE`: Apple's pages returned titles and summaries
 again, no menu was opened on a booted image, and neither item has a decision. Why
 citable: every claim names a line a reader can open and disagree with.
+
+This part also produced the corpus's first repair rather than its next entry: the
+"New folder" reading became a failing journey, which exposed a second defect under
+it — with the details pane open and no row selected the Files dialog drew no panel
+and no button. Both are fixed and recorded as [BUG-0023](../../docs/bugs/BUG-0023-a-menu-row-read-a-menu-the-click-had-already-closed.md)
+and [BUG-0024](../../docs/bugs/BUG-0024-the-details-panes-empty-state-ended-the-window.md),
+with three journeys guarding the flow and the desktop's own row. The rest of the
+part's findings stand as findings: a menu label that opens a launcher, a context
+menu no key can reach, and 28 rows with no state model are decisions about what
+the shell should be, not bugs to patch.
 
 Each batch produces ledger-ready rows, not prose: a research batch is done when
 its checklist status is final and its rows carry evidence tiers.

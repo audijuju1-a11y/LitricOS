@@ -984,6 +984,11 @@ impl BrowserApp {
         if i >= self.tabs.len() {
             return;
         }
+        // Removing a tab renumbers the ones after it, so the focused index has
+        // to move with the tab it named. Closing a tab in front of the focused
+        // one used to leave `active` pointing at the next tab instead, because
+        // the only correction was a clamp at the end of the list.
+        let was_active = i == self.active;
         self.tabs.remove(i);
         if self.tabs.is_empty() {
             let engine_tab = self.take_engine_tab();
@@ -1001,8 +1006,10 @@ impl BrowserApp {
             self.panel = BrowserPanel::Page;
             return;
         }
-        if self.active >= self.tabs.len() {
-            self.active = self.tabs.len().saturating_sub(1);
+        if was_active {
+            self.active = i.min(self.tabs.len().saturating_sub(1));
+        } else if i < self.active {
+            self.active = self.active.saturating_sub(1);
         }
     }
 
@@ -1171,8 +1178,16 @@ impl BrowserApp {
     /// path). Returns the address to send, if the tab exists.
     #[must_use]
     pub fn navigate_active(&mut self) -> Option<String> {
-        let url = self.tab()?.url.clone();
-        if let Some(t) = self.tabs.get_mut(self.active) {
+        self.navigate_tab(self.active)
+    }
+
+    /// The URL of tab `i`, with its error cleared as a reload does.
+    ///
+    /// A reload from a context menu belongs to the tab the menu was opened for,
+    /// which is not necessarily the focused one.
+    pub fn navigate_tab(&mut self, i: usize) -> Option<String> {
+        let url = self.tabs.get(i)?.url.clone();
+        if let Some(t) = self.tabs.get_mut(i) {
             t.error = false;
         }
         Some(url)
@@ -1670,6 +1685,13 @@ pub struct ContextMenu {
     pub at: (f32, f32),
     /// Which surface the click landed on.
     pub surface: MenuSurface,
+    /// The browser tab the pointer was over, when the surface is a tab.
+    ///
+    /// A row menu belongs to the thing that was right-clicked. Chrome does not
+    /// switch tabs on a right-click, so the tab cannot be read back from
+    /// `BrowserApp::active` when the row runs: it has to be recorded here,
+    /// while the pointer still says which tab it was.
+    pub tab: Option<usize>,
     /// The rows, in order.
     pub items: Vec<MenuItem>,
 }
@@ -1745,7 +1767,19 @@ impl ContextMenu {
                 MenuItem::Item("Empty trash", MenuAction::EmptyTrash),
             ],
         };
-        Self { at, surface, items }
+        Self {
+            at,
+            surface,
+            tab: None,
+            items,
+        }
+    }
+
+    /// Point this menu at the tab it was opened for.
+    #[must_use]
+    pub fn for_tab(mut self, i: usize) -> Self {
+        self.tab = Some(i);
+        self
     }
 
     /// The height the menu will draw at, one row each plus padding.
@@ -2225,6 +2259,27 @@ mod tests {
         assert_eq!(b.tab().map(|t| t.url.as_str()), Some("litric://about"));
         b.close(0);
         assert_eq!(b.tabs.len(), 1, "fresh tab replaces the last close");
+    }
+
+    #[test]
+    fn browser_close_keeps_the_focused_tab_focused() {
+        let mut b = BrowserApp::default();
+        b.tabs.clear();
+        for url in ["a", "b", "c", "d"] {
+            b.new_tab();
+            b.navigate_active_to(url);
+        }
+        b.select(2); // "c"
+        b.close(0);
+        assert_eq!(b.tabs.len(), 3);
+        assert_eq!(
+            b.tab().map(|t| t.url.as_str()),
+            Some("c"),
+            "closing an earlier tab must not hand focus to the next one"
+        );
+        // Closing the focused tab selects the tab that takes its place.
+        b.close(b.active);
+        assert_eq!(b.tab().map(|t| t.url.as_str()), Some("d"));
     }
 
     #[test]

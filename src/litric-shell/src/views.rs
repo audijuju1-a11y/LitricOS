@@ -1312,6 +1312,12 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
                 dr.y + t.px(40.0),
                 &s_meta,
             );
+            // No row to describe is the pane's own empty state, not the end of
+            // the window: returning here skipped the modal dialog and the text
+            // viewer below, so New folder with the details pane open and no
+            // selection drew no dialog and no Create button to press.
+            draw_files_dialog(canvas, shell, body);
+            draw_viewer(canvas, shell, body);
             return;
         };
         let lines = [

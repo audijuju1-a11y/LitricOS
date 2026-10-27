@@ -2368,21 +2368,7 @@ impl Shell {
     pub fn perform_menu(&mut self, action: crate::apps::MenuAction) -> Vec<Effect> {
         use crate::apps::MenuAction as MA;
         match action {
-            MA::NewFolder => {
-                let in_files = self.context_menu.as_ref().is_some_and(|m| {
-                    matches!(
-                        m.surface,
-                        crate::apps::MenuSurface::Files | crate::apps::MenuSurface::FilesRow
-                    )
-                });
-                if in_files {
-                    self.files.ask_new_folder();
-                } else {
-                    self.set_desktop_dialog(Some(crate::apps::DesktopDialog::NewFolder));
-                    self.desktop_dialog_field.clear();
-                    self.desktop_dialog_selection = None;
-                }
-            }
+            MA::NewFolder => self.new_folder_from_menu(),
             MA::NewFile => self.files.ask_new_file(),
             MA::Paste => {
                 let op = crate::apps::FilesOp::PasteCopy;
@@ -2418,25 +2404,47 @@ impl Shell {
             MA::ScanNow => return self.start_scan(),
             MA::BrowserStart => return self.browser_start_session(),
             MA::BrowserReload => {
-                let _ = self.browser.navigate_active();
-                self.browser_frame = None;
-                self.browser.last_frame = None;
-                if self.browser.active_tab_has_page() {
-                    if let Some(tab) = self.browser.active_engine_tab() {
-                        self.browser.status = "reloading".to_owned();
-                        if self.send_line(&format!("RELOAD {tab}")) {
+                let i = self.menu_tab();
+                if self.browser.tabs.get(i).is_none() {
+                    return Vec::new();
+                }
+                let active = i == self.browser.active;
+                let _ = self.browser.navigate_tab(i);
+                if active {
+                    self.browser_frame = None;
+                    self.browser.last_frame = None;
+                }
+                let has_page = self
+                    .browser
+                    .tabs
+                    .get(i)
+                    .is_some_and(|t| t.url != "litric://about");
+                if has_page {
+                    if let Some(tab) = self.browser.tabs.get(i).map(|t| t.engine_tab) {
+                        // The status line and the Stop button describe the page
+                        // on screen: reloading a background tab must not claim
+                        // the visible one is loading.
+                        if active {
+                            self.browser.status = "reloading".to_owned();
+                        }
+                        if self.send_line(&format!("RELOAD {tab}")) && active {
                             self.browser.loading = true;
                         }
                     }
                 }
             }
             MA::BrowserCloseTab => {
-                let i = self.browser.active;
+                let i = self.menu_tab();
+                if self.browser.tabs.get(i).is_none() {
+                    return Vec::new();
+                }
                 if let Some(tab) = self.browser.tabs.get(i).map(|t| t.engine_tab) {
                     self.send_line(&format!("CLOSE {tab}"));
                 }
-                self.browser_frame = None;
-                self.browser.last_frame = None;
+                if i == self.browser.active {
+                    self.browser_frame = None;
+                    self.browser.last_frame = None;
+                }
                 self.browser.close(i);
             }
             MA::DisplaySettings => {
@@ -3915,6 +3923,61 @@ impl Shell {
         }
     }
 
+    /// Where a "New folder" row creates its folder.
+    ///
+    /// The row does not know which surface drew it. The live menu cannot say
+    /// either: clicking a row closes the menu, and the closed menu is kept as
+    /// the retiring snapshot that draws its exit, so `self.context_menu` is
+    /// already `None` here -- which is why every row used to create its folder
+    /// on the desktop regardless of the surface the user right-clicked. The
+    /// retiring snapshot still carries the surface, so read that.
+    ///
+    /// A row with no menu behind it is the Files toolbar's button, which is the
+    /// same `Hot::MenuRow`; for that one the answer is the focused Files window.
+    fn new_folder_from_menu(&mut self) {
+        let from_files = match self
+            .context_menu
+            .as_ref()
+            .or(self.retiring_context_menu.as_ref())
+        {
+            Some(menu) => matches!(
+                menu.surface,
+                crate::apps::MenuSurface::Files | crate::apps::MenuSurface::FilesRow
+            ),
+            None => self.files_has_focus(),
+        };
+        if from_files {
+            self.files.ask_new_folder();
+        } else {
+            self.set_desktop_dialog(Some(crate::apps::DesktopDialog::NewFolder));
+            self.desktop_dialog_field.clear();
+            self.desktop_dialog_selection = None;
+        }
+    }
+
+    /// The browser tab a menu row applies to.
+    ///
+    /// The menu is closed by the time its row runs, so the tab it recorded is
+    /// read from the retiring snapshot the same way `new_folder_from_menu` reads
+    /// a surface. A browser menu with no tab behind it (the page area's) means
+    /// the focused tab.
+    fn menu_tab(&self) -> usize {
+        self.context_menu
+            .as_ref()
+            .or(self.retiring_context_menu.as_ref())
+            .and_then(|menu| menu.tab)
+            .unwrap_or(self.browser.active)
+    }
+
+    /// Whether the Files window is the one in front.
+    fn files_has_focus(&self) -> bool {
+        let focused = self.wm.focused();
+        self.wm
+            .all()
+            .iter()
+            .any(|w| Some(w.id) == focused && w.app_id == crate::shortcuts::App::Files.app_id())
+    }
+
     /// One key press on the lock screen.
     fn lock_key(&mut self, key: Key) -> Vec<Effect> {
         match key {
@@ -5228,19 +5291,27 @@ impl Shell {
             }
             if pressed {
                 let surface = self.menu_surface_at(at);
+                let mut menu = crate::apps::ContextMenu::for_surface(surface, (at.x, at.y));
                 // Explorer's rule: right-clicking a row also selects it, so
                 // the menu's Copy / Rename / Trash act on what was clicked.
-                if surface == crate::apps::MenuSurface::FilesRow {
-                    if let Some(Hot::Files(crate::apps::FilesHot::Row(i))) =
-                        self.hot.hit(at.x, at.y)
-                    {
-                        self.files.select_row(i);
+                // The same rule has to hold on every other list, and a tab has
+                // no selection to move: the menu remembers which tab it is for
+                // instead, because Chrome does not switch tabs on a right-click.
+                match (surface, self.hot.hit(at.x, at.y)) {
+                    (
+                        crate::apps::MenuSurface::FilesRow,
+                        Some(Hot::Files(crate::apps::FilesHot::Row(i))),
+                    ) => self.files.select_row(i),
+                    (crate::apps::MenuSurface::Trash, Some(Hot::TrashRow(i))) => {
+                        self.trash.selected = Some(i);
+                        self.trash.confirm = None;
                     }
+                    (crate::apps::MenuSurface::BrowserTab, Some(Hot::BrowserTab(i))) => {
+                        menu = menu.for_tab(i);
+                    }
+                    _ => {}
                 }
-                self.set_context_menu(Some(crate::apps::ContextMenu::for_surface(
-                    surface,
-                    (at.x, at.y),
-                )));
+                self.set_context_menu(Some(menu));
                 self.request_full_redraw();
             }
             return Vec::new();
