@@ -409,6 +409,9 @@ pub enum Hot {
     LockDone,
     /// A category row in Settings.
     SettingsCategory(u8),
+    /// The Settings sidebar itself, behind its rows: the wheel over the pane
+    /// scrolls the page list, including where it is empty.
+    SettingsSidebarScroll,
     /// Change the shell interface language.
     SettingsLanguage,
     /// Cycle the supported colour themes.
@@ -5526,11 +5529,50 @@ impl Shell {
             self.browser_engine_wheel(dy, at);
             return;
         }
+        // A sidebar under the pointer owns the wheel. Both panes are taller
+        // than the window at small sizes -- thirteen Settings pages are 414 px
+        // of rows -- and before this neither could scroll at all. The hit comes
+        // from the hotspots of the last drawn frame, which is exactly what the
+        // pointer was over; the rows are pushed after the pane, so a row wins.
+        // The hotspots are the last frame's, and that frame drew every window,
+        // including the ones a window in front has covered. The guard is what
+        // keeps a buried Settings window from scrolling when the pointer is
+        // over the terminal in front of it.
+        match self.hotspots().hit(at.x, at.y) {
+            Some(Hot::Files(
+                crate::apps::FilesHot::Place(_) | crate::apps::FilesHot::PlacesScroll,
+            )) if self.wheel_owner(App::Files, at) => {
+                self.files.scroll_places(dy);
+                self.request_full_redraw();
+                return;
+            }
+            Some(Hot::SettingsCategory(_) | Hot::SettingsSidebarScroll)
+                if self.wheel_owner(App::Settings, at) =>
+            {
+                self.settings.scroll_sidebar(dy);
+                self.request_full_redraw();
+                return;
+            }
+            _ => {}
+        }
         // Scrolling over the top bar's workspace area moves between workspaces,
         // which is a gesture people expect and costs nothing to support.
         if self.top_bar().contains(at.x, at.y) && self.wm.cycle_workspace(dy > 0.0) {
             self.request_full_redraw();
         }
+    }
+
+    /// Whether the topmost window at a point belongs to `app`.
+    ///
+    /// A sidebar pane is a wheel target read from the last frame's hotspots, and
+    /// those include the panes of covered windows. This asks the window manager
+    /// which window is actually on top, so a covered pane cannot take the wheel
+    /// from the window the user is looking at.
+    fn wheel_owner(&self, app: App, at: Point) -> bool {
+        self.wm
+            .hit_test(at.x, at.y)
+            .and_then(|hit| self.wm.window(hit.window))
+            .is_some_and(|w| w.app_id == app.app_id())
     }
 
     /// The client window under a point, if the topmost thing there is one.
@@ -5718,6 +5760,9 @@ impl Shell {
                 }
                 Vec::new()
             }
+            // The pane itself is a scroll target, not a command: the wheel path
+            // handles it before a click is considered.
+            Hot::SettingsSidebarScroll => Vec::new(),
             Hot::SettingsLanguage => self.toggle_language(),
             Hot::SettingsTheme => self.cycle_theme(),
             Hot::SettingsAccent => self.cycle_accent(),
@@ -10140,5 +10185,184 @@ mod browser_tab_strip {
         );
         assert!(s.hotspots().rect_of(Hot::BrowserStripRight).is_none());
         assert!(s.hotspots().rect_of(Hot::BrowserTab(0)).is_some());
+    }
+}
+
+/// F.10: both windows draw one sidebar, and that sidebar scrolls.
+///
+/// Settings' thirteen pages are 414 px of rows. The default 520 px window fits
+/// them, but a window the manager squeezed to 300 px could not reach the last
+/// pages at all: they were drawn outside the pane and no wheel, key or
+/// scrollbar moved them. The Files places pane had the same gap and its own
+/// width, row height and selection treatment besides. Both now go through
+/// `ui::sidebar`, so the tests that matter are the ones a user performs: squeeze
+/// the window, turn the wheel over the pane, click the row that arrives.
+#[cfg(test)]
+#[allow(clippy::arithmetic_side_effects)]
+mod sidebar_scroll {
+    use super::*;
+    use crate::canvas::{rgb, Canvas};
+    use crate::ui::Tokens;
+    use litric_design::{Theme, ThemeKind};
+
+    fn shell(w: f32, h: f32) -> Shell {
+        let tokens = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
+        let mut s = Shell::new(tokens, w, h, Regional::fallback("test"));
+        s.mode = DesktopMode::Ready;
+        s
+    }
+
+    fn draw(s: &mut Shell, w: u32, h: u32) {
+        s.tick_after(16);
+        let mut c = Canvas::new(w, h, rgb(0x000000));
+        crate::views::draw(&mut c, s);
+    }
+
+    fn wheel(s: &mut Shell, dy: f32, at: Point) {
+        s.handle(
+            &InputEvent::Scroll {
+                dx: 0.0,
+                dy,
+                at,
+                mods: Modifiers::NONE,
+            },
+            1_000,
+        );
+    }
+
+    fn click(s: &mut Shell, r: Rect) {
+        let (x, y) = r.center();
+        for pressed in [true, false] {
+            s.handle(
+                &InputEvent::PointerButton {
+                    button: PointerButton::Primary,
+                    pressed,
+                    at: Point::new(x, y),
+                    clicks: 1,
+                    mods: Modifiers::NONE,
+                },
+                1_000,
+            );
+        }
+    }
+
+    #[test]
+    fn a_squeezed_settings_window_can_reach_its_last_page() {
+        let mut s = shell(1280.0, 800.0);
+        let id = s.wm.open_at(
+            App::Settings.app_id(),
+            App::Settings.title(),
+            WmRect::new(120.0, 80.0, 640.0, 300.0),
+        );
+        s.wm.focus_window(id);
+        draw(&mut s, 1280, 800);
+
+        let last = crate::settings::Page::ALL.len() - 1;
+        assert!(
+            s.hotspots()
+                .rect_of(Hot::SettingsCategory(last as u8))
+                .is_none(),
+            "the window is not short enough for this test to prove anything"
+        );
+        let pane = s
+            .hotspots()
+            .rect_of(Hot::SettingsSidebarScroll)
+            .expect("the pane has to be a wheel target of its own");
+
+        // The wheel over the pane scrolls the page list -- not the page body and
+        // not the top bar's workspace switcher.
+        wheel(&mut s, 10.0, Point::new(pane.x + 20.0, pane.y + 12.0));
+        draw(&mut s, 1280, 800);
+        assert!(
+            s.settings.sidebar_scroll > 0.0,
+            "the wheel over the sidebar did not move it"
+        );
+        let row = s
+            .hotspots()
+            .rect_of(Hot::SettingsCategory(last as u8))
+            .expect("the last page is still unreachable after scrolling");
+
+        // A row that scrolled into view is a real row: the click lands on the
+        // page the row names, not the page that used to be drawn there.
+        click(&mut s, row);
+        let expected = crate::settings::Page::ALL
+            .get(last)
+            .copied()
+            .expect("the index came from the list");
+        assert_eq!(s.settings.page, expected);
+    }
+
+    #[test]
+    fn a_covered_sidebar_does_not_steal_the_wheel() {
+        let mut s = shell(1280.0, 800.0);
+        s.wm.open_at(
+            App::Settings.app_id(),
+            App::Settings.title(),
+            WmRect::new(120.0, 80.0, 640.0, 300.0),
+        );
+        draw(&mut s, 1280, 800);
+        let pane = s
+            .hotspots()
+            .rect_of(Hot::SettingsSidebarScroll)
+            .expect("the pane has to be a wheel target of its own");
+        let at = Point::new(pane.x + 20.0, pane.y + 12.0);
+
+        // A terminal opens in front of the pane. Its own frame is drawn over the
+        // Settings window, but the Settings pane's hotspot still exists in the
+        // last frame -- the wheel must go to the window the user can see.
+        let front = s.wm.open_at(
+            App::Terminal.app_id(),
+            App::Terminal.title(),
+            WmRect::new(100.0, 60.0, 500.0, 400.0),
+        );
+        s.wm.focus_window(front);
+        draw(&mut s, 1280, 800);
+        wheel(&mut s, 10.0, at);
+        draw(&mut s, 1280, 800);
+        assert_eq!(
+            s.settings.sidebar_scroll, 0.0,
+            "a covered Settings pane took the wheel from the terminal in front of it"
+        );
+        assert_eq!(s.wm.focused(), Some(front));
+    }
+
+    #[test]
+    fn a_squeezed_files_window_can_reach_trash() {
+        let mut s = shell(1280.0, 800.0);
+        let id = s.wm.open_at(
+            App::Files.app_id(),
+            App::Files.title(),
+            WmRect::new(120.0, 80.0, 640.0, 150.0),
+        );
+        s.wm.focus_window(id);
+        draw(&mut s, 1280, 800);
+
+        let last = s.files.places.len() - 1;
+        assert!(
+            s.hotspots()
+                .rect_of(Hot::Files(crate::apps::FilesHot::Place(last)))
+                .is_none(),
+            "the window is not short enough for this test to prove anything"
+        );
+        let pane = s
+            .hotspots()
+            .rect_of(Hot::Files(crate::apps::FilesHot::PlacesScroll))
+            .expect("the places pane has to be a wheel target of its own");
+        wheel(&mut s, 10.0, Point::new(pane.x + 20.0, pane.y + 12.0));
+        draw(&mut s, 1280, 800);
+        assert!(s.files.places_scroll > 0.0);
+
+        let row = s
+            .hotspots()
+            .rect_of(Hot::Files(crate::apps::FilesHot::Place(last)))
+            .expect("Trash is still unreachable after scrolling");
+        click(&mut s, row);
+        let expected = s
+            .files
+            .places
+            .get(last)
+            .map(|(path, _)| path.clone())
+            .expect("the index came from the list");
+        assert_eq!(s.files.path, expected);
     }
 }

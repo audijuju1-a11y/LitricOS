@@ -990,6 +990,214 @@ pub fn elide(text: &str, style: &Style, max_width: f32) -> String {
     out
 }
 
+// ---------------------------------------------------------------------------
+// Sidebars
+//
+// Two windows in this shell have a sidebar: Files' Quick access places and
+// Settings' page list. They were built twice, with two answers to every
+// question a sidebar has to answer -- 132 px fixed versus 36% of the window,
+// 20 px rows versus 30, no icon versus icon, colour-only selection versus fill
+// plus marker, no scroll, no heading. The research corpus records that as
+// F.10's largest delta: "a user learns two different sidebars in two adjacent
+// windows".
+//
+// These functions are the one design both use. Geometry comes from the
+// platforms' published numbers where they have one (libadwaita's 180-280sp
+// pane, Windows' 320 DIP expanded pane, the 40 px general target) and from this
+// shell's own list component for the row itself, so a sidebar row and a list
+// row cannot drift apart.
+// ---------------------------------------------------------------------------
+
+/// Geometry and rows for a window sidebar.
+pub mod sidebar {
+    use super::{list_item, with_alpha, Canvas, Icon, Radius, Rect, Space, State, Tokens};
+    use crate::font;
+
+    /// Narrowest a sidebar may be, in logical pixels (libadwaita's minimum).
+    pub const MIN_W: f32 = 180.0;
+    /// Widest a sidebar may be, in logical pixels (libadwaita's maximum).
+    pub const MAX_W: f32 = 280.0;
+    /// A row's height. The shell's `list_item` uses 30 px; the Files pane's
+    /// 20 px rows were below every published target, including WCAG's 24 px.
+    pub const ROW_H: f32 = 30.0;
+    /// Gap between rows.
+    pub const GAP: f32 = 2.0;
+    /// The narrowest the content beside the sidebar may become before the
+    /// sidebar gives up width.
+    pub const MIN_CONTENT_W: f32 = 320.0;
+
+    /// One row of a sidebar.
+    pub struct Item<'a> {
+        /// Text shown on the row.
+        pub label: &'a str,
+        /// Leading icon, if the window has them.
+        pub icon: Option<Icon>,
+        /// Whether this row is the selected destination.
+        pub selected: bool,
+        /// Whether the pointer is over this row.
+        pub highlighted: bool,
+    }
+
+    /// The sidebar's width for a window body.
+    ///
+    /// A quarter of the window, clamped to 180-280 px (libadwaita's pane range,
+    /// which also contains Windows' 320 DIP expanded pane at any window this
+    /// shell runs in). When the window is too narrow for both a sidebar and a
+    /// usable content column, the sidebar takes a third rather than squeezing
+    /// the content to nothing: 320 px is the floor the table needs.
+    #[must_use]
+    pub fn width(body_w: f32) -> f32 {
+        if body_w <= 0.0 {
+            return 0.0;
+        }
+        let quarter = body_w * 0.25;
+        let target = quarter.clamp(MIN_W, MAX_W);
+        let room = body_w - MIN_CONTENT_W;
+        let floor = body_w / 3.0;
+        target.min(room.max(floor)).max(0.0)
+    }
+
+    /// Height of `count` rows, gaps included.
+    #[must_use]
+    pub fn content_height(t: &Tokens, count: usize) -> f32 {
+        if count == 0 {
+            return 0.0;
+        }
+        let rows = count as f32 * ROW_H;
+        let gaps = count.saturating_sub(1) as f32 * GAP;
+        rows + t.px(gaps)
+    }
+
+    /// Largest offset that still shows the last row.
+    #[must_use]
+    pub fn max_scroll(t: &Tokens, list: Rect, count: usize) -> f32 {
+        let view = (list.h - t.sp(Space::Sm) * 2.0).max(0.0);
+        (content_height(t, count) - view).max(0.0)
+    }
+
+    /// Clamp a scroll offset to the list.
+    #[must_use]
+    pub fn clamp(t: &Tokens, list: Rect, count: usize, scroll: f32) -> f32 {
+        let max = max_scroll(t, list, count);
+        if scroll < 0.0 {
+            0.0
+        } else if scroll > max {
+            max
+        } else {
+            scroll
+        }
+    }
+
+    /// The area the scrolling rows occupy: `list` minus the fixed heading.
+    ///
+    /// Clamping and drawing both go through this, so a caller that stores the
+    /// clamped offset cannot disagree with the frame about how tall the list is.
+    #[must_use]
+    pub fn rows_area(t: &Tokens, list: Rect, heading: bool) -> Rect {
+        let heading_h = if heading { t.px(26.0) } else { 0.0 };
+        Rect::new(
+            list.x,
+            list.y + heading_h,
+            list.w,
+            (list.h - heading_h).max(0.0),
+        )
+    }
+
+    /// Draw the rows, clipped to `list`, and return the visible ones with their
+    /// indices so the caller can register its own hotspots.
+    ///
+    /// A row that is scrolled out of view is neither drawn nor returned: a
+    /// hotspot outside the pane would answer a click that never lands on it.
+    pub fn draw(
+        canvas: &mut Canvas,
+        t: &Tokens,
+        list: Rect,
+        heading: Option<&str>,
+        items: &[Item<'_>],
+        scroll: f32,
+    ) -> Vec<(usize, Rect)> {
+        let pad = t.sp(Space::Sm);
+        // The heading stays where it is while the rows move: a control that
+        // belongs to the pane (Windows puts sidebar-affecting controls above
+        // the list) must not scroll away with what it describes.
+        let rows = rows_area(t, list, heading.is_some());
+        let scroll = clamp(t, rows, items.len(), scroll);
+        let clip = canvas.push_clip(rows);
+        let mut y = rows.y + pad - scroll;
+        let mut visible = Vec::new();
+        for (i, item) in items.iter().enumerate() {
+            let row = Rect::new(rows.x + pad, y, (rows.w - pad * 2.0).max(0.0), t.px(ROW_H));
+            y += t.px(ROW_H + GAP);
+            if row.bottom() <= rows.y || row.y >= rows.bottom() {
+                continue;
+            }
+            if item.highlighted {
+                canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.text(), 0.055));
+            }
+            list_item(
+                canvas,
+                t,
+                row,
+                item.icon,
+                item.label,
+                None,
+                None,
+                if item.selected {
+                    State::Selected
+                } else {
+                    State::Normal
+                },
+            );
+            // The hotspot is the part of the row the pane actually shows: a row
+            // half under the fixed heading must not answer a click on the
+            // heading, and a row clipped at the bottom must not reach past the
+            // pane.
+            if let Some(hit) = row.intersection(&rows) {
+                visible.push((i, hit));
+            }
+        }
+        canvas.set_clip(clip);
+        if let Some(title) = heading {
+            let style = t.style_label();
+            font::draw(canvas, title, list.x + pad, list.y + t.px(16.0), &style);
+        }
+        draw_indicator(canvas, t, rows, items.len(), scroll);
+        visible
+    }
+
+    /// A thin scroll indicator when the rows are taller than the pane.
+    ///
+    /// The research notes that hover and pointer-only affordances are
+    /// discouraged, so the pane says "there is more" without being hovered.
+    fn draw_indicator(canvas: &mut Canvas, t: &Tokens, list: Rect, count: usize, scroll: f32) {
+        let content = content_height(t, count);
+        let view = (list.h - t.sp(Space::Sm) * 2.0).max(1.0);
+        if content <= view {
+            return;
+        }
+        // 3 px at 45 % and inset 4 px from the pane's edge: at the shell's 1x
+        // scale a 2 px 45 % indicator was indistinguishable from the pane's
+        // background, and hard against the edge it read as the divider between
+        // the pane and the page rather than as a scrollbar.
+        let track = Rect::new(
+            list.right() - t.px(7.0),
+            list.y + t.sp(Space::Sm),
+            t.px(3.0),
+            view,
+        );
+        canvas.fill_round_rect(track, t.px(1.5), with_alpha(t.text(), 0.12));
+        let thumb_h = (view * (view / content)).max(t.px(18.0));
+        let max = content - view;
+        let at = if max > 0.0 {
+            (scroll / max) * (view - thumb_h)
+        } else {
+            0.0
+        };
+        let thumb = Rect::new(track.x, track.y + at, track.w, thumb_h);
+        canvas.fill_round_rect(thumb, t.px(1.5), with_alpha(t.text(), 0.45));
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::arithmetic_side_effects)]
 mod tests {
@@ -1257,6 +1465,118 @@ mod tests {
         assert_eq!(a.w, 176.0);
         assert!(b.y >= a.bottom(), "rows overlap: {a:?} then {b:?}");
         assert_eq!(b.y - a.bottom(), 8.0, "gap not applied");
+    }
+
+    #[test]
+    fn the_sidebar_width_policy_is_bounded_at_both_ends() {
+        // One policy for both windows: 25 % of the body, held between
+        // libadwaita's 180 and 280, and never wider than the body leaves room
+        // for a 320 px content column. Settings used to take 36 % (504 px at
+        // 1400) and Files a fixed 132 px.
+        assert!((sidebar::width(1400.0) - 280.0).abs() < 0.01);
+        assert!((sidebar::width(1000.0) - 250.0).abs() < 0.01);
+        assert!((sidebar::width(740.0) - 185.0).abs() < 0.01);
+        assert!((sidebar::width(600.0) - 180.0).abs() < 0.01);
+        // Below 600 there is no room for 180 + 320, so the pane takes a third
+        // and the content keeps two.
+        assert!((sidebar::width(480.0) - 160.0).abs() < 0.01);
+        assert_eq!(sidebar::width(0.0), 0.0);
+        // At no width does the pane claim more than its window has.
+        for body in [1.0, 120.0, 320.0, 599.0, 640.0, 3000.0] {
+            let w = sidebar::width(body);
+            assert!(w >= 0.0 && w <= body + 0.01, "{body} gave {w}");
+        }
+    }
+
+    #[test]
+    fn the_sidebar_scroll_stops_at_the_last_row() {
+        let t = tokens();
+        let list = Rect::new(0.0, 0.0, 240.0, 200.0);
+        let rows = sidebar::rows_area(&t, list, true);
+        let count = 13;
+        let content = sidebar::content_height(&t, count);
+        assert!(content > rows.h, "{content} rows in {} px", rows.h);
+        let max = sidebar::max_scroll(&t, rows, count);
+        assert!(max > 0.0);
+        assert_eq!(sidebar::clamp(&t, rows, count, -40.0), 0.0);
+        assert_eq!(sidebar::clamp(&t, rows, count, max + 400.0), max);
+        // At the maximum offset the content's end sits exactly on the pane's
+        // padded bottom: no blank strip below the last row and no clipped row.
+        let pad = t.sp(Space::Sm);
+        let bottom = rows.y + pad + content - max;
+        assert!(
+            (bottom - (rows.bottom() - pad)).abs() < 0.01,
+            "last row ends at {bottom}, pane's padded bottom is {}",
+            rows.bottom() - pad
+        );
+    }
+
+    #[test]
+    fn a_sidebar_draws_only_the_rows_inside_its_pane() {
+        let t = tokens();
+        let list = Rect::new(0.0, 0.0, 240.0, 200.0);
+        let items: Vec<sidebar::Item<'_>> = (0..13)
+            .map(|_| sidebar::Item {
+                label: "Page",
+                icon: None,
+                selected: false,
+                highlighted: false,
+            })
+            .collect();
+        let mut c = Canvas::new(240, 200, rgb(0x000000));
+        let visible = sidebar::draw(&mut c, &t, list, Some("Settings"), &items, 10_000.0);
+        assert!(!visible.is_empty());
+        assert!(
+            visible.len() < items.len(),
+            "all {} rows were reported visible in a 200 px pane",
+            items.len()
+        );
+        assert_eq!(
+            visible.last().map(|(i, _)| *i),
+            Some(items.len() - 1),
+            "scrolling to the end must reach the last row"
+        );
+        let rows = sidebar::rows_area(&t, list, true);
+        for (_, row) in &visible {
+            assert!(
+                row.bottom() <= rows.bottom() + 0.01 && row.y >= rows.y - 0.01,
+                "{row:?} is outside {rows:?}"
+            );
+        }
+        // The heading does not scroll away with the rows.
+        assert_eq!(rows.y, list.y + t.px(26.0));
+    }
+
+    #[test]
+    fn a_sidebar_says_there_is_more_only_when_there_is() {
+        let t = tokens();
+        let items: Vec<sidebar::Item<'_>> = (0..13)
+            .map(|_| sidebar::Item {
+                label: "Page",
+                icon: None,
+                selected: false,
+                highlighted: false,
+            })
+            .collect();
+        // The indicator is drawn in the last 4 px of the pane, where no row
+        // reaches (rows are inset by Space::Sm on both sides).
+        let edge = |h: u32| -> usize {
+            let mut c = Canvas::new(240, h, rgb(0x000000));
+            sidebar::draw(
+                &mut c,
+                &t,
+                Rect::new(0.0, 0.0, 240.0, h as f32),
+                None,
+                &items,
+                0.0,
+            );
+            (0..i64::from(h))
+                .flat_map(|y| (230..240i64).map(move |x| (x, y)))
+                .filter(|(x, y)| c.get(*x, *y).unwrap_or(0) != rgb(0x000000))
+                .count()
+        };
+        assert_eq!(edge(520), 0, "a pane that fits its rows drew a scrollbar");
+        assert!(edge(200) > 0, "a pane that scrolls drew no indicator");
     }
 
     #[test]

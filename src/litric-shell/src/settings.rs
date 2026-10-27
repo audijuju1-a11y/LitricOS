@@ -276,6 +276,12 @@ pub struct Model {
     /// key rather than the row so nothing here borrows from the registry's
     /// static table and nothing can outlive it.
     pub focus: Option<&'static str>,
+    /// How far the page list is scrolled, in device pixels.
+    ///
+    /// Thirteen 30 px pages are 414 px of rows; a window shorter than that had
+    /// no way to reach the last ones. The view clamps this against the pane's
+    /// real height, which is the only place the height is known.
+    pub sidebar_scroll: f32,
     previous: Option<Preferences>,
 }
 
@@ -286,6 +292,18 @@ impl Default for Preferences {
 }
 
 impl Model {
+    /// Scroll the page list by `dy` wheel notches.
+    ///
+    /// The view clamps the result: only it knows the pane's height and how
+    /// many rows fit, and a model that guessed would keep an offset that no
+    /// longer describes a scrollable list.
+    pub fn scroll_sidebar(&mut self, dy: f32) {
+        self.sidebar_scroll += dy * 44.0;
+        if self.sidebar_scroll < 0.0 {
+            self.sidebar_scroll = 0.0;
+        }
+    }
+
     /// Construct from an already-loaded preference record.
     #[must_use]
     pub fn new(preferences: Preferences) -> Self {
@@ -294,6 +312,7 @@ impl Model {
             page: Page::Display,
             save: SaveState::Idle,
             focus: None,
+            sidebar_scroll: 0.0,
             previous: None,
         }
     }

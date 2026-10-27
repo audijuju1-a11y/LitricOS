@@ -1,0 +1,55 @@
+# F.10 sidebars -- one component, a width policy, a real scroll
+# 2026-10-27T10:56:49Z on the host. No LitricOS image was built or booted.
+
+$ cargo test --offline -p litric-shell --lib sidebar
+
+running 7 tests
+test ui::tests::the_sidebar_scroll_stops_at_the_last_row ... ok
+test ui::tests::the_sidebar_width_policy_is_bounded_at_both_ends ... ok
+test ui::tests::a_sidebar_draws_only_the_rows_inside_its_pane ... ok
+test ui::tests::a_sidebar_says_there_is_more_only_when_there_is ... ok
+test shell::sidebar_scroll::a_squeezed_files_window_can_reach_trash ... ok
+test shell::sidebar_scroll::a_squeezed_settings_window_can_reach_its_last_page ... ok
+test shell::sidebar_scroll::a_covered_sidebar_does_not_steal_the_wheel ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 578 filtered out; finished in 2.64s
+
+cargo exit=0
+
+$ cargo test --offline   (workspace)
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 85 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.90s
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 118 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+(full run: exit 0)
+
+$ cargo clippy --offline -p litric-shell --all-targets
+    Checking litric-shell v0.2.0 (/workspace/chats/71c43910455d319c26d9858f/src/litric-shell)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.92s
+cargo exit=0
+
+$ cargo fmt --all -- --check
+cargo exit=0
+
+golden-frames: 10 required screen(s), 24 frame(s) dumped
+  PASS  03-windows-overlap   Desktop + 3 windows overlap: identical
+  PASS  04-files             Files (grid, with files): identical
+  PASS  16-files-empty       Files (empty + edge state): identical
+  PASS  05-settings          Settings / Appearance: identical
+  PASS  19-dialog-danger     Dialog (danger delete file): identical
+golden-frames: PASS -- every frame is within the threshold of its golden
+
+$ ci/verify.sh
+summary: [1;32m30[0m pass, 0 fail, [1;33m3[0m skipped
+  skipped: image build (no mkosi), boot smoke test (no qemu), idle RAM/CPU (no qemu)
+  full report: docs/evidence/2026-10-27/verify-f10.log

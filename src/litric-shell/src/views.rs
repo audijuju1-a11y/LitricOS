@@ -959,42 +959,48 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let vis = app.visible();
 
     // Layout: places | main column (crumbs, commands, table) | details.
-    let places_w = t.px(132.0);
+    //
+    // One width policy for every sidebar in the shell (see `ui::sidebar`):
+    // previously this pane was a fixed 132 px while Settings took 36% of its
+    // window, which is the delta F.10 records.
+    let places_w = ui::sidebar::width(body.w);
     let details_w = if app.details { t.px(180.0) } else { 0.0 };
     let table_x = body.x + places_w;
     let table_w = body.w - places_w - details_w;
 
     // --- navigation pane (Quick access) ---
-    ui::surface(
-        canvas,
-        &t,
-        Rect::new(body.x, body.y, places_w, body.h),
-        0.0,
-        ui::Material::Elevated,
+    //
+    // The same component Settings uses: one width policy, one row height (the
+    // shell's 30 px list row), one selection treatment (fill plus the accent
+    // marker `list_item` draws), one scroll model. The pane used to be 132 px
+    // of 20 px rows with a colour-only highlight and no scroll at all.
+    let places = Rect::new(body.x, body.y, places_w, body.h);
+    ui::surface(canvas, &t, places, 0.0, ui::Material::Elevated);
+    let items: Vec<ui::sidebar::Item<'_>> = app
+        .places
+        .iter()
+        .enumerate()
+        .map(|(i, (place, label))| ui::sidebar::Item {
+            label,
+            icon: Some(Icon::Files),
+            selected: app.place_index == Some(i) || place == &app.path,
+            highlighted: false,
+        })
+        .collect();
+    // Behind the rows: the wheel over the pane's empty space must scroll it,
+    // and a row under the pointer wins the hit test because it is pushed after
+    // this. The heading is fixed, so only the rows area needs the hotspot.
+    shell.hotspots_mut().push(
+        ui::sidebar::rows_area(&t, places, true),
+        Hot::Files(FilesHot::PlacesScroll),
     );
-    let mut py = body.y + t.sp(Space::Md);
-    let s_label = t.style_label();
-    font::draw(
-        canvas,
-        "Quick access",
-        body.x + t.sp(Space::Sm),
-        py + t.px(10.0),
-        &s_label,
-    );
-    py += t.px(22.0);
-    for (i, (place, label)) in app.places.iter().enumerate() {
-        let r = Rect::new(body.x + t.px(4.0), py, places_w - t.px(8.0), t.px(20.0));
-        let selected = app.place_index == Some(i) || place == &app.path;
-        if selected {
-            canvas.fill_round_rect(r, t.radius(Radius::Sm), with_alpha(t.text(), 0.08));
-        }
-        let s = Style::new(
-            t.text_px(TypeStep::Footnote),
-            if selected { t.text() } else { t.text_dim() },
-        );
-        font::draw(canvas, label, r.x + t.px(8.0), r.y + t.px(13.0), &s);
-        shell.hotspots_mut().push(r, Hot::Files(FilesHot::Place(i)));
-        py += t.px(22.0);
+    let rows_area = ui::sidebar::rows_area(&t, places, true);
+    let scroll = ui::sidebar::clamp(&t, rows_area, items.len(), app.places_scroll);
+    shell.files.places_scroll = scroll;
+    for (i, row) in ui::sidebar::draw(canvas, &t, places, Some("Quick access"), &items, scroll) {
+        shell
+            .hotspots_mut()
+            .push(row, Hot::Files(FilesHot::Place(i)));
     }
 
     // --- breadcrumb bar + history buttons ---
@@ -2463,30 +2469,34 @@ fn draw_environments(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
 /// Settings: real shell-owned preferences and measured system facts.
 fn draw_settings(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let t = shell.tokens.clone();
-    let sidebar_w = body.w * 0.36;
+    // The same sidebar Files uses. Settings' pane used to be 36% of the window
+    // -- 504 px at 1400, well past libadwaita's 280sp maximum -- with thirteen
+    // undifferentiated 30 px rows and no scroll, so on a short window the last
+    // pages could not be reached at all.
+    let sidebar_w = ui::sidebar::width(body.w);
     let sidebar = Rect::new(body.x, body.y, sidebar_w, body.h);
-    canvas.fill_round_rect(sidebar, 0.0, with_alpha(rgb(0x000000), 0.16));
-
-    let mut col = ui::Column::new(sidebar, t.sp(Space::Sm), t.px(2.0));
-    for (i, page) in crate::settings::Page::ALL.iter().copied().enumerate() {
-        let row = col.row(t.px(30.0));
-        if shell.is_highlighted(Hot::SettingsCategory(i as u8)) {
-            canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.text(), 0.055));
-        }
-        ui::list_item(
-            canvas,
-            &t,
-            row,
-            Some(settings_icon(page)),
-            page.title(),
-            None,
-            None,
-            if page == shell.settings.page {
-                State::Selected
-            } else {
-                State::Normal
-            },
-        );
+    // The same pane material as Files', so the two windows do not disagree about
+    // what a sidebar is made of either. Settings used to paint 16 % black.
+    ui::surface(canvas, &t, sidebar, 0.0, ui::Material::Elevated);
+    let items: Vec<ui::sidebar::Item<'_>> = crate::settings::Page::ALL
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(i, page)| ui::sidebar::Item {
+            label: page.title(),
+            icon: Some(settings_icon(page)),
+            selected: page == shell.settings.page,
+            highlighted: shell.is_highlighted(Hot::SettingsCategory(i as u8)),
+        })
+        .collect();
+    shell.hotspots_mut().push(
+        ui::sidebar::rows_area(&t, sidebar, true),
+        Hot::SettingsSidebarScroll,
+    );
+    let rows_area = ui::sidebar::rows_area(&t, sidebar, true);
+    let scroll = ui::sidebar::clamp(&t, rows_area, items.len(), shell.settings.sidebar_scroll);
+    shell.settings.sidebar_scroll = scroll;
+    for (i, row) in ui::sidebar::draw(canvas, &t, sidebar, Some("Settings"), &items, scroll) {
         shell
             .hotspots_mut()
             .push(row, Hot::SettingsCategory(i as u8));

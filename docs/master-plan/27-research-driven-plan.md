@@ -466,6 +466,17 @@ Apple's pages returned titles and summaries again, and no layout test at two win
 widths has been run, so each overflow claim is a reading of a loop rather than a
 resized frame.
 
+`F.10` has since had its repair, not just its reading. Files' 132 px pane and
+Settings' 36 % pane are one component (`ui::sidebar`): 25 % of the body, clamped
+to libadwaita's 180–280 px and to a 320 px content floor, 30 px rows from the
+shell's own list item, one fixed heading, one clamped scroll offset with an
+indicator, and a wheel target behind the rows that respects window stacking. A
+640 × 300 Settings window now reaches its last category, and a 640 × 150 Files
+window reaches Trash; both are regression tests, recorded as
+[BUG-0032](../../docs/bugs/BUG-0032-two-sidebars-and-a-settings-list-nothing-could-scroll.md).
+`F.10` stays `PARTIAL` for the reasons the research recorded: no compact or
+minimal mode, no resize handle, no arrow-key model and no sections.
+
 #### Part 14: menus and context menus (2026-10-27)
 
 The two items that share a row vocabulary, in a shell that has three of them.

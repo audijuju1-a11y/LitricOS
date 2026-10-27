@@ -298,6 +298,12 @@ pub struct FilesApp {
     pub places: Vec<(String, String)>,
     /// Index into `places` currently highlighted, if any.
     pub place_index: Option<usize>,
+    /// How far the places list is scrolled, in device pixels.
+    ///
+    /// The view clamps it against the pane's real height, so a window that
+    /// grows hands the space back instead of keeping an offset that hides the
+    /// first places behind nothing.
+    pub places_scroll: f32,
     /// The current directory's logical path, e.g. `/Documents`.
     pub path: String,
     /// The listing of `path` as received (already decoded rows).
@@ -344,6 +350,7 @@ pub struct FilesApp {
 impl Default for FilesApp {
     fn default() -> Self {
         Self {
+            places_scroll: 0.0,
             places: Self::DEFAULT_PLACES
                 .iter()
                 .map(|(p, l)| ((*p).to_owned(), (*l).to_owned()))
@@ -657,6 +664,18 @@ impl FilesApp {
                 }
             })
             .collect()
+    }
+
+    /// Scroll the places list by `dy` wheel notches.
+    ///
+    /// The view clamps the result: only it knows the pane's height and how
+    /// many rows fit, and a model that guessed would keep an offset that no
+    /// longer describes a scrollable list.
+    pub fn scroll_places(&mut self, dy: f32) {
+        self.places_scroll += dy * 44.0;
+        if self.places_scroll < 0.0 {
+            self.places_scroll = 0.0;
+        }
     }
 
     /// Whether a visible row is part of the multi-selection.
@@ -1555,6 +1574,9 @@ impl DesktopIcons {
 pub enum FilesHot {
     /// A place in the navigation pane.
     Place(usize),
+    /// The navigation pane itself, behind its rows: the wheel over the pane
+    /// scrolls the list even where it is empty.
+    PlacesScroll,
     /// A breadcrumb segment.
     Crumb(usize),
     /// A column header (sort toggle).
@@ -1594,6 +1616,7 @@ pub enum FilesHot {
 #[must_use]
 pub fn files_action(app: &mut FilesApp, hot: FilesHot) -> Option<String> {
     match hot {
+        FilesHot::PlacesScroll => None,
         FilesHot::Place(i) => {
             let path = app.places.get(i).map(|(p, _)| p.clone())?;
             app.place_index = Some(i);
