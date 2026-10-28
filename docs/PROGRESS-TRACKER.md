@@ -70,7 +70,7 @@ evidence, not throughput.
 
 | Item | State | Blocker |
 |---|---|---|
-| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12 and §16 (14.404 ms median after the run-based fill, under the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
+| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16 and §17 (12.054 ms median after the exact blend table, under the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
@@ -683,7 +683,8 @@ present-to-display; no GPU or DRM device was measured.
 
 §16 supersedes the `fill_round_rect` part of this section: the same scene now
 measures **14.404 ms** median after the run-based fill. The 15.076 ms figure
-above is §12's measurement as it stood; §16 records the new runs.
+above is §12's measurement as it stood; §16 records the new runs. §17 lowers the same scene to 12.054 ms by
+replacing the translucent core blend with an exact table.
 
 ## 13. Batch: browser origin canonicalisation and the queue's load bound
 
@@ -994,3 +995,105 @@ and `stroke_line` 2.259 ms (11.7 %, 2239 calls). The next unblocked target is
 the translucent path of `fill_round_rect` — the opaque core is now a fill, so
 what is left is the edge square root and the per-pixel blend for alpha colours
 — or `stroke_line`, which has never been attributed below its entry point.
+
+§17 takes this further (12.054 ms) by replacing the translucent core blend
+with an exact table; the numbers above are §16's measurement.
+
+
+## 17. Batch: the translucent rounded fill blends through an exact table (VERIFIED)
+
+After §16 the residual `fill_round_rect` row was **4.638 ms over 380,749 px
+(12.18 ns/px)**. This batch measured where that went before changing anything,
+and the answer was the per-pixel blend, not the edge square root.
+
+### 17.1 Evidence: a control that isolates the blend
+
+`render_bench` now has `primitive_fill_panel_translucent`: the same 600×420
+panel, radius 16 and call site as the existing opaque primitive, painted at
+alpha 0.37. Same geometry, same edge coverage, same square roots — only the
+core's colour differs.
+
+| Primitive (5 processes, same session) | Median | Range |
+|---|---|---|
+| `primitive_fill_panel` (opaque) | 0.229 ms | 0.228–0.231 |
+| `primitive_fill_panel_translucent` (alpha 0.37) | **2.756 ms** | 2.747–2.763 |
+
+The difference is **2.527 ms over 220,384 core pixels (568×388) ≈ 11.5 ns/px**:
+the three-channel float blend at full coverage. Edge work is present in both rows,
+so hoisting or approximating the square root could not have moved this number.
+
+Baseline on `a9049f8`, before any renderer edit, with the new primitive present:
+`full_frame` **14.709 ms** (14.413–15.385), `open_window_frame` 28.006 ms
+(27.733–28.583), `lock_frame_customize` 18.961 ms (18.902–19.039).
+
+### 17.2 What changed
+
+`src/litric-shell/src/canvas.rs`:
+
+* for a translucent fill whose clipped core is at least 1024 px, build a
+  256-entry table once per call:
+  `table[d] = blend(0xFF00_0000 | d << 16 | d << 8 | d, color, 1.0)`;
+* the core loop takes the R byte of `table[r]`, the G byte of `table[g]` and
+  the B byte of `table[b]`, then ORs the opaque alpha;
+* small translucent cores keep the direct `blend`, so the table build cannot
+  dominate a tiny fill; opaque cores keep the `slice::fill` path from §16.
+
+Why the pixels are identical: at full coverage, `blend`'s per-channel result
+depends only on that channel's destination value, and every table entry was
+produced by calling `blend` itself with that value. Same f32 operations, same
+`round_half_up`, same output integer — a table of the function, not an
+approximation of it. There is no allocation (a 1 KiB stack array) and no API
+change.
+
+`src/litric-shell/examples/render_bench.rs` gained the translucent primitive as
+a permanent control, so the next person can re-run this attribution.
+
+### 17.3 Proof of identical output
+
+`canvas::tests::the_filled_core_skips_the_distance_and_changes_no_pixel` was
+extended again: 11 rectangles (including a 130×100 rect clipped by the canvas,
+zero-width, negative-width and off-canvas), 7 colours (opaque, alpha 0.001,
+0.05, 0.37, 0.5, 0.999 and a fully transparent source) and 4 clips (none,
+fractional partial, one-pixel, empty), each compared pixel for pixel with the
+verbatim per-pixel reference. It passes.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font face
+fixture; it is not passing and was not worked around.
+
+### 17.4 Measured result
+
+```text
+cd src && cargo build --release --example render_bench
+cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/res-<phase> > run$i.txt; done
+```
+
+Medians of the five per-process medians; ranges are min–max of those medians.
+Raw logs: `evidence/bench/fill-round-rect-blend-table-2026-10-28/{before,after}/`.
+
+| Scene | Before | After | Change | Verdict |
+|---|---|---|---|---|
+| `full_frame` (shipped) | **14.709 ms** (14.413–15.385) | **12.054 ms** (11.867–13.422) | −18.1 % | kept; ranges disjoint |
+| `open_window_frame` | 28.006 ms (27.733–28.583) | 21.727 ms (21.421–21.840) | −22.4 % | kept; ranges disjoint |
+| `lock_frame_customize` | 18.961 ms (18.902–19.039) | 16.418 ms (16.222–16.616) | −13.4 % | kept; ranges disjoint |
+| `primitive_fill_panel_translucent` | **2.756 ms** (2.747–2.763) | **0.801 ms** (0.794–0.809) | −70.9 % | kept; direct measure |
+| `primitive_fill_panel` (opaque) | 0.229 ms (0.228–0.231) | 0.222 ms (0.221–0.224) | −3.1 % | **not claimed**: the opaque path was not touched; this is layout/noise |
+
+The attribution row moved from **4.638 ms / 12.18 ns/px / 24.3 %** to
+**2.135 ms / 5.61 ns/px / 12.9 %**, same 380,749 px.
+
+Conditions: release build, 1280×800, 8-vCPU VM, no GPU, no display, same host
+and session for both phases. The profiled frame runs instrumented (16.578 ms
+against the 12.054 ms timed frame), so its shares are relative to 16.578 ms.
+
+### 17.5 Status and remaining distance
+
+**VERIFIED**: the measured bottleneck was isolated by a control, the change is
+proven pixel-identical by the existing reference pattern, and every kept number
+comes from before/after ranges that do not overlap.
+
+`full_frame` is now **3.946 ms inside the 16 ms budget** (12.054 ms).
+`lock_frame_customize` is now **0.418 ms over** at 16.418 ms and is the next
+target. The largest rows left in the instrumented frame are `glass_backdrop`
+2.548 ms (15.4 %), `soft_shadow` 2.436 ms (14.7 %), `stroke_line` 2.244 ms
+(13.5 %, 2239 calls), `fill_round_rect` 2.135 ms (12.9 %) and
+`stroke_round_rect` 1.553 ms (9.4 %).

@@ -1229,6 +1229,25 @@ impl Canvas {
         let qy_off = r.h / 2.0 - rad;
         let width = self.width as usize;
         let opaque = (color >> 24) & 0xFF == 0xFF;
+        // A translucent core cannot be a plain fill, but for a fixed colour and
+        // full coverage a channel's result depends only on that channel's
+        // destination value. 256 samples of `blend` therefore hold every
+        // possible output, and the table is built *with* `blend`, so the pixels
+        // are the same integers rather than an approximation of them. It is
+        // only worth building when enough pixels will read it.
+        let core_w = core_x1.min(x1).saturating_sub(core_x0.max(x0)).max(0);
+        let core_h = core_y1.min(y1).saturating_sub(core_y0.max(y0)).max(0);
+        let core_area = core_w.saturating_mul(core_h);
+        let mut blend_table = [0u32; 256];
+        let use_table = !opaque && core_area >= 1024;
+        if use_table {
+            for d in 0..256_u32 {
+                let sample = 0xFF00_0000 | (d << 16) | (d << 8) | d;
+                if let Some(slot) = blend_table.get_mut(d as usize) {
+                    *slot = blend(sample, color, 1.0);
+                }
+            }
+        }
         let mut painted = 0u64;
         // Pixels the core does not own are coloured by this closure: one
         // square root each, but only where the distance can matter. It takes
@@ -1272,6 +1291,21 @@ impl Canvas {
                         // coverage, so writing it directly is the same frame
                         // without a float multiply per channel per pixel.
                         seg.fill(color);
+                    } else if use_table {
+                        for p in seg.iter_mut() {
+                            let v = *p;
+                            let tr = blend_table
+                                .get(((v >> 16) & 0xFF) as usize)
+                                .copied()
+                                .unwrap_or(0);
+                            let tg = blend_table
+                                .get(((v >> 8) & 0xFF) as usize)
+                                .copied()
+                                .unwrap_or(0);
+                            let tb = blend_table.get((v & 0xFF) as usize).copied().unwrap_or(0);
+                            *p =
+                                0xFF00_0000 | (tr & 0x00FF_0000) | (tg & 0x0000_FF00) | (tb & 0xFF);
+                        }
                     } else {
                         for p in seg.iter_mut() {
                             *p = blend(*p, color, 1.0);
@@ -2787,8 +2821,20 @@ mod tests {
             (Rect::new(30.0, 30.0, 0.0, 0.0), 0.0),
             (Rect::new(30.0, 30.0, -10.0, 20.0), 4.0),
             (Rect::new(-200.0, -200.0, 50.0, 50.0), 8.0),
+            // Large enough that the translucent core takes the lookup table,
+            // and clipped by the canvas on two sides.
+            (Rect::new(15.0, 12.0, 130.0, 100.0), 20.0),
         ] {
-            for colour in [rgb(0x336699), with_alpha(rgb(0xFFFFFF), 0.37)] {
+            for colour in [
+                rgb(0x336699),
+                with_alpha(rgb(0xFFFFFF), 0.001),
+                with_alpha(rgb(0xFFFFFF), 0.05),
+                with_alpha(rgb(0xFFFFFF), 0.37),
+                with_alpha(rgb(0x123456), 0.5),
+                with_alpha(rgb(0x000000), 0.999),
+                // A fully transparent source must leave every pixel alone.
+                with_alpha(rgb(0xFF00FF), 0.0),
+            ] {
                 // No clip, a fractional partial clip, a one-pixel clip and an
                 // empty clip: the reference clips through `span` and so must
                 // the runs.

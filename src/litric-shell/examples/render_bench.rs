@@ -38,7 +38,7 @@ use std::time::Instant;
 use litric_design::{Theme, ThemeKind};
 use litric_input::event::{InputEvent, Point};
 use litric_locale::Regional;
-use litric_shell::canvas::{rgb, Canvas, Rect, Site};
+use litric_shell::canvas::{rgb, with_alpha, Canvas, Rect, Site};
 use litric_shell::desktop;
 use litric_shell::fb::{FbInfo, Framebuffer};
 use litric_shell::font::{self, Style};
@@ -595,6 +595,19 @@ fn main() -> ExitCode {
     }
     println!("primitive_fill_panel.size=600x420");
     report("primitive_fill_panel", times);
+
+    // The same panel in a translucent colour. Its core cannot take the opaque
+    // fill path, so this row isolates the per-pixel blend that dominates the
+    // residual `fill_round_rect` time; the opaque row above is the control.
+    let mut times = Vec::with_capacity(RUNS);
+    for _ in 0..RUNS {
+        let t = Instant::now();
+        b.scene
+            .fill_round_rect(panel, 16.0, with_alpha(rgb(0x202430), 0.37));
+        times.push(elapsed_ms(t));
+    }
+    println!("primitive_fill_panel_translucent.size=600x420");
+    report("primitive_fill_panel_translucent", times);
 
     let mut times = Vec::with_capacity(RUNS);
     for _ in 0..RUNS {

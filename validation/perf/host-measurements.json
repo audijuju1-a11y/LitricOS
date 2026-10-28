@@ -919,5 +919,120 @@
       "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing; the equivalence test is the output proof",
       "no present-to-display, GPU or idle-RAM measurement was possible on this host"
     ]
+  },
+  "fill_round_rect_blend_table": {
+    "commit_before": "a9049f8d2432cbadb9c7997029ecc9e3c35e4523",
+    "status": "VERIFIED (composition only; golden-frame gate remains BLOCKED)",
+    "finding": "The residual fill_round_rect cost was the translucent core's per-pixel blend, not the edge square root: the same 600x420 panel costs 0.229 ms opaque and 2.756 ms at alpha 0.37, while the edge work is identical. The 2.527 ms difference over 220,384 core pixels (568x388) is the three-channel float blend at full coverage, about 11.5 ns/px.",
+    "change": "src/litric-shell/src/canvas.rs: for a translucent core of at least 1024 clipped pixels, build a 256-entry table once per call with blend(0xFF000000|d<<16|d<<8|d, color, 1.0); the core loop then takes the R byte of table[r], the G byte of table[g] and the B byte of table[b]. Same blend function, same arithmetic, same rounding, so the pixels are identical. Small translucent cores keep the direct blend; opaque cores keep slice::fill. render_bench gained primitive_fill_panel_translucent as the control.",
+    "protocol": "src/target/release/examples/render_bench <dir>, 5 separate processes, 15 frames per scene each; median of the five per-process medians; min/max are of those medians",
+    "conditions": {
+      "canvas": "1280x800",
+      "profile": "release",
+      "cpu": "8-vCPU VM",
+      "gpu": "none",
+      "display": "none",
+      "host": "same host and session for before and after"
+    },
+    "commands": {
+      "build": "cd src && cargo build --release --example render_bench",
+      "measure": "cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/res-<phase> > run$i.txt; done",
+      "attribution": "grep '^profile\\.' <render_bench output>",
+      "tests": "cargo test -p litric-shell --lib canvas::",
+      "raw_before": "evidence/bench/fill-round-rect-blend-table-2026-10-28/before/run1.txt .. run5.txt",
+      "raw_after": "evidence/bench/fill-round-rect-blend-table-2026-10-28/after/run1.txt .. run5.txt"
+    },
+    "before_ms": {
+      "full_frame": {
+        "median": 14.709,
+        "min": 14.413,
+        "max": 15.385
+      },
+      "open_window_frame": {
+        "median": 28.006,
+        "min": 27.733,
+        "max": 28.583
+      },
+      "lock_frame_customize": {
+        "median": 18.961,
+        "min": 18.902,
+        "max": 19.039
+      },
+      "primitive_fill_panel": {
+        "median": 0.229,
+        "min": 0.228,
+        "max": 0.231
+      },
+      "primitive_fill_panel_translucent": {
+        "median": 2.756,
+        "min": 2.747,
+        "max": 2.763
+      }
+    },
+    "after_ms": {
+      "full_frame": {
+        "median": 12.054,
+        "min": 11.867,
+        "max": 13.422
+      },
+      "open_window_frame": {
+        "median": 21.727,
+        "min": 21.421,
+        "max": 21.84
+      },
+      "lock_frame_customize": {
+        "median": 16.418,
+        "min": 16.222,
+        "max": 16.616
+      },
+      "primitive_fill_panel": {
+        "median": 0.222,
+        "min": 0.221,
+        "max": 0.224
+      },
+      "primitive_fill_panel_translucent": {
+        "median": 0.801,
+        "min": 0.794,
+        "max": 0.809
+      }
+    },
+    "change_pct": {
+      "full_frame": -18.05,
+      "open_window_frame": -22.42,
+      "lock_frame_customize": -13.41,
+      "primitive_fill_panel_translucent": -70.94
+    },
+    "verdict_by_scene": {
+      "full_frame": "kept: before 14.413-15.385 and after 11.867-13.422 do not overlap",
+      "open_window_frame": "kept: before 27.733-28.583 and after 21.421-21.840 do not overlap",
+      "lock_frame_customize": "kept: before 18.902-19.039 and after 16.222-16.616 do not overlap",
+      "primitive_fill_panel_translucent": "kept: the direct measure of the change, 2.756 -> 0.801 ms, ranges disjoint",
+      "primitive_fill_panel": "not claimed: the opaque path was not touched; the small 0.229 -> 0.222 ms shift is layout/noise even though the ranges happen not to overlap"
+    },
+    "profile_row": {
+      "entry": "fill_round_rect",
+      "calls": 75,
+      "before_ms": 4.638,
+      "before_ns_per_px": 12.18,
+      "after_ms": 2.135,
+      "after_ns_per_px": 5.61,
+      "pixels": 380749,
+      "before_share_pct": 24.3,
+      "after_share_pct": 12.9
+    },
+    "identical_output_proof": "canvas::tests::the_filled_core_skips_the_distance_and_changes_no_pixel compares against a verbatim per-pixel reference over 11 rectangles (plain, pill, fractional, radius > half-extent, tiny, zero-width, negative-width, off-canvas, and a 130x100 rect clipped by the canvas), 7 colours (opaque plus alpha 0.001, 0.05, 0.37, 0.5, 0.999 and 0.0) and 4 clips (none, fractional partial, one-pixel, empty). Every pixel equal.",
+    "budget": {
+      "budget_ms": 16.0,
+      "shipped_full_frame_median_ms": 12.054,
+      "headroom_ms": 3.946,
+      "lock_frame_customize_median_ms": 16.418,
+      "over_budget_ms": 0.418
+    },
+    "caveats": [
+      "composition only at 1280x800 on an 8-vCPU VM with no GPU and no display",
+      "the profiled frame carries instrumentation overhead (timed_ms 16.578 against a 12.054 ms timed frame), so profile shares are relative to 16.578 ms",
+      "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing; the reference test is the output proof",
+      "no present-to-display, GPU, VRAM or idle-RAM measurement was possible on this host"
+    ]
   }
 }
