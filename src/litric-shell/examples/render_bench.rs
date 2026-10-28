@@ -6,6 +6,12 @@
 //! pointer move, the frame after opening a window, and presenting to a regular
 //! file that stands in for `/dev/fb0`.
 //!
+//! The scene carries the glass backdrop [`desktop::Compositor::new`] attaches,
+//! so every glass panel copies out of the pre-blurred source the shipped desktop
+//! samples. One extra scene, `full_frame_live_blur`, times the fallback a canvas
+//! with no backdrop takes: that is the live blur the tracker's §8-§11 measured
+//! while this benchmark still built its scene without the backdrop.
+//!
 //! The lock screen is measured last and in four states -- as it opens, with the
 //! password field out, with the customize sheet open, and with motion off --
 //! because a locked shell composes in full on every tick and is therefore the
@@ -50,6 +56,9 @@ struct Bench {
     shell: Shell,
     wallpaper: Canvas,
     scene: Canvas,
+    /// The blurred wallpaper the scene samples, kept so a scene can be switched
+    /// between the shipped path and the no-backdrop fallback and back again.
+    backdrop: std::rc::Rc<Canvas>,
 }
 
 fn env_row(token: &str, title: &str, state: &str, hotkey: &str) -> EnvRow {
@@ -115,11 +124,20 @@ fn build() -> Bench {
 
     let mut wallpaper = Canvas::new(W, H, rgb(0x000000));
     desktop::wallpaper(&mut wallpaper, &theme);
-    let scene = wallpaper.clone();
+    // `Compositor::new` blurs and saturates the wallpaper once and attaches it,
+    // and every glass panel then copies from it. Building the scene without
+    // that step measured the fallback (live blur) instead of the frame the
+    // shell runs; `glass_params` is the compositor's own derivation so the two
+    // cannot drift apart.
+    let (blur, saturation) = desktop::glass_params(&theme);
+    let backdrop = std::rc::Rc::new(wallpaper.glass_source(blur, saturation));
+    let mut scene = wallpaper.clone();
+    let _ = scene.set_backdrop(Some(std::rc::Rc::clone(&backdrop)));
     Bench {
         shell,
         wallpaper,
         scene,
+        backdrop,
     }
 }
 
@@ -308,6 +326,25 @@ fn main() -> ExitCode {
     println!("full_frame.sites_per_frame={split}");
     report("full_frame", times);
 
+    // ---- the same frame on the fallback path ------------------------------
+    //
+    // A canvas with no backdrop blurs the live pixels around each panel. The
+    // shipped desktop does not take this path for glass, but §8-§11 measured it
+    // (this benchmark used to build its scene without a backdrop), and a
+    // surface that swaps its backdrop for one of its own -- the lock's bloom --
+    // still can. Keeping it as its own scene makes the difference between the
+    // two rows the measured cost of the live blur.
+    let _ = b.scene.set_backdrop(None);
+    let mut times = Vec::with_capacity(RUNS);
+    for _ in 0..RUNS {
+        b.shell.request_full_redraw();
+        let t = Instant::now();
+        let _ = frame(&mut b);
+        times.push(elapsed_ms(t));
+    }
+    report("full_frame_live_blur", times);
+    let _ = b.scene.set_backdrop(Some(std::rc::Rc::clone(&b.backdrop)));
+
     // One frame with the call timers on. Enabled only here, after the timed
     // loop, so the numbers above pay nothing for instrumentation; this pass is
     // about which drawing entry point the frame spends its time in.
@@ -338,6 +375,32 @@ fn main() -> ExitCode {
     for (name, w, h) in litric_shell::canvas::profile::take_dims() {
         println!("profile.{name}.dims={w}x{h}");
     }
+    // Every glass rectangle in call order. Two panels of one size class are
+    // different rectangles, and whether the frame blurred any pixel twice is a
+    // question about these, not about the bucket totals.
+    let mut rects = Vec::new();
+    for (name, r) in litric_shell::canvas::profile::take_rects() {
+        println!(
+            "profile.{name}.rect={:.1},{:.1},{:.1}x{:.1}",
+            r.x, r.y, r.w, r.h
+        );
+        rects.push(r);
+    }
+    let mut overlapping_pairs = 0_usize;
+    let mut overlap_px = 0.0_f64;
+    for (i, a) in rects.iter().enumerate() {
+        for other in rects.iter().skip(i.saturating_add(1)) {
+            if let Some(x) = a.intersection(other) {
+                overlapping_pairs = overlapping_pairs.saturating_add(1);
+                overlap_px += f64::from(x.w * x.h);
+            }
+        }
+    }
+    let area_sum: f64 = rects.iter().map(|r| f64::from(r.w * r.h)).sum();
+    println!(
+        "profile.glass_rects.count={} profile.glass_rects.overlapping_pairs={overlapping_pairs} profile.glass_rects.overlap_px={overlap_px:.0} profile.glass_rects.area_sum_px={area_sum:.0}",
+        rects.len()
+    );
     println!("profile.timed_ms={:.3}", timed as f64 / 1_000_000.0);
 
     // ---- one pointer move over empty desktop ------------------------------

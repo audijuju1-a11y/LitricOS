@@ -394,6 +394,7 @@ pub mod profile {
         static ON: Cell<bool> = const { Cell::new(false) };
         static ROWS: RefCell<Vec<Row>> = const { RefCell::new(Vec::new()) };
         static DIMS: RefCell<Vec<(&'static str, u32, u32)>> = const { RefCell::new(Vec::new()) };
+        static RECTS: RefCell<Vec<(&'static str, super::Rect)>> = const { RefCell::new(Vec::new()) };
     }
 
     /// Start timing calls on this thread.
@@ -474,6 +475,25 @@ pub mod profile {
     #[must_use]
     pub fn take_dims() -> Vec<(&'static str, u32, u32)> {
         DIMS.with(|dims| std::mem::take(&mut *dims.borrow_mut()))
+    }
+
+    /// Remember the rectangle one call was given, in call order.
+    ///
+    /// A size bucket alone cannot say whether two panels of the same class
+    /// cover the same pixels; the rectangles can. One push per glass call while
+    /// profiling -- never inside a pixel loop -- and nothing at all on a timed
+    /// frame, because [`is_on`] is false there.
+    pub fn note_rect(name: &'static str, r: super::Rect) {
+        if !is_on() {
+            return;
+        }
+        RECTS.with(|rects| rects.borrow_mut().push((name, r)));
+    }
+
+    /// Take the remembered rectangles, leaving the list empty.
+    #[must_use]
+    pub fn take_rects() -> Vec<(&'static str, super::Rect)> {
+        RECTS.with(|rects| std::mem::take(&mut *rects.borrow_mut()))
     }
 
     /// Take what has been recorded, leaving the counters empty.
@@ -1488,6 +1508,7 @@ impl Canvas {
         let px_area = u64::from(r.w.max(0.0) as u32).saturating_mul(u64::from(r.h.max(0.0) as u32));
         profile::note_pixels(bucket, px_area);
         profile::note_dims(bucket, r.w.max(0.0) as u32, r.h.max(0.0) as u32);
+        profile::note_rect(bucket, r);
         if let Some(source) = self.backdrop.clone() {
             let _attached = profile::Timer::new("glass_stage_attached");
             let (x0, y0, x1, y1) = self.span(&r.inflate(1.5));

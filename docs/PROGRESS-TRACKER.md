@@ -70,7 +70,7 @@ evidence, not throughput.
 
 | Item | State | Blocker |
 |---|---|---|
-| Frame time, RAM, startup time, GPU use | **PARTIAL — host-side numbers in §7, desktop not measured** | The binaries compose and serve headlessly and were measured (§7). Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
+| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12 (15.08 ms median, under the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
@@ -83,7 +83,10 @@ on every change; the new workflow does this on push. The next measurement that
 would move the tracker is a QEMU boot with `tools/measure-ui.py` and
 `tools/measure-idle.py`, because every whole-machine performance row is blocked
 on the same missing image. What *can* be measured without one is in §7, and is
-reproduced by `python3 tools/measure-host.py`.
+reproduced by `python3 tools/measure-host.py`. On the composition side, §12
+replaced the benchmark's drifted scene with the one `Compositor::new` builds;
+the next measurable target it exposed is `fill_round_rect` (5.31 ms, 27.1 % of
+the profiled shipped frame) and the lock-customize frame (19.65 ms).
 
 ## 6. Batch: Part 23 citation audit and the trash-name guard (verified)
 
@@ -570,3 +573,110 @@ Timed scenes, five processes on this commit: `full_frame` **35.85 ms** median
 the clipped region, so the finding stands that this is per-pixel work. 35.85 ms
 remains 2.2× the 16 ms budget; next blocker unchanged — a structural design
 change plus a display path to validate it.
+
+## 12. Batch: the benchmark was timing a glass path the shell does not run
+
+### 12.1 The overlap question, answered with the real rectangles
+
+`profile::note_rect` records each glass call's rectangle while profiling is on,
+and the bench prints them in call order together with every pairwise
+intersection:
+
+```text
+profile.glass_panel_m.rect=780.8,92.0,435.2x262.5
+profile.glass_panel_m.rect=64.0,92.0,435.2x355.1
+profile.glass_panel_s.rect=305.0,726.0,670.0x62.0
+profile.glass_rects.count=3 profile.glass_rects.overlapping_pairs=0 profile.glass_rects.overlap_px=0 profile.glass_rects.area_sum_px=310320
+```
+
+| Rect | Which panel | x range | y range | px |
+|---|---|---|---|---|
+| `64.0,92.0,435.2x355.1` | Activity window | 64.0–499.2 | 92.0–447.1 | 154,540.7 |
+| `780.8,92.0,435.2x262.5` | Environments window | 780.8–1216.0 | 92.0–354.5 | 114,240.0 |
+| `305.0,726.0,670.0x62.0` | dock strip | 305.0–975.0 | 726.0–788.0 | 41,540.0 |
+
+The two medium panels sit at opposite top corners: `499.2 < 780.8`, so their x
+ranges are disjoint. Both end at or above `y = 447.1`, while the dock starts at
+`y = 726.0`. **0 overlapping pairs, 0 shared pixels of 310,320.** No strip is
+blurred twice, and no blurred result is reused across panels.
+
+### 12.2 The larger finding: `full_frame` was not the shipped frame
+
+`Compositor::new` blurs and saturates the wallpaper once and attaches it
+(`scene.set_backdrop(Some(source))`); every panel then copies out of that
+pre-blurred source. `render_bench::build()` built `let scene =
+wallpaper.clone();` and attached nothing, so its three glass calls fell into
+`glass_backdrop`'s live-blur fallback. Every `full_frame` number in §7–§11
+therefore timed a path the desktop does not take.
+
+The same binary already showed the inconsistency: `full_frame` spent **20.3 ms**
+in `glass_backdrop`, while `primitive_glass_backdrop_panel` — which *does*
+attach a backdrop — costs **1.92 ms** for a 600×420 panel. §11's 73 % blur share
+was real, but it belonged to the fallback, not to the shipped frame.
+
+### 12.3 What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/examples/render_bench.rs` | `build()` attaches `wallpaper.glass_source(...)` through `desktop::glass_params`, exactly as `Compositor::new` does; new `full_frame_live_blur` scene detaches the backdrop and times the same frames; the profile block prints per-call rectangles and pairwise overlap |
+| `src/litric-shell/src/desktop.rs` | `glass_params` is `pub` so the bench cannot drift from the compositor again; three tests pin the scene's backdrop and which branch each scene profiles |
+| `src/litric-shell/src/canvas.rs` | `profile::note_rect` / `take_rects`: one push per glass call while profiling, nothing on a timed frame |
+
+No renderer code changed. The duplicate-work question is moot on the shipped
+path (there is no per-frame blur), and the rectangles show no shared strip, so
+there is nothing to reuse and nothing to tighten.
+
+### 12.4 Raw profile, shipped path (run 1 of 5)
+
+```text
+profile.fill_round_rect.calls=75         ms=5.309  share=27.1 %
+profile.glass_backdrop.calls=3           ms=2.499  share=12.8 %
+profile.glass_stage_attached.calls=3     ms=2.497  share=12.7 %
+profile.soft_shadow.calls=3              ms=2.492  share=12.7 %
+profile.stroke_line.calls=2239           ms=2.242  share=11.4 %
+profile.glass_panel_m.calls=2            ms=2.163  px=268395  ns/px=8.06
+profile.stroke_round_rect.calls=5        ms=1.554  share=7.9 %
+profile.glass_panel_s.calls=1            ms=0.335  px=41540   ns/px=8.07
+profile.blit_from.calls=1                ms=0.313
+profile.draw_argb.calls=10               ms=0.195
+profile.timed_ms=19.598
+```
+
+Panels 2.163 + 0.335 = **2.498 ms** against the outer 2.499 ms hero row;
+`glass_stage_attached` is 2.497 ms of it and **`glass_stage_blur` does not
+appear at all** — the shipped frame blurs nothing per frame. The four live-blur
+stage rows in §11 remain correct for the fallback, which `full_frame_live_blur`
+still measures.
+
+### 12.5 Before and after, five processes
+
+`cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/final > run$i.txt; done`,
+then the median of the five `median_ms` lines; min/max are of those medians.
+
+| Scene | Before (§11) | After | Change | Spread (after) |
+|---|---|---|---|---|
+| `full_frame` (shipped path) | 35.597 ms | **15.076 ms** | −57.6 % | 14.949–15.121 |
+| `full_frame_live_blur` (new) | — | 35.367 ms | reproduces the old row | 35.122–35.755 |
+| `open_window_frame` | 71.806 ms | 29.654 ms | −58.7 % | 29.596–29.699 |
+| `lock_frame_customize` | 22.145 ms | 19.647 ms | −11.3 % | 19.549–19.755 |
+| `primitive_glass_backdrop_panel` | 1.924 ms | 1.929 ms | unchanged (always had a backdrop) | 1.924–1.951 |
+| `present_full` | 3.907 ms | 3.909 ms | unchanged | 3.652–3.940 |
+
+The live-blur row landing within 0.24 ms of the old `full_frame` is the control:
+the only thing that changed in the timed scene is which branch glass takes.
+This is a **measurement correction, not an optimization** — the shipped desktop
+already did the fast thing; the benchmark had drifted.
+
+### 12.6 Where the frame stands
+
+The shipped composition is **15.076 ms median (14.949–15.121, all five runs
+under budget)** against the 16 ms active budget at 1280×800 on this 8-vCPU VM
+with no GPU. `present_full` is a separate **3.909 ms** and is not part of that
+compose figure. `lock_frame_customize` at **19.647 ms** is still over budget and
+is the next named target, with `fill_round_rect` (5.309 ms, 27.1 %) the largest
+single entry in the active frame. The golden-frame gate remains **BLOCKED** on
+the missing Latin font face fixture — not passing.
+
+Caveats: the profiled frame runs instrumented (19.598 ms against a 15.076 ms
+timed frame), so its shares are relative to 19.598 ms; this is composition, not
+present-to-display; no GPU or DRM device was measured.

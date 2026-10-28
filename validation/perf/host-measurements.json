@@ -583,6 +583,215 @@
     },
     "hot_path_decision": "none: blur 14.892 ms of 20.329 ms (73.3%) is already a separable two-pass sliding-window blur over the clipped region; no exact equivalent removes per-pixel work",
     "correction": "\u00a79.3's core fast path sat in the attached-backdrop branch too and therefore never executed in the measured frame; its in-frame 'no gain' result measured nothing",
-    "measured_commit": "02b5b8c4034134f068e5bc13c72155bf2a26148d + count fix"
+    "measured_commit": "02b5b8c4034134f068e5bc13c72155bf2a26148d + count fix",
+    "path_measured": "live-blur fallback (the benchmark scene had no backdrop); see shipped_frame_path for the correction"
+  },
+  "shipped_frame_path": {
+    "commit_before": "853620c356688ab6912a66df3c8c73df222922fd",
+    "finding": "render_bench built its scene without the glass backdrop Compositor::new attaches, so every full_frame number from \u00a77-\u00a711 timed glass_backdrop's live-blur fallback (20.33 ms), not the copy path the shipped desktop takes. Compositor::new has always attached a blur/saturate source; the benchmark had drifted from it.",
+    "evidence": [
+      "src/litric-shell/src/desktop.rs Compositor::new: source = Rc::new(paper.glass_source(blur, saturation)); scene.set_backdrop(Some(source))",
+      "src/litric-shell/examples/render_bench.rs build() before this batch: let scene = wallpaper.clone(); (no set_backdrop)",
+      "same binary, same run: full_frame glass_backdrop 20.3 ms while primitive_glass_backdrop_panel, which attaches a backdrop, costs 1.92 ms for a 600x420 panel"
+    ],
+    "method": "render_bench scene now attaches wallpaper.glass_source(desktop::glass_params(theme)) exactly as Compositor::new does; an extra scene, full_frame_live_blur, detaches the backdrop before timing the same frames, so both paths are measured by the same binary. 5 separate processes, 15 frames per scene each; median of the five per-process medians, min and max of those medians.",
+    "commands": {
+      "build": "cd src && cargo build --release -p litric-shell --example render_bench",
+      "measure": "cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/final > /tmp/perf/final/run$i.txt; done",
+      "stats": "python3 - <<PY ... median/min/max of the five median_ms lines ... PY",
+      "attribution": "grep '^profile\\.' /tmp/perf/final/run1.txt"
+    },
+    "scene_rows_before_after": {
+      "full_frame": {
+        "before": {
+          "n": 5,
+          "median": 35.597,
+          "min": 35.467,
+          "max": 35.894
+        },
+        "after": {
+          "n": 5,
+          "median": 15.076,
+          "min": 14.949,
+          "max": 15.121
+        },
+        "note": "shipped path: glass copies from the attached pre-blurred source"
+      },
+      "full_frame_live_blur": {
+        "before": null,
+        "after": {
+          "n": 5,
+          "median": 35.367,
+          "min": 35.122,
+          "max": 35.755
+        },
+        "note": "new scene: same frames with the backdrop detached; reproduces the pre-batch full_frame within 0.24 ms"
+      },
+      "open_window_frame": {
+        "before": {
+          "n": 5,
+          "median": 71.806,
+          "min": 71.401,
+          "max": 72.186
+        },
+        "after": {
+          "n": 5,
+          "median": 29.654,
+          "min": 29.596,
+          "max": 29.699
+        }
+      },
+      "lock_frame_customize": {
+        "before": {
+          "n": 5,
+          "median": 22.145,
+          "min": 21.972,
+          "max": 22.238
+        },
+        "after": {
+          "n": 5,
+          "median": 19.647,
+          "min": 19.549,
+          "max": 19.755
+        }
+      },
+      "primitive_glass_backdrop_panel": {
+        "before": {
+          "n": 5,
+          "median": 1.924,
+          "min": 1.874,
+          "max": 1.939
+        },
+        "after": {
+          "n": 5,
+          "median": 1.929,
+          "min": 1.924,
+          "max": 1.951
+        },
+        "note": "unchanged within spread: the primitive always attached a backdrop"
+      },
+      "present_full": {
+        "before": {
+          "n": 5,
+          "median": 3.907,
+          "min": 3.903,
+          "max": 3.923
+        },
+        "after": {
+          "n": 5,
+          "median": 3.909,
+          "min": 3.652,
+          "max": 3.94
+        },
+        "note": "unchanged: separate from composition, not part of the 16 ms compose budget"
+      }
+    },
+    "panel_rects": [
+      {
+        "panel": "glass_panel_m",
+        "rect": "64.0,92.0,435.2x355.1",
+        "pixels": 154540.7,
+        "call": "Activity window"
+      },
+      {
+        "panel": "glass_panel_m",
+        "rect": "780.8,92.0,435.2x262.5",
+        "pixels": 114240.0,
+        "call": "Environments window"
+      },
+      {
+        "panel": "glass_panel_s",
+        "rect": "305.0,726.0,670.0x62.0",
+        "pixels": 41540.0,
+        "call": "dock strip"
+      }
+    ],
+    "overlap": {
+      "pairs_checked": 3,
+      "overlapping_pairs": 0,
+      "overlap_px": 0,
+      "area_sum_px": 310320,
+      "note": "the two medium panels are at opposite top corners (x 64..499.2 and x 780.8..1216.0); the dock is at y 726..788 while both windows end above y 447.2"
+    },
+    "duplicate_blur": {
+      "found": false,
+      "reason": "on the shipped path there is no per-frame blur to duplicate: all three calls copy from the one pre-blurred backdrop. glass_stage_blur is absent from the shipped profile; glass_stage_attached is 2.497 ms of the 2.499 ms glass row."
+    },
+    "stages_shipped_path": [
+      {
+        "stage": "glass_stage_attached",
+        "calls": 3,
+        "ms": 2.497,
+        "share_of_glass_pct": 99.9
+      },
+      {
+        "stage": "glass_stage_blur",
+        "calls": 0,
+        "ms": 0.0,
+        "note": "not called: no backdrop-free surface in the frame"
+      }
+    ],
+    "shipped_frame_attribution": [
+      {
+        "entry": "fill_round_rect",
+        "calls": 75,
+        "ms": 5.309,
+        "share_pct": 27.1
+      },
+      {
+        "entry": "glass_backdrop",
+        "calls": 3,
+        "ms": 2.499,
+        "share_pct": 12.8
+      },
+      {
+        "entry": "soft_shadow",
+        "calls": 3,
+        "ms": 2.492,
+        "share_pct": 12.7
+      },
+      {
+        "entry": "stroke_line",
+        "calls": 2239,
+        "ms": 2.242,
+        "share_pct": 11.4
+      },
+      {
+        "entry": "stroke_round_rect",
+        "calls": 5,
+        "ms": 1.554,
+        "share_pct": 7.9
+      },
+      {
+        "entry": "blit_from",
+        "calls": 1,
+        "ms": 0.313,
+        "share_pct": 1.6
+      },
+      {
+        "entry": "draw_argb",
+        "calls": 10,
+        "ms": 0.195,
+        "share_pct": 1.0
+      }
+    ],
+    "profiled_frame_timed_ms": 19.598,
+    "hot_path_decision": "none: no renderer code changed. The duplicate-work question is moot on the shipped path (no per-frame blur) and the two medium panels do not intersect, so there is no shared strip to reuse. The change is to the benchmark scene, which had drifted from Compositor::new.",
+    "tests_added": [
+      "desktop::tests::the_compositor_scene_carries_a_glass_backdrop_of_its_own_size",
+      "desktop::tests::the_compositor_scene_profiles_the_copy_path_not_the_live_blur",
+      "desktop::tests::a_canvas_without_a_backdrop_still_profiles_the_live_blur"
+    ],
+    "budget": {
+      "budget_ms": 16.0,
+      "shipped_full_frame_median_ms": 15.076,
+      "shipped_full_frame_max_ms": 15.121,
+      "note": "composition only at 1280x800 on an 8-vCPU VM with no GPU; present_full is a separate 3.909 ms. lock_frame_customize is 19.647 ms and remains above 16 ms."
+    },
+    "caveats": [
+      "the profiled frame carries instrumentation overhead (timed_ms 19.598 against a 15.076 ms timed frame); shares are relative to 19.598 ms",
+      "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing",
+      "no present-to-display or GPU measurement: no display, no DRM device, no QEMU image on this host"
+    ]
   }
 }

@@ -174,8 +174,10 @@ pub fn glass_at(
 /// The blur radius and saturation every glass surface of a theme uses.
 ///
 /// One function, so the backdrop [`Compositor::new`] makes once and the live
-/// path in [`glass`] cannot drift apart.
-fn glass_params(theme: &Theme) -> (u32, f32) {
+/// path in [`glass`] cannot drift apart. The render benchmark uses it too, so
+/// the scene it times carries the same backdrop the shipped desktop does.
+#[must_use]
+pub fn glass_params(theme: &Theme) -> (u32, f32) {
     let blur = u32::from(theme.glass.blur_px)
         .checked_div(3)
         .unwrap_or(1)
@@ -1535,5 +1537,58 @@ mod tests {
                 "bold must stay heavier than regular"
             );
         }
+    }
+
+    #[test]
+    fn the_compositor_scene_carries_a_glass_backdrop_of_its_own_size() {
+        // The benchmark attaches the same thing, and it can only be the same if
+        // the compositor actually attaches one. A scene without it falls back
+        // to blurring live pixels on every panel, every frame.
+        let theme = Theme::of(ThemeKind::Dark);
+        let c = Compositor::new(320, 200, &theme, Wallpaper::Flat);
+        let backdrop = c
+            .scene
+            .backdrop()
+            .expect("the compositor attaches a source");
+        assert_eq!((backdrop.width(), backdrop.height()), (320, 200));
+    }
+
+    #[test]
+    fn the_compositor_scene_profiles_the_copy_path_not_the_live_blur() {
+        use crate::canvas::profile;
+        let theme = Theme::of(ThemeKind::Dark);
+        let mut c = Compositor::new(320, 200, &theme, Wallpaper::Flat);
+        let r = Rect::new(20.0, 30.0, 120.0, 80.0);
+        profile::enable();
+        let _ = profile::take();
+        let _ = profile::take_rects();
+        glass_at(&mut c.scene, &theme, r, 8.0, 88);
+        let rows = profile::take();
+        let rects = profile::take_rects();
+        profile::disable();
+        let names: Vec<&str> = rows.iter().map(|row| row.name).collect();
+        assert!(names.contains(&"glass_stage_attached"), "{names:?}");
+        assert!(!names.contains(&"glass_stage_blur"), "{names:?}");
+        // 120x80 is 9,600 px, under the 60,000 px medium-panel threshold.
+        assert_eq!(rects, vec![("glass_panel_s", r)]);
+    }
+
+    #[test]
+    fn a_canvas_without_a_backdrop_still_profiles_the_live_blur() {
+        // The fallback is what a surface that swaps in a backdrop of its own
+        // still gets, so it stays instrumented rather than silently unmeasured.
+        use crate::canvas::profile;
+        let theme = Theme::of(ThemeKind::Dark);
+        let mut c = Canvas::new(320, 200, rgb(0x00202830));
+        let r = Rect::new(20.0, 30.0, 120.0, 80.0);
+        profile::enable();
+        let _ = profile::take();
+        let _ = profile::take_rects();
+        glass_at(&mut c, &theme, r, 8.0, 88);
+        let rows = profile::take();
+        profile::disable();
+        let names: Vec<&str> = rows.iter().map(|row| row.name).collect();
+        assert!(names.contains(&"glass_stage_blur"), "{names:?}");
+        assert!(!names.contains(&"glass_stage_attached"), "{names:?}");
     }
 }
