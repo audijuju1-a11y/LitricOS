@@ -1,5 +1,5 @@
 id,parent,title,status,note
-CH00,,Version baseline verification,PENDING,
+CH00,,Version baseline verification,PARTIAL,"Rolled up from 12 children: 10 COMPLETE, CH00.04 (stale apple.com page) and CH00.08 (Cinnamon version unverified) PARTIAL; see children"
 CH00.01,CH00,Windows 11 GA version/build,COMPLETE,"26H2, OS build 26300.9711 (KB5127648, 2026-10-13)"
 CH00.02,CH00,Windows 11 26H1 scope (new-device only),COMPLETE,Not offered in-place from 24H2/25H2
 CH00.03,CH00,macOS latest GA version/build,COMPLETE,"macOS 27.0.1 Golden Gate (26A434, 2026-09-28); 27.2 RC 26B118 excluded"
@@ -12,16 +12,16 @@ CH00.09,CH00,COSMIC Epoch,COMPLETE,Epoch 1.11.0 (20 Oct 2026)
 CH00.10,CH00,elementary OS / Pantheon,COMPLETE,OS 8.1.1 (2026-02-26); component versions from releases.elementary.io
 CH00.11,CH00,Budgie,COMPLETE,Budgie 10.10.3 (2026-09-27)
 CH00.12,CH00,ChromeOS stable,COMPLETE,16805.33.0 / browser 154.0.8037.151 (2026-10-09); later M156 rollout reported by third party only
-F,,Research F — Shared component catalog,PENDING,
+F,,Research F — Shared component catalog,PARTIAL,"Rolled up from Part 1 index row 40: all 27 F rows researched with 0 PENDING, several structural or documentation-only; see children"
 F.01,F,Buttons,PARTIAL,"Part 10 §F.01. Windows 26H2 and GNOME 51 guidance compared against ui.rs::button and ui::icon_button; macOS pages read at summary depth only. Found: icon_button has no call site, keyboard focus draws as the hover picture, targets below both platforms' minimums."
 F.02,F,Text fields,PARTIAL,"Part 11 §F.02. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against ui::text_field and the shell's input path. Found: TextEdit (caret, selection, Home/End, Ctrl+A) reaches one Backspace in one dialog; every other field appends at the end; the renderer cannot show a caret index or a selection; a magnifier is drawn in New Folder and Rename fields; no clip, no error/disabled state and no limit tied to the 255-byte name rule."
 F.03,F,Switches,PARTIAL,"Part 10 §F.03. Windows 26H2 and GNOME 51 guidance compared against ui.rs::toggle; macOS pages read at summary depth only. Found: a disabled off switch renders identical to an enabled off switch, and Error/Loading/Selected are accepted and ignored."
 F.04,F,Checkboxes,PARTIAL,"Part 12 §F.04. Windows 26H2 and GNOME 51 read at page depth; macOS 27 unavailable beyond summaries. Found: the only multi-select checkbox is a hand-drawn 12 px circle (radius = half the side) with an 18 x 18 hit target; no indeterminate or select-all box; Space does not toggle (Enter only); two Tab stops per Files row; no shift-range; no label. The same boolean (""Reduce motion"") is a switch in Quick settings and a state-in-label button in Settings and first-run."
 F.05,F,Radio controls,PARTIAL,"Part 12 §F.05. Windows 26H2 and GNOME 51 read at page depth; macOS 27 unavailable beyond summaries. Found: no radio control or radio vocabulary exists; the three-way search-engine choice is chips in two different designs (only one has a group label), selected by colour alone despite a comment claiming a check glyph; three Tab stops, no arrow navigation and no selection-follows-focus; theme and language hide their alternatives in cycling rows."
 F.06,F,Sliders,PARTIAL,Part 10 §F.06. Windows 26H2 and GNOME 51 guidance compared against ui.rs::slider; macOS pages read at summary depth only. Found: no surface calls the component (volume is step buttons) and Disabled/Error/Loading/Selected render as Normal.
-F.07,F,Pickers (date/time/color/file),PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.07,F,Pickers (date/time/color/file),PARTIAL,"Part 17 §F.07. Windows 26H2 date/time and colour controls at page depth; the WinUI 3 file-picker page returned 404, so the UWP picker quickstart is cited for the picker information model; Apple pickers and colour wells summary-only; GTK GtkFileDialog read in full; no GNOME HIG picker rule located. Found: the shell has no date, time, colour or file picker (8 picker occurrences, all inline choosers); the clock format is printed read-only, the accent cycles an enum and the wallpaper is enumerated; no control can be unset because no value is ever chosen; no open/save dialog exists."
 F.08,F,Tabs,PARTIAL,"Part 13 §F.08. Windows 26H2 and GNOME 51 read at page depth; macOS 27 summary-only. Found: fixed 150 px tabs with no overflow, scroll or cap, so the strip and its + button can leave the window; no tab keyboard model (two Tab stops per tab, no Ctrl+Tab/1-9) while Ctrl+T is Settings' theme cycle; the active tab is a material fill only; close is 15x15 and always visible; the tab menu has Reload and Close only, with no pin/mute/reorder/tear-out. Closing the last tab and clearing stale frames on switch are correct, but closing a tab in front of the focused one handed focus to the tab that took its index (fixed 2026-10-27, BUG-0025)."
-F.09,F,Navigation views,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.09,F,Navigation views,PARTIAL,"Part 17 §F.09. Windows NavigationView read at page depth (five display modes, 52 px header, back button that does not navigate); GNOME view switchers, sidebars and tabs read in full; Apple sidebars summary-only. Found: three navigation idioms (Files places plus breadcrumb, Settings page list, browser tabs and history) with no shared container and no adaptive mode; the Files back/forward/up buttons are always drawn enabled; the breadcrumb has no overflow clamp, no root hotspot and no per-crumb keyboard state; Settings has no back. What is right: one sidebar component with published bounds, and disabled-aware browser history."
 F.10,F,Sidebars,PARTIAL,"Part 13 §F.10. Windows 26H2 and GNOME 51 read at page depth; macOS 27 summary-only. Found: two sidebars with two designs (Files 132 px fixed, 20 px rows, fill-only selection; Settings 36 % of the window, 30 px rows, icon and accent marker), no collapse, resize, scroll or compact mode, a Settings sidebar 504 px wide at 1400, no arrow-key model and one Tab stop per row."
 F.11,F,Command bars/toolbars,PARTIAL,"Part 13 §F.11. Windows 26H2 and GNOME 51 read at page depth; macOS 27 summary-only. Found: three toolbars with three overflow policies (browser wraps then scales labels, Files silently drops buttons that would collide, Trash uses fixed widths); no overflow menu anywhere; Files draws inapplicable actions as enabled; 22-24 px label-only buttons with no icons, tooltips, access keys or separators; a fixed 112 px confirm button with an 18-character label. The browser's disabled and selected states are real."
 F.12,F,Menus,PARTIAL,"Part 14 §F.12. Windows 26H2 and GNOME 51 read at page depth; macOS 27 summary-only. Found: the bar's three labels (Apps, Workspace, Environment) open a launcher overlay, an Activity window and the quick-settings panel -- none opens a menu, and Workspace opening a window contradicts DESIGN-SYSTEM-v3 §3; labels that do not fit are replaced by one chevron whose hotspot opens the launcher, so a dropped label becomes unreachable. The two real menus (LitricOS 2 rows, Power 4 rows, both 34 px rows at 15 px text) have no keyboard binding at all (Key::Menu and F10 are decoded and unbound), no open state on their trigger, no grouping, no disabled or checked row, one Power glyph for sleep, shut down and restart, no ellipsis on the three rows that confirm, and only 1 of their 6 labels exists in the Thai dictionary while the three bar labels never call i18n at all."
@@ -32,195 +32,195 @@ F.16,F,Sheets,PARTIAL,"macOS sheets: Apple HIG, 8 elements and 4 guidelines, Par
 F.17,F,Notifications/banners/toasts,PARTIAL,"Part 16 §F.17. Windows 26H2 and GNOME 51 at page depth, macOS at summary depth, measured against the queue model, the banner layer, the centre and the daemon, with a 19-line probe. Found: no action, app icon, group or default action; banners have 0 hotspots and clicking one does nothing; a critical banner never expires and cannot be dismissed where it is; the centre drops the body; the centre answers Escape only; TTL is per call site with no default. Findings F17.01–F17.11."
 F.18,F,Progress indicators,PARTIAL,"Part 11 §F.18. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against ui::progress and its one call site. Found: the Defender scan bar is the only progress in the product (6 px, with a count label); there is no indeterminate/activity form and no spinner anywhere; total==0 renders an empty track during a live scan; ui::badge (a tone-coded status pill) has no call site."
 F.19,F,Lists,PARTIAL,"Part 10 §F.19. Windows 26H2 and GNOME 51 guidance compared against ui.rs::list_item; macOS pages read at summary depth only. Found: three keyboard models in one shell, 30 px rows in Settings, no accessible names (G.15)."
-F.20,F,Trees,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
-F.21,F,Grids/tables,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
-F.22,F,Cards,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.20,F,Trees,PARTIAL,"Part 17 §F.20. Windows TreeView and GTK GtkTreeExpander read at page depth (chevrons, lazy children, plus/minus and Ctrl+Space); Apple outline views summary-only. Found: no tree control and no hierarchy state anywhere - FileRow carries name, kind, size and mtime only, with no parent, child, depth or expanded flag; the filesystem is a flat table plus drill-in breadcrumbs; the task manager shows PPID and End process tree without drawing a tree; all six list surfaces are flat."
+F.21,F,Grids/tables,PARTIAL,"Part 18 §F.21. Windows ListView/GridView read at page depth (a table-like collection should use a DataGrid rather than ListView, and WinUI ships none); GTK GtkColumnView read as a reference (sort by header, resize, reorder, TREE_GRID); Apple lists and tables summary-only. Found: two table implementations (Files 22 px header and 24 px rows, three fit-tested columns; Task manager ten columns with width steps and short headers) sharing nothing; the Files draw loop stops at 24 rows and the model has no table-scroll field; no column can be resized or reordered; columns are dropped silently when the window narrows."
+F.22,F,Cards,PARTIAL,"Part 18 §F.22. GNOME boxed lists read in full (one or two controls per row, background click triggers the control, min and max width, expander rows); no Windows or macOS card rule retrieved. Found: no card component and no ui::card, though the design tokens name cards (litric-design lines 158, 641, 688); Mission Control window cards are ordered stably but share geometry with nothing; the browser start page draws 110 x 48 quick-link tiles with hover only and no focus, pressed or disabled state; neither surface meets the boxed-list contract."
 F.23,F,Search fields,PARTIAL,"Part 11 §F.23. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against the product's five search surfaces. Found: there is no search component; no filter field has a clear affordance; the launcher's ✕ closes the launcher instead of clearing the query; Ctrl+F in Files focuses the table, not the filter; the start-page placeholder names Google regardless of the selected engine; Hot::LauncherSearch is a dead hotspot."
-F.24,F,Empty states,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
-F.25,F,Loading states,PENDING,Reviewed 2026-10-26: the corpus has no section for this item; stays PENDING until one exists.
+F.24,F,Empty states,PARTIAL,"Part 18 §F.24. libadwaita AdwStatusPage read as a reference (icon, title, description and child action slots, compact and spinner variants); no Windows or macOS empty-state page retrieved. Found: at least eight empty states, all text-only (Empty folder, Nothing selected, No pages visited yet, No bookmarks saved yet, Nothing has been downloaded yet, Nothing waiting, the Trash message and the storage Unavailable line); none has an icon, a second sentence or an action; empty, unselected and unavailable are correctly distinguished into three sentences (four for Bluetooth) and the distinction is tested."
+F.25,F,Loading states,PARTIAL,"Part 18 §F.25. Windows progress controls read at page depth (determinate bar non-blocking, indeterminate bar non-blocking, indeterminate ring blocking, controls read-only, text or nothing for background work); AdwStatusPage spinner paintable as a reference; Apple progress indicators summary-only. Found: State::Loading is well specified and has two product call sites (the Defender scan button and the lock screen unlock); no spinner and no indeterminate form anywhere; one progress bar in the product; no loading state for lists; a slow daemon and a dead daemon produce the same Unavailable sentence."
 F.26,F,Errors/validation,PARTIAL,"Part 11 §F.26. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against fsbridge::valid_name and the two error surfaces. Found: validation runs after submit (and after the daemon on a booted image); a failure replaces the form and loses the typed name; the error detail is elided to one line; the acknowledge button is danger-toned; the Files table's inline error line exists but validation never uses it."
 F.27,F,Confirmation flows,PARTIAL,"Part 15 §F.27. Same platform reading. Found: 11 confirmation call sites and 7 prompts; 5 of the 7 guard routine work (paste, copy, move, extract, compress) that Windows, GNOME and Apple all say should not prompt because undo is cheaper; permanent delete says 'Delete N selected item(s) permanently?' and the Trash's purge says 'Delete forever?' with no object named; the Trash confirmation is an inline toolbar swap, not a dialog, and takes no focus; no undo exists anywhere (notify carries no action), so reversible actions pay a prompt while irreversible ones have no recovery beyond Trash."
 G,,Research G — Tokens & accessibility,PARTIAL,"Windows evidence for G.01–G.11, G.14 (Part 4)."
-G.01,G,Color tokens,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.02,G,Typography,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.03,G,Spacing,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.04,G,Radii,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.05,G,Shadows/elevation,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.06,G,Materials/blur,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.07,G,Icons,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.08,G,Motion timing/easing,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.09,G,Light/dark,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.10,G,Contrast & high-contrast themes,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.11,G,Display scaling/HiDPI,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.12,G,Multi-monitor,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.13,G,Localization & RTL,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.14,G,Keyboard-only navigation,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.15,G,Screen readers & a11y APIs,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.16,G,Pointer/touch/trackpad,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.17,G,Reduced motion/transparency,PARTIAL,macOS evidence added in Part 7. Linux pending.
-G.18,G,Sound & visual feedback,PARTIAL,macOS evidence added in Part 7. Linux pending.
-H,,Research H — Workflows,PENDING,
-H.01,H,First boot & setup,PENDING,
-H.02,H,Account creation,PENDING,
-H.03,H,Unlock,PENDING,
-H.04,H,Launch/switch apps,PENDING,
-H.05,H,Window management,PENDING,
-H.06,H,Display change,PENDING,
-H.07,H,Audio change,PENDING,
-H.08,H,Network change,PENDING,
-H.09,H,Device pairing,PENDING,
-H.10,H,Install/uninstall software,PENDING,
-H.11,H,Default apps,PENDING,
-H.12,H,File management,PENDING,
-H.13,H,Permissions grant/revoke,PENDING,
-H.14,H,Updates,PENDING,
-H.15,H,Recovery,PENDING,
-H.16,H,Backups,PENDING,
-H.17,H,Troubleshooting,PENDING,
-H.18,H,Accessibility change,PENDING,
-H.19,H,Shutdown,PENDING,
-H.20,H,Failure/cancel/retry/rollback paths (per workflow),PENDING,
-I,,Research I — Technical integration & LitricOS feasibility,PENDING,
-I.01,I,Public UI frameworks per OS,PENDING,
-I.02,I,Shell extension points,PENDING,
-I.03,I,"Settings persistence (registry, defaults/plist, GSettings/dconf, KConfig)",PENDING,
-I.04,I,Permission models (UAC/TCC/polkit/portals),PENDING,
-I.05,I,Notification APIs,PENDING,
-I.06,I,IPC/events,PENDING,
-I.07,I,Compositor protocols (Wayland),PENDING,
-I.08,I,Undocumented vs public boundary,PENDING,
-I.09,I,Comparison matrix,PENDING,
-I.10,I,ADOPT/ADAPT/AVOID/INVESTIGATE decisions,PENDING,
-I.11,I,Validation tests per decision,PENDING,
-J,,Research J — Source register & audit,PENDING,
-J.01,J,Register schema,PENDING,
-J.02,J,URL/domain dedupe,PENDING,
-J.03,J,Domain count toward 400 target,PENDING,
-J.04,J,Inspected vs snippet-only counts,PENDING,
-J.05,J,Primary vs independent counts,PENDING,
-J.06,J,Inaccessible log,PENDING,
-J.07,J,Contradictions log,PENDING,
-J.08,J,Per-subsystem coverage audit,PENDING,
-LB,,Research E — Budgie 10.10,PENDING,
-LB.01,LB,Shell components & compositor,PENDING,
-LB.02,LB,Launcher,PENDING,
-LB.03,LB,Panel / dock,PENDING,
-LB.04,LB,System Settings inventory,PENDING,
-LB.05,LB,File manager,PENDING,
-LB.06,LB,Window behaviour & tiling,PENDING,
-LB.07,LB,Notifications,PENDING,
-LB.08,LB,Workspace model,PENDING,
-LB.09,LB,Customization model,PENDING,
-LB.10,LB,Design language / HIG / tokens,PENDING,
-LB.11,LB,Accessibility,PENDING,
-LB.12,LB,Limitations & known issues,PENDING,
-LB.13,LB,"Integration points (portals, D-Bus, APIs)",PENDING,
-LB.14,LB,DE vs kernel vs distro boundary,PENDING,
-LC,,Research E — Cinnamon (Mint 22.3 / 27),PENDING,
-LC.01,LC,Shell components & compositor,PENDING,
-LC.02,LC,Launcher,PENDING,
-LC.03,LC,Panel / dock,PENDING,
-LC.04,LC,System Settings inventory,PENDING,
-LC.05,LC,File manager,PENDING,
-LC.06,LC,Window behaviour & tiling,PENDING,
-LC.07,LC,Notifications,PENDING,
-LC.08,LC,Workspace model,PENDING,
-LC.09,LC,Customization model,PENDING,
-LC.10,LC,Design language / HIG / tokens,PENDING,
-LC.11,LC,Accessibility,PENDING,
-LC.12,LC,Limitations & known issues,PENDING,
-LC.13,LC,"Integration points (portals, D-Bus, APIs)",PENDING,
-LC.14,LC,DE vs kernel vs distro boundary,PENDING,
-LG,,Research E — GNOME 51,PENDING,
-LG.01,LG,Shell components & compositor,PENDING,
-LG.02,LG,Launcher,PENDING,
-LG.03,LG,Panel / dock,PENDING,
-LG.04,LG,System Settings inventory,PENDING,
-LG.05,LG,File manager,PENDING,
-LG.06,LG,Window behaviour & tiling,PENDING,
-LG.07,LG,Notifications,PENDING,
-LG.08,LG,Workspace model,PENDING,
-LG.09,LG,Customization model,PENDING,
-LG.10,LG,Design language / HIG / tokens,PENDING,
-LG.11,LG,Accessibility,PENDING,
-LG.12,LG,Limitations & known issues,PENDING,
-LG.13,LG,"Integration points (portals, D-Bus, APIs)",PENDING,
-LG.14,LG,DE vs kernel vs distro boundary,PENDING,
-LK,,Research E — KDE Plasma 6.8,PENDING,
-LK.01,LK,Shell components & compositor,PENDING,
-LK.02,LK,Launcher,PENDING,
-LK.03,LK,Panel / dock,PENDING,
-LK.04,LK,System Settings inventory,PENDING,
-LK.05,LK,File manager,PENDING,
-LK.06,LK,Window behaviour & tiling,PENDING,
-LK.07,LK,Notifications,PENDING,
-LK.08,LK,Workspace model,PENDING,
-LK.09,LK,Customization model,PENDING,
-LK.10,LK,Design language / HIG / tokens,PENDING,
-LK.11,LK,Accessibility,PENDING,
-LK.12,LK,Limitations & known issues,PENDING,
-LK.13,LK,"Integration points (portals, D-Bus, APIs)",PENDING,
-LK.14,LK,DE vs kernel vs distro boundary,PENDING,
-LO,,Research E — COSMIC Epoch 1.11,PENDING,
-LO.01,LO,Shell components & compositor,PENDING,
-LO.02,LO,Launcher,PENDING,
-LO.03,LO,Panel / dock,PENDING,
-LO.04,LO,System Settings inventory,PENDING,
-LO.05,LO,File manager,PENDING,
-LO.06,LO,Window behaviour & tiling,PENDING,
-LO.07,LO,Notifications,PENDING,
-LO.08,LO,Workspace model,PENDING,
-LO.09,LO,Customization model,PENDING,
-LO.10,LO,Design language / HIG / tokens,PENDING,
-LO.11,LO,Accessibility,PENDING,
-LO.12,LO,Limitations & known issues,PENDING,
-LO.13,LO,"Integration points (portals, D-Bus, APIs)",PENDING,
-LO.14,LO,DE vs kernel vs distro boundary,PENDING,
-LP,,Research E — Pantheon (elementary OS 8.1),PENDING,
-LP.01,LP,Shell components & compositor,PENDING,
-LP.02,LP,Launcher,PENDING,
-LP.03,LP,Panel / dock,PENDING,
-LP.04,LP,System Settings inventory,PENDING,
-LP.05,LP,File manager,PENDING,
-LP.06,LP,Window behaviour & tiling,PENDING,
-LP.07,LP,Notifications,PENDING,
-LP.08,LP,Workspace model,PENDING,
-LP.09,LP,Customization model,PENDING,
-LP.10,LP,Design language / HIG / tokens,PENDING,
-LP.11,LP,Accessibility,PENDING,
-LP.12,LP,Limitations & known issues,PENDING,
-LP.13,LP,"Integration points (portals, D-Bus, APIs)",PENDING,
-LP.14,LP,DE vs kernel vs distro boundary,PENDING,
-LR,,Research E — ChromeOS 154+,PENDING,
-LR.01,LR,Shell components & compositor,PENDING,
-LR.02,LR,Launcher,PENDING,
-LR.03,LR,Panel / dock,PENDING,
-LR.04,LR,System Settings inventory,PENDING,
-LR.05,LR,File manager,PENDING,
-LR.06,LR,Window behaviour & tiling,PENDING,
-LR.07,LR,Notifications,PENDING,
-LR.08,LR,Workspace model,PENDING,
-LR.09,LR,Customization model,PENDING,
-LR.10,LR,Design language / HIG / tokens,PENDING,
-LR.11,LR,Accessibility,PENDING,
-LR.12,LR,Limitations & known issues,PENDING,
-LR.13,LR,"Integration points (portals, D-Bus, APIs)",PENDING,
-LR.14,LR,DE vs kernel vs distro boundary,PENDING,
-LX,,Research E — Xfce 4.20,PENDING,
-LX.01,LX,Shell components & compositor,PENDING,
-LX.02,LX,Launcher,PENDING,
-LX.03,LX,Panel / dock,PENDING,
-LX.04,LX,System Settings inventory,PENDING,
-LX.05,LX,File manager,PENDING,
-LX.06,LX,Window behaviour & tiling,PENDING,
-LX.07,LX,Notifications,PENDING,
-LX.08,LX,Workspace model,PENDING,
-LX.09,LX,Customization model,PENDING,
-LX.10,LX,Design language / HIG / tokens,PENDING,
-LX.11,LX,Accessibility,PENDING,
-LX.12,LX,Limitations & known issues,PENDING,
-LX.13,LX,"Integration points (portals, D-Bus, APIs)",PENDING,
-LX.14,LX,DE vs kernel vs distro boundary,PENDING,
+G.01,G,Color tokens,PARTIAL,"Part 20: 11 semantic palette tokens x 4 themes; components ask semantic names, never hex; border was the only token below its standard and was retuned in this part."
+G.02,G,Typography,PARTIAL,"Part 20: 8 type steps 12-38 px with line heights 16-44; the large-text threshold is 24 px, chosen conservatively. One family and one bold axis, no separate weight or tracking tokens."
+G.03,G,Spacing,PARTIAL,"Part 20: 8 space steps 2-48 px on a 4 px grid. Component heights do not all join it: 24 px table rows, 30 px sidebar rows, 22 px nav buttons, 26 px command row."
+G.04,G,Radii,PARTIAL,Part 20: 6 radii 6/10/14/20/28/Full with assigned roles; Full is a 9999 sentinel clamped at draw time and every corner goes through Tokens::radius.
+G.05,G,Shadows/elevation,PARTIAL,"Part 20: 5 elevation levels, blur 0-44 px, offset 0-20 px, alpha 0-55 percent, monotonic by test. Most shell surfaces are flat, so the scale is defined and tested more than exercised."
+G.06,G,Materials/blur,PARTIAL,"Part 20: 7 materials and 3 glass presets (blur 32, saturation 115-120, tint 82/85/100 percent); the adaptive solve picks 18-92 percent against the actual wallpaper and high-contrast glass is opaque by design."
+G.07,G,Icons,PARTIAL,"Part 20: 32 icon variants drawn from one vector module that inherits colour. Icon-only controls still have no label, tooltip or accessible name (Part 16 F.14)."
+G.08,G,Motion timing/easing,PARTIAL,Part 20: 4 spring tokens with settle budgets 120/200/300/450 ms plus a reduced token; anim.rs assigns them per surface and snaps when reduce motion is set.
+G.09,G,Light/dark,PARTIAL,"Part 20: 4 themes (Dark, Light, HC Dark, HC Light); Light is separately authored, not an inversion, and the 6-slot accent is refused by high-contrast themes by design."
+G.10,G,Contrast & high-contrast themes,PARTIAL,"macOS evidence in Part 7; Linux measured in Part 19. 36 of 36 text pairs pass AA (lowest 4.97, Light success), 20 of 20 high-contrast pairs pass AAA (lowest 10.00), but the border token fails 1.4.11 in both standard themes (1.44 Dark, 1.27 Light) while being the only boundary of a field or card. Focus ring is 2 px accent at 90 percent, 6.59:1 Dark and 4.47:1 Light, but State::Focused is unreachable in the button path (Part 10). Windows and GNOME token tables not re-read."
+G.11,G,Display scaling/HiDPI,PARTIAL,"Part 20: one scale factor in Tokens, set by Shell::set_display(width, height, scale); the layout audit runs every app at two resolutions; no fractional or per-output scale."
+G.12,G,Multi-monitor,PARTIAL,"Part 20: the compositor registers a single wl_output and the shell keeps one display size and scale; there is no arrangement model, per-monitor DPI or hot-plug path."
+G.13,G,Localization & RTL,PARTIAL,"Part 20: a 367-line translation dictionary including Thai, and a locale crate feeding hour cycle and first day. Zero RTL or direction handling found in litric-shell or litric-locale."
+G.14,G,Keyboard-only navigation,PARTIAL,"macOS evidence in Part 7; Linux measured in Part 19 as a route census. The focus ring is consistent and meets a AAA criterion, and the launcher, tabs, Settings search, lock screen and power menu are fully keyboard-operable. But there is no focusable-control model, only rectangle hotspots: menus, context menus, tooltips, the notification centre, breadcrumbs and the non-Files dialogs have no keyboard route, and tab order is per-surface and inconsistent. Windows and macOS keyboard requirement pages not re-read."
+G.15,G,Screen readers & a11y APIs,PARTIAL,"macOS evidence in Part 7; Linux measured in Part 19. Zero accessibility-API dependencies (no AccessKit, AT-SPI, UI Automation), no accessible name, role, state or relationship store, and no focus or selection events: the shell is drawn pixels on a canvas, so a screen reader has nothing to enumerate. The raw material exists (translation dictionary, non-colour-only states, a genuine AAA high-contrast theme) but the semantic tree does not. Windows and macOS API requirements not retrieved."
+G.16,G,Pointer/touch/trackpad,PARTIAL,"Part 20: pointer, wheel and keyboard only; no touch event type is handled. Hit targets include 18x18 checkboxes, 20x22 nav buttons and 24-30 px rows, below the 40-44 px platform targets."
+G.17,G,Reduced motion/transparency,PARTIAL,"Part 20: reduce_motion is honoured end to end (preference, token, animation). There is no reduce-transparency setting; glass adapts its own tint instead."
+G.18,G,Sound & visual feedback,PARTIAL,"Part 20: no audio output path in the shell; feedback is visual only (tone-coded badges, banners, inline errors, a counted bell), so a critical notification is silent."
+H,,Research H — Workflows,PARTIAL,All 20 workflows resolved as PARTIAL in Parts 21-22; macOS evidence thin in several rows
+H.01,H,First boot & setup,PARTIAL,3 preferences and Finish; no account network time zone or keyboard step (Part 21)
+H.02,H,Account creation,PARTIAL,No creation path in tree; Accounts page reports logind facts; provisioning out of band (Part 21)
+H.03,H,Unlock,PARTIAL,4 verdicts incl NoVerifier; refuses to lock without verifier; 0 attempt counter or delay (Part 21)
+H.04,H,Launch/switch apps,PARTIAL,Recency switcher exists; no failure or progress surface for a launch (Part 21)
+H.05,H,Window management,PARTIAL,36 WM ops incl cancel_drag and restore; close has no undo; one output (Part 21)
+H.06,H,Display change,PARTIAL,Display page read-only (0 of 5 rows change anything); mode selected at boot; no revert timer (Part 21)
+H.07,H,Audio change,PARTIAL,4 daemon verbs via wpctl; 3 shell hotspots; Option<u8> None != 0; no device picker or mixer (Part 21)
+H.08,H,Network change,PARTIAL,Kernel facts only; no Wi-Fi scan or connect; boundary documented in module (Part 21)
+H.09,H,Device pairing,PARTIAL,5 BT verbs with bt:// scopes; bluez in no profile so no bluetoothd; 4-state UI names why (Part 21)
+H.10,H,Install/uninstall software,PARTIAL,Manifest-to-dialog trust chain enforced; no package service or install/uninstall flow (Part 21)
+H.11,H,Default apps,PARTIAL,0 MIME or association code; no Default apps page; no Open with (Part 22)
+H.12,H,File management,PARTIAL,26 file verbs incl 5 trash ops; CONFLICTS before copy; 0 cancel verbs; DELETE beside TRASH (Part 22)
+H.13,H,Permissions grant/revoke,PARTIAL,Caps broker 15 methods with audit and expiry; 0 prompts and 0 revoke UI; Privacy page reports only (Part 22)
+H.14,H,Updates,PARTIAL,No update surface or daemon action; no staged update and no uninstall-an-update (Part 22)
+H.15,H,Recovery,PARTIAL,LifeState::Recovery exists and is never drawn; sysd reports needs-recovery; no ladder (Part 22)
+H.16,H,Backups,PARTIAL,0 backup components; trash restore is the only path back (Part 22)
+H.17,H,Troubleshooting,PARTIAL,Diagnostics page and Activity process table are real; 0 guided troubleshooters and 0 log viewer (Part 22)
+H.18,H,Accessibility change,PARTIAL,1 toggle (reduce motion) honoured everywhere; contrast lives in Appearance; no a11y tree (Part 22)
+H.19,H,Shutdown,PARTIAL,3 commands in a 4-entry menu with prompt and consequence; 30s systemctl timeout; no unsaved-work guard (Part 22)
+H.20,H,Failure/cancel/retry/rollback paths (per workflow),PARTIAL,"Table over 20 workflows: 9 entries, 5 named failures, 2 cancels, 4 undo/retry, 0 revert timers; unlock throttle now fixed (Part 22)"
+I,,Research I — Technical integration & LitricOS feasibility,PARTIAL,"Part 23: all 11 rows measured; no public toolkit, manifest-only extension, 8-key private store, authority without prompt, private notification queue, 3 Wayland globals and no wl_output"
+I.01,I,Public UI frameworks per OS,PARTIAL,"no public UI toolkit; apps are enum arms, foreign apps draw their own pixels"
+I.02,I,Shell extension points,PARTIAL,"manifest + capabilities only; unknown capability is a hard error, no extension registry"
+I.03,I,"Settings persistence (registry, defaults/plist, GSettings/dconf, KConfig)",PARTIAL,"9 keys in a private key=value file (ui_scale added 2026-10-28), atomic write 0600; no namespace for other apps, no change signal"
+I.04,I,Permission models (UAC/TCC/polkit/portals),PARTIAL,"capd authority, deny-by-default, audit; no consent prompt, no picker, scope coarser than a portal"
+I.05,I,Notification APIs,PARTIAL,"litric-notifyd private queue, text in/out, no DND in the daemon; no D-Bus, no replace-by-id, no actions"
+I.06,I,IPC/events,PARTIAL,"LFP/1 + browser socket + notifyd; at-most-once mutations documented; no bus, no discovery, no event stream"
+I.07,I,Compositor protocols (Wayland),PARTIAL,"wl_compositor v4, wl_seat v5, xdg_wm_base v2; pointer+keyboard only; wl_output imported but not advertised"
+I.08,I,Undocumented vs public boundary,PARTIAL,ADRs argue the boundary; LFP/1 has no specification outside its own module
+I.09,I,Comparison matrix,COMPLETE,comparison matrix across 10 surfaces in Part 23
+I.10,I,ADOPT/ADAPT/AVOID/INVESTIGATE decisions,COMPLETE,12 ADOPT/ADAPT/AVOID/INVESTIGATE decisions; revert window implemented in the shell
+I.11,I,Validation tests per decision,PARTIAL,"5 of 12 decisions validated by tests; 4 unimplemented, 3 undecided"
+J,,Research J — Source register & audit,COMPLETE,"Part 24: register and checklist audited; 4,170 rows, 371 domains, 30.3% inspected"
+J.01,J,Register schema,COMPLETE,"17 columns; 39 evidence labels, 23 without a tier suffix"
+J.02,J,URL/domain dedupe,COMPLETE,"47 duplicate URLs, 52 surplus rows, no duplicate_of column"
+J.03,J,Domain count toward 400 target,COMPLETE,372 of 400 domains (93.0%)
+J.04,J,Inspected vs snippet-only counts,COMPLETE,"1,265 inspected (30.3%), 2,899 snippet-only, 6 inaccessible"
+J.05,J,Primary vs independent counts,COMPLETE,"3,079 primary / 1,091 independent; independent used only as corroboration"
+J.06,J,Inaccessible log,COMPLETE,"6 inaccessible rows, none cited for a claim; no retry reason stored"
+J.07,J,Contradictions log,COMPLETE,"5 contradictions logged, 2 resolved in LitricOS' favour"
+J.08,J,Per-subsystem coverage audit,COMPLETE,272 subsystem labels (31 singletons); 120 Linux rows still PENDING
+LB,,Research E — Budgie 10.10,PARTIAL,Part 28 batch 4: all 14 rows measured; Budgie ships no file manager (LB.05 NOT FOUND) and no HIG was located (LB.10 structural); Chapter L row complete
+LB.01,LB,Shell components & compositor,COMPLETE,"Wayland-first since 10.10 and compositor-agnostic: requires ext-workspace-v1, wlr-foreign-toplevel-management, wlr-layer-shell, wlr-output-management and xdg-output, recommends labwc, ships no compositor (S3880); LitricOS: own compositor with 3 globals, none of the five protocols"
+LB.02,LB,Launcher,COMPLETE,"Budgie Menu: favourites via right-click, desktop actions in the menu, shared action code with Icon Tasklist, Favorites category above All, compact-mode grouping, and the menu is a layer-shell window so Super-key search gets focus (S3879, S3878); LitricOS: launcher with no favourites or actions"
+LB.03,LB,Panel / dock,COMPLETE,"budgie-panel on layer-shell with start/centre/end sections, dynamic sizing and overflow; Icon Tasklist plus a rewritten Tasklist with dynamic buttons and scroll buttons; primary monitor selectable (S3880, S3879); LitricOS: fixed bar and morphing dock"
+LB.04,LB,System Settings inventory,PARTIAL,"Budgie Control Center: Colour panel hidden, Bluetooth optional, per-panel visibility checks, Multitasking on Wayland, WM keyfiles, screen lock under Privacy, Night Light panel, accessibility incl. a working magnifier (S3880); no module catalogue; LitricOS: 13 pages, 9 keys"
+LB.05,LB,File manager,NOT FOUND,"No file-manager component appears in either release note; desktop icons come from Budgie Desktop View, an icon layer rather than a file manager (S3880, absence); LitricOS: FilesApp with 26 verbs"
+LB.06,LB,Window behaviour & tiling,PARTIAL,"The labwc bridge writes rc.xml for keybinds, focus, theming, snapping and a thumbnail window switcher, sets auto-raise delay, delegates Show Desktop and migrates configs by version (S3879, S3880); LitricOS: 36 WM ops, edge snapping, no external compositor"
+LB.07,LB,Notifications,PARTIAL,"Raven is the notification centre and Do Not Disturb toggles by middle-clicking the Notifications applet (S3880); per-app volume claims were only in search snippets, not opened pages; LitricOS: notifyd queue with DND"
+LB.08,LB,Workspace model,PARTIAL,"Workspaces applet reliability fixes and a more responsive add-workspace button; ext-workspace-v1 is a required protocol (S3880, S3879); LitricOS: fixed grid, Mission Control cards"
+LB.09,LB,Customization model,COMPLETE,"Bridge applies fonts, drop shadows and title-bar layouts; keybind templates per distribution; panel sections and applets user-arranged; Night Light via gammastep (S3879, S3880); LitricOS: 4 themes x 6 accents x 3 wallpapers, no per-distro defaults"
+LB.10,LB,Design language / HIG / tokens,PARTIAL,"No Budgie HIG or token documentation found in the pages opened; design is GTK3 plus the bridge's labwc theming (S3879, S3880); LitricOS: tokens plus lint, no principles document"
+LB.11,LB,Accessibility,PARTIAL,"Budgie Control Center supports accessibility options including a working magnifier (S3880); no screen-reader or keyboard-navigation statement found; LitricOS: 1 toggle, no magnifier, no a11y tree"
+LB.12,LB,Limitations & known issues,COMPLETE,"10.10 is the final major of the 10.x series and is in maintenance mode while Budgie 11 is built; Keyboard Layout applet disabled in 10.10 and restored in 10.10.3; Budgie Screensaver deprecated; Debian blocks SetX11Keyboard (bug 1118702); labwc 0.20.2 rejected empty keybinds (S3880, S3879); LitricOS: no release-notes surface"
+LB.13,LB,"Integration points (portals, D-Bus, APIs)",COMPLETE,"xdg-desktop-portal-gtk and -wlr, locale1/systemd-localed, WirePlumber wpctl, D-Bus org.buddiesofbudgie.KeyboardLayout, gammastep, grim/slurp, swaybg, wlopm, swayidle and Qt6 Budgie Desktop Services for display config (S3879, S3880); LitricOS: private IPC only"
+LB.14,LB,DE vs kernel vs distro boundary,COMPLETE,"Budgie sits on somebody else's compositor; kernel, logind, portals and audio outside; ships in Fedora 44 and Ubuntu Budgie 26.04; distributions package it (S3880); LitricOS: one mkosi image"
+LC,,Research E — Cinnamon (Mint 22.3 / 27),PARTIAL,"Part 26 batch 2: all 14 rows measured from the Mint 22.3 notes; no Cinnamon HIG or settings catalogue read, projects.linuxmint.com did not resolve"
+LC.01,LC,Shell components & compositor,PARTIAL,"Cinnamon on Muffin; 6.6 improved Muffin's Wayland compatibility (S3865); LitricOS: one shell, own compositor, 3 globals"
+LC.02,LC,Launcher,COMPLETE,"Menu redesigned: sidebar with avatar, places and favourites, smaller categories, configurable search and system-button position, optional no-sidebar layout (S3865); LitricOS: fixed launcher frame"
+LC.03,LC,Panel / dock,PARTIAL,"Panel applets: workspace switcher, XKB+IBus keyboard applet, Night Light (S3865); LitricOS: fixed bar and dock, no applet model"
+LC.04,LC,System Settings inventory,PARTIAL,"No Cinnamon Settings page read; 6.6 touched keyboard layouts, fractional-scale direction, Alt-Tab scope and theme grouping (S3865); LitricOS: 13 pages, 9 keys"
+LC.05,LC,File manager,COMPLETE,"Nemo 6.6: template manager, pause/resume of file operations, wildcard MIME and regex search, split-pane location kept, thumbnails (S3865); LitricOS: 0 cancel or pause verbs"
+LC.06,LC,Window behaviour & tiling,PARTIAL,"Muffin: Alt-Tab limited to the current monitor, hot corners in fullscreen, fractional scaling up or down (S3865); LitricOS: 36 ops, one output"
+LC.07,LC,Notifications,PARTIAL,"A missed notification shows a badge in the window list (S3865); LitricOS: count badge on the bell only, no per-window badge"
+LC.08,LC,Workspace model,PARTIAL,"Workspace switcher shows only visible windows with their icons (S3865); LitricOS: fixed grid and Mission Control cards, no switcher applet"
+LC.09,LC,Customization model,PARTIAL,"Menu element visibility, themes grouped by family and variant, applets, fractional-scale direction (S3865); LitricOS: closed theme and accent set"
+LC.10,LC,Design language / HIG / tokens,PARTIAL,XSI replaces Adwaita symbolic icons after GNOME restricted them; all Cinnamon and Mint projects migrated (S3865); no Cinnamon HIG opened; LitricOS: 32 icons from one module
+LC.11,LC,Accessibility,PARTIAL,"Native on-screen keyboard with input-method and layout switching (S3865); no accessibility page read; LitricOS: 1 toggle, no OSK, no a11y tree"
+LC.12,LC,Limitations & known issues,COMPLETE,"Known issues: HWE 6.14 breaks VirtualBox and the 470 NVIDIA driver, 10 s shutdown timeout, PipeWire with a PulseAudio fallback, ZFS removed, ecryptfs unmount regression, Snap disabled (S3866); LitricOS: no release-notes surface"
+LC.13,LC,"Integration points (portals, D-Bus, APIs)",PARTIAL,"XApp and XSI, apt:// handling, Update Manager tray, Thunderbolt tool, Night Light (S3865); no portal page read; LitricOS: private IPC only"
+LC.14,LC,DE vs kernel vs distro boundary,COMPLETE,"Ubuntu 24.04 base with kernel 6.14; PipeWire, systemd, logind and the package manager are distribution-owned (S3865, S3866); LitricOS: the boundary is a build decision"
+LG,,Research E — GNOME 51,PARTIAL,Part 25 batch 1: all 14 rows measured; page-level evidence from the GNOME 51 release notes and the HIG front page; the individual pattern pages returned 404 and are logged as gaps
+LG.01,LG,Shell components & compositor,PARTIAL,"GNOME Shell + Mutter; 51 reworked frame scheduling, cheaper capture, legacy NVIDIA removed, SVG cursors (S3856); LitricOS: one shell, 3 compositor globals, cursor drawn in code"
+LG.02,LG,Launcher,PARTIAL,"Activities overview: search + app grid; 51 made screen-reader result descriptions and the app grid easier to navigate (S3856); LitricOS: one overlay, seek.rs ranking, no providers or grid"
+LG.03,LG,Panel / dock,PARTIAL,"One top bar; the dash lives in the overview and a persistent dock is an extension (S3856, S3857); LitricOS: one bar plus a dock that morphs into the launcher"
+LG.04,LG,System Settings inventory,PARTIAL,"~20 panels; 51 changed Displays (auto-rotate, orientation lock, centre snapping), Mouse, Network (DNS search, WEP removed, SSH sockets), Users and About (S3856); LitricOS: 13 pages, 9 stored keys"
+LG.05,LG,File manager,PARTIAL,"Nautilus 51: drag-count badge, copied files auto-selected, right-click on empty area keeps the selection, emblem precedence (S3856); LitricOS: 26 verbs, 0 cancel, none of the three"
+LG.06,LG,Window behaviour & tiling,PARTIAL,"No first-class tiling in the 51 notes; window behaviour is Mutter's (S3856, absence); LitricOS: 36 WM ops, one output, no tiling model"
+LG.07,LG,Notifications,PARTIAL,"Shell is the notification server; Files notifications grouped in 51 (S3856); LitricOS: private queue, banner open/close hotspots, 0 grouping, 0 actions"
+LG.08,LG,Workspace model,PARTIAL,"Dynamic vertical workspaces, unchanged in 51 and therefore absent from its notes (S3856); LitricOS: fixed grid, Mission Control order stable by workspace then open order"
+LG.09,LG,Customization model,PARTIAL,"Extensions are the extension point; appearance deliberately narrow, with new wallpaper variants in 51 (S3856, S3857); LitricOS: 4 themes x 6 accents x 3 wallpapers, no registry (I.02)"
+LG.10,LG,Design language / HIG / tokens,COMPLETE,"HIG is five parts: principles, resources, guidelines, patterns, reference (S3857); 51 extends reduced motion into widgets and the shell (S3856); LitricOS has the reference part as tokens and lacks the first two"
+LG.11,LG,Accessibility,PARTIAL,"51: motion widened, screenshot region adjustable by keyboard, focus-ring timeout can be turned off, dock announced once (S3856); LitricOS: 1 toggle, no a11y tree, no focus timeout"
+LG.12,LG,Limitations & known issues,PARTIAL,"Legacy NVIDIA interfaces and WEP removed (S3856); extensions break across major releases; LitricOS: one output, one scale, no capability prompt"
+LG.13,LG,"Integration points (portals, D-Bus, APIs)",PARTIAL,"Portals, D-Bus, GSettings/dconf, systemd user units, Flatpak (S3857); LitricOS: LFP/1 + browser socket + notifyd, no bus, no portal, no discovery"
+LG.14,LG,DE vs kernel vs distro boundary,PARTIAL,"DE owns shell, compositor, settings and session apps; kernel, logind, NetworkManager, BlueZ and PipeWire are outside, and the distribution packages all of it (corpus Parts 19-23); LitricOS: one mkosi image, no package manager"
+LK,,Research E — KDE Plasma 6.8,PARTIAL,Part 25 batch 1: all 14 rows measured; page-level evidence from the KDE HIG front page and its Simple-by-default page; the layout and navigation page returned 404 and four rows are structural
+LK.01,LK,Shell components & compositor,PARTIAL,"plasmashell + KWin on Wayland; the 6.8 announcement yielded no feature list (S3860); LitricOS: one process draws bar, dock, overlays and every app"
+LK.02,LK,Launcher,PARTIAL,"Kickoff and KRunner; HIG forbids asking preferences in a first-run wizard (S3859); LitricOS: one overlay, no wizard, but first-run asks three preferences (H.01)"
+LK.03,LK,Panel / dock,PARTIAL,"Configurable panels; no KDE page read in this batch (gap); LitricOS: fixed top bar, dock is an overlay state"
+LK.04,LK,System Settings inventory,PARTIAL,"System Settings modules not enumerated by any page read in this batch (gap); LitricOS: 13 pages, 9 stored keys"
+LK.05,LK,File manager,PARTIAL,"Dolphin; HIG requires inline rename, trash instead of delete, and undo for content that is not trivial to re-add (S3859); LitricOS: modal rename, 5 trash verbs, 0 undo"
+LK.06,LK,Window behaviour & tiling,PARTIAL,"KWin tiling and quick tile; no page read in this batch (gap); LitricOS: 36 WM ops, no tiling model"
+LK.07,LK,Notifications,PARTIAL,"Plasma notification server; HIG separates passive notification from persistent inline message (S3859); LitricOS: TTL banners, no inline message component"
+LK.08,LK,Workspace model,PARTIAL,"Virtual desktops plus Activities; no page read in this batch (gap); LitricOS: fixed workspace grid, no activities"
+LK.09,LK,Customization model,PARTIAL,"Simple by default, powerful when needed (S3859); LitricOS: closed theme and accent set, no third-party surface"
+LK.10,LK,Design language / HIG / tokens,COMPLETE,"Nine HIG sections; tokens Kirigami.Theme, iconsSizes, small/medium/largeSpacing, veryShort/short/long/veryLongDuration (S3858, S3859); LitricOS Space and Motion are the same axes under different names"
+LK.11,LK,Accessibility,PARTIAL,"HIG has an Accessibility and inclusiveness section; the page was not read in this batch (gap); LitricOS: 1 toggle, no AT-SPI tree"
+LK.12,LK,Limitations & known issues,COMPLETE,"HIG states window size and position are remembered on X11 only, i.e. not on Wayland (S3859); LitricOS restores neither on any output"
+LK.13,LK,"Integration points (portals, D-Bus, APIs)",PARTIAL,"D-Bus, KIO, KConfig, KWallet, KRecentDocument, portals (S3859); LitricOS: no bus, no key store, no KIO equivalent"
+LK.14,LK,DE vs kernel vs distro boundary,PARTIAL,"Same boundary as GNOME: DRM, logind, NetworkManager, BlueZ and PipeWire outside the DE, distribution packages the DE (S3858); LitricOS: the boundary is a build decision"
+LO,,Research E — COSMIC Epoch 1.11,PARTIAL,"Part 27 batch 3: all 14 rows measured; Epoch 1.11 release pages returned 403/404, so no row rests on 1.11-specific text and LO.02, LO.06 and LO.11 say so"
+LO.01,LO,Shell components & compositor,COMPLETE,"Wayland-native Rust desktop; shell components and compositor share one toolkit; cosmic-comp on smithay with damage tracking and wl_fixes work; greeter, session and idle are separate projects (S3867, S3870); LitricOS: one shell plus own compositor, no greeter or session manager"
+LO.02,LO,Launcher,PARTIAL,"Launcher and app library are separate surfaces; the workspaces overview can open either on typing (S3867, S3870); 1.11 launcher changes could not be read (403/404); LitricOS: one overlay with seek ranking"
+LO.03,LO,Panel / dock,COMPLETE,"Single or dual panels on any edge, applets at start/centre/end, size, opacity, square or rounded corners; applets are Flatpak apps, not extensions (S3868); LitricOS: fixed bar plus morphing dock, no applet API"
+LO.04,LO,System Settings inventory,PARTIAL,"Settings pages selectable per distribution by cargo feature flags, e.g. Pop!_OS Upgrades and Restore; pages touched by point releases: appearance, network, language, default and startup apps, shortcuts, workspaces, touchpad (S3868, S3870); LitricOS: 13 fixed pages, 9 keys"
+LO.05,LO,File manager,COMPLETE,"Files: tabs, several directories in separate tabs, tab drag-and-drop, Move to / Copy to, clipboard paste of images, video and text, Recents toggle with clear history, copy path on Shift, ellipsized names (S3870); LitricOS: 26 verbs, no tabs"
+LO.06,LO,Window behaviour & tiling,PARTIAL,"Tiling is a first-class flexible element; point releases fix tiled state on maximize/snap, Super+Click on tiled windows and cursor-follows-focus across monitors (S3867, S3870); LitricOS: 36 ops, edge snapping, one output"
+LO.07,LO,Notifications,PARTIAL,"cosmic-notifications accepts file:// icons; the status area runs a socket-activated StatusNotifierWatcher so tray icons survive client crashes (S3870); LitricOS: notifyd queue, no tray or status area"
+LO.08,LO,Workspace model,COMPLETE,"Workspaces dynamic or pinned, and the overview's action on typing is a setting (S3867, S3870); LitricOS: fixed grid, Mission Control cards, no typing action"
+LO.09,LO,Customization model,COMPLETE,"Theming built for brand palettes without losing contrast, RON theme files from the CLI, Qt theming via qt5ct/qt6ct, distribution-shipped panel and shortcut defaults (S3867, S3868, S3870); LitricOS: 4 themes x 6 accents x 3 wallpapers, no theme file format"
+LO.10,LO,Design language / HIG / tokens,PARTIAL,"libcosmic is based on COSMIC's design language with consistent guidelines, a standardized configuration system and cross-desktop theming (S3869); no public HIG with token values opened; LitricOS: tokens plus lint, no principles document"
+LO.11,LO,Accessibility,PARTIAL,"No accessibility page, screen-reader statement or on-screen keyboard in the eleven pages opened; the only accessibility-adjacent item was a 1.11 touchpad setting that could not be read (403); LitricOS: 1 toggle, no a11y tree"
+LO.12,LO,Limitations & known issues,PARTIAL,"The point-release log publicly lists fixed failure classes: tiling-placeholder panic, smithay image-copy leak, portal abort without dma-buf, terminal password handling, duplicate wallpaper entries (S3870); LitricOS: no public failure log"
+LO.13,LO,"Integration points (portals, D-Bus, APIs)",COMPLETE,"xdg-desktop-portal-cosmic for screencast, clipboard, background and screenshot; StatusNotifierWatcher; AccountsService language handling; Qt theme generation; Flatpak applets; distro feature flags (S3868, S3870); LitricOS: private IPC only"
+LO.14,LO,DE vs kernel vs distro boundary,COMPLETE,"Runs on Pop!_OS 24.04 LTS and other distributions; distributions choose settings pages at build time and ship tagged or rolling QA releases; kernel, logind and audio stay outside (S3867, S3868, S3870); LitricOS: one mkosi image"
+LP,,Research E — Pantheon (elementary OS 8.1),PARTIAL,"Part 27 batch 3: all 14 rows measured from the elementary HIG and site; the OS 8 announcement 404'd, LP.12 is NOT FOUND and three rows are structural"
+LP.01,LP,Shell components & compositor,PARTIAL,"Pantheon shell with Dock, Multitasking View, picture-in-picture and Do Not Disturb; 8.1 improves Secure Session and Dock (S3877); the compositor is not described on any page opened; LitricOS: one shell, own compositor, no secure session"
+LP.02,LP,Launcher,COMPLETE,"The HIG specifies launcher metadata as UI: Name without descriptive words, GenericName, a Comment beginning with a verb, Categories and Keywords, because the menu and Dock display them (S3875); LitricOS: launcher ranks names only"
+LP.03,LP,Panel / dock,PARTIAL,"A Dock, improved in 8.1 (S3877); no dock configuration page opened; LitricOS: one bar plus morphing dock, no dock settings"
+LP.04,LP,System Settings inventory,PARTIAL,"System Settings is where app permissions can be revoked (S3877); no module list opened; LitricOS: 13 pages, 9 stored keys"
+LP.05,LP,File manager,COMPLETE,"Files: smart pathbar with breadcrumbs, search and path completion, column view, browser-class tabs with tab history (S3877); LitricOS: breadcrumb and table, 26 verbs, no tabs"
+LP.06,LP,Window behaviour & tiling,PARTIAL,"Multitasking View and workspaces are advertised (S3877); no window-manager or tiling page opened; LitricOS: 36 WM ops, edge snapping"
+LP.07,LP,Notifications,PARTIAL,"Do Not Disturb stops notifications (S3877); the HIG Toast page exists with a heading and no body (S3876); LitricOS: queue with DND, banners, centre, no toast component"
+LP.08,LP,Workspace model,PARTIAL,"Workspaces organise work by task and are reached from the Multitasking View (S3877); LitricOS: fixed grid, Mission Control cards"
+LP.09,LP,Customization model,PARTIAL,"No theme, accent or layout customization page opened; the HIG covers iconography and text as references (S3872); LitricOS: 4 themes, 6 accents, 3 wallpapers"
+LP.10,LP,Design language / HIG / tokens,COMPLETE,"Full HIG: four design philosophies (What Design Is Not, Concision, Accessible Configuration, Minimal Documentation), user workflow, app launcher, widgets, iconography and text references; unwritten sections explicitly defer to the GNOME HIG (S3871, S3872, S3873); LitricOS: tokens plus lint, no principles"
+LP.11,LP,Accessibility,PARTIAL,"The HIG names Accessible Configuration as a philosophy and 8.1 enhances accessibility (S3872, S3873, S3877); no specific feature, shortcut or contrast rule was described on a page opened; LitricOS: 1 toggle, no a11y tree"
+LP.12,LP,Limitations & known issues,NOT FOUND,No known-issues page and no release announcement could be opened: the OS 8 announcement returned 404 and no other page lists defects (S3871-S3877); LitricOS: no release-notes surface
+LP.13,LP,"Integration points (portals, D-Bus, APIs)",PARTIAL,"AppCenter reviews permission use and System Settings can revoke permissions (S3877); no portal page opened; LitricOS: private IPC, no store or permission UI"
+LP.14,LP,DE vs kernel vs distro boundary,PARTIAL,elementary ships its own OS with its own apps and AppCenter (S3877); the package base is not stated on any page opened; LitricOS: one mkosi image
+LR,,Research E — ChromeOS 154+,PARTIAL,"Part 28 batch 4: all 14 rows measured; five ChromeOS URLs returned 404, so six rows are NOT FOUND and eight structural - no ChromeOS shell behaviour is claimed without a source"
+LR.01,LR,Shell components & compositor,PARTIAL,"Chrome powers ChromeOS and the OS tracks Chrome releases; the shell and window manager are not described on any page opened (S3882, structural); LitricOS: own shell and compositor"
+LR.02,LR,Launcher,PARTIAL,"Web apps are found from the launcher and a long press of the launcher starts Select-to-search with Lens (S3882, S3886); no launcher specification opened; LitricOS: ranked launcher overlay"
+LR.03,LR,Panel / dock,PARTIAL,The shelf exists: PWAs can be pinned to it (S3882); no shelf behaviour page opened; LitricOS: fixed top bar plus morphing dock
+LR.04,LR,System Settings inventory,NOT FOUND,"No ChromeOS Settings page could be opened: the Help Center and Enterprise URLs attempted returned 404 (recorded in Part 28); LitricOS: 13 pages, 9 keys"
+LR.05,LR,File manager,PARTIAL,"The Files app can hand files to installed web apps (S3882); two Help Center Files URLs returned 404, so no Files behaviour is claimed; LitricOS: FilesApp with 26 verbs"
+LR.06,LR,Window behaviour & tiling,NOT FOUND,"No page describing windows, split screen or overview was opened; nothing to cite; LitricOS: 36 WM ops with edge snapping"
+LR.07,LR,Notifications,NOT FOUND,"No ChromeOS notification page was opened; nothing to cite; LitricOS: notifyd queue, banners, centre, DND"
+LR.08,LR,Workspace model,NOT FOUND,No virtual-desks or workspace page was opened; nothing to cite; LitricOS: fixed workspace grid and Mission Control
+LR.09,LR,Customization model,NOT FOUND,"No wallpaper, theme or shelf-customization page was opened; nothing to cite; LitricOS: 4 themes, 6 accents, 3 wallpapers"
+LR.10,LR,Design language / HIG / tokens,PARTIAL,"chromeos.dev/en/design returned 404; the PWA page that opened lists capabilities, not a design language (S3882 plus recorded failure); LitricOS: tokens plus lint, no principles"
+LR.11,LR,Accessibility,NOT FOUND,"No ChromeOS accessibility page was opened; nothing to cite; LitricOS: 1 toggle, no a11y tree"
+LR.12,LR,Limitations & known issues,PARTIAL,"End of Life / Auto Update Expiration is a documented process in the ChromiumOS reference index, and ChromeOS release notes are published one week before stable on the Help Center (S3884, S3885); LitricOS: no release-notes or support-window statement"
+LR.13,LR,"Integration points (portals, D-Bus, APIs)",PARTIAL,"Web apps install, pin to the shelf, appear in the launcher and handle files; Chrome extensions are integral (S3882); Android and Linux app support was not on any opened page; LitricOS: no extension or store model"
+LR.14,LR,DE vs kernel vs distro boundary,PARTIAL,"ChromeOS is an OS whose browser is the platform and whose releases track Chrome; security, SELinux, user sessions and AUE are documented platform topics (S3882, S3884); LitricOS: one mkosi image"
+LX,,Research E — Xfce 4.20,PARTIAL,"Part 26 batch 2: all 14 rows measured from the 4.20 tour, changelog and component docs; no Xfce HIG page was located"
+LX.01,LX,Shell components & compositor,PARTIAL,"Components ported to Wayland through libxfce4windowing; xfwm4, xfdashboard and the screensaver are not, and Labwc or Wayfire is required (S3861); LitricOS: own compositor with 3 globals, no session manager"
+LX.02,LX,Launcher,PARTIAL,"xfce4-appfinder: Ctrl+N/P navigation, Ctrl+Enter executes, per-app actions on right-click, optional daemon (S3861, S3862); LitricOS: launcher overlay with seek ranking, no per-app actions"
+LX.03,LX,Panel / dock,COMPLETE,"xfce4-panel: border width, XDG plugin discovery, multi-delete, LCD/analog clock options, show desktop on hover, tasklist icon sizing (S3861, S3862); LitricOS: fixed top bar plus morphing dock, no plugin model"
+LX.04,LX,System Settings inventory,PARTIAL,"Appearance, Display (profiles, both-dimension scaling, mirror without matching refresh), Mouse (acceleration profile, hi-res scroll), MIME multi-select, Keyboard (S3861, S3862); LitricOS: 13 pages, 9 keys, Display read-only except UI scale"
+LX.05,LX,File manager,COMPLETE,"Thunar 4.20: toolbar overflow, view switcher, tabs, CSD, split view, expandable folders, bulk renamer, undo asks before delete, direct-I/O compare, busy-disk queueing (S3861, S3862, S3864); LitricOS: 26 verbs, no cancel, no tabs or split"
+LX.06,LX,Window behaviour & tiling,PARTIAL,"xfwm4: click-to-focus or focus-follows-mouse, raise delay, snapping with distance, workspace wrap with resistance, opaque move, double-click action (S3863); LitricOS: 36 ops, edge snapping, no focus-follows-mouse"
+LX.07,LX,Notifications,PARTIAL,"libnotify is an optional Thunar dependency for mount notifications (S3864); no xfce4-notifyd page read; LitricOS: notifyd queue, banners, centre, DND"
+LX.08,LX,Workspace model,PARTIAL,"Workspace wrap at screen edges (S3863); workspace support missing on Wayland because the protocol arrived late (S3861); LitricOS: fixed grid, Mission Control order stable"
+LX.09,LX,Customization model,PARTIAL,"Window-decoration themes, panel plugins, shortcut editor with overlap groups, Xfconf, systemd user unit (S3861, S3862); LitricOS: 4 themes x 6 accents x 3 wallpapers, no plugin model"
+LX.10,LX,Design language / HIG / tokens,PARTIAL,"No Xfce HIG page located; rules are GTK/Adwaita defaults plus per-component options, and icon scaling above 1 was fixed (S3861, S3862); LitricOS: tokens plus lint, no principles document"
+LX.11,LX,Accessibility,PARTIAL,"No accessibility content in the tour, changelog or xfwm4 page (gap); LitricOS: 1 toggle honoured everywhere, no a11y tree"
+LX.12,LX,Limitations & known issues,COMPLETE,"Wayland is experimental: no compositor, missing workspaces, tray icons, keyboard/mouse settings, brightness keys and rectangular screenshots, with four components unported (S3861); LitricOS: one output, one scale"
+LX.13,LX,"Integration points (portals, D-Bus, APIs)",COMPLETE,"libxfce4windowing, minimal xdg-desktop-portal conf, D-Bus, xfconf systemd user unit, optional polkit, power-profiles-daemon (S3861, S3862); LitricOS: private IPC, no portal, no bus"
+LX.14,LX,DE vs kernel vs distro boundary,PARTIAL,"Xfce owns panel, session, settings and Thunar; the Wayland compositor is external; kernel, logind, NetworkManager and PipeWire are outside (S3861, S3862); LitricOS: one image"
 MC,,Research C — macOS 27 desktop model,PARTIAL,Researched in Part 6 (Chapter 14).
 MC.01,MC,Menu bar,PARTIAL,Researched in Part 6 (Chapter 14).
 MC.01.01,MC.01,Apple menu,PARTIAL,"Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18)."
@@ -434,7 +434,7 @@ WA.15.04,WA.15,Touch keyboard/IME,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. 
 WA.15.05,WA.15,Voice typing (Win+H),PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
 WA.15.06,WA.15,Run dialog,PARTIAL,1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending.
 WA.16,WA,Legacy Windows (10/7) interface differences,PARTIAL,Only T4/T5 evidence (2 sources); no official Windows 11 article describes this feature. Low–medium confidence.
-WB,,Research B — Windows Settings (26H2) full inventory,PENDING,
+WB,,Research B — Windows Settings (26H2) full inventory,PARTIAL,Rolled up from the WB rows: batch coverage complete through WB.12.08 (Part 29) with PARTIAL children where only policy or documentation evidence exists; see children
 WB.01,WB,System,PARTIAL,Category researched in Part 2; see child items.
 WB.01.01,WB.01,Display,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
 WB.01.01.01,WB.01.01,System > Display > HDR (added in Part 2),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
@@ -580,7 +580,7 @@ WB.12.04,WB.12,Device Manager,PARTIAL,"Controls documented by official 'Windows 
 WB.12.05,WB.12,Task Manager (incl. NPU),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
 WB.12.06,WB.12,Disk Management,PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
 WB.12.07,WB.12,Legacy dialogs (sysdm.cpl etc.),PARTIAL,"Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a live 26300.9711 build, and complete coverage of controls isn't proven."
-WB.12.08,WB.12,Group Policy / MDM-only settings,PENDING,Group Policy / MDM Policy CSP mapping is scheduled for Part 12 (Research I).
+WB.12.08,WB.12,Group Policy / MDM-only settings,PARTIAL,"Part 29: three Microsoft Learn pages opened - Policy CSP paths and Result values, ADMX as shared GP/MDM metadata with post-ship ADMXInstall, and GP-over-MDM precedence from 1709 (S3888-S3890). Part 31 closes the enumeration method: Intune Group Policy analytics reports MDM Support No per setting across six parsed CSP families (S3891), and the authoritative row-by-row list is the 25H2 spreadsheet (S3892); the list itself was not extracted, so the row stays PARTIAL rather than claiming a catalogue it does not have"
 WB.12.09,WB.12,SKU differences (Home/Pro/Enterprise/Education),PARTIAL,SKU/hardware conditions captured per page where sources state them; no consolidated Home/Pro/Enterprise matrix yet.
 WC,,Research A3 — Fluent / WinUI design system,PARTIAL,"Researched in Part 4 (Chapter 12): 2 COMPLETE, 11 PARTIAL."
 WC.01,WC,Design principles,PARTIAL,"Principles documented by Microsoft Learn and Fluent 2; qualitative only, no exhaustive list."

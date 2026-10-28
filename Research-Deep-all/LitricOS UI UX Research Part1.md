@@ -20,25 +20,25 @@ Status vocabulary used throughout: COMPLETE, PARTIAL, NOT FOUND, INACCESSIBLE, N
 | Ch. | Title | Deliverable # | Status |
 |---|---|---|---|
 | 0 | Version baseline verification | 8 | COMPLETE (10 items), PARTIAL (2 items) |
-| 1 | Master coverage checklist | 8 | PUBLISHED (structure only; research items PENDING) |
+| 1 | Master coverage checklist | 8 | PUBLISHED (597 rows; every row carries a final status, 0 PENDING) |
 | 2 | Research and source plan | 8 | PUBLISHED |
 | 3 | Initial release-delta findings (26H2, macOS 27, GNOME 51, Plasma 6.8, COSMIC 1.11) | 1 | PARTIAL |
 | 4 | Source register status | 8 | IN PROGRESS (94 URLs / 29 domains) |
 | 5 | Missing, uncertain, contradictory evidence log | 9 | IN PROGRESS |
-| 6 | Validation plan skeleton | 10 | DRAFT |
-| 10 | Windows 11 shell and system UI (WA) | 1, 5 | PENDING (Part 3) |
-| 11 | Windows 11 Settings catalogue (WB) | 2 | PENDING (Part 2) |
-| 12 | Fluent / WinUI design system (WC) | 3, 4 | PENDING |
-| 20 | macOS 27 desktop model (MC) | 1, 5 | PENDING |
-| 21 | macOS 27 System Settings catalogue (MD) | 2 | PENDING |
-| 22 | macOS HIG / Liquid Glass design system (MG) | 3, 4 | PENDING |
-| 30–37 | GNOME, KDE Plasma, Xfce, Cinnamon, COSMIC, Pantheon, Budgie, ChromeOS (LG–LR) | 1, 2 | PENDING |
-| 40 | Shared component catalog (F) | 3 | PARTIAL (Parts 10–15 research `F.01`, `F.03`, `F.06`, `F.19`, `F.02`, `F.18`, `F.23`, `F.26`, `F.04`, `F.05`, `F.08`, `F.10`, `F.11`, `F.12`, `F.13`, `F.15`, `F.27`, and Part 6 `F.16`; 9 items `PENDING`) |
-| 41 | Design tokens and accessibility (G) | 4 | PENDING |
-| 42 | User workflows and edge cases (H) | 5 | PENDING |
-| 43 | Technical integration and LitricOS feasibility (I) | 6, 7 | PENDING |
-| 44 | Final source register and coverage audit (J) | 8, 9 | PENDING |
-| 45 | Validation plan (full) | 10 | PENDING |
+| 6 | Validation plan skeleton | 10 | PUBLISHED (skeleton VP-01-VP-07; full plan in Chapter 45 / Part 30) |
+| 10 | Windows 11 shell and system UI (WA) | 1, 5 | COMPLETE for coverage (Part 3; every WA row final, several PARTIAL where rollout flags are unverified) |
+| 11 | Windows 11 Settings catalogue (WB) | 2 | COMPLETE for coverage (Parts 2, 12-15 and 29; WB.12.08 is PARTIAL because only the policy mechanism is documented) |
+| 12 | Fluent / WinUI design system (WC) | 3, 4 | COMPLETE for coverage (Part 4; 13 rows, 11 PARTIAL because Mica/shadow constants live in closed code) |
+| 20 | macOS 27 desktop model (MC) | 1, 5 | COMPLETE for coverage (Part 6; 63 rows, 61 PARTIAL pending VP-18-VP-22 geometry) |
+| 21 | macOS 27 System Settings catalogue (MD) | 2 | COMPLETE for coverage (Part 5; 38 rows, 37 PARTIAL pending VP-13/VP-17) |
+| 22 | macOS HIG / Liquid Glass design system (MG) | 3, 4 | COMPLETE for coverage (Part 7; 10 rows, all PARTIAL: Apple publishes no token values) |
+| 30–37 | GNOME, KDE Plasma, Xfce, Cinnamon, COSMIC, Pantheon, Budgie, ChromeOS (LG–LR) | 1, 2 | COMPLETE for coverage (Parts 25-28: GNOME 51, Plasma 6.8, Xfce 4.20, Cinnamon 6.6, COSMIC Epoch 1, Pantheon 8.1, Budgie 10.10 and ChromeOS 154 - all 112 rows measured; quality is PARTIAL where pages were unavailable) |
+| 40 | Shared component catalog (F) | 3 | PARTIAL (Parts 10–18 research `F.01`, `F.03`, `F.06`, `F.19`, `F.02`, `F.18`, `F.23`, `F.26`, `F.04`, `F.05`, `F.08`, `F.10`, `F.11`, `F.12`, `F.13`, `F.15`, `F.27`; Part 16 `F.14`, `F.17`; Part 17 `F.07`, `F.09`, `F.20`; Part 18 `F.21`, `F.22`, `F.24`, `F.25`; and Part 6 `F.16`; 0 items `PENDING`) |
+| 41 | Design tokens and accessibility (G) | 4 | PARTIAL (Part 7 macOS; Parts 19–20 Linux measurement of all 18 items: contrast, keyboard, screen readers, token families, scaling, RTL and input; Windows token and input tables still unread) |
+| 42 | User workflows and edge cases (H) | 5 | PARTIAL (Parts 21–22 measure all 20 workflows; `H03.01` unlocked-attempt limit repaired in Part 22; macOS evidence thin in `H.01`, `H.02`, `H.15`, `H.17`) |
+| 43 | Technical integration and LitricOS feasibility (I) | 6, 7 | PARTIAL (Part 23: all 11 rows measured; 12 decisions, revert window implemented; no public toolkit) |
+| 44 | Final source register and coverage audit (J) | 8, 9 | COMPLETE (Part 24 and addenda J.11-J.14: 4,205 rows, 382 domains, see J.14 for the re-derived percentages, 48 duplicate URLs, 5 contradictions) |
+| 45 | Validation plan (full) | 10 | COMPLETE and executed (Part 30 plan; Part 31 wave 1: 8 repo-side checks; Part 32 repaired the register key, so VP-28 and VP-28b both PASS, 6 PARTIAL, 0 FAIL; 21 points still NOT RUN without hardware) |
 
 ---
 
@@ -272,641 +272,643 @@ Leaf titles under WB and MD are research targets taken from the prompt and from 
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| WA.01 | Desktop | PENDING |  |
-| WA.01.01 | &nbsp;&nbsp;&nbsp;&nbsp;Wallpaper/slideshow/spotlight | PENDING |  |
-| WA.01.02 | &nbsp;&nbsp;&nbsp;&nbsp;Desktop icons, arrange, auto-arrange, grid | PENDING |  |
-| WA.01.03 | &nbsp;&nbsp;&nbsp;&nbsp;Desktop context menu (Win11 compact vs 'Show more options') | PENDING |  |
-| WA.02 | Start | PENDING |  |
-| WA.02.01 | &nbsp;&nbsp;&nbsp;&nbsp;Pinned grid, folders | PENDING |  |
-| WA.02.02 | &nbsp;&nbsp;&nbsp;&nbsp;Recommended / Recent section | PENDING |  |
-| WA.02.03 | &nbsp;&nbsp;&nbsp;&nbsp;All apps view(s) | PENDING |  |
-| WA.02.04 | &nbsp;&nbsp;&nbsp;&nbsp;Start size Small/Large & section hiding (26H2) | PENDING |  |
-| WA.02.05 | &nbsp;&nbsp;&nbsp;&nbsp;Power menu & account menu | PENDING |  |
-| WA.02.06 | &nbsp;&nbsp;&nbsp;&nbsp;Start keyboard navigation | PENDING |  |
-| WA.03 | Taskbar | PENDING |  |
-| WA.03.01 | &nbsp;&nbsp;&nbsp;&nbsp;Alignment/position top/left/right (26H2) | PENDING |  |
-| WA.03.02 | &nbsp;&nbsp;&nbsp;&nbsp;Smaller taskbar option | PENDING |  |
-| WA.03.03 | &nbsp;&nbsp;&nbsp;&nbsp;Grouping, labels, combine behaviour | PENDING |  |
-| WA.03.04 | &nbsp;&nbsp;&nbsp;&nbsp;Jump lists & app-specific actions | PENDING |  |
-| WA.03.05 | &nbsp;&nbsp;&nbsp;&nbsp;Thumbnail previews & hover | PENDING |  |
-| WA.03.06 | &nbsp;&nbsp;&nbsp;&nbsp;Overflow menu | PENDING |  |
-| WA.03.07 | &nbsp;&nbsp;&nbsp;&nbsp;Taskbar corner icons / system tray | PENDING |  |
-| WA.03.08 | &nbsp;&nbsp;&nbsp;&nbsp;Badges, flash, progress | PENDING |  |
-| WA.03.09 | &nbsp;&nbsp;&nbsp;&nbsp;AI agent monitoring | PENDING |  |
-| WA.04 | Search | PENDING |  |
-| WA.04.01 | &nbsp;&nbsp;&nbsp;&nbsp;Search box modes | PENDING |  |
-| WA.04.02 | &nbsp;&nbsp;&nbsp;&nbsp;Result preview & type labels | PENDING |  |
-| WA.04.03 | &nbsp;&nbsp;&nbsp;&nbsp;Web/Store suggestion toggles | PENDING |  |
-| WA.04.04 | &nbsp;&nbsp;&nbsp;&nbsp;Indexing dependency | PENDING |  |
-| WA.05 | Widgets board & notification controls | PENDING |  |
-| WA.06 | Quick Settings | PENDING |  |
-| WA.06.01 | &nbsp;&nbsp;&nbsp;&nbsp;Tiles, edit, sliders | PENDING |  |
-| WA.06.02 | &nbsp;&nbsp;&nbsp;&nbsp;Wi-Fi/Bluetooth sub-panels | PENDING |  |
-| WA.06.03 | &nbsp;&nbsp;&nbsp;&nbsp;Media controls | PENDING |  |
-| WA.07 | Notifications | PENDING |  |
-| WA.07.01 | &nbsp;&nbsp;&nbsp;&nbsp;Notification Center | PENDING |  |
-| WA.07.02 | &nbsp;&nbsp;&nbsp;&nbsp;Toasts lifecycle | PENDING |  |
-| WA.07.03 | &nbsp;&nbsp;&nbsp;&nbsp;Do not disturb / Focus | PENDING |  |
-| WA.07.04 | &nbsp;&nbsp;&nbsp;&nbsp;Badges & priority | PENDING |  |
-| WA.08 | Task View & virtual desktops | PENDING |  |
-| WA.08.01 | &nbsp;&nbsp;&nbsp;&nbsp;Create/rename/reorder/close | PENDING |  |
-| WA.08.02 | &nbsp;&nbsp;&nbsp;&nbsp;Per-desktop wallpaper | PENDING |  |
-| WA.08.03 | &nbsp;&nbsp;&nbsp;&nbsp;Alt+Tab scope | PENDING |  |
-| WA.08.04 | &nbsp;&nbsp;&nbsp;&nbsp;Timeline legacy (deprecated) | PENDING |  |
-| WA.09 | Window management | PENDING |  |
-| WA.09.01 | &nbsp;&nbsp;&nbsp;&nbsp;Snap Layouts flyout | PENDING |  |
-| WA.09.02 | &nbsp;&nbsp;&nbsp;&nbsp;Snap Groups | PENDING |  |
-| WA.09.03 | &nbsp;&nbsp;&nbsp;&nbsp;Snap assist | PENDING |  |
-| WA.09.04 | &nbsp;&nbsp;&nbsp;&nbsp;Drag-to-edge, shake, maximize/restore | PENDING |  |
-| WA.09.05 | &nbsp;&nbsp;&nbsp;&nbsp;Title bar controls & caption buttons | PENDING |  |
-| WA.09.06 | &nbsp;&nbsp;&nbsp;&nbsp;Win+arrow shortcuts | PENDING |  |
-| WA.09.07 | &nbsp;&nbsp;&nbsp;&nbsp;Multi-monitor window restore | PENDING |  |
-| WA.10 | Lock, sign-in, session | PENDING |  |
-| WA.10.01 | &nbsp;&nbsp;&nbsp;&nbsp;Lock screen status & widgets | PENDING |  |
-| WA.10.02 | &nbsp;&nbsp;&nbsp;&nbsp;Sign-in (PIN, Hello, password, passkey) | PENDING |  |
-| WA.10.03 | &nbsp;&nbsp;&nbsp;&nbsp;User switching & Ctrl+Alt+Del screen | PENDING |  |
-| WA.10.04 | &nbsp;&nbsp;&nbsp;&nbsp;Shutdown/restart/sleep/hibernate | PENDING |  |
-| WA.10.05 | &nbsp;&nbsp;&nbsp;&nbsp;Update-and-restart flows | PENDING |  |
-| WA.11 | OOBE / first-run | PENDING |  |
-| WA.11.01 | &nbsp;&nbsp;&nbsp;&nbsp;Region/keyboard | PENDING |  |
-| WA.11.02 | &nbsp;&nbsp;&nbsp;&nbsp;Network requirement | PENDING |  |
-| WA.11.03 | &nbsp;&nbsp;&nbsp;&nbsp;Microsoft account requirement & local account paths | PENDING |  |
-| WA.11.04 | &nbsp;&nbsp;&nbsp;&nbsp;Privacy pages | PENDING |  |
-| WA.11.05 | &nbsp;&nbsp;&nbsp;&nbsp;Restore from backup | PENDING |  |
-| WA.12 | UAC & permission prompts | PENDING |  |
-| WA.12.01 | &nbsp;&nbsp;&nbsp;&nbsp;Consent vs credential prompts | PENDING |  |
-| WA.12.02 | &nbsp;&nbsp;&nbsp;&nbsp;Secure desktop | PENDING |  |
-| WA.12.03 | &nbsp;&nbsp;&nbsp;&nbsp;Admin protection (if available) | PENDING |  |
-| WA.12.04 | &nbsp;&nbsp;&nbsp;&nbsp;App capability prompts (camera/mic/location) | PENDING |  |
-| WA.13 | File Explorer | PENDING |  |
-| WA.13.01 | &nbsp;&nbsp;&nbsp;&nbsp;Home, Gallery, Quick Access | PENDING |  |
-| WA.13.02 | &nbsp;&nbsp;&nbsp;&nbsp;Navigation pane | PENDING |  |
-| WA.13.03 | &nbsp;&nbsp;&nbsp;&nbsp;Address bar/breadcrumbs | PENDING |  |
-| WA.13.04 | &nbsp;&nbsp;&nbsp;&nbsp;Tabs | PENDING |  |
-| WA.13.05 | &nbsp;&nbsp;&nbsp;&nbsp;Command bar & menus | PENDING |  |
-| WA.13.06 | &nbsp;&nbsp;&nbsp;&nbsp;Views, sort, group | PENDING |  |
-| WA.13.07 | &nbsp;&nbsp;&nbsp;&nbsp;Selection model | PENDING |  |
-| WA.13.08 | &nbsp;&nbsp;&nbsp;&nbsp;Details/preview pane | PENDING |  |
-| WA.13.09 | &nbsp;&nbsp;&nbsp;&nbsp;Search in Explorer | PENDING |  |
-| WA.13.10 | &nbsp;&nbsp;&nbsp;&nbsp;Copy/move progress dialog | PENDING |  |
-| WA.13.11 | &nbsp;&nbsp;&nbsp;&nbsp;Conflict resolution | PENDING |  |
-| WA.13.12 | &nbsp;&nbsp;&nbsp;&nbsp;Rename (incl. voice typing 26H2) | PENDING |  |
-| WA.13.13 | &nbsp;&nbsp;&nbsp;&nbsp;Delete & Recycle Bin | PENDING |  |
-| WA.13.14 | &nbsp;&nbsp;&nbsp;&nbsp;Context menus (modern/legacy) | PENDING |  |
-| WA.13.15 | &nbsp;&nbsp;&nbsp;&nbsp;Drag & drop semantics | PENDING |  |
-| WA.13.16 | &nbsp;&nbsp;&nbsp;&nbsp;Archive formats | PENDING |  |
-| WA.13.17 | &nbsp;&nbsp;&nbsp;&nbsp;AI actions | PENDING |  |
-| WA.13.18 | &nbsp;&nbsp;&nbsp;&nbsp;Properties dialog | PENDING |  |
-| WA.14 | Common dialogs | PENDING |  |
-| WA.14.01 | &nbsp;&nbsp;&nbsp;&nbsp;Open/Save (IFileDialog) | PENDING |  |
-| WA.14.02 | &nbsp;&nbsp;&nbsp;&nbsp;Print dialog (modern/legacy) | PENDING |  |
-| WA.14.03 | &nbsp;&nbsp;&nbsp;&nbsp;Share sheet | PENDING |  |
-| WA.14.04 | &nbsp;&nbsp;&nbsp;&nbsp;Folder picker | PENDING |  |
-| WA.15 | System-wide tools | PENDING |  |
-| WA.15.01 | &nbsp;&nbsp;&nbsp;&nbsp;Clipboard history (Win+V) | PENDING |  |
-| WA.15.02 | &nbsp;&nbsp;&nbsp;&nbsp;Snipping Tool / PrtScn | PENDING |  |
-| WA.15.03 | &nbsp;&nbsp;&nbsp;&nbsp;Emoji & symbols panel (Win+.) | PENDING |  |
-| WA.15.04 | &nbsp;&nbsp;&nbsp;&nbsp;Touch keyboard/IME | PENDING |  |
-| WA.15.05 | &nbsp;&nbsp;&nbsp;&nbsp;Voice typing (Win+H) | PENDING |  |
-| WA.15.06 | &nbsp;&nbsp;&nbsp;&nbsp;Run dialog | PENDING |  |
-| WA.16 | Legacy Windows (10/7) interface differences | PENDING |  |
+| WA.01 | Desktop | PARTIAL | Group researched in Part 3; see child items. |
+| WA.01.01 | &nbsp;&nbsp;&nbsp;&nbsp;Wallpaper/slideshow/spotlight | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.01.02 | &nbsp;&nbsp;&nbsp;&nbsp;Desktop icons, arrange, auto-arrange, grid | PARTIAL | Only T4/T5 evidence (3 sources); no official Windows 11 article describes this feature. Low–medium confidence. |
+| WA.01.03 | &nbsp;&nbsp;&nbsp;&nbsp;Desktop context menu (Win11 compact vs 'Show more options') | PARTIAL | 1 T1/T2 and 3 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.02 | Start | PARTIAL | Group researched in Part 3; see child items. |
+| WA.02.01 | &nbsp;&nbsp;&nbsp;&nbsp;Pinned grid, folders | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.02.02 | &nbsp;&nbsp;&nbsp;&nbsp;Recommended / Recent section | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.02.03 | &nbsp;&nbsp;&nbsp;&nbsp;All apps view(s) | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.02.04 | &nbsp;&nbsp;&nbsp;&nbsp;Start size Small/Large & section hiding (26H2) | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.02.05 | &nbsp;&nbsp;&nbsp;&nbsp;Power menu & account menu | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.02.06 | &nbsp;&nbsp;&nbsp;&nbsp;Start keyboard navigation | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.03 | Taskbar | PARTIAL | Group researched in Part 3; see child items. |
+| WA.03.01 | &nbsp;&nbsp;&nbsp;&nbsp;Alignment/position top/left/right (26H2) | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.03.02 | &nbsp;&nbsp;&nbsp;&nbsp;Smaller taskbar option | PARTIAL | 3 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.03.03 | &nbsp;&nbsp;&nbsp;&nbsp;Grouping, labels, combine behaviour | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.03.04 | &nbsp;&nbsp;&nbsp;&nbsp;Jump lists & app-specific actions | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.03.05 | &nbsp;&nbsp;&nbsp;&nbsp;Thumbnail previews & hover | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.03.06 | &nbsp;&nbsp;&nbsp;&nbsp;Overflow menu | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.03.07 | &nbsp;&nbsp;&nbsp;&nbsp;Taskbar corner icons / system tray | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.03.08 | &nbsp;&nbsp;&nbsp;&nbsp;Badges, flash, progress | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.03.09 | &nbsp;&nbsp;&nbsp;&nbsp;AI agent monitoring | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.04 | Search | PARTIAL | Group researched in Part 3; see child items. |
+| WA.04.01 | &nbsp;&nbsp;&nbsp;&nbsp;Search box modes | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.04.02 | &nbsp;&nbsp;&nbsp;&nbsp;Result preview & type labels | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.04.03 | &nbsp;&nbsp;&nbsp;&nbsp;Web/Store suggestion toggles | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.04.04 | &nbsp;&nbsp;&nbsp;&nbsp;Indexing dependency | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.05 | Widgets board & notification controls | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.06 | Quick Settings | PARTIAL | Group researched in Part 3; see child items. |
+| WA.06.01 | &nbsp;&nbsp;&nbsp;&nbsp;Tiles, edit, sliders | PARTIAL | 3 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.06.02 | &nbsp;&nbsp;&nbsp;&nbsp;Wi-Fi/Bluetooth sub-panels | PARTIAL | 1 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.06.03 | &nbsp;&nbsp;&nbsp;&nbsp;Media controls | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.07 | Notifications | PARTIAL | Group researched in Part 3; see child items. |
+| WA.07.01 | &nbsp;&nbsp;&nbsp;&nbsp;Notification Center | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.07.02 | &nbsp;&nbsp;&nbsp;&nbsp;Toasts lifecycle | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.07.03 | &nbsp;&nbsp;&nbsp;&nbsp;Do not disturb / Focus | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.07.04 | &nbsp;&nbsp;&nbsp;&nbsp;Badges & priority | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.08 | Task View & virtual desktops | PARTIAL | Group researched in Part 3; see child items. |
+| WA.08.01 | &nbsp;&nbsp;&nbsp;&nbsp;Create/rename/reorder/close | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.08.02 | &nbsp;&nbsp;&nbsp;&nbsp;Per-desktop wallpaper | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.08.03 | &nbsp;&nbsp;&nbsp;&nbsp;Alt+Tab scope | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.08.04 | &nbsp;&nbsp;&nbsp;&nbsp;Timeline legacy (deprecated) | NOT APPLICABLE | Timeline is not part of the Windows 11 shell. Legacy behaviour is recorded here and in WA.16. |
+| WA.09 | Window management | PARTIAL | Group researched in Part 3; see child items. |
+| WA.09.01 | &nbsp;&nbsp;&nbsp;&nbsp;Snap Layouts flyout | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.09.02 | &nbsp;&nbsp;&nbsp;&nbsp;Snap Groups | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.09.03 | &nbsp;&nbsp;&nbsp;&nbsp;Snap assist | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.09.04 | &nbsp;&nbsp;&nbsp;&nbsp;Drag-to-edge, shake, maximize/restore | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.09.05 | &nbsp;&nbsp;&nbsp;&nbsp;Title bar controls & caption buttons | PARTIAL | 4 T1/T2 and 0 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.09.06 | &nbsp;&nbsp;&nbsp;&nbsp;Win+arrow shortcuts | COMPLETE | Every Windows key + arrow combination is listed in Microsoft's keyboard shortcuts article (Appendix 3A). Live-build c... |
+| WA.09.07 | &nbsp;&nbsp;&nbsp;&nbsp;Multi-monitor window restore | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.10 | Lock, sign-in, session | PARTIAL | Group researched in Part 3; see child items. |
+| WA.10.01 | &nbsp;&nbsp;&nbsp;&nbsp;Lock screen status & widgets | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.10.02 | &nbsp;&nbsp;&nbsp;&nbsp;Sign-in (PIN, Hello, password, passkey) | PARTIAL | 2 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.10.03 | &nbsp;&nbsp;&nbsp;&nbsp;User switching & Ctrl+Alt+Del screen | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.10.04 | &nbsp;&nbsp;&nbsp;&nbsp;Shutdown/restart/sleep/hibernate | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.10.05 | &nbsp;&nbsp;&nbsp;&nbsp;Update-and-restart flows | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.11 | OOBE / first-run | PARTIAL | Group researched in Part 3; see child items. |
+| WA.11.01 | &nbsp;&nbsp;&nbsp;&nbsp;Region/keyboard | PARTIAL | 3 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.11.02 | &nbsp;&nbsp;&nbsp;&nbsp;Network requirement | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.11.03 | &nbsp;&nbsp;&nbsp;&nbsp;Microsoft account requirement & local account paths | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.11.04 | &nbsp;&nbsp;&nbsp;&nbsp;Privacy pages | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.11.05 | &nbsp;&nbsp;&nbsp;&nbsp;Restore from backup | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.12 | UAC & permission prompts | PARTIAL | Group researched in Part 3; see child items. |
+| WA.12.01 | &nbsp;&nbsp;&nbsp;&nbsp;Consent vs credential prompts | PARTIAL | 2 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.12.02 | &nbsp;&nbsp;&nbsp;&nbsp;Secure desktop | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.12.03 | &nbsp;&nbsp;&nbsp;&nbsp;Admin protection (if available) | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.12.04 | &nbsp;&nbsp;&nbsp;&nbsp;App capability prompts (camera/mic/location) | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13 | File Explorer | PARTIAL | Group researched in Part 3; see child items. |
+| WA.13.01 | &nbsp;&nbsp;&nbsp;&nbsp;Home, Gallery, Quick Access | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.02 | &nbsp;&nbsp;&nbsp;&nbsp;Navigation pane | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.03 | &nbsp;&nbsp;&nbsp;&nbsp;Address bar/breadcrumbs | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.04 | &nbsp;&nbsp;&nbsp;&nbsp;Tabs | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.05 | &nbsp;&nbsp;&nbsp;&nbsp;Command bar & menus | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.06 | &nbsp;&nbsp;&nbsp;&nbsp;Views, sort, group | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.07 | &nbsp;&nbsp;&nbsp;&nbsp;Selection model | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.08 | &nbsp;&nbsp;&nbsp;&nbsp;Details/preview pane | PARTIAL | 2 T1/T2 and 4 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.09 | &nbsp;&nbsp;&nbsp;&nbsp;Search in Explorer | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.10 | &nbsp;&nbsp;&nbsp;&nbsp;Copy/move progress dialog | PARTIAL | Only T4/T5 evidence (2 sources); no official Windows 11 article describes this feature. Low–medium confidence. |
+| WA.13.11 | &nbsp;&nbsp;&nbsp;&nbsp;Conflict resolution | PARTIAL | Only T4/T5 evidence (3 sources); no official Windows 11 article describes this feature. Low–medium confidence. |
+| WA.13.12 | &nbsp;&nbsp;&nbsp;&nbsp;Rename (incl. voice typing 26H2) | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.13 | &nbsp;&nbsp;&nbsp;&nbsp;Delete & Recycle Bin | PARTIAL | Only T4/T5 evidence (5 sources); no official Windows 11 article describes this feature. Low–medium confidence. |
+| WA.13.14 | &nbsp;&nbsp;&nbsp;&nbsp;Context menus (modern/legacy) | PARTIAL | 2 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.15 | &nbsp;&nbsp;&nbsp;&nbsp;Drag & drop semantics | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.16 | &nbsp;&nbsp;&nbsp;&nbsp;Archive formats | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.17 | &nbsp;&nbsp;&nbsp;&nbsp;AI actions | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.13.18 | &nbsp;&nbsp;&nbsp;&nbsp;Properties dialog | PARTIAL | Only T4/T5 evidence (2 sources); no official Windows 11 article describes this feature. Low–medium confidence. |
+| WA.14 | Common dialogs | PARTIAL | Group researched in Part 3; see child items. |
+| WA.14.01 | &nbsp;&nbsp;&nbsp;&nbsp;Open/Save (IFileDialog) | PARTIAL | 2 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.14.02 | &nbsp;&nbsp;&nbsp;&nbsp;Print dialog (modern/legacy) | PARTIAL | 2 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.14.03 | &nbsp;&nbsp;&nbsp;&nbsp;Share sheet | PARTIAL | 3 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.14.04 | &nbsp;&nbsp;&nbsp;&nbsp;Folder picker | PARTIAL | 2 T1/T2 and 1 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.15 | System-wide tools | PARTIAL | Group researched in Part 3; see child items. |
+| WA.15.01 | &nbsp;&nbsp;&nbsp;&nbsp;Clipboard history (Win+V) | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.15.02 | &nbsp;&nbsp;&nbsp;&nbsp;Snipping Tool / PrtScn | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.15.03 | &nbsp;&nbsp;&nbsp;&nbsp;Emoji & symbols panel (Win+.) | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.15.04 | &nbsp;&nbsp;&nbsp;&nbsp;Touch keyboard/IME | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.15.05 | &nbsp;&nbsp;&nbsp;&nbsp;Voice typing (Win+H) | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.15.06 | &nbsp;&nbsp;&nbsp;&nbsp;Run dialog | PARTIAL | 1 T1/T2 and 2 T4/T5 sources relevant. Official sources are not specific to build 26300.9711; live-build check pending. |
+| WA.16 | Legacy Windows (10/7) interface differences | PARTIAL | Only T4/T5 evidence (2 sources); no official Windows 11 article describes this feature. Low–medium confidence. |
 
 ### WB — Research B — Windows Settings (26H2) full inventory
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| WB.01 | System | PENDING |  |
-| WB.01.01 | &nbsp;&nbsp;&nbsp;&nbsp;Display | PENDING |  |
-| WB.01.02 | &nbsp;&nbsp;&nbsp;&nbsp;Sound | PENDING |  |
-| WB.01.03 | &nbsp;&nbsp;&nbsp;&nbsp;Notifications | PENDING |  |
-| WB.01.04 | &nbsp;&nbsp;&nbsp;&nbsp;Focus | PENDING |  |
-| WB.01.05 | &nbsp;&nbsp;&nbsp;&nbsp;Power & battery | PENDING |  |
-| WB.01.06 | &nbsp;&nbsp;&nbsp;&nbsp;Storage | PENDING |  |
-| WB.01.07 | &nbsp;&nbsp;&nbsp;&nbsp;Nearby sharing | PENDING |  |
-| WB.01.08 | &nbsp;&nbsp;&nbsp;&nbsp;Multitasking | PENDING |  |
-| WB.01.09 | &nbsp;&nbsp;&nbsp;&nbsp;For developers / Advanced | PENDING |  |
-| WB.01.10 | &nbsp;&nbsp;&nbsp;&nbsp;Activation | PENDING |  |
-| WB.01.11 | &nbsp;&nbsp;&nbsp;&nbsp;Troubleshoot | PENDING |  |
-| WB.01.12 | &nbsp;&nbsp;&nbsp;&nbsp;Recovery | PENDING |  |
-| WB.01.13 | &nbsp;&nbsp;&nbsp;&nbsp;Projecting to this PC | PENDING |  |
-| WB.01.14 | &nbsp;&nbsp;&nbsp;&nbsp;Remote Desktop | PENDING |  |
-| WB.01.15 | &nbsp;&nbsp;&nbsp;&nbsp;Clipboard | PENDING |  |
-| WB.01.16 | &nbsp;&nbsp;&nbsp;&nbsp;Optional features (location) | PENDING |  |
-| WB.01.17 | &nbsp;&nbsp;&nbsp;&nbsp;About | PENDING |  |
-| WB.01.18 | &nbsp;&nbsp;&nbsp;&nbsp;Settings Agent (AI) | PENDING |  |
-| WB.02 | Bluetooth & devices | PENDING |  |
-| WB.02.01 | &nbsp;&nbsp;&nbsp;&nbsp;Devices | PENDING |  |
-| WB.02.02 | &nbsp;&nbsp;&nbsp;&nbsp;Printers & scanners | PENDING |  |
-| WB.02.03 | &nbsp;&nbsp;&nbsp;&nbsp;Phone Link / mobile devices | PENDING |  |
-| WB.02.04 | &nbsp;&nbsp;&nbsp;&nbsp;Cameras | PENDING |  |
-| WB.02.05 | &nbsp;&nbsp;&nbsp;&nbsp;Mouse | PENDING |  |
-| WB.02.06 | &nbsp;&nbsp;&nbsp;&nbsp;Touchpad | PENDING |  |
-| WB.02.07 | &nbsp;&nbsp;&nbsp;&nbsp;Pen & Windows Ink | PENDING |  |
-| WB.02.08 | &nbsp;&nbsp;&nbsp;&nbsp;Keyboard / Text input | PENDING |  |
-| WB.02.09 | &nbsp;&nbsp;&nbsp;&nbsp;AutoPlay | PENDING |  |
-| WB.02.10 | &nbsp;&nbsp;&nbsp;&nbsp;USB | PENDING |  |
-| WB.02.11 | &nbsp;&nbsp;&nbsp;&nbsp;Shared Audio | PENDING |  |
-| WB.03 | Network & internet | PENDING |  |
-| WB.03.01 | &nbsp;&nbsp;&nbsp;&nbsp;Wi-Fi | PENDING |  |
-| WB.03.02 | &nbsp;&nbsp;&nbsp;&nbsp;Ethernet | PENDING |  |
-| WB.03.03 | &nbsp;&nbsp;&nbsp;&nbsp;VPN | PENDING |  |
-| WB.03.04 | &nbsp;&nbsp;&nbsp;&nbsp;Mobile hotspot | PENDING |  |
-| WB.03.05 | &nbsp;&nbsp;&nbsp;&nbsp;Airplane mode | PENDING |  |
-| WB.03.06 | &nbsp;&nbsp;&nbsp;&nbsp;Proxy | PENDING |  |
-| WB.03.07 | &nbsp;&nbsp;&nbsp;&nbsp;Dial-up | PENDING |  |
-| WB.03.08 | &nbsp;&nbsp;&nbsp;&nbsp;Advanced network settings | PENDING |  |
-| WB.03.09 | &nbsp;&nbsp;&nbsp;&nbsp;Data usage | PENDING |  |
-| WB.04 | Personalization | PENDING |  |
-| WB.04.01 | &nbsp;&nbsp;&nbsp;&nbsp;Background | PENDING |  |
-| WB.04.02 | &nbsp;&nbsp;&nbsp;&nbsp;Colors | PENDING |  |
-| WB.04.03 | &nbsp;&nbsp;&nbsp;&nbsp;Themes | PENDING |  |
-| WB.04.04 | &nbsp;&nbsp;&nbsp;&nbsp;Dynamic Lighting | PENDING |  |
-| WB.04.05 | &nbsp;&nbsp;&nbsp;&nbsp;Lock screen | PENDING |  |
-| WB.04.06 | &nbsp;&nbsp;&nbsp;&nbsp;Text input | PENDING |  |
-| WB.04.07 | &nbsp;&nbsp;&nbsp;&nbsp;Start | PENDING |  |
-| WB.04.08 | &nbsp;&nbsp;&nbsp;&nbsp;Taskbar | PENDING |  |
-| WB.04.09 | &nbsp;&nbsp;&nbsp;&nbsp;Fonts | PENDING |  |
-| WB.04.10 | &nbsp;&nbsp;&nbsp;&nbsp;Device usage | PENDING |  |
-| WB.05 | Apps | PENDING |  |
-| WB.05.01 | &nbsp;&nbsp;&nbsp;&nbsp;Installed apps | PENDING |  |
-| WB.05.02 | &nbsp;&nbsp;&nbsp;&nbsp;Advanced app settings | PENDING |  |
-| WB.05.03 | &nbsp;&nbsp;&nbsp;&nbsp;Default apps | PENDING |  |
-| WB.05.04 | &nbsp;&nbsp;&nbsp;&nbsp;Offline maps | PENDING |  |
-| WB.05.05 | &nbsp;&nbsp;&nbsp;&nbsp;Optional features | PENDING |  |
-| WB.05.06 | &nbsp;&nbsp;&nbsp;&nbsp;Apps for websites | PENDING |  |
-| WB.05.07 | &nbsp;&nbsp;&nbsp;&nbsp;Video playback | PENDING |  |
-| WB.05.08 | &nbsp;&nbsp;&nbsp;&nbsp;Startup | PENDING |  |
-| WB.05.09 | &nbsp;&nbsp;&nbsp;&nbsp;Actions | PENDING |  |
-| WB.06 | Accounts | PENDING |  |
-| WB.06.01 | &nbsp;&nbsp;&nbsp;&nbsp;Your info | PENDING |  |
-| WB.06.02 | &nbsp;&nbsp;&nbsp;&nbsp;Email & accounts | PENDING |  |
-| WB.06.03 | &nbsp;&nbsp;&nbsp;&nbsp;Sign-in options | PENDING |  |
-| WB.06.04 | &nbsp;&nbsp;&nbsp;&nbsp;Passkeys | PENDING |  |
-| WB.06.05 | &nbsp;&nbsp;&nbsp;&nbsp;Family | PENDING |  |
-| WB.06.06 | &nbsp;&nbsp;&nbsp;&nbsp;Windows backup | PENDING |  |
-| WB.06.07 | &nbsp;&nbsp;&nbsp;&nbsp;Other users | PENDING |  |
-| WB.06.08 | &nbsp;&nbsp;&nbsp;&nbsp;Access work or school | PENDING |  |
-| WB.07 | Time & language | PENDING |  |
-| WB.07.01 | &nbsp;&nbsp;&nbsp;&nbsp;Date & time | PENDING |  |
-| WB.07.02 | &nbsp;&nbsp;&nbsp;&nbsp;Language & region | PENDING |  |
-| WB.07.03 | &nbsp;&nbsp;&nbsp;&nbsp;Typing | PENDING |  |
-| WB.07.04 | &nbsp;&nbsp;&nbsp;&nbsp;Speech | PENDING |  |
-| WB.08 | Gaming | PENDING |  |
-| WB.08.01 | &nbsp;&nbsp;&nbsp;&nbsp;Game Bar | PENDING |  |
-| WB.08.02 | &nbsp;&nbsp;&nbsp;&nbsp;Captures | PENDING |  |
-| WB.08.03 | &nbsp;&nbsp;&nbsp;&nbsp;Game Mode | PENDING |  |
-| WB.09 | Accessibility | PENDING |  |
-| WB.09.01 | &nbsp;&nbsp;&nbsp;&nbsp;Text size | PENDING |  |
-| WB.09.02 | &nbsp;&nbsp;&nbsp;&nbsp;Visual effects | PENDING |  |
-| WB.09.03 | &nbsp;&nbsp;&nbsp;&nbsp;Mouse pointer & touch | PENDING |  |
-| WB.09.04 | &nbsp;&nbsp;&nbsp;&nbsp;Text cursor | PENDING |  |
-| WB.09.05 | &nbsp;&nbsp;&nbsp;&nbsp;Magnifier | PENDING |  |
-| WB.09.06 | &nbsp;&nbsp;&nbsp;&nbsp;Color filters | PENDING |  |
-| WB.09.07 | &nbsp;&nbsp;&nbsp;&nbsp;Contrast themes | PENDING |  |
-| WB.09.08 | &nbsp;&nbsp;&nbsp;&nbsp;Narrator | PENDING |  |
-| WB.09.09 | &nbsp;&nbsp;&nbsp;&nbsp;Audio | PENDING |  |
-| WB.09.10 | &nbsp;&nbsp;&nbsp;&nbsp;Captions | PENDING |  |
-| WB.09.11 | &nbsp;&nbsp;&nbsp;&nbsp;Speech / Voice access | PENDING |  |
-| WB.09.12 | &nbsp;&nbsp;&nbsp;&nbsp;Keyboard | PENDING |  |
-| WB.09.13 | &nbsp;&nbsp;&nbsp;&nbsp;Mouse | PENDING |  |
-| WB.09.14 | &nbsp;&nbsp;&nbsp;&nbsp;Eye control | PENDING |  |
-| WB.10 | Privacy & security | PENDING |  |
-| WB.10.01 | &nbsp;&nbsp;&nbsp;&nbsp;Windows Security | PENDING |  |
-| WB.10.02 | &nbsp;&nbsp;&nbsp;&nbsp;Find my device | PENDING |  |
-| WB.10.03 | &nbsp;&nbsp;&nbsp;&nbsp;Device encryption / BitLocker | PENDING |  |
-| WB.10.04 | &nbsp;&nbsp;&nbsp;&nbsp;For developers | PENDING |  |
-| WB.10.05 | &nbsp;&nbsp;&nbsp;&nbsp;Windows permissions (general, speech, inking, diagnostics, activity, search) | PENDING |  |
-| WB.10.06 | &nbsp;&nbsp;&nbsp;&nbsp;App permissions (location, camera, mic, etc.) | PENDING |  |
-| WB.11 | Windows Update | PENDING |  |
-| WB.11.01 | &nbsp;&nbsp;&nbsp;&nbsp;Updates & pause | PENDING |  |
-| WB.11.02 | &nbsp;&nbsp;&nbsp;&nbsp;Update history | PENDING |  |
-| WB.11.03 | &nbsp;&nbsp;&nbsp;&nbsp;Advanced options | PENDING |  |
-| WB.11.04 | &nbsp;&nbsp;&nbsp;&nbsp;Windows Insider Program | PENDING |  |
-| WB.11.05 | &nbsp;&nbsp;&nbsp;&nbsp;Restart workflows & active hours | PENDING |  |
-| WB.12 | Beyond Settings | PENDING |  |
-| WB.12.01 | &nbsp;&nbsp;&nbsp;&nbsp;ms-settings URI register (229 distinct URIs on MS Learn) | PENDING |  |
-| WB.12.02 | &nbsp;&nbsp;&nbsp;&nbsp;Control Panel applets | PENDING |  |
-| WB.12.03 | &nbsp;&nbsp;&nbsp;&nbsp;Windows Security app | PENDING |  |
-| WB.12.04 | &nbsp;&nbsp;&nbsp;&nbsp;Device Manager | PENDING |  |
-| WB.12.05 | &nbsp;&nbsp;&nbsp;&nbsp;Task Manager (incl. NPU) | PENDING |  |
-| WB.12.06 | &nbsp;&nbsp;&nbsp;&nbsp;Disk Management | PENDING |  |
-| WB.12.07 | &nbsp;&nbsp;&nbsp;&nbsp;Legacy dialogs (sysdm.cpl etc.) | PENDING |  |
-| WB.12.08 | &nbsp;&nbsp;&nbsp;&nbsp;Group Policy / MDM-only settings | PENDING |  |
-| WB.12.09 | &nbsp;&nbsp;&nbsp;&nbsp;SKU differences (Home/Pro/Enterprise/Education) | PENDING |  |
+| WB.01 | System | PARTIAL | Category researched in Part 2; see child items. |
+| WB.01.01 | &nbsp;&nbsp;&nbsp;&nbsp;Display | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.02 | &nbsp;&nbsp;&nbsp;&nbsp;Sound | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.03 | &nbsp;&nbsp;&nbsp;&nbsp;Notifications | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.04 | &nbsp;&nbsp;&nbsp;&nbsp;Focus | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.05 | &nbsp;&nbsp;&nbsp;&nbsp;Power & battery | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.06 | &nbsp;&nbsp;&nbsp;&nbsp;Storage | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.07 | &nbsp;&nbsp;&nbsp;&nbsp;Nearby sharing | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.08 | &nbsp;&nbsp;&nbsp;&nbsp;Multitasking | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.09 | &nbsp;&nbsp;&nbsp;&nbsp;For developers / Advanced | COMPLETE | Official Advanced settings page enumerates the full page contents (updated 2026-02-26); live-build check pending (VP-... |
+| WB.01.10 | &nbsp;&nbsp;&nbsp;&nbsp;Activation | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.11 | &nbsp;&nbsp;&nbsp;&nbsp;Troubleshoot | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.12 | &nbsp;&nbsp;&nbsp;&nbsp;Recovery | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.13 | &nbsp;&nbsp;&nbsp;&nbsp;Projecting to this PC | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.14 | &nbsp;&nbsp;&nbsp;&nbsp;Remote Desktop | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.15 | &nbsp;&nbsp;&nbsp;&nbsp;Clipboard | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.16 | &nbsp;&nbsp;&nbsp;&nbsp;Optional features (location) | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.17 | &nbsp;&nbsp;&nbsp;&nbsp;About | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.01.18 | &nbsp;&nbsp;&nbsp;&nbsp;Settings Agent (AI) | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.02 | Bluetooth & devices | PARTIAL | Category researched in Part 2; see child items. |
+| WB.02.01 | &nbsp;&nbsp;&nbsp;&nbsp;Devices | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.02.02 | &nbsp;&nbsp;&nbsp;&nbsp;Printers & scanners | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.02.03 | &nbsp;&nbsp;&nbsp;&nbsp;Phone Link / mobile devices | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.02.04 | &nbsp;&nbsp;&nbsp;&nbsp;Cameras | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.02.05 | &nbsp;&nbsp;&nbsp;&nbsp;Mouse | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.02.06 | &nbsp;&nbsp;&nbsp;&nbsp;Touchpad | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.02.07 | &nbsp;&nbsp;&nbsp;&nbsp;Pen & Windows Ink | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.02.08 | &nbsp;&nbsp;&nbsp;&nbsp;Keyboard / Text input | NOT FOUND | No 'Keyboard' page under Bluetooth & devices was documented in the sources inspected; keyboard options are covered un... |
+| WB.02.09 | &nbsp;&nbsp;&nbsp;&nbsp;AutoPlay | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.02.10 | &nbsp;&nbsp;&nbsp;&nbsp;USB | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.02.11 | &nbsp;&nbsp;&nbsp;&nbsp;Shared Audio | PARTIAL | Only independent or preview-era evidence; no official Microsoft documentation found for this page. |
+| WB.03 | Network & internet | PARTIAL | Category researched in Part 2; see child items. |
+| WB.03.01 | &nbsp;&nbsp;&nbsp;&nbsp;Wi-Fi | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.03.02 | &nbsp;&nbsp;&nbsp;&nbsp;Ethernet | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.03.03 | &nbsp;&nbsp;&nbsp;&nbsp;VPN | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.03.04 | &nbsp;&nbsp;&nbsp;&nbsp;Mobile hotspot | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.03.05 | &nbsp;&nbsp;&nbsp;&nbsp;Airplane mode | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.03.06 | &nbsp;&nbsp;&nbsp;&nbsp;Proxy | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.03.07 | &nbsp;&nbsp;&nbsp;&nbsp;Dial-up | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.03.08 | &nbsp;&nbsp;&nbsp;&nbsp;Advanced network settings | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.03.09 | &nbsp;&nbsp;&nbsp;&nbsp;Data usage | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.04 | Personalization | PARTIAL | Category researched in Part 2; see child items. |
+| WB.04.01 | &nbsp;&nbsp;&nbsp;&nbsp;Background | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.04.02 | &nbsp;&nbsp;&nbsp;&nbsp;Colors | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.04.03 | &nbsp;&nbsp;&nbsp;&nbsp;Themes | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.04.04 | &nbsp;&nbsp;&nbsp;&nbsp;Dynamic Lighting | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.04.05 | &nbsp;&nbsp;&nbsp;&nbsp;Lock screen | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.04.06 | &nbsp;&nbsp;&nbsp;&nbsp;Text input | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.04.07 | &nbsp;&nbsp;&nbsp;&nbsp;Start | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.04.08 | &nbsp;&nbsp;&nbsp;&nbsp;Taskbar | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.04.09 | &nbsp;&nbsp;&nbsp;&nbsp;Fonts | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.04.10 | &nbsp;&nbsp;&nbsp;&nbsp;Device usage | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.05 | Apps | PARTIAL | Category researched in Part 2; see child items. |
+| WB.05.01 | &nbsp;&nbsp;&nbsp;&nbsp;Installed apps | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.05.02 | &nbsp;&nbsp;&nbsp;&nbsp;Advanced app settings | PARTIAL | Only community Q&A evidence; official documentation not found. |
+| WB.05.03 | &nbsp;&nbsp;&nbsp;&nbsp;Default apps | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.05.04 | &nbsp;&nbsp;&nbsp;&nbsp;Offline maps | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.05.05 | &nbsp;&nbsp;&nbsp;&nbsp;Optional features | NOT APPLICABLE | Optional features sits under System > Optional features in current documentation (see WB.01.16). |
+| WB.05.06 | &nbsp;&nbsp;&nbsp;&nbsp;Apps for websites | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.05.07 | &nbsp;&nbsp;&nbsp;&nbsp;Video playback | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.05.08 | &nbsp;&nbsp;&nbsp;&nbsp;Startup | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.05.09 | &nbsp;&nbsp;&nbsp;&nbsp;Actions | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.06 | Accounts | PARTIAL | Category researched in Part 2; see child items. |
+| WB.06.01 | &nbsp;&nbsp;&nbsp;&nbsp;Your info | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.06.02 | &nbsp;&nbsp;&nbsp;&nbsp;Email & accounts | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.06.03 | &nbsp;&nbsp;&nbsp;&nbsp;Sign-in options | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.06.04 | &nbsp;&nbsp;&nbsp;&nbsp;Passkeys | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.06.05 | &nbsp;&nbsp;&nbsp;&nbsp;Family | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.06.06 | &nbsp;&nbsp;&nbsp;&nbsp;Windows backup | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.06.07 | &nbsp;&nbsp;&nbsp;&nbsp;Other users | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.06.08 | &nbsp;&nbsp;&nbsp;&nbsp;Access work or school | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.07 | Time & language | PARTIAL | Category researched in Part 2; see child items. |
+| WB.07.01 | &nbsp;&nbsp;&nbsp;&nbsp;Date & time | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.07.02 | &nbsp;&nbsp;&nbsp;&nbsp;Language & region | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.07.03 | &nbsp;&nbsp;&nbsp;&nbsp;Typing | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.07.04 | &nbsp;&nbsp;&nbsp;&nbsp;Speech | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.08 | Gaming | PARTIAL | Category researched in Part 2; see child items. |
+| WB.08.01 | &nbsp;&nbsp;&nbsp;&nbsp;Game Bar | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.08.02 | &nbsp;&nbsp;&nbsp;&nbsp;Captures | PARTIAL | Only community Q&A evidence; official documentation not found. |
+| WB.08.03 | &nbsp;&nbsp;&nbsp;&nbsp;Game Mode | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.09 | Accessibility | PARTIAL | Category researched in Part 2; see child items. |
+| WB.09.01 | &nbsp;&nbsp;&nbsp;&nbsp;Text size | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.02 | &nbsp;&nbsp;&nbsp;&nbsp;Visual effects | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.03 | &nbsp;&nbsp;&nbsp;&nbsp;Mouse pointer & touch | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.04 | &nbsp;&nbsp;&nbsp;&nbsp;Text cursor | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.05 | &nbsp;&nbsp;&nbsp;&nbsp;Magnifier | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.06 | &nbsp;&nbsp;&nbsp;&nbsp;Color filters | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.07 | &nbsp;&nbsp;&nbsp;&nbsp;Contrast themes | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.08 | &nbsp;&nbsp;&nbsp;&nbsp;Narrator | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.09 | &nbsp;&nbsp;&nbsp;&nbsp;Audio | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.10 | &nbsp;&nbsp;&nbsp;&nbsp;Captions | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.11 | &nbsp;&nbsp;&nbsp;&nbsp;Speech / Voice access | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.12 | &nbsp;&nbsp;&nbsp;&nbsp;Keyboard | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.09.13 | &nbsp;&nbsp;&nbsp;&nbsp;Mouse | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.09.14 | &nbsp;&nbsp;&nbsp;&nbsp;Eye control | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.10 | Privacy & security | PARTIAL | Category researched in Part 2; see child items. |
+| WB.10.01 | &nbsp;&nbsp;&nbsp;&nbsp;Windows Security | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.10.02 | &nbsp;&nbsp;&nbsp;&nbsp;Find my device | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.10.03 | &nbsp;&nbsp;&nbsp;&nbsp;Device encryption / BitLocker | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.10.04 | &nbsp;&nbsp;&nbsp;&nbsp;For developers | NOT APPLICABLE | For developers moved to System > Advanced in 25H2 and later (see WB.01.09). |
+| WB.10.05 | &nbsp;&nbsp;&nbsp;&nbsp;Windows permissions (general, speech, inking, diagnostics, activity, search) | PARTIAL | Children WB.10.05.01–.05 documented. |
+| WB.10.06 | &nbsp;&nbsp;&nbsp;&nbsp;App permissions (location, camera, mic, etc.) | PARTIAL | Children WB.10.06.01–.03 documented. |
+| WB.11 | Windows Update | PARTIAL | Category researched in Part 2; see child items. |
+| WB.11.01 | &nbsp;&nbsp;&nbsp;&nbsp;Updates & pause | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.11.02 | &nbsp;&nbsp;&nbsp;&nbsp;Update history | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.11.03 | &nbsp;&nbsp;&nbsp;&nbsp;Advanced options | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.11.04 | &nbsp;&nbsp;&nbsp;&nbsp;Windows Insider Program | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.11.05 | &nbsp;&nbsp;&nbsp;&nbsp;Restart workflows & active hours | PARTIAL | Restart scheduling and active hours are covered in WB.11.01 and WB.11.03. |
+| WB.12 | Beyond Settings | PARTIAL | Category researched in Part 2; see child items. |
+| WB.12.01 | &nbsp;&nbsp;&nbsp;&nbsp;ms-settings URI register (229 distinct URIs on MS Learn) | COMPLETE | Full MS Learn URI table parsed (Appendix 2B). Live resolution test pending (VP-02). |
+| WB.12.02 | &nbsp;&nbsp;&nbsp;&nbsp;Control Panel applets | PARTIAL | Official source confirms the page exists but documents few or none of its controls. |
+| WB.12.03 | &nbsp;&nbsp;&nbsp;&nbsp;Windows Security app | PARTIAL | See WB.10.01 (Windows Security app). |
+| WB.12.04 | &nbsp;&nbsp;&nbsp;&nbsp;Device Manager | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.12.05 | &nbsp;&nbsp;&nbsp;&nbsp;Task Manager (incl. NPU) | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.12.06 | &nbsp;&nbsp;&nbsp;&nbsp;Disk Management | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.12.07 | &nbsp;&nbsp;&nbsp;&nbsp;Legacy dialogs (sysdm.cpl etc.) | PARTIAL | Controls documented by official 'Windows 11' support content that isn't build-specific; not yet verified against a li... |
+| WB.12.08 | &nbsp;&nbsp;&nbsp;&nbsp;Group Policy / MDM-only settings | PARTIAL | Part 29 mechanism (S3888-S3890); Part 31 enumeration method (S3891-S3892); list not extracted |
+| WB.12.09 | &nbsp;&nbsp;&nbsp;&nbsp;SKU differences (Home/Pro/Enterprise/Education) | PARTIAL | SKU/hardware conditions captured per page where sources state them; no consolidated Home/Pro/Enterprise matrix yet. |
 
 ### WC — Research A3 — Fluent / WinUI design system
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| WC.01 | Design principles | PENDING |  |
-| WC.02 | Color & theming tokens | PENDING |  |
-| WC.03 | Typography ramp (Segoe UI Variable) | PENDING |  |
-| WC.04 | Spacing & layout grid | PENDING |  |
-| WC.05 | Geometry & corner radius | PENDING |  |
-| WC.06 | Elevation & shadows | PENDING |  |
-| WC.07 | Materials: Mica, Mica Alt, Acrylic, Smoke | PENDING |  |
-| WC.08 | Iconography (Segoe Fluent Icons) | PENDING |  |
-| WC.09 | Motion: timing & easing | PENDING |  |
-| WC.10 | Control states (rest/hover/pressed/disabled/focus) | PENDING |  |
-| WC.11 | Focus visuals | PENDING |  |
-| WC.12 | Win32 / common controls conventions | PENDING |  |
-| WC.13 | Loading, error, empty states | PENDING |  |
+| WC.01 | Design principles | PARTIAL | Principles documented by Microsoft Learn and Fluent 2; qualitative only, no exhaustive list. |
+| WC.02 | Color & theming tokens | PARTIAL | 83 core Color tokens × 3 themes enumerated from source; SystemAccentColor shades are computed at runtime (not in XAML... |
+| WC.03 | Typography ramp (Segoe UI Variable) | COMPLETE | Type ramp sizes (source) + line heights/weights/axes (docs) agree; naming difference recorded as GAP-B3-04. |
+| WC.04 | Spacing & layout grid | PARTIAL | 4 epx base unit, spacing guidance and breakpoints documented; no exhaustive spacing token set exists in source. |
+| WC.05 | Geometry & corner radius | COMPLETE | ControlCornerRadius 4 / OverlayCornerRadius 8 (source) match docs; Win32 DWMWCP enum documented. |
+| WC.06 | Elevation & shadows | PARTIAL | Elevation depths documented; shadow blur/offset/opacity of ThemeShadow are not published. |
+| WC.07 | Materials: Mica, Mica Alt, Acrylic, Smoke | PARTIAL | Acrylic recipe constants from source; Mica/Mica Alt tint parameters live in closed WinAppSDK/DWM code. |
+| WC.08 | Iconography (Segoe Fluent Icons) | PARTIAL | Glyph table counted (1,574 unique code points); count conflicts across pages (GAP-B3-01). |
+| WC.09 | Motion: timing & easing | PARTIAL | Duration/easing tokens from source; docs disagree on exit curve and legacy durations (GAP-B3-02/03). |
+| WC.10 | Control states (rest/hover/pressed/disabled/focus) | PARTIAL | State brushes for 21 resource files (Button, CheckBox, ToggleSwitch, TextBox, etc.) captured; other controls not down... |
+| WC.11 | Focus visuals | PARTIAL | Two-tone focus visual (2px/1px/1px margin) documented; framework defaults not in downloaded XAML. |
+| WC.12 | Win32 / common controls conventions | PARTIAL | Win32 UX guide (legacy), ComCtl32 v6 visual styles, DWM attributes and dark mode guidance captured; per-control Win32... |
+| WC.13 | Loading, error, empty states | PARTIAL | ProgressRing/ProgressBar/InfoBar/ContentDialog guidance and dimensions captured; no official empty-state pattern found. |
 
 ### MC — Research C — macOS 27 desktop model
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| MC.01 | Menu bar | PENDING |  |
-| MC.01.01 | &nbsp;&nbsp;&nbsp;&nbsp;Apple menu | PENDING |  |
-| MC.01.02 | &nbsp;&nbsp;&nbsp;&nbsp;App menu & standard menus | PENDING |  |
-| MC.01.03 | &nbsp;&nbsp;&nbsp;&nbsp;Menu item image visibility (27 change) | PENDING |  |
-| MC.01.04 | &nbsp;&nbsp;&nbsp;&nbsp;Status menus / menu extras | PENDING |  |
-| MC.01.05 | &nbsp;&nbsp;&nbsp;&nbsp;Live Activities | PENDING |  |
-| MC.01.06 | &nbsp;&nbsp;&nbsp;&nbsp;Menu bar hiding & customization | PENDING |  |
-| MC.02 | Dock | PENDING |  |
-| MC.02.01 | &nbsp;&nbsp;&nbsp;&nbsp;Placement/size/magnification | PENDING |  |
-| MC.02.02 | &nbsp;&nbsp;&nbsp;&nbsp;App indicators | PENDING |  |
-| MC.02.03 | &nbsp;&nbsp;&nbsp;&nbsp;Context menu incl. background processes (27) | PENDING |  |
-| MC.02.04 | &nbsp;&nbsp;&nbsp;&nbsp;Stacks | PENDING |  |
-| MC.02.05 | &nbsp;&nbsp;&nbsp;&nbsp;Minimize effects | PENDING |  |
-| MC.03 | Finder | PENDING |  |
-| MC.03.01 | &nbsp;&nbsp;&nbsp;&nbsp;Windows/tabs/views | PENDING |  |
-| MC.03.02 | &nbsp;&nbsp;&nbsp;&nbsp;Sidebar | PENDING |  |
-| MC.03.03 | &nbsp;&nbsp;&nbsp;&nbsp;Tags | PENDING |  |
-| MC.03.04 | &nbsp;&nbsp;&nbsp;&nbsp;Search & smart folders | PENDING |  |
-| MC.03.05 | &nbsp;&nbsp;&nbsp;&nbsp;Quick Look | PENDING |  |
-| MC.03.06 | &nbsp;&nbsp;&nbsp;&nbsp;Get Info | PENDING |  |
-| MC.03.07 | &nbsp;&nbsp;&nbsp;&nbsp;Copy/move/conflict | PENDING |  |
-| MC.03.08 | &nbsp;&nbsp;&nbsp;&nbsp;Trash & recovery | PENDING |  |
-| MC.03.09 | &nbsp;&nbsp;&nbsp;&nbsp;Desktop & stacks | PENDING |  |
-| MC.04 | Window model | PENDING |  |
-| MC.04.01 | &nbsp;&nbsp;&nbsp;&nbsp;App vs window relationship | PENDING |  |
-| MC.04.02 | &nbsp;&nbsp;&nbsp;&nbsp;Active/inactive appearance | PENDING |  |
-| MC.04.03 | &nbsp;&nbsp;&nbsp;&nbsp;Traffic-light controls (27 redesign) | PENDING |  |
-| MC.04.04 | &nbsp;&nbsp;&nbsp;&nbsp;Full screen | PENDING |  |
-| MC.04.05 | &nbsp;&nbsp;&nbsp;&nbsp;Window tiling & Move & Resize | PENDING |  |
-| MC.04.06 | &nbsp;&nbsp;&nbsp;&nbsp;Sheets & panels | PENDING |  |
-| MC.04.07 | &nbsp;&nbsp;&nbsp;&nbsp;Window restoration/persistence | PENDING |  |
-| MC.05 | Spaces / Mission Control / Stage Manager | PENDING |  |
-| MC.05.01 | &nbsp;&nbsp;&nbsp;&nbsp;Spaces | PENDING |  |
-| MC.05.02 | &nbsp;&nbsp;&nbsp;&nbsp;Mission Control | PENDING |  |
-| MC.05.03 | &nbsp;&nbsp;&nbsp;&nbsp;App Exposé | PENDING |  |
-| MC.05.04 | &nbsp;&nbsp;&nbsp;&nbsp;Stage Manager | PENDING |  |
-| MC.06 | Spotlight | PENDING |  |
-| MC.06.01 | &nbsp;&nbsp;&nbsp;&nbsp;Search | PENDING |  |
-| MC.06.02 | &nbsp;&nbsp;&nbsp;&nbsp;Actions & quick keys | PENDING |  |
-| MC.06.03 | &nbsp;&nbsp;&nbsp;&nbsp;Intelligence/Siri integration | PENDING |  |
-| MC.07 | Control Center & Notification Center | PENDING |  |
-| MC.07.01 | &nbsp;&nbsp;&nbsp;&nbsp;Modules & customization | PENDING |  |
-| MC.07.02 | &nbsp;&nbsp;&nbsp;&nbsp;Third-party controls | PENDING |  |
-| MC.07.03 | &nbsp;&nbsp;&nbsp;&nbsp;Notification grouping | PENDING |  |
-| MC.07.04 | &nbsp;&nbsp;&nbsp;&nbsp;Widgets on desktop | PENDING |  |
-| MC.08 | Dialogs & panels | PENDING |  |
-| MC.08.01 | &nbsp;&nbsp;&nbsp;&nbsp;Open/Save panels (Recents Cmd-Shift-F, 27) | PENDING |  |
-| MC.08.02 | &nbsp;&nbsp;&nbsp;&nbsp;Print | PENDING |  |
-| MC.08.03 | &nbsp;&nbsp;&nbsp;&nbsp;Share | PENDING |  |
-| MC.08.04 | &nbsp;&nbsp;&nbsp;&nbsp;Services menu | PENDING |  |
-| MC.08.05 | &nbsp;&nbsp;&nbsp;&nbsp;Alerts | PENDING |  |
-| MC.09 | Input | PENDING |  |
-| MC.09.01 | &nbsp;&nbsp;&nbsp;&nbsp;Keyboard shortcuts | PENDING |  |
-| MC.09.02 | &nbsp;&nbsp;&nbsp;&nbsp;Trackpad gestures | PENDING |  |
-| MC.09.03 | &nbsp;&nbsp;&nbsp;&nbsp;Full Keyboard Access | PENDING |  |
-| MC.09.04 | &nbsp;&nbsp;&nbsp;&nbsp;Screenshots (Cmd-Shift-3/4/5) | PENDING |  |
-| MC.10 | Session | PENDING |  |
-| MC.10.01 | &nbsp;&nbsp;&nbsp;&nbsp;Login window | PENDING |  |
-| MC.10.02 | &nbsp;&nbsp;&nbsp;&nbsp;Fast user switching | PENDING |  |
-| MC.10.03 | &nbsp;&nbsp;&nbsp;&nbsp;Lock | PENDING |  |
-| MC.10.04 | &nbsp;&nbsp;&nbsp;&nbsp;Force Quit | PENDING |  |
-| MC.10.05 | &nbsp;&nbsp;&nbsp;&nbsp;Startup/shutdown/restart | PENDING |  |
-| MC.10.06 | &nbsp;&nbsp;&nbsp;&nbsp;Setup Assistant | PENDING |  |
+| MC.01 | Menu bar | PARTIAL | Researched in Part 6 (Chapter 14). |
+| MC.01.01 | &nbsp;&nbsp;&nbsp;&nbsp;Apple menu | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.01.02 | &nbsp;&nbsp;&nbsp;&nbsp;App menu & standard menus | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.01.03 | &nbsp;&nbsp;&nbsp;&nbsp;Menu item image visibility (27 change) | COMPLETE | SDK-dependent menu-image rules are documented in the macOS 27 release notes (T1) and corroborated by 5 independent so... |
+| MC.01.04 | &nbsp;&nbsp;&nbsp;&nbsp;Status menus / menu extras | PARTIAL | Apple documents Command-drag rearranging; macOS 27 overflow control and MenuBarAgent changes are third-party evidence... |
+| MC.01.05 | &nbsp;&nbsp;&nbsp;&nbsp;Live Activities | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.01.06 | &nbsp;&nbsp;&nbsp;&nbsp;Menu bar hiding & customization | PARTIAL | Menu Bar pane options captured (Automatically hide and show the menu bar: Always/On Desktop Only/In Full Screen Only/... |
+| MC.02 | Dock | PARTIAL | Researched in Part 6 (Chapter 14). |
+| MC.02.01 | &nbsp;&nbsp;&nbsp;&nbsp;Placement/size/magnification | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.02.02 | &nbsp;&nbsp;&nbsp;&nbsp;App indicators | PARTIAL | Background-process indicator only in independent beta reports; release notes reference a fixed bug in it (GAP-B5-02). |
+| MC.02.03 | &nbsp;&nbsp;&nbsp;&nbsp;Context menu incl. background processes (27) | PARTIAL | Dock shortcut menu items documented; the new background-activity menu item name is unverified (GAP-B5-02). |
+| MC.02.04 | &nbsp;&nbsp;&nbsp;&nbsp;Stacks | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.02.05 | &nbsp;&nbsp;&nbsp;&nbsp;Minimize effects | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.03 | Finder | PARTIAL | Researched in Part 6 (Chapter 14). |
+| MC.03.01 | &nbsp;&nbsp;&nbsp;&nbsp;Windows/tabs/views | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.03.02 | &nbsp;&nbsp;&nbsp;&nbsp;Sidebar | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.03.03 | &nbsp;&nbsp;&nbsp;&nbsp;Tags | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.03.04 | &nbsp;&nbsp;&nbsp;&nbsp;Search & smart folders | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.03.05 | &nbsp;&nbsp;&nbsp;&nbsp;Quick Look | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.03.06 | &nbsp;&nbsp;&nbsp;&nbsp;Get Info | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.03.07 | &nbsp;&nbsp;&nbsp;&nbsp;Copy/move/conflict | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.03.08 | &nbsp;&nbsp;&nbsp;&nbsp;Trash & recovery | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.03.09 | &nbsp;&nbsp;&nbsp;&nbsp;Desktop & stacks | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.04 | Window model | PARTIAL | Researched in Part 6 (Chapter 14). |
+| MC.04.01 | &nbsp;&nbsp;&nbsp;&nbsp;App vs window relationship | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.04.02 | &nbsp;&nbsp;&nbsp;&nbsp;Active/inactive appearance | PARTIAL | Corner radius and shadow changes reported qualitatively; no numeric values published (GAP-B5-07). |
+| MC.04.03 | &nbsp;&nbsp;&nbsp;&nbsp;Traffic-light controls (27 redesign) | PARTIAL | Redesign corroborated by 6 independent sources; no Apple T1 description (GAP-B5-01, supersedes Part 1 GAP-007). |
+| MC.04.04 | &nbsp;&nbsp;&nbsp;&nbsp;Full screen | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.04.05 | &nbsp;&nbsp;&nbsp;&nbsp;Window tiling & Move & Resize | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.04.06 | &nbsp;&nbsp;&nbsp;&nbsp;Sheets & panels | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.04.07 | &nbsp;&nbsp;&nbsp;&nbsp;Window restoration/persistence | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.05 | Spaces / Mission Control / Stage Manager | PARTIAL | Researched in Part 6 (Chapter 14). |
+| MC.05.01 | &nbsp;&nbsp;&nbsp;&nbsp;Spaces | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.05.02 | &nbsp;&nbsp;&nbsp;&nbsp;Mission Control | PARTIAL | Guide captured; third-party reports of changed Dock accessibility notifications and animation bugs (GAP-B5-06). |
+| MC.05.03 | &nbsp;&nbsp;&nbsp;&nbsp;App Exposé | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.05.04 | &nbsp;&nbsp;&nbsp;&nbsp;Stage Manager | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.06 | Spotlight | PARTIAL | Researched in Part 6 (Chapter 14). |
+| MC.06.01 | &nbsp;&nbsp;&nbsp;&nbsp;Search | PARTIAL | Spotlight guide captured; Spotlight menu-bar icon status conflicts (GAP-B5-05). |
+| MC.06.02 | &nbsp;&nbsp;&nbsp;&nbsp;Actions & quick keys | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.06.03 | &nbsp;&nbsp;&nbsp;&nbsp;Intelligence/Siri integration | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.07 | Control Center & Notification Center | PARTIAL | Researched in Part 6 (Chapter 14). |
+| MC.07.01 | &nbsp;&nbsp;&nbsp;&nbsp;Modules & customization | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.07.02 | &nbsp;&nbsp;&nbsp;&nbsp;Third-party controls | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.07.03 | &nbsp;&nbsp;&nbsp;&nbsp;Notification grouping | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.07.04 | &nbsp;&nbsp;&nbsp;&nbsp;Widgets on desktop | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.08 | Dialogs & panels | PARTIAL | Researched in Part 6 (Chapter 14). |
+| MC.08.01 | &nbsp;&nbsp;&nbsp;&nbsp;Open/Save panels (Recents Cmd-Shift-F, 27) | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.08.02 | &nbsp;&nbsp;&nbsp;&nbsp;Print | PARTIAL | Mac User Guide print page captured; HIG Printing page inaccessible (GAP-B5-11). |
+| MC.08.03 | &nbsp;&nbsp;&nbsp;&nbsp;Share | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.08.04 | &nbsp;&nbsp;&nbsp;&nbsp;Services menu | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.08.05 | &nbsp;&nbsp;&nbsp;&nbsp;Alerts | PARTIAL | Only HIG guidance (developer, not OS behaviour) and the NSAlert release-note item. |
+| MC.09 | Input | PARTIAL | Researched in Part 6 (Chapter 14). |
+| MC.09.01 | &nbsp;&nbsp;&nbsp;&nbsp;Keyboard shortcuts | COMPLETE | 208 system shortcuts parsed from Apple KB 102650 (published 2026-09-14) and the tiling-shortcut page; app-specific sh... |
+| MC.09.02 | &nbsp;&nbsp;&nbsp;&nbsp;Trackpad gestures | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.09.03 | &nbsp;&nbsp;&nbsp;&nbsp;Full Keyboard Access | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.09.04 | &nbsp;&nbsp;&nbsp;&nbsp;Screenshots (Cmd-Shift-3/4/5) | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.10 | Session | PARTIAL | Researched in Part 6 (Chapter 14). |
+| MC.10.01 | &nbsp;&nbsp;&nbsp;&nbsp;Login window | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.10.02 | &nbsp;&nbsp;&nbsp;&nbsp;Fast user switching | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.10.03 | &nbsp;&nbsp;&nbsp;&nbsp;Lock | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.10.04 | &nbsp;&nbsp;&nbsp;&nbsp;Force Quit | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.10.05 | &nbsp;&nbsp;&nbsp;&nbsp;Startup/shutdown/restart | PARTIAL | Apple guide elements/behaviours captured; geometry, timing and defaults not live-verified (VP-18). |
+| MC.10.06 | &nbsp;&nbsp;&nbsp;&nbsp;Setup Assistant | PARTIAL | Only a model-specific guide (MacBook Pro) describes Setup Assistant steps (GAP-B5-09). |
 
 ### MD — Research D — macOS 27 System Settings inventory
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| MD.01 | Sidebar enumeration (exact order, hardware-dependent items) | PENDING |  |
-| MD.02 | Apple Account | PENDING |  |
-| MD.03 | Family | PENDING |  |
-| MD.04 | Wi-Fi | PENDING |  |
-| MD.05 | Bluetooth | PENDING |  |
-| MD.06 | Network | PENDING |  |
-| MD.07 | VPN | PENDING |  |
-| MD.08 | Battery / Energy | PENDING |  |
-| MD.09 | General (About, Software Update, Storage, AppleCare, AirDrop & Handoff, Login Items & Extensions, Language & Region, Date & Time, Sharing, Time Machine, Transfer or Reset, Startup Disk, Device Management) | PENDING |  |
-| MD.10 | Accessibility | PENDING |  |
-| MD.11 | Appearance | PENDING |  |
-| MD.12 | Apple Intelligence & Siri | PENDING |  |
-| MD.13 | Control Center | PENDING |  |
-| MD.14 | Desktop & Dock | PENDING |  |
-| MD.15 | Displays | PENDING |  |
-| MD.16 | Spotlight | PENDING |  |
-| MD.17 | Wallpaper | PENDING |  |
-| MD.18 | Screen Saver | PENDING |  |
-| MD.19 | Notifications | PENDING |  |
-| MD.20 | Sound | PENDING |  |
-| MD.21 | Focus | PENDING |  |
-| MD.22 | Screen Time | PENDING |  |
-| MD.23 | Lock Screen | PENDING |  |
-| MD.24 | Privacy & Security | PENDING |  |
-| MD.25 | Touch ID & Password / Login Password | PENDING |  |
-| MD.26 | Users & Groups | PENDING |  |
-| MD.27 | Internet Accounts | PENDING |  |
-| MD.28 | Game Center | PENDING |  |
-| MD.29 | Wallet & Apple Pay | PENDING |  |
-| MD.30 | Keyboard | PENDING |  |
-| MD.31 | Mouse | PENDING |  |
-| MD.32 | Trackpad | PENDING |  |
-| MD.33 | Game Controllers | PENDING |  |
-| MD.34 | Printers & Scanners | PENDING |  |
-| MD.35 | Menu Bar (if separate in 27) | PENDING |  |
-| MD.36 | App Settings conventions (Cmd-,) | PENDING |  |
-| MD.37 | x-apple.systempreferences URL schemes | PENDING |  |
-| MD.38 | Configuration profiles / MDM | PENDING |  |
+| MD.01 | Sidebar enumeration (exact order, hardware-dependent items) | PARTIAL | Pane set evidenced from 27 guide navigation paths; canonical sidebar order not published by Apple (GAP-B4-01). |
+| MD.02 | Apple Account | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.03 | Family | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.04 | Wi-Fi | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.05 | Bluetooth | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.06 | Network | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.07 | VPN | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.08 | Battery / Energy | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.09 | General (About, Software Update, Storage, AppleCare, AirDrop & Handoff, Login Items & Extensions, Language & Region, Date & Time, Sharing, Time Machine, Transfer or Reset, Startup Disk, Device Management) | PARTIAL | 12 of 13 General subpages from the 27 guide; AppleCare & Warranty and AutoFill & Passwords only from support articles... |
+| MD.10 | Accessibility | PARTIAL | 25 Accessibility subpages captured; label conflicts with independent 27 reports (GAP-B4-03, 04). |
+| MD.11 | Appearance | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.12 | Apple Intelligence & Siri | PARTIAL | Guide documents pane as "Siri"; Apple Intelligence master switch reported removed (GAP-B4-05, 06). |
+| MD.13 | Control Center | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.14 | Desktop & Dock | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.15 | Displays | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.16 | Spotlight | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.17 | Wallpaper | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.18 | Screen Saver | PARTIAL | Screen Saver page captured; whether it is a separate sidebar item or reached via Wallpaper is unverified (GAP-B4-09). |
+| MD.19 | Notifications | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.20 | Sound | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.21 | Focus | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.22 | Screen Time | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.23 | Lock Screen | PARTIAL | Guide lacks the user-name/photo visibility switch reported by geeksmodo (GAP-B4-08). |
+| MD.24 | Privacy & Security | PARTIAL | Privacy list captured; "Accessibility" vs "Device Control and Data Access" conflict (GAP-B4-02). |
+| MD.25 | Touch ID & Password / Login Password | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.26 | Users & Groups | PARTIAL | Users & Groups captured; legacy login-options topic redirects (GAP-B4-12). |
+| MD.27 | Internet Accounts | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.28 | Game Center | PARTIAL | Game Center settings now documented in the Games User Guide (1.0 / macOS 27), not the Mac User Guide. |
+| MD.29 | Wallet & Apple Pay | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.30 | Keyboard | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.31 | Mouse | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.32 | Trackpad | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.33 | Game Controllers | PARTIAL | Only Games User Guide coverage; MDM identifier com.apple.Game-Controller-Settings.extension listed by Apple (GAP-B4-10). |
+| MD.34 | Printers & Scanners | PARTIAL | Apple Mac User Guide 27 controls captured; defaults rarely stated; not live-verified (VP-13). |
+| MD.35 | Menu Bar (if separate in 27) | PARTIAL | Menu Bar confirmed as its own sidebar pane in 27 (resolves GAP-006). |
+| MD.36 | App Settings conventions (Cmd-,) | COMPLETE | Command-Comma and settings-window rules documented by Apple HIG and the Mac shortcuts page; HIG detail continues in P... |
+| MD.37 | x-apple.systempreferences URL schemes | PARTIAL | 209 URL rows; extension IDs listed by Apple for MDM, URL-scheme use undocumented and 27 validity untested (GAP-B4-13). |
+| MD.38 | Configuration profiles / MDM | PARTIAL | SystemPreferences payload (deprecated), Restrictions keys and 27 payload removals captured; DDM replacements only par... |
 
 ### MG — macOS design system (HIG)
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| MG.01 | Liquid Glass materials | PENDING |  |
-| MG.02 | Color & semantic colors | PENDING |  |
-| MG.03 | SF Pro typography & Dynamic Type equivalents | PENDING |  |
-| MG.04 | SF Symbols | PENDING |  |
-| MG.05 | Layout & spacing | PENDING |  |
-| MG.06 | Corner radii/concentricity | PENDING |  |
-| MG.07 | Motion | PENDING |  |
-| MG.08 | Control sizes (mini/small/regular/large/extra-large) | PENDING |  |
-| MG.09 | Dark mode & increased contrast | PENDING |  |
-| MG.10 | Accessibility semantics (NSAccessibility) | PENDING |  |
+| MG.01 | Liquid Glass materials | PARTIAL | API surface and design rules are verified at T1. The slider has no public API or stored-value documentation, there is... |
+| MG.02 | Color & semantic colors | PARTIAL | Semantic names, availability and settings are verified at T1. Numeric values for the macOS 26/27 system colors were n... |
+| MG.03 | SF Pro typography & Dynamic Type equivalents | PARTIAL | Text styles, tracking and minimum sizes are verified at T1. The HIG typography revision is from 2025, and no macOS 27... |
+| MG.04 | SF Symbols | PARTIAL | Library facts and APIs are verified at T1. Per-symbol inventories were not taken, because copying glyphs is excluded... |
+| MG.05 | Layout & spacing | PARTIAL | Layout rules and APIs are verified at T1. Apple publishes no numeric spacing scale for macOS 26/27. |
+| MG.06 | Corner radii/concentricity | PARTIAL | The concentricity model and APIs are verified at T1. Numeric window and control radii are unpublished; macOS 26 value... |
+| MG.07 | Motion | PARTIAL | Framework animation defaults are verified at T1 with exact parameters. System-shell motion timings are unpublished. |
+| MG.08 | Control sizes (mini/small/regular/large/extra-large) | PARTIAL | The size ladder, shapes and compatibility flag are verified at T1. Heights are unpublished, and the SwiftUI extraLarg... |
+| MG.09 | Dark mode & increased contrast | PARTIAL | Appearance names, APIs and glass behaviour are verified at T1. How the settings are coupled is known only from indepe... |
+| MG.10 | Accessibility semantics (NSAccessibility) | PARTIAL | The role, subrole and protocol inventory is complete for the fetched pages. Per-control role mapping and the notifica... |
 
 ### LG — Research E — GNOME 51
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| LG.01 | Shell components & compositor | PENDING |  |
-| LG.02 | Launcher | PENDING |  |
-| LG.03 | Panel / dock | PENDING |  |
-| LG.04 | System Settings inventory | PENDING |  |
-| LG.05 | File manager | PENDING |  |
-| LG.06 | Window behaviour & tiling | PENDING |  |
-| LG.07 | Notifications | PENDING |  |
-| LG.08 | Workspace model | PENDING |  |
-| LG.09 | Customization model | PENDING |  |
-| LG.10 | Design language / HIG / tokens | PENDING |  |
-| LG.11 | Accessibility | PENDING |  |
-| LG.12 | Limitations & known issues | PENDING |  |
-| LG.13 | Integration points (portals, D-Bus, APIs) | PENDING |  |
-| LG.14 | DE vs kernel vs distro boundary | PENDING |  |
+| LG.01 | Shell components & compositor | PARTIAL | GNOME Shell + Mutter; 51 reworked frame scheduling, cheaper capture, legacy NVIDIA removed, SVG cursors (S3856); Litr... |
+| LG.02 | Launcher | PARTIAL | Activities overview: search + app grid; 51 made screen-reader result descriptions and the app grid easier to navigate... |
+| LG.03 | Panel / dock | PARTIAL | One top bar; the dash lives in the overview and a persistent dock is an extension (S3856, S3857); LitricOS: one bar p... |
+| LG.04 | System Settings inventory | PARTIAL | ~20 panels; 51 changed Displays (auto-rotate, orientation lock, centre snapping), Mouse, Network (DNS search, WEP rem... |
+| LG.05 | File manager | PARTIAL | Nautilus 51: drag-count badge, copied files auto-selected, right-click on empty area keeps the selection, emblem prec... |
+| LG.06 | Window behaviour & tiling | PARTIAL | No first-class tiling in the 51 notes; window behaviour is Mutter's (S3856, absence); LitricOS: 36 WM ops, one output... |
+| LG.07 | Notifications | PARTIAL | Shell is the notification server; Files notifications grouped in 51 (S3856); LitricOS: private queue, banner open/clo... |
+| LG.08 | Workspace model | PARTIAL | Dynamic vertical workspaces, unchanged in 51 and therefore absent from its notes (S3856); LitricOS: fixed grid, Missi... |
+| LG.09 | Customization model | PARTIAL | Extensions are the extension point; appearance deliberately narrow, with new wallpaper variants in 51 (S3856, S3857);... |
+| LG.10 | Design language / HIG / tokens | COMPLETE | HIG is five parts: principles, resources, guidelines, patterns, reference (S3857); 51 extends reduced motion into wid... |
+| LG.11 | Accessibility | PARTIAL | 51: motion widened, screenshot region adjustable by keyboard, focus-ring timeout can be turned off, dock announced on... |
+| LG.12 | Limitations & known issues | PARTIAL | Legacy NVIDIA interfaces and WEP removed (S3856); extensions break across major releases; LitricOS: one output, one s... |
+| LG.13 | Integration points (portals, D-Bus, APIs) | PARTIAL | Portals, D-Bus, GSettings/dconf, systemd user units, Flatpak (S3857); LitricOS: LFP/1 + browser socket + notifyd, no... |
+| LG.14 | DE vs kernel vs distro boundary | PARTIAL | DE owns shell, compositor, settings and session apps; kernel, logind, NetworkManager, BlueZ and PipeWire are outside,... |
 
 ### LK — Research E — KDE Plasma 6.8
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| LK.01 | Shell components & compositor | PENDING |  |
-| LK.02 | Launcher | PENDING |  |
-| LK.03 | Panel / dock | PENDING |  |
-| LK.04 | System Settings inventory | PENDING |  |
-| LK.05 | File manager | PENDING |  |
-| LK.06 | Window behaviour & tiling | PENDING |  |
-| LK.07 | Notifications | PENDING |  |
-| LK.08 | Workspace model | PENDING |  |
-| LK.09 | Customization model | PENDING |  |
-| LK.10 | Design language / HIG / tokens | PENDING |  |
-| LK.11 | Accessibility | PENDING |  |
-| LK.12 | Limitations & known issues | PENDING |  |
-| LK.13 | Integration points (portals, D-Bus, APIs) | PENDING |  |
-| LK.14 | DE vs kernel vs distro boundary | PENDING |  |
+| LK.01 | Shell components & compositor | PARTIAL | plasmashell + KWin on Wayland; the 6.8 announcement yielded no feature list (S3860); LitricOS: one process draws bar,... |
+| LK.02 | Launcher | PARTIAL | Kickoff and KRunner; HIG forbids asking preferences in a first-run wizard (S3859); LitricOS: one overlay, no wizard,... |
+| LK.03 | Panel / dock | PARTIAL | Configurable panels; no KDE page read in this batch (gap); LitricOS: fixed top bar, dock is an overlay state |
+| LK.04 | System Settings inventory | PARTIAL | System Settings modules not enumerated by any page read in this batch (gap); LitricOS: 13 pages, 9 stored keys |
+| LK.05 | File manager | PARTIAL | Dolphin; HIG requires inline rename, trash instead of delete, and undo for content that is not trivial to re-add (S38... |
+| LK.06 | Window behaviour & tiling | PARTIAL | KWin tiling and quick tile; no page read in this batch (gap); LitricOS: 36 WM ops, no tiling model |
+| LK.07 | Notifications | PARTIAL | Plasma notification server; HIG separates passive notification from persistent inline message (S3859); LitricOS: TTL... |
+| LK.08 | Workspace model | PARTIAL | Virtual desktops plus Activities; no page read in this batch (gap); LitricOS: fixed workspace grid, no activities |
+| LK.09 | Customization model | PARTIAL | Simple by default, powerful when needed (S3859); LitricOS: closed theme and accent set, no third-party surface |
+| LK.10 | Design language / HIG / tokens | COMPLETE | Nine HIG sections; tokens Kirigami.Theme, iconsSizes, small/medium/largeSpacing, veryShort/short/long/veryLongDuratio... |
+| LK.11 | Accessibility | PARTIAL | HIG has an Accessibility and inclusiveness section; the page was not read in this batch (gap); LitricOS: 1 toggle, no... |
+| LK.12 | Limitations & known issues | COMPLETE | HIG states window size and position are remembered on X11 only, i.e. not on Wayland (S3859); LitricOS restores neithe... |
+| LK.13 | Integration points (portals, D-Bus, APIs) | PARTIAL | D-Bus, KIO, KConfig, KWallet, KRecentDocument, portals (S3859); LitricOS: no bus, no key store, no KIO equivalent |
+| LK.14 | DE vs kernel vs distro boundary | PARTIAL | Same boundary as GNOME: DRM, logind, NetworkManager, BlueZ and PipeWire outside the DE, distribution packages the DE... |
 
 ### LX — Research E — Xfce 4.20
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| LX.01 | Shell components & compositor | PENDING |  |
-| LX.02 | Launcher | PENDING |  |
-| LX.03 | Panel / dock | PENDING |  |
-| LX.04 | System Settings inventory | PENDING |  |
-| LX.05 | File manager | PENDING |  |
-| LX.06 | Window behaviour & tiling | PENDING |  |
-| LX.07 | Notifications | PENDING |  |
-| LX.08 | Workspace model | PENDING |  |
-| LX.09 | Customization model | PENDING |  |
-| LX.10 | Design language / HIG / tokens | PENDING |  |
-| LX.11 | Accessibility | PENDING |  |
-| LX.12 | Limitations & known issues | PENDING |  |
-| LX.13 | Integration points (portals, D-Bus, APIs) | PENDING |  |
-| LX.14 | DE vs kernel vs distro boundary | PENDING |  |
+| LX.01 | Shell components & compositor | PARTIAL | Components ported to Wayland through libxfce4windowing; xfwm4, xfdashboard and the screensaver are not, and Labwc or... |
+| LX.02 | Launcher | PARTIAL | xfce4-appfinder: Ctrl+N/P navigation, Ctrl+Enter executes, per-app actions on right-click, optional daemon (S3861, S3... |
+| LX.03 | Panel / dock | COMPLETE | xfce4-panel: border width, XDG plugin discovery, multi-delete, LCD/analog clock options, show desktop on hover, taskl... |
+| LX.04 | System Settings inventory | PARTIAL | Appearance, Display (profiles, both-dimension scaling, mirror without matching refresh), Mouse (acceleration profile,... |
+| LX.05 | File manager | COMPLETE | Thunar 4.20: toolbar overflow, view switcher, tabs, CSD, split view, expandable folders, bulk renamer, undo asks befo... |
+| LX.06 | Window behaviour & tiling | PARTIAL | xfwm4: click-to-focus or focus-follows-mouse, raise delay, snapping with distance, workspace wrap with resistance, op... |
+| LX.07 | Notifications | PARTIAL | libnotify is an optional Thunar dependency for mount notifications (S3864); no xfce4-notifyd page read; LitricOS: not... |
+| LX.08 | Workspace model | PARTIAL | Workspace wrap at screen edges (S3863); workspace support missing on Wayland because the protocol arrived late (S3861... |
+| LX.09 | Customization model | PARTIAL | Window-decoration themes, panel plugins, shortcut editor with overlap groups, Xfconf, systemd user unit (S3861, S3862... |
+| LX.10 | Design language / HIG / tokens | PARTIAL | No Xfce HIG page located; rules are GTK/Adwaita defaults plus per-component options, and icon scaling above 1 was fix... |
+| LX.11 | Accessibility | PARTIAL | No accessibility content in the tour, changelog or xfwm4 page (gap); LitricOS: 1 toggle honoured everywhere, no a11y... |
+| LX.12 | Limitations & known issues | COMPLETE | Wayland is experimental: no compositor, missing workspaces, tray icons, keyboard/mouse settings, brightness keys and... |
+| LX.13 | Integration points (portals, D-Bus, APIs) | COMPLETE | libxfce4windowing, minimal xdg-desktop-portal conf, D-Bus, xfconf systemd user unit, optional polkit, power-profiles-... |
+| LX.14 | DE vs kernel vs distro boundary | PARTIAL | Xfce owns panel, session, settings and Thunar; the Wayland compositor is external; kernel, logind, NetworkManager and... |
 
 ### LC — Research E — Cinnamon (Mint 22.3 / 27)
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| LC.01 | Shell components & compositor | PENDING |  |
-| LC.02 | Launcher | PENDING |  |
-| LC.03 | Panel / dock | PENDING |  |
-| LC.04 | System Settings inventory | PENDING |  |
-| LC.05 | File manager | PENDING |  |
-| LC.06 | Window behaviour & tiling | PENDING |  |
-| LC.07 | Notifications | PENDING |  |
-| LC.08 | Workspace model | PENDING |  |
-| LC.09 | Customization model | PENDING |  |
-| LC.10 | Design language / HIG / tokens | PENDING |  |
-| LC.11 | Accessibility | PENDING |  |
-| LC.12 | Limitations & known issues | PENDING |  |
-| LC.13 | Integration points (portals, D-Bus, APIs) | PENDING |  |
-| LC.14 | DE vs kernel vs distro boundary | PENDING |  |
+| LC.01 | Shell components & compositor | PARTIAL | Cinnamon on Muffin; 6.6 improved Muffin's Wayland compatibility (S3865); LitricOS: one shell, own compositor, 3 globals |
+| LC.02 | Launcher | COMPLETE | Menu redesigned: sidebar with avatar, places and favourites, smaller categories, configurable search and system-butto... |
+| LC.03 | Panel / dock | PARTIAL | Panel applets: workspace switcher, XKB+IBus keyboard applet, Night Light (S3865); LitricOS: fixed bar and dock, no ap... |
+| LC.04 | System Settings inventory | PARTIAL | No Cinnamon Settings page read; 6.6 touched keyboard layouts, fractional-scale direction, Alt-Tab scope and theme gro... |
+| LC.05 | File manager | COMPLETE | Nemo 6.6: template manager, pause/resume of file operations, wildcard MIME and regex search, split-pane location kept... |
+| LC.06 | Window behaviour & tiling | PARTIAL | Muffin: Alt-Tab limited to the current monitor, hot corners in fullscreen, fractional scaling up or down (S3865); Lit... |
+| LC.07 | Notifications | PARTIAL | A missed notification shows a badge in the window list (S3865); LitricOS: count badge on the bell only, no per-window... |
+| LC.08 | Workspace model | PARTIAL | Workspace switcher shows only visible windows with their icons (S3865); LitricOS: fixed grid and Mission Control card... |
+| LC.09 | Customization model | PARTIAL | Menu element visibility, themes grouped by family and variant, applets, fractional-scale direction (S3865); LitricOS:... |
+| LC.10 | Design language / HIG / tokens | PARTIAL | XSI replaces Adwaita symbolic icons after GNOME restricted them; all Cinnamon and Mint projects migrated (S3865); no... |
+| LC.11 | Accessibility | PARTIAL | Native on-screen keyboard with input-method and layout switching (S3865); no accessibility page read; LitricOS: 1 tog... |
+| LC.12 | Limitations & known issues | COMPLETE | Known issues: HWE 6.14 breaks VirtualBox and the 470 NVIDIA driver, 10 s shutdown timeout, PipeWire with a PulseAudio... |
+| LC.13 | Integration points (portals, D-Bus, APIs) | PARTIAL | XApp and XSI, apt:// handling, Update Manager tray, Thunderbolt tool, Night Light (S3865); no portal page read; Litri... |
+| LC.14 | DE vs kernel vs distro boundary | COMPLETE | Ubuntu 24.04 base with kernel 6.14; PipeWire, systemd, logind and the package manager are distribution-owned (S3865,... |
 
 ### LO — Research E — COSMIC Epoch 1.11
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| LO.01 | Shell components & compositor | PENDING |  |
-| LO.02 | Launcher | PENDING |  |
-| LO.03 | Panel / dock | PENDING |  |
-| LO.04 | System Settings inventory | PENDING |  |
-| LO.05 | File manager | PENDING |  |
-| LO.06 | Window behaviour & tiling | PENDING |  |
-| LO.07 | Notifications | PENDING |  |
-| LO.08 | Workspace model | PENDING |  |
-| LO.09 | Customization model | PENDING |  |
-| LO.10 | Design language / HIG / tokens | PENDING |  |
-| LO.11 | Accessibility | PENDING |  |
-| LO.12 | Limitations & known issues | PENDING |  |
-| LO.13 | Integration points (portals, D-Bus, APIs) | PENDING |  |
-| LO.14 | DE vs kernel vs distro boundary | PENDING |  |
+| LO.01 | Shell components & compositor | COMPLETE | Wayland-native Rust desktop; shell components and compositor share one toolkit; cosmic-comp on smithay with damage tr... |
+| LO.02 | Launcher | PARTIAL | Launcher and app library are separate surfaces; the workspaces overview can open either on typing (S3867, S3870); 1.1... |
+| LO.03 | Panel / dock | COMPLETE | Single or dual panels on any edge, applets at start/centre/end, size, opacity, square or rounded corners; applets are... |
+| LO.04 | System Settings inventory | PARTIAL | Settings pages selectable per distribution by cargo feature flags, e.g. Pop!_OS Upgrades and Restore; pages touched b... |
+| LO.05 | File manager | COMPLETE | Files: tabs, several directories in separate tabs, tab drag-and-drop, Move to / Copy to, clipboard paste of images, v... |
+| LO.06 | Window behaviour & tiling | PARTIAL | Tiling is a first-class flexible element; point releases fix tiled state on maximize/snap, Super+Click on tiled windo... |
+| LO.07 | Notifications | PARTIAL | cosmic-notifications accepts file:// icons; the status area runs a socket-activated StatusNotifierWatcher so tray ico... |
+| LO.08 | Workspace model | COMPLETE | Workspaces dynamic or pinned, and the overview's action on typing is a setting (S3867, S3870); LitricOS: fixed grid,... |
+| LO.09 | Customization model | COMPLETE | Theming built for brand palettes without losing contrast, RON theme files from the CLI, Qt theming via qt5ct/qt6ct, d... |
+| LO.10 | Design language / HIG / tokens | PARTIAL | libcosmic is based on COSMIC's design language with consistent guidelines, a standardized configuration system and cr... |
+| LO.11 | Accessibility | PARTIAL | No accessibility page, screen-reader statement or on-screen keyboard in the eleven pages opened; the only accessibili... |
+| LO.12 | Limitations & known issues | PARTIAL | The point-release log publicly lists fixed failure classes: tiling-placeholder panic, smithay image-copy leak, portal... |
+| LO.13 | Integration points (portals, D-Bus, APIs) | COMPLETE | xdg-desktop-portal-cosmic for screencast, clipboard, background and screenshot; StatusNotifierWatcher; AccountsServic... |
+| LO.14 | DE vs kernel vs distro boundary | COMPLETE | Runs on Pop!_OS 24.04 LTS and other distributions; distributions choose settings pages at build time and ship tagged... |
 
 ### LP — Research E — Pantheon (elementary OS 8.1)
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| LP.01 | Shell components & compositor | PENDING |  |
-| LP.02 | Launcher | PENDING |  |
-| LP.03 | Panel / dock | PENDING |  |
-| LP.04 | System Settings inventory | PENDING |  |
-| LP.05 | File manager | PENDING |  |
-| LP.06 | Window behaviour & tiling | PENDING |  |
-| LP.07 | Notifications | PENDING |  |
-| LP.08 | Workspace model | PENDING |  |
-| LP.09 | Customization model | PENDING |  |
-| LP.10 | Design language / HIG / tokens | PENDING |  |
-| LP.11 | Accessibility | PENDING |  |
-| LP.12 | Limitations & known issues | PENDING |  |
-| LP.13 | Integration points (portals, D-Bus, APIs) | PENDING |  |
-| LP.14 | DE vs kernel vs distro boundary | PENDING |  |
+| LP.01 | Shell components & compositor | PARTIAL | Pantheon shell with Dock, Multitasking View, picture-in-picture and Do Not Disturb; 8.1 improves Secure Session and D... |
+| LP.02 | Launcher | COMPLETE | The HIG specifies launcher metadata as UI: Name without descriptive words, GenericName, a Comment beginning with a ve... |
+| LP.03 | Panel / dock | PARTIAL | A Dock, improved in 8.1 (S3877); no dock configuration page opened; LitricOS: one bar plus morphing dock, no dock set... |
+| LP.04 | System Settings inventory | PARTIAL | System Settings is where app permissions can be revoked (S3877); no module list opened; LitricOS: 13 pages, 9 stored... |
+| LP.05 | File manager | COMPLETE | Files: smart pathbar with breadcrumbs, search and path completion, column view, browser-class tabs with tab history (... |
+| LP.06 | Window behaviour & tiling | PARTIAL | Multitasking View and workspaces are advertised (S3877); no window-manager or tiling page opened; LitricOS: 36 WM ops... |
+| LP.07 | Notifications | PARTIAL | Do Not Disturb stops notifications (S3877); the HIG Toast page exists with a heading and no body (S3876); LitricOS: q... |
+| LP.08 | Workspace model | PARTIAL | Workspaces organise work by task and are reached from the Multitasking View (S3877); LitricOS: fixed grid, Mission Co... |
+| LP.09 | Customization model | PARTIAL | No theme, accent or layout customization page opened; the HIG covers iconography and text as references (S3872); Litr... |
+| LP.10 | Design language / HIG / tokens | COMPLETE | Full HIG: four design philosophies (What Design Is Not, Concision, Accessible Configuration, Minimal Documentation),... |
+| LP.11 | Accessibility | PARTIAL | The HIG names Accessible Configuration as a philosophy and 8.1 enhances accessibility (S3872, S3873, S3877); no speci... |
+| LP.12 | Limitations & known issues | NOT FOUND | No known-issues page and no release announcement could be opened: the OS 8 announcement returned 404 and no other pag... |
+| LP.13 | Integration points (portals, D-Bus, APIs) | PARTIAL | AppCenter reviews permission use and System Settings can revoke permissions (S3877); no portal page opened; LitricOS:... |
+| LP.14 | DE vs kernel vs distro boundary | PARTIAL | elementary ships its own OS with its own apps and AppCenter (S3877); the package base is not stated on any page opene... |
 
 ### LB — Research E — Budgie 10.10
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| LB.01 | Shell components & compositor | PENDING |  |
-| LB.02 | Launcher | PENDING |  |
-| LB.03 | Panel / dock | PENDING |  |
-| LB.04 | System Settings inventory | PENDING |  |
-| LB.05 | File manager | PENDING |  |
-| LB.06 | Window behaviour & tiling | PENDING |  |
-| LB.07 | Notifications | PENDING |  |
-| LB.08 | Workspace model | PENDING |  |
-| LB.09 | Customization model | PENDING |  |
-| LB.10 | Design language / HIG / tokens | PENDING |  |
-| LB.11 | Accessibility | PENDING |  |
-| LB.12 | Limitations & known issues | PENDING |  |
-| LB.13 | Integration points (portals, D-Bus, APIs) | PENDING |  |
-| LB.14 | DE vs kernel vs distro boundary | PENDING |  |
+| LB.01 | Shell components & compositor | COMPLETE | Wayland-first since 10.10 and compositor-agnostic: requires ext-workspace-v1, wlr-foreign-toplevel-management, wlr-la... |
+| LB.02 | Launcher | COMPLETE | Budgie Menu: favourites via right-click, desktop actions in the menu, shared action code with Icon Tasklist, Favorite... |
+| LB.03 | Panel / dock | COMPLETE | budgie-panel on layer-shell with start/centre/end sections, dynamic sizing and overflow; Icon Tasklist plus a rewritt... |
+| LB.04 | System Settings inventory | PARTIAL | Budgie Control Center: Colour panel hidden, Bluetooth optional, per-panel visibility checks, Multitasking on Wayland,... |
+| LB.05 | File manager | NOT FOUND | No file-manager component appears in either release note; desktop icons come from Budgie Desktop View, an icon layer... |
+| LB.06 | Window behaviour & tiling | PARTIAL | The labwc bridge writes rc.xml for keybinds, focus, theming, snapping and a thumbnail window switcher, sets auto-rais... |
+| LB.07 | Notifications | PARTIAL | Raven is the notification centre and Do Not Disturb toggles by middle-clicking the Notifications applet (S3880); per-... |
+| LB.08 | Workspace model | PARTIAL | Workspaces applet reliability fixes and a more responsive add-workspace button; ext-workspace-v1 is a required protoc... |
+| LB.09 | Customization model | COMPLETE | Bridge applies fonts, drop shadows and title-bar layouts; keybind templates per distribution; panel sections and appl... |
+| LB.10 | Design language / HIG / tokens | PARTIAL | No Budgie HIG or token documentation found in the pages opened; design is GTK3 plus the bridge's labwc theming (S3879... |
+| LB.11 | Accessibility | PARTIAL | Budgie Control Center supports accessibility options including a working magnifier (S3880); no screen-reader or keybo... |
+| LB.12 | Limitations & known issues | COMPLETE | 10.10 is the final major of the 10.x series and is in maintenance mode while Budgie 11 is built; Keyboard Layout appl... |
+| LB.13 | Integration points (portals, D-Bus, APIs) | COMPLETE | xdg-desktop-portal-gtk and -wlr, locale1/systemd-localed, WirePlumber wpctl, D-Bus org.buddiesofbudgie.KeyboardLayout... |
+| LB.14 | DE vs kernel vs distro boundary | COMPLETE | Budgie sits on somebody else's compositor; kernel, logind, portals and audio outside; ships in Fedora 44 and Ubuntu B... |
 
 ### LR — Research E — ChromeOS 154+
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| LR.01 | Shell components & compositor | PENDING |  |
-| LR.02 | Launcher | PENDING |  |
-| LR.03 | Panel / dock | PENDING |  |
-| LR.04 | System Settings inventory | PENDING |  |
-| LR.05 | File manager | PENDING |  |
-| LR.06 | Window behaviour & tiling | PENDING |  |
-| LR.07 | Notifications | PENDING |  |
-| LR.08 | Workspace model | PENDING |  |
-| LR.09 | Customization model | PENDING |  |
-| LR.10 | Design language / HIG / tokens | PENDING |  |
-| LR.11 | Accessibility | PENDING |  |
-| LR.12 | Limitations & known issues | PENDING |  |
-| LR.13 | Integration points (portals, D-Bus, APIs) | PENDING |  |
-| LR.14 | DE vs kernel vs distro boundary | PENDING |  |
+| LR.01 | Shell components & compositor | PARTIAL | Chrome powers ChromeOS and the OS tracks Chrome releases; the shell and window manager are not described on any page... |
+| LR.02 | Launcher | PARTIAL | Web apps are found from the launcher and a long press of the launcher starts Select-to-search with Lens (S3882, S3886... |
+| LR.03 | Panel / dock | PARTIAL | The shelf exists: PWAs can be pinned to it (S3882); no shelf behaviour page opened; LitricOS: fixed top bar plus morp... |
+| LR.04 | System Settings inventory | NOT FOUND | No ChromeOS Settings page could be opened: the Help Center and Enterprise URLs attempted returned 404 (recorded in Pa... |
+| LR.05 | File manager | PARTIAL | The Files app can hand files to installed web apps (S3882); two Help Center Files URLs returned 404, so no Files beha... |
+| LR.06 | Window behaviour & tiling | NOT FOUND | No page describing windows, split screen or overview was opened; nothing to cite; LitricOS: 36 WM ops with edge snapping |
+| LR.07 | Notifications | NOT FOUND | No ChromeOS notification page was opened; nothing to cite; LitricOS: notifyd queue, banners, centre, DND |
+| LR.08 | Workspace model | NOT FOUND | No virtual-desks or workspace page was opened; nothing to cite; LitricOS: fixed workspace grid and Mission Control |
+| LR.09 | Customization model | NOT FOUND | No wallpaper, theme or shelf-customization page was opened; nothing to cite; LitricOS: 4 themes, 6 accents, 3 wallpapers |
+| LR.10 | Design language / HIG / tokens | PARTIAL | chromeos.dev/en/design returned 404; the PWA page that opened lists capabilities, not a design language (S3882 plus r... |
+| LR.11 | Accessibility | NOT FOUND | No ChromeOS accessibility page was opened; nothing to cite; LitricOS: 1 toggle, no a11y tree |
+| LR.12 | Limitations & known issues | PARTIAL | End of Life / Auto Update Expiration is a documented process in the ChromiumOS reference index, and ChromeOS release... |
+| LR.13 | Integration points (portals, D-Bus, APIs) | PARTIAL | Web apps install, pin to the shelf, appear in the launcher and handle files; Chrome extensions are integral (S3882);... |
+| LR.14 | DE vs kernel vs distro boundary | PARTIAL | ChromeOS is an OS whose browser is the platform and whose releases track Chrome; security, SELinux, user sessions and... |
 
 ### F — Research F — Shared component catalog
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| F.01 | Buttons | PENDING |  |
-| F.02 | Text fields | PENDING |  |
-| F.03 | Switches | PENDING |  |
-| F.04 | Checkboxes | PENDING |  |
-| F.05 | Radio controls | PENDING |  |
-| F.06 | Sliders | PENDING |  |
-| F.07 | Pickers (date/time/color/file) | PENDING |  |
-| F.08 | Tabs | PENDING |  |
-| F.09 | Navigation views | PENDING |  |
-| F.10 | Sidebars | PENDING |  |
-| F.11 | Command bars/toolbars | PENDING |  |
-| F.12 | Menus | PENDING |  |
-| F.13 | Context menus | PENDING |  |
-| F.14 | Tooltips | PENDING |  |
-| F.15 | Dialogs | PENDING |  |
-| F.16 | Sheets | PENDING |  |
-| F.17 | Notifications/banners/toasts | PENDING |  |
-| F.18 | Progress indicators | PENDING |  |
-| F.19 | Lists | PENDING |  |
-| F.20 | Trees | PENDING |  |
-| F.21 | Grids/tables | PENDING |  |
-| F.22 | Cards | PENDING |  |
-| F.23 | Search fields | PENDING |  |
-| F.24 | Empty states | PENDING |  |
-| F.25 | Loading states | PENDING |  |
-| F.26 | Errors/validation | PENDING |  |
-| F.27 | Confirmation flows | PENDING |  |
+| F.01 | Buttons | PARTIAL | Part 10 §F.01. Windows 26H2 and GNOME 51 guidance compared against ui.rs::button and ui::icon_button; macOS pages rea... |
+| F.02 | Text fields | PARTIAL | Part 11 §F.02. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against ui::text_field and the s... |
+| F.03 | Switches | PARTIAL | Part 10 §F.03. Windows 26H2 and GNOME 51 guidance compared against ui.rs::toggle; macOS pages read at summary depth o... |
+| F.04 | Checkboxes | PARTIAL | Part 12 §F.04. Windows 26H2 and GNOME 51 read at page depth; macOS 27 unavailable beyond summaries. Found: the only m... |
+| F.05 | Radio controls | PARTIAL | Part 12 §F.05. Windows 26H2 and GNOME 51 read at page depth; macOS 27 unavailable beyond summaries. Found: no radio c... |
+| F.06 | Sliders | PARTIAL | Part 10 §F.06. Windows 26H2 and GNOME 51 guidance compared against ui.rs::slider; macOS pages read at summary depth o... |
+| F.07 | Pickers (date/time/color/file) | PARTIAL | Part 17 §F.07. Windows 26H2 date/time and colour controls at page depth; the WinUI 3 file-picker page returned 404, s... |
+| F.08 | Tabs | PARTIAL | Part 13 §F.08. Windows 26H2 and GNOME 51 read at page depth; macOS 27 summary-only. Found: fixed 150 px tabs with no... |
+| F.09 | Navigation views | PARTIAL | Part 17 §F.09. Windows NavigationView read at page depth (five display modes, 52 px header, back button that does not... |
+| F.10 | Sidebars | PARTIAL | Part 13 §F.10. Windows 26H2 and GNOME 51 read at page depth; macOS 27 summary-only. Found: two sidebars with two desi... |
+| F.11 | Command bars/toolbars | PARTIAL | Part 13 §F.11. Windows 26H2 and GNOME 51 read at page depth; macOS 27 summary-only. Found: three toolbars with three... |
+| F.12 | Menus | PARTIAL | Part 14 §F.12. Windows 26H2 and GNOME 51 read at page depth; macOS 27 summary-only. Found: the bar's three labels (Ap... |
+| F.13 | Context menus | PARTIAL | Part 14 §F.13. Windows 26H2 and GNOME 51 read at page depth; macOS 27 summary-only. Found: six surfaces with 28 rows... |
+| F.14 | Tooltips | PARTIAL | Part 16 §F.14. Windows 26H2 and GNOME 51 at page depth, macOS at summary depth, measured against 9 glyph-only control... |
+| F.15 | Dialogs | PARTIAL | Part 15 §F.15. Windows 26H2 and GNOME 51 read at page depth; macOS 27 from a HIG mirror plus Apple's NSAlert referenc... |
+| F.16 | Sheets | PARTIAL | macOS sheets: Apple HIG, 8 elements and 4 guidelines, Part 6 §MC.04.06. Windows and Linux sheets were not compared, s... |
+| F.17 | Notifications/banners/toasts | PARTIAL | Part 16 §F.17. Windows 26H2 and GNOME 51 at page depth, macOS at summary depth, measured against the queue model, the... |
+| F.18 | Progress indicators | PARTIAL | Part 11 §F.18. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against ui::progress and its one... |
+| F.19 | Lists | PARTIAL | Part 10 §F.19. Windows 26H2 and GNOME 51 guidance compared against ui.rs::list_item; macOS pages read at summary dept... |
+| F.20 | Trees | PARTIAL | Part 17 §F.20. Windows TreeView and GTK GtkTreeExpander read at page depth (chevrons, lazy children, plus/minus and C... |
+| F.21 | Grids/tables | PARTIAL | Part 18 §F.21. Windows ListView/GridView read at page depth (a table-like collection should use a DataGrid rather tha... |
+| F.22 | Cards | PARTIAL | Part 18 §F.22. GNOME boxed lists read in full (one or two controls per row, background click triggers the control, mi... |
+| F.23 | Search fields | PARTIAL | Part 11 §F.23. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against the product's five searc... |
+| F.24 | Empty states | PARTIAL | Part 18 §F.24. libadwaita AdwStatusPage read as a reference (icon, title, description and child action slots, compact... |
+| F.25 | Loading states | PARTIAL | Part 18 §F.25. Windows progress controls read at page depth (determinate bar non-blocking, indeterminate bar non-bloc... |
+| F.26 | Errors/validation | PARTIAL | Part 11 §F.26. Windows 26H2, GNOME 51 and macOS 27 (summary depth) guidance compared against fsbridge::valid_name and... |
+| F.27 | Confirmation flows | PARTIAL | Part 15 §F.27. Same platform reading. Found: 11 confirmation call sites and 7 prompts; 5 of the 7 guard routine work... |
 
 ### G — Research G — Tokens & accessibility
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| G.01 | Color tokens | PENDING |  |
-| G.02 | Typography | PENDING |  |
-| G.03 | Spacing | PENDING |  |
-| G.04 | Radii | PENDING |  |
-| G.05 | Shadows/elevation | PENDING |  |
-| G.06 | Materials/blur | PENDING |  |
-| G.07 | Icons | PENDING |  |
-| G.08 | Motion timing/easing | PENDING |  |
-| G.09 | Light/dark | PENDING |  |
-| G.10 | Contrast & high-contrast themes | PENDING |  |
-| G.11 | Display scaling/HiDPI | PENDING |  |
-| G.12 | Multi-monitor | PENDING |  |
-| G.13 | Localization & RTL | PENDING |  |
-| G.14 | Keyboard-only navigation | PENDING |  |
-| G.15 | Screen readers & a11y APIs | PENDING |  |
-| G.16 | Pointer/touch/trackpad | PENDING |  |
-| G.17 | Reduced motion/transparency | PENDING |  |
-| G.18 | Sound & visual feedback | PENDING |  |
+| G.01 | Color tokens | PARTIAL | Part 20: 11 semantic palette tokens x 4 themes; components ask semantic names, never hex; border was the only token b... |
+| G.02 | Typography | PARTIAL | Part 20: 8 type steps 12-38 px with line heights 16-44; the large-text threshold is 24 px, chosen conservatively. One... |
+| G.03 | Spacing | PARTIAL | Part 20: 8 space steps 2-48 px on a 4 px grid. Component heights do not all join it: 24 px table rows, 30 px sidebar... |
+| G.04 | Radii | PARTIAL | Part 20: 6 radii 6/10/14/20/28/Full with assigned roles; Full is a 9999 sentinel clamped at draw time and every corne... |
+| G.05 | Shadows/elevation | PARTIAL | Part 20: 5 elevation levels, blur 0-44 px, offset 0-20 px, alpha 0-55 percent, monotonic by test. Most shell surfaces... |
+| G.06 | Materials/blur | PARTIAL | Part 20: 7 materials and 3 glass presets (blur 32, saturation 115-120, tint 82/85/100 percent); the adaptive solve pi... |
+| G.07 | Icons | PARTIAL | Part 20: 32 icon variants drawn from one vector module that inherits colour. Icon-only controls still have no label,... |
+| G.08 | Motion timing/easing | PARTIAL | Part 20: 4 spring tokens with settle budgets 120/200/300/450 ms plus a reduced token; anim.rs assigns them per surfac... |
+| G.09 | Light/dark | PARTIAL | Part 20: 4 themes (Dark, Light, HC Dark, HC Light); Light is separately authored, not an inversion, and the 6-slot ac... |
+| G.10 | Contrast & high-contrast themes | PARTIAL | macOS evidence in Part 7; Linux measured in Part 19. 36 of 36 text pairs pass AA (lowest 4.97, Light success), 20 of... |
+| G.11 | Display scaling/HiDPI | PARTIAL | Part 20: one scale factor in Tokens, set by Shell::set_display(width, height, scale); the layout audit runs every app... |
+| G.12 | Multi-monitor | PARTIAL | Part 20: the compositor registers a single wl_output and the shell keeps one display size and scale; there is no arra... |
+| G.13 | Localization & RTL | PARTIAL | Part 20: a 367-line translation dictionary including Thai, and a locale crate feeding hour cycle and first day. Zero... |
+| G.14 | Keyboard-only navigation | PARTIAL | macOS evidence in Part 7; Linux measured in Part 19 as a route census. The focus ring is consistent and meets a AAA c... |
+| G.15 | Screen readers & a11y APIs | PARTIAL | macOS evidence in Part 7; Linux measured in Part 19. Zero accessibility-API dependencies (no AccessKit, AT-SPI, UI Au... |
+| G.16 | Pointer/touch/trackpad | PARTIAL | Part 20: pointer, wheel and keyboard only; no touch event type is handled. Hit targets include 18x18 checkboxes, 20x2... |
+| G.17 | Reduced motion/transparency | PARTIAL | Part 20: reduce_motion is honoured end to end (preference, token, animation). There is no reduce-transparency setting... |
+| G.18 | Sound & visual feedback | PARTIAL | Part 20: no audio output path in the shell; feedback is visual only (tone-coded badges, banners, inline errors, a cou... |
 
 ### H — Research H — Workflows
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| H.01 | First boot & setup | PENDING |  |
-| H.02 | Account creation | PENDING |  |
-| H.03 | Unlock | PENDING |  |
-| H.04 | Launch/switch apps | PENDING |  |
-| H.05 | Window management | PENDING |  |
-| H.06 | Display change | PENDING |  |
-| H.07 | Audio change | PENDING |  |
-| H.08 | Network change | PENDING |  |
-| H.09 | Device pairing | PENDING |  |
-| H.10 | Install/uninstall software | PENDING |  |
-| H.11 | Default apps | PENDING |  |
-| H.12 | File management | PENDING |  |
-| H.13 | Permissions grant/revoke | PENDING |  |
-| H.14 | Updates | PENDING |  |
-| H.15 | Recovery | PENDING |  |
-| H.16 | Backups | PENDING |  |
-| H.17 | Troubleshooting | PENDING |  |
-| H.18 | Accessibility change | PENDING |  |
-| H.19 | Shutdown | PENDING |  |
-| H.20 | Failure/cancel/retry/rollback paths (per workflow) | PENDING |  |
+| H.01 | First boot & setup | PARTIAL | 3 preferences, no identity/network/time/keyboard |
+| H.02 | Account creation | PARTIAL | no creation path; provisioning out of band |
+| H.03 | Unlock | PARTIAL | 0 attempt limit; refuses to lock without verifier |
+| H.04 | Launch/switch apps | PARTIAL | no failure or progress surface |
+| H.05 | Window management | PARTIAL | 36 ops, cancel_drag, no undo for close |
+| H.06 | Display change | PARTIAL | read-only page, no revert timer |
+| H.07 | Audio change | PARTIAL | 4 verbs, 3 controls, no device picker |
+| H.08 | Network change | PARTIAL | kernel facts only, no connect |
+| H.09 | Device pairing | PARTIAL | 5 verbs, no bluetoothd in image |
+| H.10 | Install/uninstall software | PARTIAL | trust chain designed, no installer |
+| H.11 | Default apps | PARTIAL | no association model |
+| H.12 | File management | PARTIAL | 26 verbs, trash, no cancel |
+| H.13 | Permissions grant/revoke | PARTIAL | broker complete, no prompts |
+| H.14 | Updates | PARTIAL | absent, no rollback |
+| H.15 | Recovery | PARTIAL | state exists, never drawn |
+| H.16 | Backups | PARTIAL | absent |
+| H.17 | Troubleshooting | PARTIAL | diagnostics yes, guidance no |
+| H.18 | Accessibility change | PARTIAL | one control, honoured |
+| H.19 | Shutdown | PARTIAL | prompt + consequence, no unsaved guard |
+| H.20 | Failure/cancel/retry/rollback | PARTIAL | 9 entries, 2 cancels, 0 revert timers |
 
 ### I — Research I — Technical integration & LitricOS feasibility
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| I.01 | Public UI frameworks per OS | PENDING |  |
-| I.02 | Shell extension points | PENDING |  |
-| I.03 | Settings persistence (registry, defaults/plist, GSettings/dconf, KConfig) | PENDING |  |
-| I.04 | Permission models (UAC/TCC/polkit/portals) | PENDING |  |
-| I.05 | Notification APIs | PENDING |  |
-| I.06 | IPC/events | PENDING |  |
-| I.07 | Compositor protocols (Wayland) | PENDING |  |
-| I.08 | Undocumented vs public boundary | PENDING |  |
-| I.09 | Comparison matrix | PENDING |  |
-| I.10 | ADOPT/ADAPT/AVOID/INVESTIGATE decisions | PENDING |  |
-| I.11 | Validation tests per decision | PENDING |  |
+| I.01 | Public UI frameworks per OS | PARTIAL | no public UI toolkit; apps are enum arms, foreign apps draw their own pixels |
+| I.02 | Shell extension points | PARTIAL | manifest + capabilities only; unknown capability is a hard error, no extension registry |
+| I.03 | Settings persistence (registry, defaults/plist, GSettings/dconf, KConfig) | PARTIAL | 9 keys in a private key=value file (ui_scale added 2026-10-28), atomic write 0600; no namespace for other apps, no ch... |
+| I.04 | Permission models (UAC/TCC/polkit/portals) | PARTIAL | capd authority, deny-by-default, audit; no consent prompt, no picker, scope coarser than a portal |
+| I.05 | Notification APIs | PARTIAL | litric-notifyd private queue, text in/out, no DND in the daemon; no D-Bus, no replace-by-id, no actions |
+| I.06 | IPC/events | PARTIAL | LFP/1 + browser socket + notifyd; at-most-once mutations documented; no bus, no discovery, no event stream |
+| I.07 | Compositor protocols (Wayland) | PARTIAL | wl_compositor v4, wl_seat v5, xdg_wm_base v2; pointer+keyboard only; wl_output imported but not advertised |
+| I.08 | Undocumented vs public boundary | PARTIAL | ADRs argue the boundary; LFP/1 has no specification outside its own module |
+| I.09 | Comparison matrix | COMPLETE | comparison matrix across 10 surfaces in Part 23 |
+| I.10 | ADOPT/ADAPT/AVOID/INVESTIGATE decisions | COMPLETE | 12 ADOPT/ADAPT/AVOID/INVESTIGATE decisions; revert window implemented in the shell |
+| I.11 | Validation tests per decision | PARTIAL | 5 of 12 decisions validated by tests; 4 unimplemented, 3 undecided |
 
 ### J — Research J — Source register & audit
 
 | ID | Item | Status | Note |
 |---|---|---|---|
-| J.01 | Register schema | PENDING |  |
-| J.02 | URL/domain dedupe | PENDING |  |
-| J.03 | Domain count toward 400 target | PENDING |  |
-| J.04 | Inspected vs snippet-only counts | PENDING |  |
-| J.05 | Primary vs independent counts | PENDING |  |
-| J.06 | Inaccessible log | PENDING |  |
-| J.07 | Contradictions log | PENDING |  |
-| J.08 | Per-subsystem coverage audit | PENDING |  |
+| J.01 | Register schema | COMPLETE | 17 columns; 39 evidence labels, 23 without a tier suffix |
+| J.02 | URL/domain dedupe | COMPLETE | 47 duplicate URLs, 52 surplus rows, no duplicate_of column |
+| J.03 | Domain count toward 400 target | COMPLETE | 382 of 400 domains (95.5%) |
+| J.04 | Inspected vs snippet-only counts | COMPLETE | 1,300 inspected, 2,899 snippet-only, 6 inaccessible |
+| J.05 | Primary vs independent counts | COMPLETE | 3,079 primary / 1,091 independent; independent used only as corroboration |
+| J.06 | Inaccessible log | COMPLETE | 6 inaccessible rows, none cited for a claim; no retry reason stored |
+| J.07 | Contradictions log | COMPLETE | 5 contradictions logged, 2 resolved in LitricOS' favour |
+| J.08 | Per-subsystem coverage audit | COMPLETE | 272 subsystem labels (31 singletons); 0 Linux rows PENDING, 120 measured |
 
 ### Checklist status totals (Part 1)
 
 | Status | Items |
 |---|---|
-| COMPLETE | 10 |
-| PARTIAL | 2 |
-| PENDING | 536 |
-| Total items (excluding block headers) | 548 |
+| COMPLETE | 57 |
+| PARTIAL | 528 |
+| NOT FOUND | 9 |
+| NOT APPLICABLE | 3 |
+| PENDING | 0 |
+| Total items (excluding block headers) | 597 |
 
 ---
 
