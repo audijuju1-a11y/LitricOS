@@ -1211,24 +1211,78 @@ impl Canvas {
         // straight edges are not in it). Inside it the signed distance is at
         // most `-max(radius, 0.5)`, so coverage is exactly 1 and the distance
         // -- a square root per pixel -- need not be computed. The pixel is still
-        // composited by the same call, so the result is the same bit for bit.
+        // composited by the same blend call, so the result is the same bit for
+        // bit.
         let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
         let inset = rad.max(0.5);
         let core_x0 = (r.x + inset - 0.5).ceil() as i64;
         let core_x1 = ((r.right() - inset - 0.5).floor() as i64).saturating_add(1);
         let core_y0 = (r.y + inset - 0.5).ceil() as i64;
         let core_y1 = ((r.bottom() - inset - 0.5).floor() as i64).saturating_add(1);
-        for y in y0..y1 {
-            let in_rows = y >= core_y0 && y < core_y1 && core_x0 < core_x1;
-            for x in x0..x1 {
-                if in_rows && x >= core_x0 && x < core_x1 {
-                    self.blend_in(x, y, color, 1.0);
-                } else {
-                    let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius);
-                    self.blend_in(x, y, color, coverage(d));
+        // Everything the signed distance needs from the rectangle, derived once
+        // per call rather than once per pixel. The old loop recomputed the
+        // centre, both half-extents and the clamped radius -- two divides and a
+        // chain of min/max -- for every pixel it visited, and then paid
+        // `index()`'s bounds check and multiply again to write the result.
+        let (cx, cy) = r.center();
+        let qx_off = r.w / 2.0 - rad;
+        let qy_off = r.h / 2.0 - rad;
+        let width = self.width as usize;
+        let opaque = (color >> 24) & 0xFF == 0xFF;
+        let mut painted = 0u64;
+        // Pixels the core does not own are coloured by this closure: one
+        // square root each, but only where the distance can matter. It takes
+        // the row slice and the two per-row terms, so the call pays neither a
+        // `self` borrow nor a page lookup per pixel.
+        let edge_run = |row: &mut [u32], from: i64, to: i64, qy: f32, ay: f32| -> u64 {
+            for x in from..to {
+                let px = x as f32 + 0.5;
+                let qx = (px - cx).abs() - qx_off;
+                let ax = qx.max(0.0);
+                let d = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - rad;
+                let cov = coverage(d);
+                if cov > 0.0 {
+                    if let Some(p) = row.get_mut(x as usize) {
+                        *p = blend(*p, color, cov);
+                    }
                 }
             }
+            u64::try_from(to.saturating_sub(from)).unwrap_or(0)
+        };
+        for y in y0..y1 {
+            let base = (y as usize).saturating_mul(width);
+            let Some(row) = self.px.get_mut(base..base.saturating_add(width)) else {
+                continue;
+            };
+            let py = y as f32 + 0.5;
+            let qy = (py - cy).abs() - qy_off;
+            let ay = qy.max(0.0);
+            let in_rows = y >= core_y0 && y < core_y1 && core_x0 < core_x1;
+            // The pixel test the old loop made per pixel chooses exactly these
+            // three runs; visiting them in order keeps the same pixels written
+            // once each, in the same left-to-right order, with the same blend.
+            let core_from = if in_rows { core_x0.clamp(x0, x1) } else { x0 };
+            let core_to = if in_rows { core_x1.clamp(x0, x1) } else { x0 };
+            painted = painted.saturating_add(edge_run(row, x0, core_from, qy, ay));
+            if core_from < core_to {
+                let n = u64::try_from(core_to.saturating_sub(core_from)).unwrap_or(0);
+                if let Some(seg) = row.get_mut(core_from as usize..core_to as usize) {
+                    if opaque {
+                        // `blend` returns an opaque source unchanged at full
+                        // coverage, so writing it directly is the same frame
+                        // without a float multiply per channel per pixel.
+                        seg.fill(color);
+                    } else {
+                        for p in seg.iter_mut() {
+                            *p = blend(*p, color, 1.0);
+                        }
+                    }
+                }
+                painted = painted.saturating_add(n);
+            }
+            painted = painted.saturating_add(edge_run(row, core_to, x1, qy, ay));
         }
+        profile::note_pixels("fill_round_rect", painted);
     }
 
     /// A one-pixel-wide (or thicker) rounded outline.
@@ -2728,13 +2782,34 @@ mod tests {
             (Rect::new(5.0, 5.0, 3.0, 3.0), 1.0),
             (Rect::new(40.0, 40.0, 0.4, 60.0), 0.0),
             (Rect::new(-10.0, -6.0, 60.0, 40.0), 9.0),
+            // Degenerate: nothing to paint, and a rectangle entirely off the
+            // canvas. The runs must be empty rather than write a stray pixel.
+            (Rect::new(30.0, 30.0, 0.0, 0.0), 0.0),
+            (Rect::new(30.0, 30.0, -10.0, 20.0), 4.0),
+            (Rect::new(-200.0, -200.0, 50.0, 50.0), 8.0),
         ] {
             for colour in [rgb(0x336699), with_alpha(rgb(0xFFFFFF), 0.37)] {
-                let mut want = textured(160, 120);
-                let mut got = textured(160, 120);
-                reference(&mut want, r, radius, colour);
-                got.fill_round_rect(r, radius, colour);
-                assert_eq!(want.pixels(), got.pixels(), "{r:?} radius {radius}");
+                // No clip, a fractional partial clip, a one-pixel clip and an
+                // empty clip: the reference clips through `span` and so must
+                // the runs.
+                for clip in [
+                    None,
+                    Some(Rect::new(25.0, 15.0, 90.5, 70.0)),
+                    Some(Rect::new(0.0, 0.0, 1.0, 1.0)),
+                    Some(Rect::new(100.0, 80.0, 0.0, 0.0)),
+                ] {
+                    let mut want = textured(160, 120);
+                    let mut got = textured(160, 120);
+                    let _ = want.set_clip(clip);
+                    let _ = got.set_clip(clip);
+                    reference(&mut want, r, radius, colour);
+                    got.fill_round_rect(r, radius, colour);
+                    assert_eq!(
+                        want.pixels(),
+                        got.pixels(),
+                        "{r:?} radius {radius} colour {colour:#010x} clip {clip:?}"
+                    );
+                }
             }
         }
     }

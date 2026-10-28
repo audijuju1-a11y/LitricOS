@@ -70,7 +70,7 @@ evidence, not throughput.
 
 | Item | State | Blocker |
 |---|---|---|
-| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12 (15.08 ms median, under the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
+| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12 and §16 (14.404 ms median after the run-based fill, under the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
@@ -681,6 +681,10 @@ Caveats: the profiled frame runs instrumented (19.598 ms against a 15.076 ms
 timed frame), so its shares are relative to 19.598 ms; this is composition, not
 present-to-display; no GPU or DRM device was measured.
 
+§16 supersedes the `fill_round_rect` part of this section: the same scene now
+measures **14.404 ms** median after the run-based fill. The 15.076 ms figure
+above is §12's measurement as it stood; §16 records the new runs.
+
 ## 13. Batch: browser origin canonicalisation and the queue's load bound
 
 Security pass over the layer that reads untrusted text: the address bar and the
@@ -890,3 +894,103 @@ test. The four updated expectations are not new tests.
   compose path); the next measured renderer target remains `fill_round_rect`
   (5.31 ms, 27.1 % of the profiled frame), and the lock-customize frame at
   19.65 ms.
+
+
+## 16. Batch: the rounded-rect fill derives its geometry once and writes runs (VERIFIED)
+
+`fill_round_rect` was the largest single entry in the shipped compose frame
+(§12.4: **5.290 ms over 75 calls, 26.9 %** of a 19.670 ms instrumented frame).
+The baseline was re-measured on `1a05e45` before any edit — five separate
+`render_bench` processes, 15 frames per scene — and agreed with §12:
+`full_frame` medians 14.982 / 15.004 / 15.026 / 15.243 / 15.586 ms.
+
+### 16.1 Root cause (code evidence)
+
+Inside `fill_round_rect`'s pixel loop, every visited pixel:
+
+* called `sd_round_rect`, which re-derived `r.center()` and divided
+  `r.w / 2.0`, `r.h / 2.0` and `radius.min(hw).min(hh).max(0.0)` **per pixel**;
+* decided its own case with `in_rows && x >= core_x0 && x < core_x1`, even
+  though that condition is constant along a row apart from two boundaries;
+* wrote through `blend_in`, which paid `index()` (two range checks and a
+  multiply), then `px.get_mut` (another check), per pixel;
+* in the core, ran the full three-channel float blend per pixel even for an
+  opaque colour, although `blend` already returns an opaque source unchanged at
+  coverage 1.0.
+
+The cost was therefore not the anti-aliasing: it was per-pixel geometry and
+per-pixel addressing, plus a blend that could have been a fill.
+
+### 16.2 What changed
+
+One file, `src/litric-shell/src/canvas.rs`:
+
+* the centre, both half-extent offsets, the clamped radius, and the per-row
+  `py` / `qy` / `ay` terms are now derived once (per call / per row);
+* each row is split into exactly the three runs the old per-pixel condition
+  selected — left edge, core, right edge — so the same pixels are blended once
+  each, in the same left-to-right order, with the same arguments;
+* writes go through a row slice and the `blend` free function, removing the
+  repeated `index()` address arithmetic and bounds check;
+* an opaque core is written with `slice::fill(color)`, which is exactly what
+  `blend(dst, color, 1.0)` returns for an opaque source;
+* the function now reports its visited pixels through `profile::note_pixels`,
+  so the attribution row prints `px` and `ns/px` instead of zeros.
+
+No API, allocation or behavioural change. Degenerate and clipped rectangles are
+handled by empty runs, not by special cases.
+
+### 16.3 Identical output, proven by the existing reference test
+
+`canvas::tests::the_filled_core_skips_the_distance_and_changes_no_pixel` already
+rendered `fill_round_rect` and a verbatim per-pixel reference side by side. It
+was extended rather than replaced: 10 rectangles (plain, pill, fractional,
+radius larger than half-extent, tiny, zero-width, negative-width, off-canvas),
+2 colours (opaque and alpha 0.37) and 4 clips (none, fractional partial,
+one-pixel, empty) are compared pixel for pixel. It passes.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font face
+fixture; it is not passing and was not worked around.
+
+### 16.4 Measured result (same protocol, same host)
+
+```text
+cd src && cargo build --release --example render_bench
+cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/<phase> > run$i.txt; done
+```
+
+Values are medians of the five per-process medians; ranges are min–max of those
+medians. Raw logs: `evidence/bench/fill-round-rect-2026-10-28/{before,after}/`.
+
+| Scene | Before | After | Change | Verdict |
+|---|---|---|---|---|
+| `full_frame` (shipped) | **15.026 ms** (14.982–15.586) | **14.404 ms** (14.219–14.577) | −4.1 % | kept; ranges disjoint |
+| `open_window_frame` | 30.087 ms (29.510–30.287) | 27.800 ms (27.756–29.090) | −7.6 % | kept; ranges disjoint |
+| `lock_frame_customize` | 19.875 ms (19.561–19.920) | 18.950 ms (18.919–19.176) | −4.7 % | kept; ranges disjoint |
+| `full_frame_live_blur` | 35.939 ms (35.540–36.409) | 35.324 ms (34.711–35.492) | −1.7 % | kept; ranges disjoint |
+| `primitive_fill_panel` (600×420 opaque) | **1.197 ms** (1.193–1.207) | **0.231 ms** (0.227–0.232) | −80.7 % | kept; the direct measure of the change |
+| `present_full` | 3.949 ms (3.928–4.026) | 3.918 ms (3.896–3.946) | −0.8 % | **not claimed**: inside the overlapping spread |
+
+The attribution row moved from 5.290 ms with `px=0` to **4.749 ms with
+`px=380,749` and 12.47 ns/px**. The primitive result and the frame result agree:
+the opaque core stopped being a float blend, and the remaining time is the edge
+square root plus the per-pixel blend that translucent fills still need.
+
+Conditions: release build, 1280×800, 8-vCPU VM, no GPU, no display, same host
+and session for both phases. The profiled frame runs instrumented (19.231 ms
+against the 14.404 ms timed frame), so its shares are relative to 19.231 ms.
+
+### 16.5 Status and remaining distance
+
+**VERIFIED** for the change: output is proven identical by the reference test,
+all six scenes were re-measured with the same protocol, and every kept number
+comes from ranges that do not overlap.
+
+`full_frame` is now **1.596 ms inside the 16 ms budget** (14.404 ms).
+`lock_frame_customize` is still **2.950 ms over** at 18.950 ms. The largest
+remaining entries in the instrumented frame are `fill_round_rect` 4.749 ms
+(24.7 %), `glass_backdrop` 2.580 ms (13.4 %), `soft_shadow` 2.531 ms (13.2 %)
+and `stroke_line` 2.259 ms (11.7 %, 2239 calls). The next unblocked target is
+the translucent path of `fill_round_rect` — the opaque core is now a fill, so
+what is left is the edge square root and the per-pixel blend for alpha colours
+— or `stroke_line`, which has never been attributed below its entry point.

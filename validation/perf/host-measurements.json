@@ -793,5 +793,131 @@
       "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing",
       "no present-to-display or GPU measurement: no display, no DRM device, no QEMU image on this host"
     ]
+  },
+  "fill_round_rect_optimization": {
+    "commit_before": "1a05e459cb1a3e18dde7213da4b4ae3c32da7557",
+    "status": "VERIFIED (composition only; golden-frame gate remains BLOCKED)",
+    "finding": "fill_round_rect re-derived the rounded-rect centre, both half-extents and the clamped radius -- two divides and a min/max chain -- for every pixel it visited, then paid index()'s bounds check and multiply again to write the result. Its opaque core also ran the full three-channel float blend per pixel even though blend returns an opaque source unchanged at coverage 1.0.",
+    "change": "src/litric-shell/src/canvas.rs: hoist the geometry once per call and the per-row terms once per row; split each row into the exact left-edge/core/right-edge runs the old per-pixel condition selected; write through a row slice and the blend free function; fill an opaque core with slice::fill; report visited pixels through profile::note_pixels.",
+    "protocol": "src/target/release/examples/render_bench <dir>, 5 separate processes, 15 frames per scene each; median of the five per-process medians; min/max are of those medians",
+    "conditions": {
+      "canvas": "1280x800",
+      "profile": "release",
+      "cpu": "8-vCPU VM",
+      "gpu": "none",
+      "display": "none",
+      "host": "same host and session for before and after"
+    },
+    "commands": {
+      "build": "cd src && cargo build --release --example render_bench",
+      "measure": "cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/<phase> > run$i.txt; done",
+      "attribution": "grep '^profile\\.' <render_bench output>",
+      "tests": "cargo test -p litric-shell --lib canvas::",
+      "raw_before": "evidence/bench/fill-round-rect-2026-10-28/before/run1.txt .. run5.txt",
+      "raw_after": "evidence/bench/fill-round-rect-2026-10-28/after/run1.txt .. run5.txt"
+    },
+    "before_ms": {
+      "full_frame": {
+        "median": 15.026,
+        "min": 14.982,
+        "max": 15.586
+      },
+      "open_window_frame": {
+        "median": 30.087,
+        "min": 29.51,
+        "max": 30.287
+      },
+      "lock_frame_customize": {
+        "median": 19.875,
+        "min": 19.561,
+        "max": 19.92
+      },
+      "full_frame_live_blur": {
+        "median": 35.939,
+        "min": 35.54,
+        "max": 36.409
+      },
+      "present_full": {
+        "median": 3.949,
+        "min": 3.928,
+        "max": 4.026
+      },
+      "primitive_fill_panel": {
+        "median": 1.197,
+        "min": 1.193,
+        "max": 1.207
+      }
+    },
+    "after_ms": {
+      "full_frame": {
+        "median": 14.404,
+        "min": 14.219,
+        "max": 14.577
+      },
+      "open_window_frame": {
+        "median": 27.8,
+        "min": 27.756,
+        "max": 29.09
+      },
+      "lock_frame_customize": {
+        "median": 18.95,
+        "min": 18.919,
+        "max": 19.176
+      },
+      "full_frame_live_blur": {
+        "median": 35.324,
+        "min": 34.711,
+        "max": 35.492
+      },
+      "present_full": {
+        "median": 3.918,
+        "min": 3.896,
+        "max": 3.946
+      },
+      "primitive_fill_panel": {
+        "median": 0.231,
+        "min": 0.227,
+        "max": 0.232
+      }
+    },
+    "change_pct": {
+      "full_frame": -4.14,
+      "open_window_frame": -7.6,
+      "lock_frame_customize": -4.65,
+      "full_frame_live_blur": -1.71,
+      "present_full": -0.78,
+      "primitive_fill_panel": -80.7
+    },
+    "verdict_by_scene": {
+      "full_frame": "kept: before range 14.982-15.586 and after range 14.219-14.577 do not overlap",
+      "open_window_frame": "kept: before range 29.510-30.287 and after range 27.756-29.090 do not overlap",
+      "lock_frame_customize": "kept: before range 19.561-19.920 and after range 18.919-19.176 do not overlap",
+      "full_frame_live_blur": "kept: medians 35.939 -> 35.324, before and after ranges do not overlap",
+      "primitive_fill_panel": "kept: 1.197 -> 0.231 ms on a 600x420 opaque panel; ranges do not overlap",
+      "present_full": "not claimed: the -0.78 % move is inside the overlapping spread (before 3.928-4.026, after 3.896-3.946)"
+    },
+    "profile_row": {
+      "entry": "fill_round_rect",
+      "calls": 75,
+      "before_ms": 5.29,
+      "after_ms": 4.749,
+      "pixels_after": 380749,
+      "ns_per_px_after": 12.47,
+      "note": "the row printed px=0 before this batch because fill_round_rect never reported its area; it now does, so ns/px is available after but not before"
+    },
+    "identical_output_proof": "canvas::tests::the_filled_core_skips_the_distance_and_changes_no_pixel compares the run-based fill against a verbatim per-pixel reference over 10 rectangles (plain, pill, fractional, radius > half-extent, tiny, zero-width, negative-width, off-canvas), 2 colours (opaque and alpha 0.37) and 4 clips (none, fractional partial, one-pixel, empty). Every pixel equal.",
+    "budget": {
+      "budget_ms": 16.0,
+      "shipped_full_frame_median_ms": 14.404,
+      "headroom_ms": 1.596,
+      "lock_frame_customize_median_ms": 18.95,
+      "over_budget_ms": 2.95
+    },
+    "caveats": [
+      "composition only at 1280x800 on an 8-vCPU VM with no GPU and no display; present_full is separate",
+      "the profiled frame carries instrumentation overhead (timed_ms 19.231 against a 14.404 ms timed frame), so profile shares are relative to 19.231 ms",
+      "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing; the equivalence test is the output proof",
+      "no present-to-display, GPU or idle-RAM measurement was possible on this host"
+    ]
   }
 }
