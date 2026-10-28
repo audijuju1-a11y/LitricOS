@@ -1543,11 +1543,7 @@ mod broker {
         /// # Errors
         /// Bind or accept errors; the caller logs and exits.
         pub fn run(&self, socket_path: &Path) -> io::Result<()> {
-            let _ = std::fs::remove_file(socket_path);
-            if let Some(parent) = socket_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let listener = UnixListener::bind(socket_path)?;
+            let listener = bind_listener(socket_path)?;
             eprintln!("browserd: listening on {}", socket_path.display());
             for stream in listener.incoming() {
                 match stream {
@@ -1561,6 +1557,54 @@ mod broker {
             }
             Ok(())
         }
+    }
+
+    /// Bind `socket_path` without displacing a broker that is still listening.
+    ///
+    /// The first version removed whatever was at the path before binding. A
+    /// process that was killed leaves its socket behind, but a process that is
+    /// still running leaves a socket clients are using: unlinking that one
+    /// leaves the live broker accepting on an inode nobody can reach, and this
+    /// process silently takes over the name. So the path is removed only when
+    /// nothing answers on it, a path that is not a socket is left alone and
+    /// reported, and the socket is made owner-only -- if that fails the socket
+    /// just made is removed and the error returned.
+    ///
+    /// # Errors
+    /// A live listener (`AddrInUse`), a non-socket at the path
+    /// (`AlreadyExists`), and whatever bind or `chmod` raise.
+    pub(super) fn bind_listener(socket_path: &Path) -> io::Result<UnixListener> {
+        use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
+        if let Some(parent) = socket_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        match std::fs::symlink_metadata(socket_path) {
+            Ok(meta) => {
+                if !meta.file_type().is_socket() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "the socket path is occupied by something that is not a socket",
+                    ));
+                }
+                if UnixStream::connect(socket_path).is_ok() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AddrInUse,
+                        "another broker is already listening on this socket",
+                    ));
+                }
+                std::fs::remove_file(socket_path)?;
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        let listener = UnixListener::bind(socket_path)?;
+        if let Err(e) =
+            std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))
+        {
+            let _ = std::fs::remove_file(socket_path);
+            return Err(e);
+        }
+        Ok(listener)
     }
 
     /// The socket path: `BROWSERD_SOCK` or the default.
@@ -1625,10 +1669,65 @@ fn main() {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::broker::{drop_staged, find_chromium, Broker};
+    use super::broker::{bind_listener, drop_staged, find_chromium, Broker};
     use super::{pct_decode, pct_encode};
     use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::fs::PermissionsExt as _;
     use std::os::unix::net::UnixStream;
+
+    /// A scratch directory for the bind tests, tagged with this process.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("browserd-bind-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            std::fs::create_dir_all(&dir).is_ok(),
+            "mkdir {}",
+            dir.display()
+        );
+        dir
+    }
+
+    #[test]
+    fn a_live_brokers_socket_is_not_replaced_and_the_socket_is_owner_only() {
+        let dir = scratch("live");
+        let path = dir.join("browser.sock");
+        let first = bind_listener(&path).expect("first bind");
+        let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the socket must be owner-only");
+        let second = bind_listener(&path).expect_err("a live socket is not replaced");
+        assert_eq!(second.kind(), std::io::ErrorKind::AddrInUse);
+        UnixStream::connect(&path).expect("the first listener still answers");
+        drop(first);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_stale_brokers_socket_is_replaced_and_a_file_is_never_deleted() {
+        let dir = scratch("stale");
+        let path = dir.join("browser.sock");
+        {
+            // A listener that was killed: the file stays, nothing answers.
+            let dead = std::os::unix::net::UnixListener::bind(&path).expect("bind");
+            drop(dead);
+        }
+        let listener = bind_listener(&path).expect("a stale socket is replaced");
+        assert_eq!(
+            std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777,
+            0o600
+        );
+        drop(listener);
+        let _ = std::fs::remove_file(&path);
+
+        let file = dir.join("important.txt");
+        std::fs::write(&file, b"do not delete").expect("write");
+        let err = bind_listener(&file).expect_err("a plain file is occupied");
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read(&file).expect("still there"),
+            b"do not delete",
+            "a broker must not unlink a file it did not create"
+        );
+    }
 
     #[test]
     fn pct_round_trips_and_stays_literal_on_garbage() {
@@ -1767,7 +1866,11 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("litric-browserd-drop-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("staging");
+        assert!(
+            std::fs::create_dir_all(&dir).is_ok(),
+            "staging {}",
+            dir.display()
+        );
         dir
     }
 

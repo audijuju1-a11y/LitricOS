@@ -68,7 +68,11 @@ ALLOWED = {
         "reserve_trash_name": "removes the record it is creating when the write fails",
     },
     "src/litric-browser/src/bin/browserd.rs": {
-        "run": "unlinks a stale socket file before bind; never a user path",
+        "run": "binds through `bind_listener`; never a user path",
+        "bind_listener": "unlinks a stale socket file before bind (with a symlink_metadata refusal), and removes the socket it just bound when making it owner-only failed; never a user path",
+        "scratch": "test helper: removes the scratch directory this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
+        "a_live_brokers_socket_is_not_replaced_and_the_socket_is_owner_only": "test cleanup: removes the socket it bound under the system temp directory, after asserting the live socket was not replaced",
+        "a_stale_brokers_socket_is_replaced_and_a_file_is_never_deleted": "test cleanup: removes the socket it bound under the system temp directory, after asserting the stale one was replaced and a plain file was not deleted",
         "drop_staged": "removes one finished download the shell has imported, from the broker's own --downloads staging directory: the name must be one segment and is symlink_metadata-checked to be a regular file, so a link or a directory is refused (ADR-0018 DROP)",
         "staging": "test helper: removes the scratch staging directory this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
         "a_staged_download_can_be_dropped_by_name": "test cleanup: removes the scratch staging directory it created under the system temp directory, after asserting the file was dropped",

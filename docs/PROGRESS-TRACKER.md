@@ -2314,3 +2314,93 @@ Two items are decisions rather than work:
   architectural decision, not a patch.
 
 The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.
+## 29. Batch: every daemon's socket bound the same way (verified)
+
+### 29.1 Why this row
+
+§27 and §28 fixed `litric-filesd`. An audit of every `UnixListener::bind` in
+`src/` found the same two questions unasked in the other daemons:
+
+| Daemon | Live daemon's socket | Non-socket at the path | Mode |
+|---|---|---|---|
+| `browserd` | **unlinked it** | **unlinked it** | **caller's umask** |
+| `notifyd` | **unlinked it** | refused, intact | `0600` |
+| `sysd` | **unlinked it** | refused, intact | `0600` |
+
+`browserd` was the worst: the standalone path (`BROWSERD_SOCK`) removed
+whatever was at the path before binding, so a second broker displaced a live
+one, and it never set a mode, so `/run/browserd.sock` took the umask.
+
+### 29.2 What changed
+
+All three now answer the three cases the same way `litric-filesd` does:
+
+* a socket something still answers on → `AddrInUse`, nothing unlinked (the
+  live daemon keeps its clients);
+* a path that is not a socket → `AlreadyExists`, nothing deleted;
+* a leftover socket nothing answers on → unlinked, then bound, then `0600`;
+  if the `chmod` fails the socket just made is removed and the error returned
+  rather than serving with wider permissions than intended.
+
+`browserd` gained a `bind_listener` inside `mod broker` and `run` now calls
+it; it also propagates "cannot create the socket's directory" instead of
+ignoring it, since binding would fail anyway with a less useful error.
+
+### 29.3 Tests (executed)
+
+| Crate | Test | What it proves |
+|---|---|---|
+| `litric-notifyd` | `a_live_daemons_socket_is_not_replaced_and_the_socket_is_owner_only` | second `bind` is `AddrInUse`; the first still answers `connect`; mode `0600` |
+| `litric-notifyd` | `a_stale_socket_is_replaced_and_a_file_is_never_deleted` | stale replaced at `0600`; a plain file is `AlreadyExists` and its bytes intact |
+| `litric-sysd` | `a_live_daemons_socket_is_not_replaced_and_the_socket_is_owner_only` | same, over `sysd::server::bind` |
+| `litric-sysd` | `a_stale_socket_is_replaced_and_a_file_is_never_deleted` | same |
+| `litric-browserd` | `a_live_brokers_socket_is_not_replaced_and_the_socket_is_owner_only` | same, over `broker::bind_listener` (this socket had no mode test before) |
+| `litric-browserd` | `a_stale_brokers_socket_is_replaced_and_a_file_is_never_deleted` | same |
+
+Two things this batch learned by measuring rather than assuming:
+
+* The workspace total rose by **4**, not 6: `litric-browserd` is declared with
+  `required-features = ["broker"]`, so `cargo test --workspace` never compiled
+  the bin and its two tests did not run. They were then run explicitly with
+  `-p litric-browser --features broker --bin litric-browserd` (12 passed). The
+  first draft of this row would have claimed six tests while running four.
+* `cargo clippy --features broker` (also never run before) failed on a denied
+  `expect()` in the pre-existing `staging` test helper. The crate denies
+  `expect_used`, `unwrap_used` and `panic` crate-wide, so both that helper and
+  the new `scratch` helper now use `assert!(…is_ok(), …)`; test-only change, no
+  suppression added.
+
+### 29.4 Checks
+
+```text
+cargo fmt --check                                                  exit 0
+cargo clippy --workspace --all-targets -- -D warnings              exit 0
+cargo clippy -p litric-browser --features broker --all-targets -D  exit 0
+cargo test --workspace                 55 suites, 1,671 passed, 0 failed
+cargo test -p litric-browser --features broker --bin litric-browserd  12 passed
+python3 ci/check-python-syntax.py                                  exit 0 (61 files)
+python3 ci/lint-line-endings.py                                    exit 0 (352 files, all LF)
+python3 ci/lint-file-safety.py                                     exit 0
+bash ci/verify.sh                      27 pass, 2 fail, 4 skipped
+```
+
+The two verifier failures are unchanged and are setup: absent `keys/dev/`
+material (`tools/gen-dev-keys.sh`, excluded by `keys/.gitignore`), which also
+fails the mkosi lint on the same missing paths. Nothing was generated,
+weakened or committed for them.
+
+### 29.5 Limits, and one finding for the next round
+
+No QEMU, image build, display or GPU in this environment: no boot or hardware
+claim, and no RAM/GPU number was measured for this batch. The cross-uid case
+is still not executed anywhere — it needs a second uid — so the boundary is
+still asserted as "owner + `0600`", which is what the kernel enforces.
+
+One finding is recorded rather than fixed because it is shipped as pending:
+`image/units-pending/litric-capd.socket` sets `SocketMode=0666`. The socket is
+not installed by the image yet, and the capability broker's own protocol may
+authenticate the peer, but a world-connectable socket on a capability broker
+deserves a deliberate decision before that unit leaves `units-pending`. That is
+the next non-UI row.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.

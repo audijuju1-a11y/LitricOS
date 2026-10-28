@@ -36,7 +36,9 @@ fn now() -> Timestamp {
 ///
 /// Refuses to unlink anything that is not a socket. A daemon that removes
 /// whatever it finds at its own path is one `--socket` typo away from deleting
-/// a user's file.
+/// a user's file. A socket something still answers on belongs to a live daemon
+/// and is not replaced either: unlinking it would leave that daemon accepting
+/// on an inode no client can reach.
 ///
 /// # Errors
 /// Any I/O error from creating the directory, removing the stale socket or
@@ -46,7 +48,15 @@ pub fn bind(path: &Path) -> io::Result<UnixListener> {
         fs::create_dir_all(dir)?;
     }
     match fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_socket() => fs::remove_file(path)?,
+        Ok(meta) if meta.file_type().is_socket() => {
+            if UnixStream::connect(path).is_ok() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    format!("another daemon is already listening on {}", path.display()),
+                ));
+            }
+            fs::remove_file(path)?
+        }
         Ok(_) => {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -59,7 +69,12 @@ pub fn bind(path: &Path) -> io::Result<UnixListener> {
     // Owner only. The shell will need a group here once it exists and runs as
     // the user; widening it before there is anything to widen it for would be
     // permission granted to nobody in particular.
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+        // Serving with wider permissions than intended is worse than not
+        // starting, and the socket just made is ours to remove.
+        let _ = fs::remove_file(path);
+        return Err(e);
+    }
     Ok(listener)
 }
 
@@ -180,4 +195,57 @@ pub fn query(path: &Path, request: &str) -> io::Result<String> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// A scratch directory for the bind tests, tagged with this process.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("litric-sysd-bind-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    #[test]
+    fn a_live_daemons_socket_is_not_replaced_and_the_socket_is_owner_only() {
+        let dir = scratch("live");
+        let path = dir.join("sysd.sock");
+        let first = bind(&path).expect("first bind");
+        let mode = fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the socket must be owner-only");
+        let second = bind(&path).expect_err("a live socket is not replaced");
+        assert_eq!(second.kind(), io::ErrorKind::AddrInUse);
+        UnixStream::connect(&path).expect("the first listener still answers");
+        drop(first);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_stale_socket_is_replaced_and_a_file_is_never_deleted() {
+        let dir = scratch("stale");
+        let path = dir.join("sysd.sock");
+        {
+            // A listener that was killed: the file stays, nothing answers.
+            let dead = UnixListener::bind(&path).expect("bind");
+            drop(dead);
+        }
+        let listener = bind(&path).expect("a stale socket is replaced");
+        assert_eq!(
+            fs::metadata(&path).expect("stat").permissions().mode() & 0o777,
+            0o600
+        );
+        drop(listener);
+        let _ = fs::remove_file(&path);
+
+        let file = dir.join("important.txt");
+        fs::write(&file, b"do not delete").expect("write");
+        let err = bind(&file).expect_err("a plain file is occupied");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&file).expect("still there"), b"do not delete");
+    }
 }
