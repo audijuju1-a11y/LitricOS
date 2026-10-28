@@ -165,6 +165,13 @@ impl Session {
                 // with the reason.
                 return Outcome::NoSearchProvider { query: q };
             }
+            Intent::AddressError { input, error } => {
+                let reason = error.to_string();
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+                    tab.failed(&format!("that address is not valid: {reason}"));
+                }
+                return Outcome::InvalidAddress { input, reason };
+            }
         };
 
         if let Err(refusal) = self.policy.check_navigation(&target) {
@@ -231,6 +238,13 @@ pub enum Outcome {
     NoSearchProvider {
         /// What was typed.
         query: String,
+    },
+    /// What was typed names a supported address and does not parse.
+    InvalidAddress {
+        /// What was typed.
+        input: String,
+        /// Why it is not an address.
+        reason: String,
     },
     /// There is no tab with that id.
     NoSuchTab,
@@ -330,6 +344,42 @@ mod tests {
             matches!(out, Outcome::Blocked(Refusal::Tracker { .. })),
             "{out:?}"
         );
+    }
+
+    #[test]
+    fn a_malformed_address_is_reported_on_the_tab_instead_of_becoming_a_search() {
+        // Caller-level: the parser's new outcome reaches `Session::go`, becomes
+        // the tab's own error state (which the interface renders), and does not
+        // enter history or reach the engine.
+        let mut s = session();
+        let t = s.open_tab();
+        let out = s.go(t, "https://example.com:abc/");
+        let Outcome::InvalidAddress { input, reason } = out else {
+            panic!("expected an address error, got {out:?}");
+        };
+        assert_eq!(input, "https://example.com:abc/");
+        assert!(reason.contains("port"), "{reason}");
+        match s.active().map(|x| x.state.clone()) {
+            Some(LoadState::Failed { reason }) => {
+                assert!(reason.contains("not valid"), "{reason}");
+            }
+            other => panic!("expected a failed tab, got {other:?}"),
+        }
+        assert!(
+            s.active().is_some_and(|x| x.history.is_empty()),
+            "a rejected address must not enter history"
+        );
+        // The paths that were already right are unchanged.
+        assert_eq!(
+            s.go(t, "how do compositors work"),
+            Outcome::NoSearchProvider {
+                query: "how do compositors work".to_owned()
+            }
+        );
+        assert!(matches!(
+            s.go(t, "https://example.com/"),
+            Outcome::Failed { .. }
+        ));
     }
 
     #[test]

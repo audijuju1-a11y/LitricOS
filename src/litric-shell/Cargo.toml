@@ -18,6 +18,7 @@ litric-wm     = { path = "../litric-wm" }
 litric-locale = { path = "../litric-locale" }
 litric-files  = { path = "../litric-files" }
 litric-defender = { path = "../litric-defender" }
+litric-browser = { path = "../litric-browser" }
 litric-compositor = { path = "../litric-compositor" }
 litric-core = { path = "../litric-core" }
 litric-text = { path = "../litric-text" }

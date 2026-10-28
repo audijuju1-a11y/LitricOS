@@ -742,14 +742,74 @@ $ python3 tools/validate_chapter45.py --check   8 checks: 2 PASS, 6 PARTIAL, 0 F
 $ python3 tools/fix_source_id_keys.py --check   no-op: 4208 rows, 0 duplicates; exit 0
 ```
 
-**Found and not fixed:** `url::interpret` returns `Intent::Search` for an
-address that carries a supported scheme but fails to parse, while the comment
-above it says the user should get an error about the address instead. With no
-search provider configured the text goes nowhere, so it is not exploitable
-today; fixing it needs a new intent/outcome variant and a UI path, and is
-recorded as residual risk in BUG-0033 rather than half-done here.
+**Found and not fixed in §13, fixed in §14:** `url::interpret` returned
+`Intent::Search` for an address that carries a supported scheme but fails to
+parse, while the comment above it said the user should get an error about the
+address instead. That is BUG-0035, closed in the next batch through an explicit
+intent and outcome plus the shell's omnibox path.
 
 The golden-frame gate remains **BLOCKED** on the missing Latin font face
 fixture. No claim of zero vulnerabilities is made: this pass covered the
 address-bar parser, the browser permission/tracker policy and the notification
 queue file, not every crate.
+
+## 14. Batch: malformed addresses are reported, not searched (VERIFIED)
+
+BUG-0033's residual risk is closed. `url::interpret` now returns
+`Intent::AddressError { input, error }` for text that carries a supported
+scheme and fails `Url::parse`; the comment above it and the code agree, and the
+choice was to fix the code, not the comment, because searching for a broken
+address asks a question nobody asked and sends the text to a provider.
+
+### 14.1 What changed
+
+| File | Change |
+|---|---|
+| `src/litric-browser/src/url.rs` | `Intent::AddressError`; `interpret` returns it for a supported scheme that does not parse; `validate_host` refuses an unmatched bracket, so `https://[::1` is `BadHost` instead of host `[:` with port 1. Two tests |
+| `src/litric-browser/src/lib.rs` | `Outcome::InvalidAddress { input, reason }`; `Session::go` reports it, marks the tab `LoadState::Failed` with `that address is not valid: …`, and does not enter history. Caller-level test |
+| `src/litric-shell/Cargo.toml` | `litric-browser` added as a dependency (the shell already depends on `litric-defender`, `litric-files`, `litric-notifyd`) |
+| `src/litric-shell/src/apps.rs` | `commit_omnibox` validates every address form through `litric_browser::url::Url::parse` before navigating: `://` input and host-like `example.com:abc` both refused, status line set, tab marked, `None` returned so no engine request is sent. Search URLs are not parsed. Caller-level test |
+
+What the user sees: the browser status line reads
+`that address is not valid: <the parser's reason>` and the tab is marked as
+failed; the address stays in the omnibox for correction, no navigation is
+recorded, and no request leaves for the engine or a search provider.
+
+### 14.2 Behaviour kept exactly as it was
+
+* Bare words and phrases still search (`litric docs` → the configured engine).
+* `example.com` still becomes `https://example.com`, byte-for-byte.
+* `file:///etc/hostname` and `litric://about` still resolve as before.
+* `javascript:alert(1)` and `note: remember this` are still searches: an
+  unsupported scheme is text first and an address never.
+* Whitespace-only input still returns `None`/`Search("")`.
+
+### 14.3 Verification
+
+```text
+$ cargo fmt --check                                exit 0
+$ cargo clippy --workspace --all-targets -- -D warnings   exit 0
+$ cargo test -p litric-browser --lib              92 passed; 0 failed
+$ cargo test -p litric-shell --lib -- malformed_address   1 passed; 0 failed
+$ cargo test --workspace                          TESTS passed=1647 failed=0
+$ python3 ci/check-python-syntax.py               OK: 61 file(s); exit 0
+$ python3 ci/lint-line-endings.py                 OK: 352 file(s), all LF; exit 0
+$ python3 ci/lint-doc-refs.py                     OK: 765 citations / 153 docs; exit 0
+```
+
+Full record: `docs/bugs/BUG-0035-a-malformed-address-was-searched-for-instead-of-reported.md`.
+The corresponding residual-risk bullet was removed from BUG-0033.
+
+### 14.4 Residual
+
+* The shell validates but does not canonicalise: a valid address keeps the
+  spelling the user typed (`https://EXAMPLE.com`), because history and bookmark
+  keys are strings. The parser's canonical form is not adopted yet.
+* The error sentence is English-only, like the rest of the browser status lines;
+  it is not in `litric-locale`.
+* `Intent` is not `#[non_exhaustive]`, so a future `match` fails to compile
+  rather than silently searching — deliberate, and recorded in BUG-0035.
+* No pixel test: the shell's error path is proven at the model/status level, not
+  by a rendered screenshot.
+* The golden-frame gate remains **BLOCKED** on the missing Latin font face
+  fixture. This batch makes no performance claim.

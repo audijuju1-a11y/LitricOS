@@ -332,6 +332,15 @@ fn validate_host(host: &str) -> Result<(), UrlError> {
             reason: "it contains a space",
         });
     }
+    // A bracket is only allowed as a complete IPv6 literal. Without this,
+    // `https://[::1` parsed as host `[:` with port 1, because the truncated
+    // literal left a colon that the port rule could read.
+    if (host.contains('[') || host.contains(']')) && !(host.starts_with('[') && host.ends_with(']'))
+    {
+        return Err(UrlError::BadHost {
+            reason: "it has an unmatched bracket",
+        });
+    }
     Ok(())
 }
 
@@ -357,15 +366,31 @@ pub enum Intent {
     Navigate(Url),
     /// Words to search for.
     Search(String),
+    /// Text that names a scheme this browser supports and is not a valid
+    /// address.
+    ///
+    /// Kept separate from [`Intent::Search`] on purpose: a half-typed address
+    /// sent to a search provider answers a question the user did not ask and
+    /// puts the text in front of a third party. A scheme the browser does not
+    /// support is still a search, because `javascript:` and `note:` are text
+    /// first and addresses never.
+    AddressError {
+        /// What the user typed, trimmed.
+        input: String,
+        /// Why it is not an address.
+        error: UrlError,
+    },
 }
 
 /// Decide whether typed text is an address or a search.
 ///
-/// The rule people expect: something with a scheme, or something that looks
-/// like a host name with a dot in it and no spaces, is an address. Everything
-/// else is a search. Guessing wrong in the other direction — treating "rust
-/// traits" as a host — is what produces a DNS lookup for every phrase somebody
-/// types.
+/// The rule people expect: something with a supported scheme, or something that
+/// looks like a host name with a dot in it and no spaces, is an address; a
+/// scheme-bearing address that does not parse is [`Intent::AddressError`];
+/// everything else is a search. Guessing wrong in the other direction — treating
+/// "rust traits" as a host — is what produces a DNS lookup for every phrase
+/// somebody types, and searching for a broken address asks a question nobody
+/// asked while handing the text to a provider.
 #[must_use]
 pub fn interpret(input: &str) -> Intent {
     let s = input.trim();
@@ -377,10 +402,15 @@ pub fn interpret(input: &str) -> Intent {
         if Scheme::parse(scheme).is_some() {
             return match Url::parse(s) {
                 Ok(u) => Intent::Navigate(u),
-                // A malformed address the user clearly meant as one stays a
-                // navigation attempt, so they get an error about the address
-                // rather than a search for it.
-                Err(_) => Intent::Search(s.to_owned()),
+                // A malformed address the user clearly meant as one is
+                // reported as one, so they get an error about the address
+                // rather than a search for it (and the text never leaves for a
+                // provider). This is the behaviour the paragraph above always
+                // claimed; the code used to search instead.
+                Err(error) => Intent::AddressError {
+                    input: s.to_owned(),
+                    error,
+                },
             };
         }
     }
@@ -514,6 +544,14 @@ mod tests {
     }
 
     #[test]
+    fn a_truncated_ipv6_literal_is_not_a_host() {
+        assert!(matches!(
+            Url::parse("https://[::1/"),
+            Err(UrlError::BadHost { .. })
+        ));
+    }
+
+    #[test]
     fn an_unsupported_scheme_says_which_one() {
         assert_eq!(
             Url::parse("javascript:alert(1)"),
@@ -587,6 +625,41 @@ mod tests {
             Scheme::Https,
             "an unqualified host must not default to http"
         );
+    }
+
+    #[test]
+    fn a_malformed_supported_address_is_an_error_not_a_search() {
+        // Each case names a scheme this build supports and then fails to parse.
+        // Searching for it would answer the wrong question and send the text to
+        // a provider; the address is reported instead.
+        for (raw, want) in [
+            ("https://example.com:abc/", UrlError::BadPort),
+            ("https://example.com:/", UrlError::BadPort),
+            ("https:///path", UrlError::MissingHost),
+        ] {
+            match interpret(raw) {
+                Intent::AddressError { input, error } => {
+                    assert_eq!(input, raw);
+                    assert_eq!(error, want, "{raw}");
+                }
+                other => panic!("{raw} became {other:?}"),
+            }
+        }
+        assert!(matches!(
+            interpret("https://[::1/"),
+            Intent::AddressError { .. }
+        ));
+        // Text that merely contains a colon is still a search, and a scheme the
+        // browser does not handle is text, not an address.
+        assert!(matches!(
+            interpret("javascript:alert(1)"),
+            Intent::Search(_)
+        ));
+        assert!(matches!(
+            interpret("note: remember this"),
+            Intent::Search(_)
+        ));
+        assert_eq!(interpret("   "), Intent::Search(String::new()));
     }
 
     #[test]

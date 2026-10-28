@@ -1200,12 +1200,33 @@ impl BrowserApp {
         if raw.is_empty() {
             return None;
         }
-        let url = if raw.contains("://") || raw.starts_with("litric://") {
-            raw
+        // Anything that is meant as an address -- a scheme, or a host-like word
+        // -- is validated before it is sent anywhere. Before this, a malformed
+        // one was handed to the engine as though it were an address, and a
+        // host-like one with a bad port even skipped that. The browser's own
+        // parser is the one authority for what an address is (BUG-0035).
+        let address = if raw.contains("://") || raw.starts_with("litric://") {
+            Some(raw.clone())
         } else if raw.contains('.') && !raw.contains(' ') {
-            format!("https://{raw}")
+            Some(format!("https://{raw}"))
         } else {
-            self.engine.search_url(&raw)
+            None
+        };
+        let url = match address {
+            Some(url) => {
+                if let Err(error) = litric_browser::url::Url::parse(&url) {
+                    self.status = format!("that address is not valid: {error}");
+                    if let Some(tab) = self.tabs.get_mut(self.active) {
+                        tab.error = true;
+                    }
+                    return None;
+                }
+                url
+            }
+            // A search URL is built by this file and its query is encoded, so
+            // it is not parsed here: it is not an address and has no host to
+            // validate.
+            None => self.engine.search_url(&raw),
         };
         self.navigate_active_to(&url);
         Some(url)
@@ -2545,6 +2566,48 @@ mod tests {
         assert_eq!(b.commit_omnibox().as_deref(), Some("file:///etc/hostname"));
         b.omnibox = "  ".to_owned();
         assert_eq!(b.commit_omnibox(), None);
+    }
+
+    #[test]
+    fn a_malformed_address_is_refused_in_the_omnibox_instead_of_searched_or_sent() {
+        let mut b = BrowserApp {
+            omnibox: "https://example.com:abc/".to_owned(),
+            ..BrowserApp::default()
+        };
+        assert_eq!(b.commit_omnibox(), None);
+        assert!(b.status.contains("not valid"), "{}", b.status);
+        assert!(
+            b.tabs.first().is_some_and(|tab| tab.error),
+            "the tab carries the error"
+        );
+        assert_eq!(
+            b.tabs.first().map(|tab| tab.url.as_str()),
+            Some("litric://about"),
+            "the tab did not move"
+        );
+        // The hotspot path returns nothing to load, so no engine request is
+        // made for a malformed address.
+        b.omnibox = "ftp://example.com/".to_owned();
+        assert!(browser_action(&mut b, Hot::BrowserGo).is_none());
+        assert!(b.status.contains("not valid"), "{}", b.status);
+        // A host-like word with a bad port is an address attempt too, and used
+        // to skip validation because it carried no `://`.
+        b.omnibox = "example.com:abc".to_owned();
+        assert!(browser_action(&mut b, Hot::BrowserGo).is_none());
+        assert!(b.status.contains("not valid"), "{}", b.status);
+        // Valid addresses and plain-text searches resolve exactly as before,
+        // and a successful navigation clears the tab's error.
+        b.omnibox = "example.com".to_owned();
+        assert_eq!(
+            browser_action(&mut b, Hot::BrowserGo).as_deref(),
+            Some("https://example.com")
+        );
+        assert!(b.tabs.first().is_some_and(|tab| !tab.error));
+        b.omnibox = "litric docs".to_owned();
+        assert_eq!(
+            b.commit_omnibox().as_deref(),
+            Some("https://www.google.com/search?q=litric%20docs")
+        );
     }
 
     #[test]

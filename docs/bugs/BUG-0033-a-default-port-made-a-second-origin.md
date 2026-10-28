@@ -106,11 +106,6 @@ exit 0
 
 ## Residual risk
 
-* **`interpret` contradicts its own comment.** A scheme-qualified address that
-  fails to parse is returned as `Intent::Search`, while the comment above it
-  says the user should get an error about the address. With no search provider
-  configured the text goes nowhere, so this is not exploitable today; it is a
-  privacy hazard the day a provider is added and is **NOT FIXED** here.
 * **No engine and no network test.** The fix is in the parser and policy layer;
   no HTTP client exists to observe the host string that would be dialled.
 * **Origin normalisation of a persisted store is not migrated**, because no
