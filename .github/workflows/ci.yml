@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    name: rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: format
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --workspace
+
+  research:
+    name: research corpus and validation harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: python syntax
+        run: python3 ci/check-python-syntax.py
+      - name: line endings
+        run: python3 ci/lint-line-endings.py
+      - name: document citations
+        run: python3 ci/lint-doc-refs.py
+      - name: Chapter 45 harness (receipts are not rewritten in CI)
+        run: python3 tools/validate_chapter45.py --check
+      - name: source-id key guard
+        run: python3 tools/fix_source_id_keys.py --check

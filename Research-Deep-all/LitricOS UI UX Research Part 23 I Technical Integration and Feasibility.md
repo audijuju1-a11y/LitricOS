@@ -571,7 +571,7 @@ are undecided; none of those three can be closed by writing a test first.
 
 ### Reused
 
-S0930 (registry), S0941/S3079/S0112b (`defaults`), S1740 family (WinUI),
+S0941/S3079/S0112b (`defaults`), S1740 family (WinUI),
 S3716 family (GTK), S3042 family (AppKit), S0130/S0131 (notification APIs),
 S3852 (XDG Desktop Portal), S3845–S3849 (Chapter H).
 

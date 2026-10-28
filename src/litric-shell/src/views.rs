@@ -970,10 +970,15 @@ fn crumb_window(available: f32, widths: &[f32], sep: f32, dots: f32) -> (usize, 
         return (0, false);
     }
     let reserve = dots + sep;
-    let mut skip = 0;
-    while skip + 1 < widths.len() && total + reserve > available {
-        total -= widths[skip] + sep;
-        skip += 1;
+    let mut skip: usize = 0;
+    // `get` rather than `widths[skip]`: the loop condition makes the index
+    // valid today, but a slice index is a panic waiting for a later edit to
+    // the condition, and this function runs inside the frame loop.
+    while skip.saturating_add(1) < widths.len() && total + reserve > available {
+        if let Some(width) = widths.get(skip) {
+            total -= width + sep;
+        }
+        skip = skip.saturating_add(1);
     }
     (skip, true)
 }
@@ -1089,7 +1094,7 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         cx += dots_w + t.px(2.0);
     }
     for (i, c) in crumbs.iter().enumerate().skip(skip) {
-        let last = i + 1 == crumbs.len();
+        let last = i.saturating_add(1) == crumbs.len();
         let room = (bar.right() - t.px(6.0) - cx - t.px(8.0)).max(t.px(10.0));
         let shown = if overflow {
             ui::elide(c, &s_crumb, room)
@@ -5884,33 +5889,26 @@ fn draw_revert_banner(canvas: &mut Canvas, shell: &mut Shell) {
         r.y + t.px(44.0),
         &body_style,
     );
-    let mut button =
-        |canvas: &mut Canvas, t: &Tokens, at: Rect, label: &str, hot: Hot, filled: bool| {
-            ui::surface(
-                canvas,
-                t,
-                at,
-                t.radius(Radius::Md),
-                if filled {
-                    Material::Popover
-                } else {
-                    Material::Popover
-                },
-            );
-            if shell_highlight(shell, hot) {
-                ui::focus_ring(canvas, t, at, t.radius(Radius::Md));
-            }
-            let style = Style::new(t.text_px(TypeStep::Caption), t.text());
-            let width = font::measure(label, &style);
-            font::draw(
-                canvas,
-                label,
-                at.x + (at.w - width) / 2.0,
-                at.y + at.h / 2.0 + t.px(5.0),
-                &style,
-            );
-            shell.hotspots_mut().push(at, hot);
-        };
+    // Both actions are secondary: the banner is already the interruption, and
+    // a filled primary here would make "Keep" look like the only choice. The
+    // old `filled` flag selected `Popover` in both branches, so it carried no
+    // meaning; the parameter is gone rather than left as a trap.
+    let mut button = |canvas: &mut Canvas, t: &Tokens, at: Rect, label: &str, hot: Hot| {
+        ui::surface(canvas, t, at, t.radius(Radius::Md), Material::Popover);
+        if shell_highlight(shell, hot) {
+            ui::focus_ring(canvas, t, at, t.radius(Radius::Md));
+        }
+        let style = Style::new(t.text_px(TypeStep::Caption), t.text());
+        let width = font::measure(label, &style);
+        font::draw(
+            canvas,
+            label,
+            at.x + (at.w - width) / 2.0,
+            at.y + at.h / 2.0 + t.px(5.0),
+            &style,
+        );
+        shell.hotspots_mut().push(at, hot);
+    };
     let keep = Rect::new(
         r.right() - t.px(14.0) - t.px(78.0) - t.px(8.0) - t.px(78.0),
         r.y + r.h - t.px(14.0) - t.px(28.0),
@@ -5918,8 +5916,8 @@ fn draw_revert_banner(canvas: &mut Canvas, shell: &mut Shell) {
         t.px(28.0),
     );
     let undo = Rect::new(keep.right() + t.px(8.0), keep.y, t.px(78.0), t.px(28.0));
-    button(canvas, &t, keep, "Keep", Hot::ScaleKeep, true);
-    button(canvas, &t, undo, "Revert", Hot::ScaleUndo, false);
+    button(canvas, &t, keep, "Keep", Hot::ScaleKeep);
+    button(canvas, &t, undo, "Revert", Hot::ScaleUndo);
 }
 
 /// Whether a row should read as hovered or focused, asked through the shell so

@@ -87,10 +87,10 @@ is the right page; one needed the suffix; one cluster was citing the wrong pages
 Two lines changed. No citation is left pointing at an id whose row is a different URL from the one
 the sentence describes.
 
-**Not repaired, and stated as an open finding:** the same "Reused" paragraph still cites `S0930` as
-"registry", while `S0930` is a Windows-forum search article. That id was not in the shared set, so it
-was outside this repair's measured scope; it needs a separate citation audit rather than a guess in
-this one.
+**Repaired after the first pass:** the same "Reused" paragraph cited `S0930` as "registry", while
+`S0930` is a Windows-forum search article. No registry source exists in the register for that claim,
+so the false attribution was removed from Part 23 rather than repointed to a page that would have
+been equally wrong. The rest of the "Reused" list still needs a dedicated citation audit.
 
 ---
 
