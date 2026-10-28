@@ -1833,3 +1833,89 @@ rows are `soft_shadow` (6.726 ms), `stroke_line` and `fill_round_rect`; this
 batch changes only the ring scan. The golden-frame gate remains **BLOCKED** on
 the missing Latin font face fixture and is not claimed.
 
+## 24. Batch: measuring stroke_line and rejecting a row-band walk (negative result)
+
+### 24.1 Ground truth and attribution
+
+`HEAD == upstream == remote tip == 7002db9`, tree clean, `origin/main = c2822ba`
+(untouched). A profiled pass was added to `stroke_line` and two call counters to
+`fill_round_rect`; both run only while profiling is enabled, so timed frames pay
+nothing. One open-window frame reports:
+
+| `stroke_line` | Value |
+|---|---|
+| calls | **3,094** |
+| axis-aligned calls (`dx == 0` or `dy == 0`) | 836 (27.0 %) |
+| zero-length calls | 0 |
+| fully hidden by the clip | 0 |
+| total segment length | 9,599 px (3.1 px per call) |
+| walked pixels | 155,310 |
+| zero-coverage pixels | **118,663 (76.4 %)** |
+| partial / full coverage | 32,753 / 3,894 |
+| row, profiled frame | 5.110 ms (5.072-6.373) |
+
+| `fill_round_rect` | Value |
+|---|---|
+| calls / translucent calls | 102 / 51 |
+| walked pixels | 841,611 |
+| interior | 737,035 at 1.31 ns/px |
+| edge band | 104,576 scanned at 8.93 ns/px, 102,038 painted |
+| outside shape / clipped | 39,182 / 1,728 |
+| row, profiled frame | 2.747 ms (2.706-4.051) |
+
+The fill is already split at the per-row level and its interior runs at
+1.31 ns/px; this batch found no defensible cut there. The line looked different:
+76.4 % of its walked pixels paint nothing, all within the rectangular bbox of a
+diagonal capsule.
+
+### 24.2 The change that was tried
+
+Each row's painted interval was bounded by the union of the segment's
+perpendicular band (within `half + 0.5` of the infinite line) and the two end
+discs. That union is a superset of the capsule, and one-pixel margins kept
+rounding from excluding a painted pixel. The exact distance and coverage test
+for every pixel inside the interval was unchanged.
+
+Parity: the pre-change loop was kept verbatim as `stroke_line_reference` and
+compared over 14 geometries (horizontal, vertical, both diagonals, shallow,
+steep, fractional, zero length, 1 px, thick and thin pens, off-canvas) x 4 clips
+(none, fractional, one-pixel, empty) x 3 colours (opaque, translucent, alpha 0)
+= **168 full-canvas comparisons**. All 56 canvas tests passed, so the rewrite
+was pixel-identical.
+
+### 24.3 Measured result and why it was reverted
+
+Identical five-process protocol, same session, after the parity tests:
+
+| Item | Before | After (band walk) | Verdict |
+|---|---|---|---|
+| `stroke_line` row | 5.110 ms (5.072-6.373) | **5.641 ms (5.614-5.802)** | slower at the median |
+| `open_window_frame` | 11.613 ms (11.560-12.150) | 12.116 ms (11.932-12.360) | slower |
+| `full_frame` | 6.989 ms (6.709-7.091) | 7.018 ms (6.906-7.240) | no gain |
+| `lock_frame_customize` | 8.183 ms (7.966-8.281) | 8.235 ms (8.206-8.525) | no gain |
+| `fill_round_rect` row (control) | 2.747 ms | 2.746 ms | unchanged, as expected |
+| `primitive_fill_panel` (control) | 0.053 ms | 0.051 ms | unchanged |
+
+The change is **reverted**. The measurement explains it: the 118,663 zero
+pixels are spread over 3,094 calls (38 per call), so a row band saves only a few
+pixels per row while adding a division and up to two square roots per row. With
+3.1 px average segment length the setup cost dominates. This is the opposite of
+§22, where the same idea removed 97.6 % of 832,335 pixels across 16 large
+rectangles, and of §23, where the removed iterations were pure no-ops inside a
+loop that was already running.
+
+### 24.4 Status and remaining distance
+
+**NOT VERIFIED for the optimisation; the change was rejected by measurement and
+reverted.** The attribution counters are kept because they are prof-only and
+make the next attempt cheaper. No speed claim is made, and no profiled scene
+changed: `open_window_frame` 11.613 ms (4.387 ms inside 16), `full_frame`
+6.989 ms (9.011 ms inside) and `lock_frame_customize` 8.183 ms (7.817 ms
+inside).
+
+The largest remaining window rows are `soft_shadow` (~6.7 ms), `stroke_line`
+(~5.1 ms, 3,094 mostly-short calls) and `fill_round_rect` (~2.7 ms, 1.31 ns/px
+interior). Any further stroke work needs to reduce **per-call** cost, not bbox
+area. The golden-frame gate remains **BLOCKED** on the missing Latin font face
+fixture and is not claimed.
+

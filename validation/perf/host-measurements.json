@@ -1941,5 +1941,87 @@
         "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
       ],
       "evidence": "evidence/bench/soft-shadow-ring-bound-2026-10-28/{before,after}/"
+    },
+    "stroke_line_band_rejected": {
+      "commit_before": "7002db9",
+      "status": "NOT VERIFIED for the optimisation: the row-band walk measured slower (5.110 -> 5.641 ms) and was reverted; the prof-only attribution counters are kept.",
+      "finding": "One open_window_frame issues 3,094 stroke_line calls (836 axis-aligned, none zero-length or fully clipped) with 9,599 px of total segment length, yet walks 155,310 pixels: 118,663 (76.4 %) have zero coverage, 32,753 partial and 3,894 full. The row measures 5.110 ms (5.072-6.373). fill_round_rect is already row-split: 102 calls (51 translucent), 841,611 px, 737,035 interior at 1.31 ns/px and 104,576 edge px at 8.93 ns/px, row 2.747 ms.",
+      "attempted_change": "Bound each row by the union of the segment's perpendicular band within half+0.5 and the two end discs, a superset of the capsule, with one-pixel margins; the distance and coverage test for every pixel stayed identical.",
+      "parity": "stroke_line_reference is the pre-change loop verbatim; 14 geometries x 4 clips (none, fractional, one-pixel, empty) x 3 colours = 168 full-canvas comparisons passed, and all 56 canvas tests passed.",
+      "after": {
+        "stroke_line_row_ms": {
+          "median": 5.641,
+          "min": 5.614,
+          "max": 5.802
+        },
+        "open_window_frame_ms": {
+          "median": 12.116,
+          "min": 11.932,
+          "max": 12.36
+        },
+        "full_frame_ms": {
+          "median": 7.018,
+          "min": 6.906,
+          "max": 7.24
+        },
+        "lock_frame_customize_ms": {
+          "median": 8.235,
+          "min": 8.206,
+          "max": 8.525
+        },
+        "fill_round_rect_row_ms": {
+          "median": 2.746,
+          "min": 2.73,
+          "max": 2.873
+        }
+      },
+      "before": {
+        "stroke_line_row_ms": {
+          "median": 5.11,
+          "min": 5.072,
+          "max": 6.373
+        },
+        "open_window_frame_ms": {
+          "median": 11.613,
+          "min": 11.56,
+          "max": 12.15
+        },
+        "full_frame_ms": {
+          "median": 6.989,
+          "min": 6.709,
+          "max": 7.091
+        },
+        "lock_frame_customize_ms": {
+          "median": 8.183,
+          "min": 7.966,
+          "max": 8.281
+        },
+        "fill_round_rect_row_ms": {
+          "median": 2.747,
+          "min": 2.706,
+          "max": 4.051
+        }
+      },
+      "verdict": "reverted: the 118,663 zero pixels are spread over 3,094 calls (38 per call), so a per-row band saves few pixels while adding a division and up to two square roots per row; with 3.1 px average segment length the setup cost dominates. No speed is claimed and no profiled scene changed.",
+      "counters": {
+        "stroke_line.calls": 3094,
+        "stroke_line.axis_calls": 836,
+        "stroke_line.zero_len_calls": 0,
+        "stroke_line.hidden_calls": 0,
+        "stroke_line.len_px": 9599,
+        "stroke_line.walked": 155310,
+        "stroke_line.zero": 118663,
+        "stroke_line.partial": 32753,
+        "stroke_line.full": 3894,
+        "fill_round_rect.calls": 102,
+        "fill_round_rect.translucent_calls": 51
+      },
+      "caveats": [
+        "composition only at 1280x800 on an 8-vCPU VM with no GPU and no display; no present-to-display, GPU, VRAM or idle-RAM number was measured",
+        "row times are instrumented frames that also run the profiled classification pass; timed scene numbers are the honest frame measure",
+        "the attempted change was rejected on measurement and is not in the tree; only the prof-only counters remain",
+        "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
+      ],
+      "evidence": "evidence/bench/stroke-line-band-2026-10-28/{before,after}/"
     }
 }

@@ -1595,6 +1595,8 @@ impl Canvas {
                 0,
             );
             profile::note_bucket("fill_round_rect.clipped", clipped_px, 0);
+            profile::note_counter("fill_round_rect.calls", 1);
+            profile::note_counter("fill_round_rect.translucent_calls", u64::from(!opaque));
             profile::note_counter("fill_round_rect.rows", rows_walked);
             profile::note_counter("fill_round_rect.zero_calls", u64::from(painted == 0));
             profile::note_max("fill_round_rect.max_call_px", painted);
@@ -1723,6 +1725,7 @@ impl Canvas {
     /// An anti-aliased line of the given width, with round caps.
     pub fn stroke_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: u32) {
         let _prof = profile::Timer::new("stroke_line");
+        let prof = profile::is_on();
         let half = width / 2.0;
         let minx = x0.min(x1) - half - 1.5;
         let miny = y0.min(y1) - half - 1.5;
@@ -1747,6 +1750,55 @@ impl Canvas {
                 let d = (qx * qx + qy * qy).sqrt() - half;
                 self.blend_in(x, y, color, coverage(d));
             }
+        }
+        if prof {
+            // Where a line's walked pixels go. Same expression as the painter,
+            // in an untimed pass, so the buckets cannot disagree with it. Icons
+            // issue thousands of short strokes, so this also records how many
+            // calls are axis-aligned, zero-length or entirely clipped away.
+            let (mut walked, mut zero, mut partial, mut full) = (0u64, 0u64, 0u64, 0u64);
+            for y in by0..by1 {
+                for x in bx0..bx1 {
+                    walked = walked.saturating_add(1);
+                    let px = x as f32 + 0.5;
+                    let py = y as f32 + 0.5;
+                    let t = if len2 <= f32::EPSILON {
+                        0.0
+                    } else {
+                        (((px - x0) * dx + (py - y0) * dy) / len2).clamp(0.0, 1.0)
+                    };
+                    let qx = px - (x0 + dx * t);
+                    let qy = py - (y0 + dy * t);
+                    let cov = coverage((qx * qx + qy * qy).sqrt() - half);
+                    if cov <= 0.0 {
+                        zero = zero.saturating_add(1);
+                    } else if cov >= 1.0 {
+                        full = full.saturating_add(1);
+                    } else {
+                        partial = partial.saturating_add(1);
+                    }
+                }
+            }
+            let raw_w = (bounds.right().ceil() - bounds.x.floor()).max(0.0);
+            let raw_h = (bounds.bottom().ceil() - bounds.y.floor()).max(0.0);
+            let raw = (raw_w * raw_h) as u64;
+            profile::note_counter("stroke_line.calls", 1);
+            profile::note_counter(
+                "stroke_line.zero_len_calls",
+                u64::from(len2 <= f32::EPSILON),
+            );
+            profile::note_counter("stroke_line.axis_calls", u64::from(dx == 0.0 || dy == 0.0));
+            profile::note_counter(
+                "stroke_line.hidden_calls",
+                u64::from(by1 <= by0 || bx1 <= bx0),
+            );
+            profile::note_counter("stroke_line.len_px", len2.sqrt().round() as u64);
+            profile::note_bucket("stroke_line.walked", walked, 0);
+            profile::note_bucket("stroke_line.zero", zero, 0);
+            profile::note_bucket("stroke_line.partial", partial, 0);
+            profile::note_bucket("stroke_line.full", full, 0);
+            profile::note_bucket("stroke_line.clipped", raw.saturating_sub(walked), 0);
+            profile::note_max("stroke_line.max_call_px", walked);
         }
     }
 
