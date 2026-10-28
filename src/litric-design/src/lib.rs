@@ -203,7 +203,7 @@ impl Theme {
                     text_secondary: Rgb::hex(0xA9B1BF),
                     accent: Rgb::hex(0x6AA6FF),
                     on_accent: Rgb::hex(0x06080C),
-                    border: Rgb::hex(0x2A2E37),
+                    border: Rgb::hex(0x646A75),
                     danger: Rgb::hex(0xFF6B6B),
                     success: Rgb::hex(0x5BD9A4),
                     warning: Rgb::hex(0xFFC66D),
@@ -220,7 +220,7 @@ impl Theme {
                     text_secondary: Rgb::hex(0x4C5563),
                     accent: Rgb::hex(0x1D5FD6),
                     on_accent: Rgb::hex(0xFFFFFF),
-                    border: Rgb::hex(0xD9DDE3),
+                    border: Rgb::hex(0x7C828C),
                     danger: Rgb::hex(0xC42B2B),
                     success: Rgb::hex(0x1B7A4F),
                     warning: Rgb::hex(0x8A5A00),
@@ -1443,8 +1443,8 @@ mod tests {
             let t = Theme::of(*kind);
             let r = t.palette.border.contrast(t.palette.bg_elevated);
             assert!(
-                r >= 1.3,
-                "{}: border on bg_elevated is {r:.2}, too faint to read as an edge",
+                r >= 3.0,
+                "{}: border on bg_elevated is {r:.2}, below the 3:1 WCAG asks of a non-text edge",
                 kind.token()
             );
         }

@@ -707,6 +707,17 @@ pub struct LockState {
     pub flow_ms: u64,
     /// When the drift was last advanced, in the caller's timebase.
     last_ms: u64,
+    /// Refused attempts since the last success or lock. Drives the wait.
+    failures: u32,
+    /// The daemon's sentence for the last refusal, kept so the countdown can be
+    /// rebuilt each second without losing the reason it is counting down from.
+    refusal: String,
+    /// When another attempt is allowed, in the caller's timebase. Zero means an
+    /// attempt is allowed now.
+    blocked_until_ms: u64,
+    /// Whole seconds left on the wait, for the surface. `None` means the field
+    /// is open; `Some(0)` never occurs, because zero seconds is open.
+    pub retry_in_s: Option<u64>,
 }
 
 impl LockState {
@@ -831,6 +842,84 @@ impl LockState {
         match &self.verdict {
             Verdict::Idle | Verdict::Checking => None,
             Verdict::Failed(s) | Verdict::NoVerifier(s) => Some(s.as_str()),
+        }
+    }
+
+    /// The longest a run of refusals can close the field, in milliseconds.
+    ///
+    /// Half a minute is long enough to make a scripted guess worthless and
+    /// short enough that a person who fat-fingered a password twice is not
+    /// locked out of their own machine for a coffee break.
+    pub const MAX_BACKOFF_MS: u64 = 30_000;
+
+    /// Record a refused attempt at `now_ms`, returning how long the next one
+    /// must wait.
+    ///
+    /// The wait doubles from one second and stops at [`Self::MAX_BACKOFF_MS`].
+    /// The **first** refusal already waits: the state this replaces allowed an
+    /// unlimited number of attempts with no delay at all, and a zero-second
+    /// first step would leave the first run of guesses as cheap as before.
+    pub fn note_failure(&mut self, reason: &str, now_ms: u64) -> u64 {
+        self.failures = self.failures.saturating_add(1);
+        let step = self.failures.saturating_sub(1).min(5);
+        let wait = (1_000u64 << step).min(Self::MAX_BACKOFF_MS);
+        self.blocked_until_ms = now_ms.saturating_add(wait);
+        self.refusal = reason.to_owned();
+        self.retry_in_s = Some(wait.div_ceil(1_000));
+        self.verdict = Verdict::Failed(self.with_countdown());
+        wait
+    }
+
+    /// Move the countdown to `now_ms`. Returns whether anything changed, which
+    /// is what lets the shell redraw once a second instead of every frame.
+    ///
+    /// The refusal itself stays on screen after the wait ends: the field is
+    /// open again, and the reason it closed is still the last thing that
+    /// happened.
+    pub fn refresh_retry(&mut self, now_ms: u64) -> bool {
+        if self.blocked_until_ms == 0 {
+            return false;
+        }
+        let left = self.blocked_until_ms.saturating_sub(now_ms);
+        let secs = left.div_ceil(1_000);
+        let next = if secs == 0 { None } else { Some(secs) };
+        if next == self.retry_in_s {
+            return false;
+        }
+        self.retry_in_s = next;
+        if matches!(self.verdict, Verdict::Failed(_)) {
+            self.verdict = Verdict::Failed(self.with_countdown());
+        }
+        true
+    }
+
+    /// Whether an attempt may be handed to the daemon at `now_ms`.
+    #[must_use]
+    pub fn can_attempt(&self, now_ms: u64) -> bool {
+        self.blocked_until_ms <= now_ms
+    }
+
+    /// Forget the run of refusals, because a password was verified or the
+    /// session was locked again. The wait is per lock session, not per boot.
+    pub fn clear_failures(&mut self) {
+        self.failures = 0;
+        self.refusal.clear();
+        self.blocked_until_ms = 0;
+        self.retry_in_s = None;
+    }
+
+    /// Refused attempts in this run, for tests and diagnostics.
+    #[must_use]
+    pub fn failures(&self) -> u32 {
+        self.failures
+    }
+
+    /// The refusal sentence with the countdown appended, or the sentence alone
+    /// once the wait is over.
+    fn with_countdown(&self) -> String {
+        match self.retry_in_s {
+            Some(secs) => format!("{} · Try again in {secs}s", self.refusal),
+            None => self.refusal.clone(),
         }
     }
 }
@@ -1930,18 +2019,28 @@ fn entry(
     let submit = Rect::new(r.right() - t.px(5.0) - side, r.y + t.px(5.0), side, side);
     // The submit is the one action on this surface, so it is the accent: the
     // same colour as the avatar and the digits' tint, and never a second hue.
+    // A refusal closes the field, so the one action this surface has is drawn
+    // as unavailable and, below, is not registered as a hotspot at all.
+    let waiting = v.state.retry_in_s;
     let state = if v.state.verdict == Verdict::Checking {
         State::Loading
+    } else if waiting.is_some() {
+        State::Disabled
     } else if matches!(v.state.verdict, Verdict::Failed(_)) {
         State::Error
     } else {
         State::Normal
     };
+    let ink_alpha = match state {
+        State::Error => 0.5,
+        State::Disabled => 0.35,
+        _ => 1.0,
+    };
     canvas.fill_circle(
         submit.center().0,
         submit.center().1,
         submit.h / 2.0,
-        with_alpha(ink, if state == State::Error { 0.5 } else { 1.0 }),
+        with_alpha(ink, ink_alpha),
     );
     crate::icons::draw(
         canvas,
@@ -1956,7 +2055,9 @@ fn entry(
     );
     if v.state.stage == Stage::Entry {
         hits.push((r, Hot::LockEntry));
-        hits.push((submit, Hot::LockSubmit));
+        if waiting.is_none() {
+            hits.push((submit, Hot::LockSubmit));
+        }
     }
 
     // What the last attempt did, under the field. A refusal is named in the
@@ -2604,5 +2705,46 @@ mod tests {
             (scale - 1.12).abs() <= 1.0 / SCALE_STEP,
             "scale landed on {scale}"
         );
+    }
+
+    #[test]
+    fn a_run_of_refusals_waits_longer_each_time_and_stops_at_the_cap() {
+        let mut st = LockState::default();
+        let mut waits = Vec::new();
+        for _ in 0..8 {
+            waits.push(st.note_failure("no", 0));
+        }
+        assert_eq!(
+            waits,
+            vec![1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000],
+            "the wait doubles from one second and stops at half a minute"
+        );
+        assert_eq!(st.failures(), 8);
+    }
+
+    #[test]
+    fn the_wait_expires_on_the_shells_clock() {
+        let mut st = LockState::default();
+        st.note_failure("no", 10_000);
+        assert!(!st.can_attempt(10_999));
+        assert_eq!(st.retry_in_s, Some(1));
+        assert!(!st.refresh_retry(10_999), "the second did not change");
+        assert!(st.refresh_retry(11_000), "the second ran out");
+        assert!(st.can_attempt(11_000));
+        assert_eq!(st.retry_in_s, None);
+        assert_eq!(
+            st.message(),
+            Some("no"),
+            "the reason stays after the countdown ends"
+        );
+    }
+
+    #[test]
+    fn a_verified_password_clears_the_wait() {
+        let mut st = LockState::default();
+        st.note_failure("no", 0);
+        st.clear_failures();
+        assert!(st.can_attempt(0));
+        assert_eq!(st.failures(), 0);
     }
 }

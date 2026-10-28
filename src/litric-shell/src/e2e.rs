@@ -463,7 +463,6 @@ fn journey_files_window_is_drawn_with_places_rows_and_commands() {
     let _canvas = draw_frame(&mut s);
     for hot in [
         Hot::Files(FilesHot::Place(0)),
-        Hot::Files(FilesHot::Back),
         Hot::Files(FilesHot::Up),
         Hot::Files(FilesHot::Details),
     ] {
@@ -478,6 +477,18 @@ fn journey_files_window_is_drawn_with_places_rows_and_commands() {
             .rect_of(Hot::MenuRow(MenuAction::NewFolder))
             .is_some(),
         "the New folder command is drawn"
+    );
+    // A button with nowhere to go is not a target. Once there is history, the
+    // same button is drawn and clickable.
+    assert!(
+        s.hotspots().rect_of(Hot::Files(FilesHot::Back)).is_none(),
+        "Back must not be a target with an empty history"
+    );
+    s.files.navigate("/Pictures");
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.hotspots().rect_of(Hot::Files(FilesHot::Back)).is_some(),
+        "Back draws once there is history"
     );
 }
 
@@ -1977,6 +1988,72 @@ fn journey_the_lock_does_not_collect_a_password_it_could_not_check() {
 }
 
 #[test]
+fn journey_a_refusal_closes_the_field_before_it_can_be_asked_again() {
+    // The harness's key helpers stamp events at a fixed time, so this journey
+    // advances the shell's clock explicitly: a wait is measured against it.
+    fn enter_at(s: &mut Shell, now: u64) -> Vec<Effect> {
+        s.handle(
+            &InputEvent::KeyDown {
+                key: Key::Enter,
+                code: 0,
+                mods: Modifiers::NONE,
+                repeat: false,
+            },
+            now,
+        )
+    }
+
+    let mut s = lockable_shell();
+    assert!(s.lock_now());
+    type_text(&mut s, "hunter2");
+    let first = enter_at(&mut s, 1_300);
+    assert!(first
+        .iter()
+        .any(|e| matches!(e, Effect::VerifyPassword { .. })));
+
+    s.lock_failed("ERR action-failed unix_chkpwd said no");
+    s.tick(1_400);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.hotspots().rect_of(Hot::LockSubmit).is_none(),
+        "the field closes on the first refusal"
+    );
+    assert!(
+        s.take_unlock().is_none(),
+        "no secret leaves the shell while the field is closed"
+    );
+
+    // Enter during the wait is not a request, and it does not eat the buffer.
+    type_text(&mut s, "hunter2");
+    let blocked = enter_at(&mut s, 1_500);
+    assert!(!blocked
+        .iter()
+        .any(|e| matches!(e, Effect::VerifyPassword { .. })));
+
+    // The wait ends on the clock, not on a keypress: the field is back and the
+    // text typed during the wait is still in it.
+    s.tick(2_400);
+    let _ = draw_frame(&mut s);
+    assert!(s.hotspots().rect_of(Hot::LockSubmit).is_some());
+    let second = enter_at(&mut s, 2_500);
+    assert!(second
+        .iter()
+        .any(|e| matches!(e, Effect::VerifyPassword { .. })));
+
+    // The second refusal waits twice as long as the first.
+    s.lock_failed("ERR action-failed unix_chkpwd said no");
+    s.tick(3_000);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.hotspots().rect_of(Hot::LockSubmit).is_none(),
+        "the second wait is two seconds, not one"
+    );
+    s.tick(5_000);
+    let _ = draw_frame(&mut s);
+    assert!(s.hotspots().rect_of(Hot::LockSubmit).is_some());
+}
+
+#[test]
 fn journey_the_lock_customize_sheet_changes_the_look_live() {
     let mut s = lockable_shell();
     assert!(s.lock_now());
@@ -2245,4 +2322,82 @@ fn journey_the_search_field_finds_a_window_on_another_workspace() {
         s.wm.window(id).map(|w| w.state),
         Some(litric_wm::WindowState::Normal)
     );
+}
+
+#[test]
+fn journey_a_display_scale_change_undoes_itself_unless_it_is_kept() {
+    // A scale that is too large moves its own undo control off the edge of the
+    // screen, so the only safe design is a change that expires. This journey
+    // drives both endings: the user who does nothing gets the old scale back,
+    // and the user who says keep keeps the new one. The control itself is a
+    // hotspot on the Display page; what is measured here is the mechanism the
+    // control arms, which is the part that has to work when the screen does not.
+    let tokens = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
+    let mut s = Shell::new(tokens, 1280.0, 800.0, Regional::fallback("test"));
+    s.mode = DesktopMode::Ready;
+
+    s.apply_ui_scale(1.25);
+    assert!(
+        (s.tokens.scale - 1.25).abs() < 0.001,
+        "the change is applied at once"
+    );
+    let pending = s.scale_revert.as_ref().expect("a provisional change");
+    assert_eq!(pending.previous(), 1.0);
+    assert_eq!(pending.seconds_left(), 15);
+
+    // Another step while a change is provisional must not stack: it would make
+    // the value being tested ambiguous, and the first undo value unreachable.
+    s.apply_ui_scale(1.5);
+    assert!((s.tokens.scale - 1.25).abs() < 0.001);
+
+    s.tick(10_000);
+    assert!(
+        (s.tokens.scale - 1.25).abs() < 0.001,
+        "still inside the window"
+    );
+    assert_eq!(s.scale_revert.as_ref().map(|w| w.seconds_left()), Some(5));
+    s.tick(15_500);
+    assert!(
+        (s.tokens.scale - 1.0).abs() < 0.001,
+        "the window closed and put the old scale back"
+    );
+    assert!(s.scale_revert.is_none());
+
+    // The other ending: the user keeps it, and the clock no longer applies.
+    s.apply_ui_scale(1.25);
+    assert!((s.tokens.scale - 1.25).abs() < 0.001);
+    let effects = s.keep_pending_change();
+    assert!(s.scale_revert.is_none());
+    s.tick(60_000);
+    assert!(
+        (s.tokens.scale - 1.25).abs() < 0.001,
+        "a kept change survives the clock that would have undone it"
+    );
+    // Keeping it is what writes it: the step reaches the record, and the record
+    // is what a restart reads back.
+    let saved = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::PersistPreferences(preferences) => Some(*preferences),
+            _ => None,
+        })
+        .expect("keeping a scale asks for it to be stored");
+    assert_eq!(saved.ui_scale, crate::settings::UiScale::Large);
+    s.finish_preferences_save(Ok(()));
+    assert!(
+        (s.tokens.scale - 1.25).abs() < 0.001,
+        "a successful write does not move the screen"
+    );
+
+    // A restart reads the step back and does not ask again: a value that came
+    // from the file was confirmed by the save that wrote it.
+    let mut rebooted = Shell::new(
+        Tokens::new(Theme::of(ThemeKind::Dark), 1.0),
+        1280.0,
+        800.0,
+        Regional::fallback("test"),
+    );
+    rebooted.load_preferences(saved);
+    assert!((rebooted.tokens.scale - 1.25).abs() < 0.001);
+    assert!(rebooted.scale_revert.is_none());
 }

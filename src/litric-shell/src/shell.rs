@@ -424,6 +424,13 @@ pub enum Hot {
     SettingsSchedule,
     /// Toggle reduced motion in the shell.
     SettingsMotion,
+    /// The UI-scale control on the Display page: cycles the scale and arms the
+    /// countdown that puts the old one back.
+    DisplayScale,
+    /// Keep the scale that is on screen and let the countdown go.
+    ScaleKeep,
+    /// Put the previous scale back now, without waiting out the countdown.
+    ScaleUndo,
     /// Finish first-run setup and show the desktop.
     SetupDone,
     /// The dock's launcher button: expands the dock into the launcher.
@@ -2817,6 +2824,16 @@ pub struct Shell {
     pub environments: Vec<EnvRow>,
     /// Shell-owned language, theme and accessibility settings.
     pub settings: crate::settings::Model,
+    /// A display change that is still waiting to be confirmed. `Some` means the
+    /// value on screen is provisional and the clock in it will put the previous
+    /// value back; see [`crate::revert`].
+    pub scale_revert: Option<crate::revert::RevertWindow<f32>>,
+    /// The scale this display asked for, before the user's own step is applied.
+    ///
+    /// Kept apart from [`Self::tokens`] so a stored 125 % step multiplies the
+    /// display's scale instead of replacing it: a 2x panel that is also asked
+    /// for a larger interface must not come back at 1.25x on the next boot.
+    base_scale: f32,
     /// The numbers on screen.
     pub facts: SystemFacts,
     /// The Activity window's model: machine meters, the process table, and what
@@ -2993,6 +3010,14 @@ impl Shell {
         self.tokens.theme = resolved_theme(preferences, self.local_hour());
         self.quick.reduce_motion = preferences.reduce_motion;
         self.browser.engine = preferences.search_engine;
+        // The stored step is a multiplier on the display's own scale, so one
+        // record is right on a 1x panel and on a 2x one. Nothing is provisional
+        // at startup: a value that is already on disk was confirmed by the save
+        // that wrote it, and arming a window here would undo it every boot.
+        let scale = self.base_scale * preferences.ui_scale.factor();
+        if (self.tokens.scale - scale).abs() > 0.001 {
+            self.set_ui_scale(scale);
+        }
         self.request_full_redraw();
     }
 
@@ -3040,6 +3065,13 @@ impl Shell {
         let preferences = self.settings.preferences;
         self.tokens.theme = resolved_theme(preferences, self.local_hour());
         self.quick.reduce_motion = preferences.reduce_motion;
+        // The record is the authority on the step, so a failed write leaves the
+        // screen at the size that is actually stored rather than at the one the
+        // disk refused.
+        let wanted = self.base_scale * preferences.ui_scale.factor();
+        if (self.tokens.scale - wanted).abs() > 0.001 {
+            self.set_ui_scale(wanted);
+        }
         self.request_full_redraw();
     }
 
@@ -3154,9 +3186,127 @@ impl Shell {
         self.save_preferences(next)
     }
 
+    /// The UI scales this build offers, smallest first.
+    ///
+    /// Three steps, not a slider: each one is a real layout the shell has been
+    /// measured at, and a continuous range would promise sizes nobody checked.
+    pub const UI_SCALES: [f32; 3] = [
+        crate::settings::UiScale::Normal.factor(),
+        crate::settings::UiScale::Large.factor(),
+        crate::settings::UiScale::Larger.factor(),
+    ];
+
+    /// How long a display change stays provisional.
+    ///
+    /// Fifteen seconds is long enough to read the countdown and find the button
+    /// on a screen that is too large, and short enough that a black panel is not
+    /// the rest of the session.
+    pub const REVERT_WINDOW_MS: u64 = 15_000;
+
+    /// Apply a UI scale, provisionally.
+    ///
+    /// The value is applied immediately — a change that is only described is not
+    /// a test of whether the screen is usable — and the previous value is held
+    /// until the user keeps it or the window closes. A second change while one
+    /// is pending is refused rather than stacked: the alternative is a chain of
+    /// undo values in which the one the user wants is no longer reachable.
+    pub fn apply_ui_scale(&mut self, scale: f32) {
+        let previous = self.tokens.scale;
+        if (scale - previous).abs() < 0.001 || self.scale_revert.is_some() {
+            return;
+        }
+        self.set_ui_scale(scale);
+        self.scale_revert = Some(crate::revert::RevertWindow::arm(
+            previous,
+            scale,
+            "UI scale",
+            Self::REVERT_WINDOW_MS,
+        ));
+        self.request_full_redraw();
+    }
+
+    /// Set the scale without arming anything: the layout path, not the choice.
+    fn set_ui_scale(&mut self, scale: f32) {
+        self.tokens.scale = scale;
+        let screen = self.wm.screen();
+        self.wm
+            .set_display(screen.w, screen.h, self.tokens.px(Self::TOP_BAR_LOGICAL));
+        self.request_full_redraw();
+    }
+
+    /// Keep the provisional change: the value stays, the clock stops, and the
+    /// step is remembered.
+    ///
+    /// Writing happens here and not when the change is applied: a provisional
+    /// value that reached the file would survive a crash inside the window and
+    /// come back as the size the user never confirmed, which is the one outcome
+    /// the window exists to prevent.
+    pub fn keep_pending_change(&mut self) -> Vec<Effect> {
+        if let Some(mut window) = self.scale_revert.take() {
+            window.keep();
+        } else {
+            return Vec::new();
+        }
+        self.request_full_redraw();
+        let step = crate::settings::UiScale::from_factor(self.tokens.scale / self.base_scale)
+            .unwrap_or(self.settings.preferences.ui_scale);
+        if step == self.settings.preferences.ui_scale {
+            // Keeping the size that was already stored is not a change, and a
+            // write for it would only be a chance to fail.
+            return Vec::new();
+        }
+        let mut next = self.settings.preferences;
+        next.ui_scale = step;
+        self.save_preferences(next)
+    }
+
+    /// Put the previous value back now.
+    pub fn undo_pending_change(&mut self) {
+        let Some(window) = self.scale_revert.take() else {
+            return;
+        };
+        self.set_ui_scale(window.previous());
+    }
+
+    /// Advance the provisional change by the time that has passed.
+    fn advance_pending_change(&mut self, dt_ms: u64) {
+        let Some(window) = self.scale_revert.as_mut() else {
+            return;
+        };
+        let verdict = window.tick(dt_ms);
+        if verdict == crate::revert::Verdict::Expired {
+            let previous = window.previous();
+            self.scale_revert = None;
+            self.set_ui_scale(previous);
+        } else {
+            // The countdown is drawn text: it only moves if the surface is
+            // repainted, and a still desktop has no other reason to repaint.
+            self.request_full_redraw();
+        }
+    }
+
+    /// Step to the next scale, wrapping to the smallest.
+    fn cycle_ui_scale(&mut self) -> Vec<Effect> {
+        if self.scale_revert.is_some() {
+            // The banner is the only control while a change is provisional;
+            // another step would make the value being tested ambiguous.
+            return Vec::new();
+        }
+        let current = crate::settings::UiScale::from_factor(self.tokens.scale / self.base_scale)
+            .unwrap_or(crate::settings::UiScale::Normal);
+        let next = crate::settings::UiScale::ALL
+            .iter()
+            .copied()
+            .find(|step| step.factor() > current.factor() + 0.001)
+            .unwrap_or(crate::settings::UiScale::Normal);
+        self.apply_ui_scale(self.base_scale * next.factor());
+        Vec::new()
+    }
+
     /// A desktop for a display of this size.
     #[must_use]
     pub fn new(tokens: Tokens, width: f32, height: f32, regional: Regional) -> Self {
+        let base_scale = tokens.scale;
         let top = tokens.px(Self::TOP_BAR_LOGICAL);
         let drawn_clock = regional.clock(0);
         let theme = tokens.theme.kind;
@@ -3179,6 +3329,8 @@ impl Shell {
             settings: crate::settings::Model::new(crate::settings::Preferences::new(
                 theme, language,
             )),
+            scale_revert: None,
+            base_scale,
             facts: SystemFacts::default(),
             activity: crate::taskmgr::TaskManager::new(),
             files: crate::apps::FilesApp::default(),
@@ -3841,6 +3993,7 @@ impl Shell {
             return false;
         }
         self.lock.locked = true;
+        self.lock.clear_failures();
         self.lock.verdict = crate::lock::Verdict::Idle;
         // `can_lock` has already checked that this is present and not `-`.
         self.lock.user = self.facts.auth_account.clone().unwrap_or_default();
@@ -3868,14 +4021,20 @@ impl Shell {
     pub fn unlock(&mut self) {
         self.lock.locked = false;
         self.lock.back();
+        self.lock.clear_failures();
         self.lock.verdict = crate::lock::Verdict::Idle;
         self.request_full_redraw();
     }
 
     /// The daemon refused an attempt. The lock stays on, and the reason is the
     /// daemon's own sentence rather than a paraphrase.
+    ///
+    /// A refusal also closes the field: the wait doubles with each one, so a
+    /// password cannot be guessed at the speed of the daemon. The countdown is
+    /// part of the sentence, because a field that vanishes without a reason is
+    /// a broken screen rather than a defence.
     pub fn lock_failed(&mut self, reason: &str) {
-        self.lock.verdict = crate::lock::Verdict::Failed(reason.to_owned());
+        self.lock.note_failure(reason, self.now_ms);
         self.request_full_redraw();
     }
 
@@ -3883,7 +4042,7 @@ impl Shell {
     /// so the plain text exists in exactly one place for as long as it takes to
     /// hand it over.
     pub fn take_unlock(&mut self) -> Option<(String, crate::lock::Secret)> {
-        if !self.lock.locked {
+        if !self.lock.locked || !self.lock.can_attempt(self.now_ms) {
             return None;
         }
         let secret = self.lock.take_secret();
@@ -4115,6 +4274,12 @@ impl Shell {
         if !self.lock.locked || self.lock.stage != crate::lock::Stage::Entry {
             return Vec::new();
         }
+        // The field is closed after a refusal. The hotspot is withheld while it
+        // waits, so this is the keyboard's path to the same rule rather than a
+        // second one: neither may hand the daemon a guess early.
+        if !self.lock.can_attempt(self.now_ms) {
+            return Vec::new();
+        }
         if !self.can_lock() {
             let reason = self.lock_refusal();
             self.lock_no_verifier(&reason);
@@ -4186,10 +4351,20 @@ impl Shell {
 
     /// Move time forward without any input, for the idle timers and the clock.
     pub fn tick(&mut self, now_ms: u64) {
+        // The countdown for a provisional display change is measured against
+        // this clock, so elapsed time is read before the clock moves.
+        let dt_ms = now_ms.saturating_sub(self.now_ms);
         self.set_now(now_ms);
+        self.advance_pending_change(dt_ms);
         // An appearance schedule is time passing, so it belongs here rather
         // than in a timer of its own: the shell already wakes for the clock.
         self.follow_schedule();
+        // A refusal closes the password field for a while. The countdown is
+        // read from this clock, so a redraw is what makes it move; without one
+        // the surface would still say "wait 8s" a minute later.
+        if self.lock.locked && self.lock.refresh_retry(now_ms) {
+            self.request_full_redraw();
+        }
         // The intro repaints every tick while it plays, and once more when it
         // ends so the desktop comes back without waiting for input.
         if self.boot_started_ms.is_some() {
@@ -5769,6 +5944,12 @@ impl Shell {
             Hot::SettingsWallpaper => self.cycle_wallpaper(),
             Hot::SettingsSchedule => self.cycle_theme_schedule(),
             Hot::SettingsMotion => self.toggle_reduced_motion(),
+            Hot::DisplayScale => self.cycle_ui_scale(),
+            Hot::ScaleKeep => self.keep_pending_change(),
+            Hot::ScaleUndo => {
+                self.undo_pending_change();
+                Vec::new()
+            }
             Hot::SetupDone => self.finish_first_run(),
             // The dock and the launcher it becomes.
             Hot::DockToggle => self.perform(Action::ToggleLauncher),

@@ -24,11 +24,13 @@
 //! # What it deliberately is not
 //!
 //! Not a settings daemon, and not a schema for settings the shell does not own.
-//! A page whose state comes from the kernel or from `litric-sysd` (Display,
-//! Network, Power) has no row here, because there is nothing to store and
-//! nothing to set: those pages report measurements, and a registry row for them
-//! would be a control that cannot do anything. The parity ledger calls that
-//! `DEFER`, and the gate matrix calls an inert control a defect.
+//! A page whose state comes from the kernel or from `litric-sysd` (Network,
+//! Power) has no row here beyond the choices it genuinely stores, because a
+//! row for a measurement would be a control that cannot do anything. The
+//! parity ledger calls that `DEFER`, and the gate matrix calls an inert control
+//! a defect. Display is the partial case: its mode and geometry rows are
+//! readings, while `ui_scale` is a stored choice, so it is the one row the page
+//! owns.
 //!
 //! # Deep links
 //!
@@ -117,7 +119,7 @@ impl Entry {
 pub const INTERNAL_KEYS: [&str; 2] = ["version", "onboarded"];
 
 /// Every setting the shell owns, in the order the pages present them.
-pub const ENTRIES: [Entry; 7] = [
+pub const ENTRIES: [Entry; 8] = [
     Entry {
         key: "theme",
         page: Page::Appearance,
@@ -165,6 +167,14 @@ pub const ENTRIES: [Entry; 7] = [
         synonyms: &["animation", "motion", "transitions"],
         kind: Kind::Toggle,
         value: |p| yes_no(p.reduce_motion).to_owned(),
+    },
+    Entry {
+        key: "ui_scale",
+        page: Page::Display,
+        title: "UI scale",
+        synonyms: &["text size", "larger text", "zoom", "scale", "สเกล"],
+        kind: Kind::Ladder,
+        value: |p| p.ui_scale.title().to_owned(),
     },
     Entry {
         key: "search_engine",

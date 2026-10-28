@@ -516,6 +516,24 @@ impl FilesApp {
         true
     }
 
+    /// Whether Back would move anywhere.
+    #[must_use]
+    pub fn can_go_back(&self) -> bool {
+        !self.back.is_empty()
+    }
+
+    /// Whether Forward would move anywhere.
+    #[must_use]
+    pub fn can_go_forward(&self) -> bool {
+        !self.forward.is_empty()
+    }
+
+    /// Whether Up would move anywhere. The root is the stop.
+    #[must_use]
+    pub fn can_go_up(&self) -> bool {
+        !self.path.is_empty() && self.path != "/"
+    }
+
     /// Go up one level. `/Documents/Work` → `/Documents`; the root path
     /// stays put.
     pub fn go_up(&mut self) {
@@ -1579,6 +1597,10 @@ pub enum FilesHot {
     PlacesScroll,
     /// A breadcrumb segment.
     Crumb(usize),
+    /// The root crumb. Always drawn, always a target, so a deep path has a
+    /// way home that does not depend on the window being wide enough to show
+    /// the first segment.
+    Root,
     /// A column header (sort toggle).
     Header(SortKey),
     /// A row in the table.
@@ -1626,6 +1648,10 @@ pub fn files_action(app: &mut FilesApp, hot: FilesHot) -> Option<String> {
         FilesHot::Crumb(i) => {
             let path = app.breadcrumb_path(i);
             app.navigate(&path);
+            Some(app.path.clone())
+        }
+        FilesHot::Root => {
+            app.navigate("/");
             Some(app.path.clone())
         }
         FilesHot::Header(k) => {
@@ -2237,6 +2263,33 @@ mod tests {
         assert_eq!(f.breadcrumbs(), ["Documents", "Work", "2026"]);
         assert_eq!(f.breadcrumb_path(1), "/Documents/Work");
         assert_eq!(f.breadcrumb_path(9), "/Documents/Work/2026", "clamped");
+    }
+
+    #[test]
+    fn history_buttons_know_when_they_have_nowhere_to_go() {
+        let mut f = FilesApp::default();
+        assert!(!f.can_go_back());
+        assert!(!f.can_go_forward());
+        assert!(
+            f.can_go_up(),
+            "the default window is a folder, not the root"
+        );
+        f.navigate("/");
+        assert!(!f.can_go_up(), "the root has no parent");
+        f.navigate("/Documents");
+        assert!(f.can_go_back());
+        assert!(!f.can_go_forward());
+        assert!(f.go_back());
+        assert!(f.can_go_forward());
+    }
+
+    #[test]
+    fn the_root_crumb_goes_home_from_any_depth() {
+        let mut f = FilesApp::default();
+        f.navigate("/Documents/Work");
+        let path = files_action(&mut f, FilesHot::Root);
+        assert_eq!(path.as_deref(), Some("/"));
+        assert_eq!(f.path, "/");
     }
 
     #[test]

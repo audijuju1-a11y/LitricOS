@@ -85,6 +85,80 @@ impl ThemeSchedule {
     }
 }
 
+/// How much larger the interface is drawn, as a step rather than a number.
+///
+/// Three steps, and the store keeps the step rather than the multiplier: a
+/// float written by one build would be read by the next as a size nobody
+/// measured, while a step name is either known or ignored. The multiplier is a
+/// property of the step, so there is one place to change it and one place to
+/// test it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UiScale {
+    /// The size the display asks for.
+    #[default]
+    Normal,
+    /// A quarter larger.
+    Large,
+    /// Half again as large.
+    Larger,
+}
+
+impl UiScale {
+    /// Every step, smallest first — the order the Display row steps through.
+    pub const ALL: [Self; 3] = [Self::Normal, Self::Large, Self::Larger];
+
+    /// What this step multiplies the display's own scale by.
+    #[must_use]
+    pub const fn factor(self) -> f32 {
+        match self {
+            Self::Normal => 1.0,
+            Self::Large => 1.25,
+            Self::Larger => 1.5,
+        }
+    }
+
+    /// Stable token, written to the preference file.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Normal => "1",
+            Self::Large => "1.25",
+            Self::Larger => "1.5",
+        }
+    }
+
+    /// Parse a stored token. A bare multiplier from a hand-edited file is
+    /// accepted when it names a step exactly; anything else keeps the default.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        if let Some(step) = Self::ALL.iter().copied().find(|step| step.token() == raw) {
+            return Some(step);
+        }
+        raw.parse::<f32>().ok().and_then(Self::from_factor)
+    }
+
+    /// The step a multiplier names, or `None` for a size this build does not
+    /// offer.
+    #[must_use]
+    pub fn from_factor(factor: f32) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|step| (step.factor() - factor).abs() < 0.001)
+    }
+
+    /// The name shown on the Display row.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Normal => "100%",
+            Self::Large => "125%",
+            Self::Larger => "150%",
+        }
+    }
+}
+
 use crate::apps::SearchEngine;
 use crate::desktop::Wallpaper;
 use crate::i18n::Language;
@@ -103,6 +177,8 @@ pub struct Preferences {
     pub language: Language,
     /// Whether shell animation is reduced.
     pub reduce_motion: bool,
+    /// How much larger the interface is drawn. See [`UiScale`].
+    pub ui_scale: UiScale,
     /// Whether first-run setup has finished. Until it has, the desktop shows the
     /// setup screen instead of the desktop.
     pub onboarded: bool,
@@ -128,6 +204,7 @@ impl Preferences {
             wallpaper: Wallpaper::System,
             language,
             reduce_motion: false,
+            ui_scale: UiScale::Normal,
             onboarded: true,
             theme_schedule: ThemeSchedule::Manual,
             search_engine: SearchEngine::Google,

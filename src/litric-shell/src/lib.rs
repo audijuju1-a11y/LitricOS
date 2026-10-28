@@ -62,6 +62,7 @@ pub mod overview;
 pub mod prefstore;
 pub mod present;
 pub mod registry;
+pub mod revert;
 pub mod seek;
 pub mod settings;
 pub mod shell;

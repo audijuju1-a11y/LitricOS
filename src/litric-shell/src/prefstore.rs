@@ -48,7 +48,7 @@ use litric_design::{Accent, ThemeKind};
 
 use crate::desktop::Wallpaper;
 use crate::i18n::Language;
-use crate::settings::Preferences;
+use crate::settings::{Preferences, UiScale};
 
 /// The schema version this build writes.
 ///
@@ -109,6 +109,11 @@ pub fn parse(text: &str, defaults: Preferences) -> Preferences {
                     preferences.reduce_motion = enabled;
                 }
             }
+            "ui_scale" => {
+                if let Some(scale) = UiScale::parse(value) {
+                    preferences.ui_scale = scale;
+                }
+            }
             "theme_schedule" => {
                 if let Some(schedule) = crate::settings::ThemeSchedule::parse(value) {
                     preferences.theme_schedule = schedule;
@@ -161,6 +166,9 @@ pub fn encode(preferences: Preferences) -> String {
     out.push('\n');
     out.push_str("reduce_motion=");
     out.push_str(if preferences.reduce_motion { "1" } else { "0" });
+    out.push('\n');
+    out.push_str("ui_scale=");
+    out.push_str(preferences.ui_scale.token());
     out.push('\n');
     out.push_str("theme_schedule=");
     out.push_str(preferences.theme_schedule.token());
@@ -438,11 +446,41 @@ mod tests {
             "wallpaper=",
             "language=",
             "reduce_motion=",
+            "ui_scale=",
             "onboarded=",
             "theme_schedule=",
         ] {
             assert!(text.contains(key), "the record omits {key}: {text}");
         }
+    }
+
+    #[test]
+    fn the_ui_scale_round_trips_and_a_size_this_build_does_not_draw_is_ignored() {
+        let preferences = Preferences {
+            ui_scale: UiScale::Large,
+            ..Preferences::default()
+        };
+        let text = encode(preferences);
+        assert!(text.contains("ui_scale=1.25"), "{text}");
+        assert_eq!(
+            parse(&text, Preferences::default()).ui_scale,
+            UiScale::Large
+        );
+
+        // A hand-edited file may write the multiplier, and an exact step is
+        // still understood; a size between steps is not a step.
+        assert_eq!(
+            parse("ui_scale=1.5\n", Preferences::default()).ui_scale,
+            UiScale::Larger
+        );
+        assert_eq!(
+            parse("ui_scale=1.75\n", Preferences::default()).ui_scale,
+            UiScale::Normal
+        );
+        assert_eq!(
+            parse("ui_scale=huge\n", Preferences::default()).ui_scale,
+            UiScale::Normal
+        );
     }
 
     #[test]

@@ -948,6 +948,36 @@ fn files_columns(t: &ui::Tokens, table_w: f32, style: &Style) -> Vec<(f32, &'sta
         .collect()
 }
 
+/// How many leading breadcrumbs to drop so the rest fit in `available`, and
+/// whether the path overflowed at all.
+///
+/// The last crumb is the folder the user is standing in, so it is never
+/// dropped: when even that one cannot fit, `skip` stays 0 and the caller
+/// elides its label instead. Dropping the head rather than the tail is what
+/// keeps the answer to "where am I?" on screen.
+fn crumb_window(available: f32, widths: &[f32], sep: f32, dots: f32) -> (usize, bool) {
+    if widths.is_empty() {
+        return (0, false);
+    }
+    let mut total = 0.0;
+    for (i, w) in widths.iter().enumerate() {
+        total += *w;
+        if i > 0 {
+            total += sep;
+        }
+    }
+    if total <= available {
+        return (0, false);
+    }
+    let reserve = dots + sep;
+    let mut skip = 0;
+    while skip + 1 < widths.len() && total + reserve > available {
+        total -= widths[skip] + sep;
+        skip += 1;
+    }
+    (skip, true)
+}
+
 fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     refresh_files(shell);
     let t = shell.tokens.clone();
@@ -1007,34 +1037,74 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let bar = Rect::new(table_x, body.y, table_w, t.px(30.0));
     ui::surface(canvas, &t, bar, 0.0, ui::Material::Flat);
     let mut bx = bar.x + t.px(6.0);
-    for (label, hot) in [
-        ("‹", FilesHot::Back),
-        ("›", FilesHot::Forward),
-        ("↑", FilesHot::Up),
-    ] {
+    // A button with nowhere to go is drawn disabled and registered as nothing:
+    // it looked pressable with an empty history and answered a click by doing
+    // nothing, which is worse than either state on its own.
+    let nav = [
+        ("‹", FilesHot::Back, app.can_go_back()),
+        ("›", FilesHot::Forward, app.can_go_forward()),
+        ("↑", FilesHot::Up, app.can_go_up()),
+    ];
+    for (label, hot, enabled) in nav {
         let r = Rect::new(bx, bar.y + t.px(4.0), t.px(20.0), t.px(22.0));
-        ui::button(canvas, &t, r, label, ui::State::Normal, Tone::Neutral);
-        shell.hotspots_mut().push(r, Hot::Files(hot));
+        let state = if enabled {
+            ui::State::Normal
+        } else {
+            ui::State::Disabled
+        };
+        ui::button(canvas, &t, r, label, state, Tone::Neutral);
+        if enabled {
+            shell.hotspots_mut().push(r, Hot::Files(hot));
+        }
         bx += t.px(24.0);
     }
-    let mut cx = bx + t.px(6.0);
-    let crumbs = app.breadcrumbs();
+    // The root is a crumb like any other. It used to be painted as text with no
+    // hotspot, so the one place every deep path can jump to was the one place
+    // that could not be clicked.
     let s_crumb = Style::new(t.text_px(TypeStep::Footnote), t.text());
-    for (i, c) in crumbs.iter().enumerate() {
-        let w = font::measure(c, &s_crumb) + t.px(8.0);
+    let s_sep = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    let root_w = font::measure("/", &s_crumb).max(t.px(8.0)) + t.px(8.0);
+    let root = Rect::new(bx + t.px(2.0), bar.y + t.px(4.0), root_w, t.px(22.0));
+    font::draw(
+        canvas,
+        "/",
+        root.x + t.px(4.0),
+        root.y + t.px(14.0),
+        &s_crumb,
+    );
+    shell.hotspots_mut().push(root, Hot::Files(FilesHot::Root));
+    let mut cx = root.right() + t.px(2.0);
+
+    let crumbs = app.breadcrumbs();
+    let widths: Vec<f32> = crumbs
+        .iter()
+        .map(|c| font::measure(c, &s_crumb) + t.px(8.0))
+        .collect();
+    let dots_w = font::measure("...", &s_crumb) + t.px(8.0);
+    let available = (bar.right() - t.px(8.0) - cx).max(0.0);
+    let (skip, overflow) = crumb_window(available, &widths, t.px(8.0), dots_w);
+    if overflow && skip > 0 {
+        let r = Rect::new(cx, bar.y + t.px(4.0), dots_w, t.px(22.0));
+        font::draw(canvas, "...", cx + t.px(4.0), r.y + t.px(14.0), &s_sep);
+        cx += dots_w + t.px(2.0);
+    }
+    for (i, c) in crumbs.iter().enumerate().skip(skip) {
+        let last = i + 1 == crumbs.len();
+        let room = (bar.right() - t.px(6.0) - cx - t.px(8.0)).max(t.px(10.0));
+        let shown = if overflow {
+            ui::elide(c, &s_crumb, room)
+        } else {
+            (*c).clone()
+        };
+        let w = font::measure(&shown, &s_crumb) + t.px(8.0);
         let r = Rect::new(cx, bar.y + t.px(4.0), w, t.px(22.0));
-        font::draw(canvas, c, cx + t.px(4.0), r.y + t.px(14.0), &s_crumb);
+        font::draw(canvas, &shown, cx + t.px(4.0), r.y + t.px(14.0), &s_crumb);
         shell.hotspots_mut().push(r, Hot::Files(FilesHot::Crumb(i)));
         cx += w + t.px(2.0);
-        if i.checked_add(1).is_some_and(|n| n < crumbs.len()) {
-            let sep = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
-            font::draw(canvas, "/", cx, r.y + t.px(14.0), &sep);
+        if !last {
+            font::draw(canvas, "/", cx, r.y + t.px(14.0), &s_sep);
             cx += t.px(8.0);
         }
-    }
-    if crumbs.is_empty() {
-        let sep = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
-        font::draw(canvas, "/ (root)", cx, bar.y + t.px(14.0), &sep);
     }
 
     // --- command row: New / Paste / Compress / Extract, filter readout,
@@ -2900,6 +2970,39 @@ fn draw_settings_page(
                     ),
                 ],
             );
+            // The one display value this build can change without a mode-setting
+            // service. It is drawn as a control rather than a reading because it
+            // is the only row on this page that does something, and because a
+            // control that looks like the readings beside it is a control nobody
+            // clicks.
+            let row = Rect::new(
+                pane.x + t.sp(Space::Lg),
+                pane.y + t.px(56.0) + t.px(150.0),
+                pane.w - t.sp(Space::Lg) * 2.0,
+                t.px(34.0),
+            );
+            ui::surface(canvas, t, row, t.radius(Radius::Md), Material::Popover);
+            if shell.is_highlighted(Hot::DisplayScale) {
+                ui::focus_ring(canvas, t, row, t.radius(Radius::Md));
+            }
+            let label_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
+            font::draw(
+                canvas,
+                "UI scale",
+                row.x + t.px(10.0),
+                row.y + t.px(21.0),
+                &label_style,
+            );
+            let value = format!("{:.2}× · change", shell.tokens.scale);
+            let width = font::measure(&value, &label_style);
+            font::draw(
+                canvas,
+                &value,
+                row.right() - width - t.px(10.0),
+                row.y + t.px(21.0),
+                &label_style,
+            );
+            shell.hotspots_mut().push(row, Hot::DisplayScale);
         }
         Page::Input => {
             // The devices, by name, from the kernel's own list. This page used
@@ -5634,6 +5737,7 @@ fn draw_banners(canvas: &mut Canvas, shell: &mut Shell) {
     if shell.overlay == Overlay::Notifications {
         return;
     }
+    draw_revert_banner(canvas, shell);
     let t = shell.tokens.clone();
     let screen = shell.wm.screen();
     // The fifth field says whether the banner is still live. A retiring
@@ -5737,6 +5841,91 @@ fn draw_banners(canvas: &mut Canvas, shell: &mut Shell) {
         }
         y += r.h + t.px(8.0);
     }
+}
+
+/// The countdown for a display change that will undo itself.
+///
+/// It sits below the top bar, centred, because the top bar is the one strip the
+/// change cannot move off the screen. Both answers are buttons: a countdown with
+/// only "wait" is a countdown a person cannot stop, and the point of the window
+/// is that the user gets to decide.
+fn draw_revert_banner(canvas: &mut Canvas, shell: &mut Shell) {
+    let Some(pending) = shell.scale_revert.as_ref() else {
+        return;
+    };
+    let t = shell.tokens.clone();
+    let screen = shell.wm.screen();
+    let w = t.px(380.0).min(screen.w * 0.8);
+    let r = Rect::new(
+        (screen.w - w) / 2.0,
+        shell.top_bar().h + t.px(12.0),
+        w,
+        t.px(96.0),
+    );
+    ui::surface(canvas, &t, r, t.radius(Radius::Md), Material::Popover);
+    let title_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    let body_style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    let title = format!("{} {:.2}× applied", pending.label(), pending.applied());
+    font::draw(
+        canvas,
+        &title,
+        r.x + t.px(14.0),
+        r.y + t.px(24.0),
+        &title_style,
+    );
+    let body = format!(
+        "Keep it, or the screen goes back in {}s",
+        pending.seconds_left()
+    );
+    font::draw(
+        canvas,
+        &body,
+        r.x + t.px(14.0),
+        r.y + t.px(44.0),
+        &body_style,
+    );
+    let mut button =
+        |canvas: &mut Canvas, t: &Tokens, at: Rect, label: &str, hot: Hot, filled: bool| {
+            ui::surface(
+                canvas,
+                t,
+                at,
+                t.radius(Radius::Md),
+                if filled {
+                    Material::Popover
+                } else {
+                    Material::Popover
+                },
+            );
+            if shell_highlight(shell, hot) {
+                ui::focus_ring(canvas, t, at, t.radius(Radius::Md));
+            }
+            let style = Style::new(t.text_px(TypeStep::Caption), t.text());
+            let width = font::measure(label, &style);
+            font::draw(
+                canvas,
+                label,
+                at.x + (at.w - width) / 2.0,
+                at.y + at.h / 2.0 + t.px(5.0),
+                &style,
+            );
+            shell.hotspots_mut().push(at, hot);
+        };
+    let keep = Rect::new(
+        r.right() - t.px(14.0) - t.px(78.0) - t.px(8.0) - t.px(78.0),
+        r.y + r.h - t.px(14.0) - t.px(28.0),
+        t.px(78.0),
+        t.px(28.0),
+    );
+    let undo = Rect::new(keep.right() + t.px(8.0), keep.y, t.px(78.0), t.px(28.0));
+    button(canvas, &t, keep, "Keep", Hot::ScaleKeep, true);
+    button(canvas, &t, undo, "Revert", Hot::ScaleUndo, false);
+}
+
+/// Whether a row should read as hovered or focused, asked through the shell so
+/// the banner and every other drawn control answer the same question.
+fn shell_highlight(shell: &Shell, hot: Hot) -> bool {
+    shell.is_highlighted(hot)
 }
 
 // ---------------------------------------------------------------------------
@@ -6168,6 +6357,18 @@ mod tests {
             s.wm.hit_test(b.center().0, b.center().1).map(|h| h.zone),
             Some(HitZone::Close)
         );
+    }
+
+    #[test]
+    fn breadcrumbs_drop_their_head_before_their_tail() {
+        // Three 100 px crumbs and two 8 px separators: 316 px in total.
+        let widths = [100.0, 100.0, 100.0];
+        assert_eq!(crumb_window(400.0, &widths, 8.0, 20.0), (0, false));
+        // 250 px cannot hold all three; the head goes and the tail stays.
+        assert_eq!(crumb_window(250.0, &widths, 8.0, 20.0), (1, true));
+        // One crumb with no room: it is kept and elided, not hidden.
+        assert_eq!(crumb_window(20.0, &[100.0], 8.0, 20.0), (0, true));
+        assert_eq!(crumb_window(20.0, &[], 8.0, 20.0), (0, false));
     }
 
     #[test]
