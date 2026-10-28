@@ -2107,3 +2107,119 @@ no GPU in this environment, so nothing here is a boot, install or hardware
 claim, and no RAM, GPU or present-to-display number was measured. The
 golden-frame gate remains **BLOCKED** on the missing Latin font face fixture.
 
+## 27. Batch: the file socket's per-user boundary (verified)
+
+### 27.1 Why this row
+
+§26 closed the broker's containment: every verb refuses a path that leaves
+the root, proven by 25 hostile requests. That left the transport itself — how
+a client reaches the daemon, and who is allowed to. In the standalone path
+(`--socket`), `serve_unix` did `let _ = std::fs::remove_file(socket)`
+unconditionally before binding, and bound with whatever the umask allowed.
+
+Two consequences, both real:
+
+* A second daemon unlinked a **live** daemon's socket, bound the same name,
+  and the first carried on accepting on an inode no client could reach.
+* The socket was created with the caller's umask. A group- or world-accessible
+  mode on `/run/litric/files.sock` lets another local user speak LFP/1, which
+  is the one boundary ADR-0019 assumes the kernel is holding.
+
+### 27.2 What changed
+
+| Behaviour | Before | After |
+|---|---|---|
+| Path exists, is a socket, nothing listening | unlinked, then bound | unlinked, then bound (stale socket) |
+| Path exists, is a socket, something listening | unlinked, then bound — the live daemon was displaced | `AddrInUse`, live socket untouched |
+| Path exists, is not a socket | unlinked — a file the daemon did not create was deleted | `AlreadyExists`, nothing deleted |
+| Socket mode | umask default | `0600`; if `chmod` fails the daemon removes its own socket and exits |
+| Socket owner | daemon's uid | daemon's uid (unchanged, now asserted) |
+| Request buffers | fresh `Vec` + `String` per request | one `Vec` reused per connection, borrowed as `&str` when it is UTF-8 |
+
+`bind_listener` is the one place that decides this; `serve_unix` calls it. The
+production path (systemd `Accept=yes`, `--stdio`) does not bind at all, and
+`image/mkosi.extra/usr/lib/systemd/system/litric-files.socket` already sets
+`SocketMode=0600` — so both paths now state the same rule in the place that
+actually creates the socket.
+
+### 27.3 Why the boundary is the kernel's, not a userspace uid check
+
+The first design compared `peer_cred().uid()` with the daemon's uid before
+reading a request. It cannot be built here:
+
+* `std::os::unix::net::UnixStream::peer_cred` is unstable on this toolchain
+  (1.99.1).
+* `getsockopt(SO_PEERCRED)` needs `libc`/`rustix`, and `litric-files` is a
+  runtime crate covered by the dependency policy: `ci/dep-policy-allow.txt` is
+  empty and the crate is `#![forbid(unsafe_code)]`.
+
+So the check would have cost the file layer its first third-party dependency
+or its first `unsafe` block, to duplicate a decision the kernel already makes
+for a `0600` socket: `connect` from another uid fails with `EACCES` before a
+byte of the request exists. The trade is recorded rather than silently taken.
+**Gap:** when `peer_cred` stabilises, an explicit check plus a real cross-uid
+integration test belongs here; that is a next step, not a claim.
+
+### 27.4 Tests (all executed)
+
+| Test | What it proves |
+|---|---|
+| `the_socket_is_owner_only_and_a_live_daemons_socket_is_not_stolen` | mode is exactly `0600`; the socket's uid is the daemon's; a second `bind_listener` on it returns `AddrInUse`; the first listener still answers `connect` |
+| `a_stale_socket_file_is_replaced` | a socket file left by a killed process is replaced, and the new socket is also `0600` |
+| `a_path_that_is_not_a_socket_is_never_deleted` | a plain file at the path is reported as `AlreadyExists` and its bytes are intact |
+| `a_connection_from_the_daemons_own_user_is_served_over_a_real_socket` | end to end over a real `UnixStream`: `HELLO 1` in, `OK ... version=1` out |
+
+**Limit, stated plainly:** the mismatch case could not be *executed*
+in-process. Producing a second uid needs root or a second account, which this
+environment does not provide, so no `EACCES` was observed. What is executed is
+the pair of facts the kernel's decision rests on: the socket is `0600` and it
+belongs to the daemon's uid. The refusal is Linux's, not ours, and the unit and
+the standalone path now agree on the mode.
+
+### 27.5 The file-safety gate caught the new deletion
+
+The first draft added `remove_file` twice inside `bind_listener` and gate
+`[3f]` failed with `2 unreviewed deletion site(s) in src/`. That is the gate
+working as designed. The fix was the review step it asks for, not a
+suppression: `ci/lint-file-safety.py` now records the site with its reason —
+unlinks a stale socket file before bind (after a `symlink_metadata` refusal),
+and removes the socket it just bound when making it owner-only failed; never a
+user path.
+
+### 27.6 Checks
+
+```text
+cargo fmt --check                                      exit 0
+cargo clippy --workspace --all-targets -- -D warnings  exit 0
+cargo test --workspace         55 suites, 1,665 passed, 0 failed
+python3 ci/check-python-syntax.py                      exit 0 (61 files)
+python3 ci/lint-line-endings.py                        exit 0 (352 files, all LF)
+python3 ci/lint-doc-refs.py                            exit 0
+python3 ci/lint-file-safety.py                         exit 0
+bash ci/verify.sh              27 pass, 2 fail, 4 skipped
+```
+
+1,665 is four above §26's 1,661: the four socket tests.
+
+The two failures have one cause and it is setup, not a defect. `keys/dev/` is
+absent because `keys/.gitignore` excludes it and `tools/gen-dev-keys.sh`
+generates it; `ci/verify.sh` gate [4] says exactly that, and the mkosi lint
+fails on the same absent `SecureBootKey`/`VerityKey` paths named in
+`image/mkosi.conf`. Generating key material to turn them green was not done:
+the mission forbids committing keys, and a lint that passes only with local
+material checks the checkout, not the code.
+
+### 27.7 Limits
+
+No QEMU, no image build, no display and no GPU in this environment: nothing
+here is a boot, install or hardware claim, and no RAM, GPU or
+present-to-display number was measured. The buffer reuse removes two
+allocations per request but was **not** measured — no heap or RSS figure is
+claimed for it, only the code change. `read_until` still grows the line buffer
+until a newline arrives; `proto::MAX_LINE` (16,384) is enforced *after* the
+read, so a same-user client can still make the daemon buffer before the
+refusal. With the socket owner-only that is self-DoS only, and it is written
+down rather than fixed by changing reader semantics in this batch. The
+golden-frame gate remains **BLOCKED** on the missing Latin font fixture, and
+ADR-0016's capability-grant persistence is still an open architectural
+decision, not part of this batch.

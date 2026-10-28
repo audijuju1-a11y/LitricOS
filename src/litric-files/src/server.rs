@@ -20,6 +20,10 @@ use crate::trash::DiskTrash;
 use crate::{Error, ErrorKind, Policy};
 use litric_core::pct;
 use std::io::{self, BufRead, BufWriter, Read as _, Write};
+#[cfg(unix)]
+use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
 /// `READTEXT` reads at most this many bytes (ADR-0019: first 64 KiB).
@@ -986,8 +990,13 @@ fn now_unix() -> u64 {
 pub fn serve_stream(input: &mut dyn BufRead, output: &mut dyn Write, root: Root) -> io::Result<()> {
     let mut conn = Connection::new(root);
     let mut out = BufWriter::new(output);
+    // One buffer for the life of the connection, cleared between requests. The
+    // old loop allocated a fresh `Vec` and a fresh `String` for every line; the
+    // shell holds a connection open for a whole session, so that was two
+    // allocations per folder listing for no gain.
+    let mut line: Vec<u8> = Vec::with_capacity(1024);
     loop {
-        let mut line = Vec::new();
+        line.clear();
         let n = input.read_until(b'\n', &mut line)?;
         if n == 0 {
             return Ok(()); // peer closed
@@ -1004,12 +1013,21 @@ pub fn serve_stream(input: &mut dyn BufRead, output: &mut dyn Write, root: Root)
             out.flush()?;
             continue;
         }
-        let text = String::from_utf8_lossy(&line).into_owned();
         let mut progress_write = |done: u64, total: u64| {
             let pct_done = percent(done, total);
             let _ = writeln!(out, "{}", proto::progress(done, total, pct_done));
         };
-        match conn.dispatch(&text, &mut progress_write) {
+        // A request line is UTF-8 by the protocol (ADR-0019). Borrow it when it
+        // is, and only build a replaced copy for bytes that are not: the lossy
+        // path must still answer rather than drop the connection.
+        let outcome = match std::str::from_utf8(&line) {
+            Ok(text) => conn.dispatch(text, &mut progress_write),
+            Err(_) => {
+                let lossy = String::from_utf8_lossy(&line);
+                conn.dispatch(&lossy, &mut progress_write)
+            }
+        };
+        match outcome {
             Outcome::Quit => return Ok(()),
             Outcome::Fail(e) => {
                 writeln!(out, "{}", proto::err(e.kind(), e.message()))?;
@@ -1035,6 +1053,54 @@ fn percent(done: u64, total: u64) -> u64 {
         .min(100)
 }
 
+/// Bind `socket` without displacing a daemon that is still listening.
+///
+/// A process that was killed leaves its socket file behind, and `bind` then
+/// fails with `AddrInUse` forever. The first version of this function removed
+/// the file unconditionally, which also unlinked the socket of a *live* daemon:
+/// that daemon kept accepting on an inode no client could reach, and the second
+/// daemon silently took over the name. Here the path is removed only when
+/// nothing answers on it, and a path that is not a socket at all is left alone
+/// and reported — a daemon must not delete a file it did not create.
+///
+/// The socket is then made owner-only. If that cannot be done the socket is
+/// removed and the error returned: serving a socket with wider permissions than
+/// intended is worse than not starting.
+///
+/// # Errors
+/// A path already held by a live listener (`AddrInUse`), a path that is not a
+/// socket (`AlreadyExists`), and whatever bind or `chmod` raise.
+#[cfg(unix)]
+fn bind_listener(socket: &Path) -> io::Result<UnixListener> {
+    match std::fs::symlink_metadata(socket) {
+        Ok(meta) => {
+            if !meta.file_type().is_socket() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "the socket path is occupied by something that is not a socket",
+                ));
+            }
+            if UnixStream::connect(socket).is_ok() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrInUse,
+                    "another daemon is already listening on this socket",
+                ));
+            }
+            // Nothing answered: the file is a leftover from a process that is
+            // gone, and removing it is the only way to bind this name again.
+            std::fs::remove_file(socket)?;
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let listener = UnixListener::bind(socket)?;
+    if let Err(e) = std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600)) {
+        let _ = std::fs::remove_file(socket);
+        return Err(e);
+    }
+    Ok(listener)
+}
+
 /// Bind and serve LFP/1 on a Unix socket. The listener is created by systemd
 /// socket activation in production (`Accept=yes` gives one process per
 /// connection); this path is for standalone runs and integration tests.
@@ -1048,8 +1114,13 @@ fn percent(done: u64, total: u64) -> u64 {
 /// Bind errors surface to the caller; an error accepting or serving one
 /// connection does not stop the listener.
 pub fn serve_unix(socket: &Path, root: Root) -> io::Result<()> {
-    let _ = std::fs::remove_file(socket);
-    let listener = std::os::unix::net::UnixListener::bind(socket)?;
+    let listener = bind_listener(socket)?;
+    // Per-user isolation is the socket's own ownership and mode, enforced by the
+    // kernel: `connect` from any uid but the owner's fails before a request byte
+    // exists. There is deliberately no userspace credential check here -- std's
+    // `UnixStream::peer_cred` is unstable on this toolchain, and reading
+    // SO_PEERCRED directly would add the crate's first third-party dependency,
+    // which the dependency policy forbids (tracker §27 records the gap).
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
@@ -1901,6 +1972,107 @@ mod tests {
         let (_dir, root) = open_root("quit");
         let mut conn = Connection::new(root);
         assert_eq!(conn.dispatch("QUIT", &mut |_, _| {}), Outcome::Quit);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_socket_is_owner_only_and_a_live_daemons_socket_is_not_stolen() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = temp_root("socket-bind");
+        let socket = dir.join("files.sock");
+        let first = bind_listener(&socket).expect("first bind");
+        use std::os::unix::fs::MetadataExt as _;
+        let meta = std::fs::metadata(&socket).expect("the socket exists");
+        let mode = meta.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the socket must be owner-only");
+        // The owner is this process's user: the temp directory was made by the
+        // same process, and on Unix the kernel refuses `connect` from every
+        // other uid to a 0600 socket, before any request is read.
+        let dir_uid = std::fs::metadata(&dir).expect("the temp dir").uid();
+        assert_eq!(
+            meta.uid(),
+            dir_uid,
+            "the socket belongs to the daemon's user"
+        );
+        // A second daemon must refuse instead of unlinking a socket that is
+        // still being served, and the first must still answer on it.
+        let second = bind_listener(&socket).expect_err("a live socket is not replaced");
+        assert_eq!(second.kind(), io::ErrorKind::AddrInUse);
+        UnixStream::connect(&socket).expect("the first listener still answers");
+        drop(first);
+        let _ = std::fs::remove_file(&socket);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_socket_file_is_replaced() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = temp_root("socket-stale");
+        let socket = dir.join("files.sock");
+        {
+            // A listener that was killed: the file stays, nothing answers.
+            let dead = UnixListener::bind(&socket).expect("bind");
+            drop(dead);
+        }
+        assert!(socket.exists(), "the leftover file is still there");
+        let listener = bind_listener(&socket).expect("a stale socket is replaced");
+        UnixStream::connect(&socket).expect("the new listener answers");
+        let mode = std::fs::metadata(&socket)
+            .expect("stat")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        drop(listener);
+        let _ = std::fs::remove_file(&socket);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_is_not_a_socket_is_never_deleted() {
+        let dir = temp_root("socket-not-a-socket");
+        let path = dir.join("important.txt");
+        std::fs::write(&path, b"do not delete").expect("write");
+        let err = bind_listener(&path).expect_err("a plain file is occupied");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read(&path).expect("still there"),
+            b"do not delete",
+            "a daemon must not unlink a file it did not create"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_connection_from_the_daemons_own_user_is_served_over_a_real_socket() {
+        use std::io::{BufRead as _, BufReader, Write as _};
+        let dir = temp_root("socket-serve");
+        let socket = dir.join("files.sock");
+        let (_, root) = open_root("socket-serve-root");
+        let path = socket.clone();
+        std::thread::spawn(move || {
+            let _ = serve_unix(&path, root);
+        });
+        // `serve_unix` binds synchronously before it accepts, but a spawned
+        // thread means the path may not exist for a moment.
+        let mut stream = None;
+        for _ in 0..200 {
+            match UnixStream::connect(&socket) {
+                Ok(s) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+            }
+        }
+        let stream = stream.expect("the daemon accepted a same-user connection");
+        let mut writer = stream.try_clone().expect("clone");
+        writer.write_all(b"HELLO 1\n").expect("write");
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read");
+        assert!(line.starts_with("OK "), "got: {line:?}");
+        let _ = std::fs::remove_file(&socket);
     }
 
     #[test]

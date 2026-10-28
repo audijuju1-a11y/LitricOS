@@ -58,6 +58,7 @@ ALLOWED = {
     },
     "src/litric-files/src/server.rs": {
         "serve_unix": "unlinks a stale socket file before bind; never a user path",
+        "bind_listener": "unlinks a stale socket file before bind (with a symlink_metadata refusal), and removes the socket it just bound when making it owner-only failed; never a user path",
     },
     "src/litric-shell/src/fsbridge.rs": {
         "move_item": "deletes the source only after a cross-device copy completed",
