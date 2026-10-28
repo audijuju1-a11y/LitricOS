@@ -996,15 +996,14 @@ pub fn serve_stream(input: &mut dyn BufRead, output: &mut dyn Write, root: Root)
     // allocations per folder listing for no gain.
     let mut line: Vec<u8> = Vec::with_capacity(1024);
     loop {
-        line.clear();
-        let n = input.read_until(b'\n', &mut line)?;
-        if n == 0 {
-            return Ok(()); // peer closed
-        }
+        let overlong = match read_frame(input, &mut line)? {
+            Frame::Eof => return Ok(()), // peer closed
+            Frame::Line { overlong } => overlong,
+        };
         while matches!(line.last(), Some(b'\n') | Some(b'\r')) {
             line.pop();
         }
-        if line.len() > proto::MAX_LINE {
+        if overlong || line.len() > proto::MAX_LINE {
             writeln!(
                 out,
                 "{}",
@@ -1040,6 +1039,73 @@ pub fn serve_stream(input: &mut dyn BufRead, output: &mut dyn Write, root: Root)
             }
         }
         out.flush()?;
+    }
+}
+
+/// The most bytes one frame may hold: the protocol's 16,384-byte payload plus
+/// its optional `\r` and the `\n` that ends it.
+const FRAME_LIMIT: usize = proto::MAX_LINE + 2;
+
+/// What one read of the connection produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Frame {
+    /// The peer closed before a byte of a new request arrived.
+    Eof,
+    /// One request line. `overlong` means it exceeded the protocol's cap, so
+    /// its tail was consumed and dropped rather than stored.
+    Line {
+        /// Whether the line was longer than a request may be.
+        overlong: bool,
+    },
+}
+
+/// Read one request line into `line`, never growing it past [`FRAME_LIMIT`].
+///
+/// `read_until` grew the buffer to whatever the peer sent: a line that never
+/// ended cost the daemon one allocation per byte received, for a request the
+/// framing rules were going to refuse anyway. Here the payload is stored only
+/// up to the cap and the remainder of an over-long line is consumed without
+/// being kept, so the *next* request still starts at a line boundary. The
+/// reply and the connection's survival are what `read_until` produced; only
+/// the memory is bounded.
+///
+/// A final line without a terminating `\n` is still a line, as before: the old
+/// loop processed whatever bytes `read_until` returned at EOF.
+///
+/// # Errors
+/// Whatever the reader raises.
+fn read_frame(input: &mut dyn BufRead, line: &mut Vec<u8>) -> io::Result<Frame> {
+    line.clear();
+    let mut overlong = false;
+    loop {
+        let buf = input.fill_buf()?;
+        if buf.is_empty() {
+            if line.is_empty() && !overlong {
+                return Ok(Frame::Eof);
+            }
+            return Ok(Frame::Line { overlong });
+        }
+        let newline = buf.iter().position(|b| *b == b'\n');
+        let take = newline.unwrap_or(buf.len());
+        if !overlong {
+            let room = FRAME_LIMIT.saturating_sub(line.len());
+            let add = take.min(room);
+            if let Some(part) = buf.get(..add) {
+                line.extend_from_slice(part);
+            }
+            if add < take {
+                // Longer than a valid request can be: stop storing. The rest
+                // is dropped as it arrives, below.
+                overlong = true;
+            }
+        }
+        match newline {
+            Some(at) => {
+                input.consume(at.saturating_add(1));
+                return Ok(Frame::Line { overlong });
+            }
+            None => input.consume(take),
+        }
     }
 }
 
@@ -2086,6 +2152,98 @@ mod tests {
         assert!(text.starts_with("OK 1\nversion=1"), "got: {text}");
         // STAT of a directory that exists replies OK 1; the loop closed on QUIT.
         assert!(text.contains("OK 1\n"));
+    }
+
+    /// Drive `serve_stream` over a byte slice and return the reply text.
+    fn run_stream(root: Root, request: &[u8]) -> String {
+        let mut input = io::BufReader::new(request);
+        let mut output = Vec::new();
+        serve_stream(&mut input, &mut output, root).expect("serve");
+        String::from_utf8(output).expect("utf-8")
+    }
+
+    #[test]
+    fn a_request_at_the_line_limit_is_framed_and_one_byte_over_is_refused() {
+        // Exactly `MAX_LINE` payload bytes: framing accepts it, so the answer
+        // is about the path, not about the line length.
+        let pad = "x".repeat(proto::MAX_LINE - "STAT ".len());
+        let (_dir, root) = open_root("line-limit");
+        let at_limit = format!("STAT {pad}\n");
+        assert_eq!(at_limit.len(), proto::MAX_LINE + 1);
+        let too_long = pct::encode_field("request line too long");
+        let text = run_stream(root, at_limit.as_bytes());
+        assert!(
+            !text.contains(&too_long),
+            "a line at the limit must be framed, got: {text}"
+        );
+        // CRLF is the protocol's normal terminator and must be accepted at the
+        // limit too.
+        let (_dir, root) = open_root("line-limit-crlf");
+        let text = run_stream(root, format!("STAT {pad}\r\n").as_bytes());
+        assert!(
+            !text.contains(&too_long),
+            "a CRLF line at the limit must be framed, got: {text}"
+        );
+        // One byte more is refused, and the connection keeps serving the next
+        // request: the tail of the over-long line is drained, not parsed.
+        let (_dir, root) = open_root("line-over");
+        let over = format!(
+            "STAT {}x\nHELLO 1\n",
+            "x".repeat(proto::MAX_LINE - "STAT ".len())
+        );
+        assert_eq!(over.len(), proto::MAX_LINE + 2 + "HELLO 1\n".len());
+        let text = run_stream(root, over.as_bytes());
+        assert!(text.contains(&too_long), "got: {text}");
+        assert!(
+            text.contains("OK 1"),
+            "the request after an over-long line must be served, got: {text}"
+        );
+    }
+
+    #[test]
+    fn an_endless_line_is_discarded_instead_of_buffered() {
+        static CHUNK: [u8; 65_536] = [b'A'; 65_536];
+
+        struct Endless {
+            left: usize,
+        }
+
+        impl io::Read for Endless {
+            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "the framing reads through BufRead only",
+                ))
+            }
+        }
+
+        impl io::BufRead for Endless {
+            fn fill_buf(&mut self) -> io::Result<&[u8]> {
+                Ok(&CHUNK[..self.left.min(CHUNK.len())])
+            }
+
+            fn consume(&mut self, amt: usize) {
+                self.left = self.left.saturating_sub(amt);
+            }
+        }
+
+        // Four mebibytes with no newline: `read_until` would have stored every
+        // byte of it before refusing.
+        let mut input = Endless {
+            left: 4 * 1024 * 1024,
+        };
+        let mut line = Vec::with_capacity(1024);
+        let frame = read_frame(&mut input, &mut line).expect("read");
+        assert_eq!(frame, Frame::Line { overlong: true });
+        assert!(
+            line.len() <= proto::MAX_LINE + 2,
+            "the line buffer grew to {} bytes",
+            line.len()
+        );
+        assert_eq!(
+            input.left, 0,
+            "the rest of the line is drained, not re-read"
+        );
     }
 
     #[test]

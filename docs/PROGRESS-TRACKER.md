@@ -2223,3 +2223,94 @@ down rather than fixed by changing reader semantics in this batch. The
 golden-frame gate remains **BLOCKED** on the missing Latin font fixture, and
 ADR-0016's capability-grant persistence is still an open architectural
 decision, not part of this batch.
+## 28. Batch: LFP/1 frames bounded before they are buffered (verified)
+
+### 28.1 Why this row
+
+§27 made the socket owner-only, so only the daemon's own user can reach it
+at all. That removed the cross-user exposure, not the read loop's shape:
+`read_until(b'\n', &mut line)` grew the buffer to whatever the peer sent and
+only then compared the length with `proto::MAX_LINE`. A client that never
+sent a newline made the daemon hold every byte it received, and the refusal
+arrived only once the client stopped — memory proportional to input, for a
+request the framing rules were going to refuse anyway.
+
+### 28.2 What changed
+
+`read_frame` reads through `BufRead::fill_buf` and stores at most
+`FRAME_LIMIT = proto::MAX_LINE + 2` bytes (the 16,384-byte payload plus its
+optional `\r` and the `\n` that ends it). Once a line passes that, it stops
+storing and drains to the newline without keeping the bytes, so the *next*
+request still starts at a line boundary. The reply is unchanged and is still
+followed by a served connection.
+
+| Case | Before | After |
+|---|---|---|
+| 4 MiB line with no newline | buffer grew to 4 MiB | stores at most 16,386 bytes |
+| Reply to an over-long line | after the peer stops sending | the same `ERR`, after draining |
+| Connection after an over-long line | keeps serving | keeps serving (tested with `HELLO 1` next) |
+| Payload exactly `MAX_LINE`, `\n` or `\r\n` | accepted | accepted (both tested) |
+| Payload `MAX_LINE + 1`, `\n` | refused | refused |
+| Allocation per request | one `Vec`, unbounded growth | same `Vec`, bounded growth |
+
+### 28.3 The one narrowing, stated precisely
+
+The old rule was: strip trailing `\r`/`\n`, then require at most `MAX_LINE`
+bytes. The new rule adds: the *raw* frame may not exceed `MAX_LINE + 2`
+bytes. The only shape refused now that was accepted before is a line whose
+raw framing exceeds 16,386 bytes while its trimmed payload is still within
+16,384 — in practice a maximal line followed by two or more `\r` bytes. LFP/1
+defines a line ending in `\n`, with `\r\n` tolerated; a run of trailing CRs is
+outside the protocol. It is recorded here rather than glossed over.
+
+### 28.4 Tests (executed)
+
+| Test | What it proves |
+|---|---|
+| `a_request_at_the_line_limit_is_framed_and_one_byte_over_is_refused` | a 16,384-byte payload with `\n` and with `\r\n` is framed (no length refusal); 16,385 is refused; the `HELLO 1` after it is answered `OK 1`, so the drain resynchronised |
+| `an_endless_line_is_discarded_instead_of_buffered` | 4 MiB with no newline yields `Frame::Line { overlong: true }`, `line.len() <= MAX_LINE + 2`, and the source is fully consumed |
+
+The first draft of these assertions searched the raw reply for
+`"request line too long"`, but LFP/1 percent-encodes the message, so that
+string never appears and the negative assertion could not fail. The test now
+compares against `pct::encode_field("request line too long")`; the check
+started failing against the real wire text, which is how the mistake was
+caught.
+
+### 28.5 Checks
+
+```text
+cargo fmt --check                                      exit 0
+cargo clippy --workspace --all-targets -- -D warnings  exit 0
+cargo test --workspace         55 suites, 1,667 passed, 0 failed
+python3 ci/check-python-syntax.py                      exit 0 (61 files)
+python3 ci/lint-line-endings.py                        exit 0 (352 files, all LF)
+python3 ci/lint-doc-refs.py                            exit 0 (798 citations)
+python3 ci/lint-file-safety.py                         exit 0
+bash ci/verify.sh              27 pass, 2 fail, 4 skipped
+```
+
+1,667 is two above §27's 1,665: these two tests. The two verifier failures are
+the same absent `keys/dev/` material as §26 and §27 (`tools/gen-dev-keys.sh`
+generates it, `keys/.gitignore` excludes it); nothing was generated, weakened
+or committed to change that.
+
+### 28.6 Limits, and next steps that need a decision
+
+No QEMU, no image build, no display and no GPU here: no boot or hardware claim
+is made. The buffer bound is proven by construction plus the `line.len()`
+assertion in the 4 MiB test; **no RSS or heap figure was measured**, so none is
+claimed. Draining an over-long line still costs wall time proportional to that
+line — memory is bounded, bandwidth is not; closing the connection instead
+would change what the shell observes, so it was not done.
+
+Two items are decisions rather than work:
+
+* A userspace peer-uid check (`SO_PEERCRED`) needs `libc`/`rustix`, which the
+  dependency policy currently forbids (`ci/dep-policy-allow.txt` is empty).
+  Either that policy changes or the kernel's `0600` boundary stays the
+  enforcement point.
+* ADR-0016 (capability grants are in memory and lost on reboot) is an
+  architectural decision, not a patch.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.
