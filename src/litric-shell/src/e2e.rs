@@ -612,7 +612,7 @@ fn journey_browser_history_and_bookmarks_are_clickable_and_keep_visits() {
     assert!(effects.contains(&Effect::PersistBrowserData));
     assert_eq!(
         s.browser.tab().map(|tab| tab.url.as_str()),
-        Some("https://litricos.example")
+        Some("https://litricos.example/")
     );
 
     let _ = draw_frame(&mut s);
@@ -627,7 +627,7 @@ fn journey_browser_history_and_bookmarks_are_clickable_and_keep_visits() {
     click(&mut s, first_visit.center().0, first_visit.center().1);
     assert_eq!(
         s.browser.tab().map(|tab| tab.url.as_str()),
-        Some("https://litricos.example")
+        Some("https://litricos.example/")
     );
     assert!(s.browser.is_bookmarked());
 }
@@ -978,7 +978,7 @@ fn journey_the_omnibox_takes_keys_not_just_text() {
     s.browser.omnibox_focus = true;
     s.browser.omnibox = "example.com".to_owned();
     key_press(&mut s, Key::Enter, Modifiers::NONE);
-    assert_eq!(s.browser.tab().unwrap().url, "https://example.com");
+    assert_eq!(s.browser.tab().unwrap().url, "https://example.com/");
     assert!(!s.browser.omnibox_focus, "commit released the omnibox");
 }
 
@@ -1448,7 +1448,7 @@ fn journey_engine_chip_and_quick_link_navigate() {
     click(&mut s, tile.center().0, tile.center().1);
     assert_eq!(
         s.browser.tab().map(|t| t.url.clone()),
-        Some("https://github.com".to_owned()),
+        Some("https://github.com/".to_owned()),
         "quick link navigated the tab"
     );
 }

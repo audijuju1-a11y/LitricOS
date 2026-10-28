@@ -802,9 +802,9 @@ The corresponding residual-risk bullet was removed from BUG-0033.
 
 ### 14.4 Residual
 
-* The shell validates but does not canonicalise: a valid address keeps the
-  spelling the user typed (`https://EXAMPLE.com`), because history and bookmark
-  keys are strings. The parser's canonical form is not adopted yet.
+* The shell validated but did not canonicalise: a valid address kept the
+  spelling the user typed, because history and bookmark keys were strings.
+  **Resolved in section 15 (BUG-0036).**
 * The error sentence is English-only, like the rest of the browser status lines;
   it is not in `litric-locale`.
 * `Intent` is not `#[non_exhaustive]`, so a future `match` fails to compile
@@ -813,3 +813,80 @@ The corresponding residual-risk bullet was removed from BUG-0033.
   by a rendered screenshot.
 * The golden-frame gate remains **BLOCKED** on the missing Latin font face
   fixture. This batch makes no performance claim.
+
+
+## 15. Batch: one site has one spelling in history and bookmarks (VERIFIED)
+
+Closes the residual in section 14.4 and BUG-0035. The shell used the typed text
+as the history and bookmark key, so `https://EXAMPLE.com`, `https://example.com`
+and `https://example.com:443` were three entries for one page, three Back steps,
+and a page could read as unbookmarked right after being bookmarked from another
+spelling. `Url::parse` already normalised the parts (host case, a scheme's
+default port, an empty path); the shell validated with it and then threw the
+result away. The saved file had the same defect: `load_browser_data` deduplicated
+the decoded text as written.
+
+### 15.1 What changed
+
+| File | Change |
+|---|---|
+| `src/litric-browser/src/url.rs` | `to_url` is documented as the canonical text and writes the `//` an empty-host but rooted URL needs, so `file:///etc/hostname` no longer came back as `file:/etc/hostname`. Three tests (two new, one round-trip list extended) |
+| `src/litric-shell/src/apps.rs` | `BrowserApp::canonical_address` (parser text, or the input unchanged when it is not an address); `commit_omnibox` stores and returns `parsed.to_url()`; `navigate_active_to` normalises on entry so every stored-address writer shares one key. Two caller-level tests |
+| `src/litric-shell/src/main.rs` | `load_browser_data` canonicalises each decoded entry before deduplicating, so a store written before this fix loads as one row per page. One test |
+| `src/litric-shell/src/e2e.rs`, `apps.rs` | Four expectations that asserted the old non-canonical text updated to the intended canonical output (not loosened) |
+| `docs/bugs/BUG-0036-…md`, this section, BUG-0035 | Evidence, fix, tests, verification and residual risk; BUG-0035's canonicalisation bullet marked resolved here |
+
+No renderer, network, permission or storage behaviour changed. The change is
+confined to the text form used as a stored key and returned to the caller.
+
+### 15.2 Behaviour, measured as text
+
+| Typed | Stored, shown and returned |
+|---|---|
+| `https://example.com` | `https://example.com/` |
+| `https://EXAMPLE.com/path` | `https://example.com/path` |
+| `https://example.com:443` | `https://example.com/` |
+| `file:///etc/hostname` | `file:///etc/hostname` |
+| `litric://about` | `litric://about` |
+| `litric docs` | the search URL, unchanged |
+
+The path keeps its case: only the host is case-folded, because only the host is
+case-insensitive. A search URL and a non-address token are returned unchanged —
+they have no canonical address form.
+
+### 15.3 Verification (real output)
+
+```text
+$ cargo fmt --check
+FMT_EXIT=0
+$ cargo clippy --workspace --all-targets -- -D warnings
+Finished `dev` profile; CLIPPY_EXIT=0
+$ cargo test --workspace
+TOTAL passed=1652 failed=0
+  test tests::saved_addresses_load_as_one_canonical_spelling ... ok
+$ python3 ci/check-python-syntax.py
+OK: 61 python file(s) parse (no bytecode written); EXIT=0
+$ python3 ci/lint-line-endings.py
+OK: 352 file(s) checked, all LF; EXIT=0
+$ python3 ci/lint-doc-refs.py
+OK: 774 citation(s) across 155 document(s) resolve; EXIT=0
+```
+
+The count rose from 1647 to 1652: two URL tests, two shell tests and one load
+test. The four updated expectations are not new tests.
+
+### 15.4 Residual and next
+
+* Percent-encoding is not normalised (`%7E` and `~` stay different keys):
+  decoding an encoding can change which resource is addressed, so that is a
+  separate decision with its own tests, not a silent addition here.
+* A saved file is canonicalised in memory on load and rewritten in canonical
+  form on the next save; loading never edits the user's file, which is the
+  existing store rule.
+* The golden-frame gate remains **BLOCKED** on the missing Latin font face
+  fixture; no pixel test covers the bookmark star, and this batch makes no
+  performance claim.
+* Frame time is unchanged from section 12 (15.08 ms median on the shipped
+  compose path); the next measured renderer target remains `fill_round_rect`
+  (5.31 ms, 27.1 % of the profiled frame), and the lock-customize frame at
+  19.65 ms.

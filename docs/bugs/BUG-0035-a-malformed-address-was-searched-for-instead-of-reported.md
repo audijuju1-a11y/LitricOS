@@ -119,10 +119,11 @@ OK: 765 citation(s) across 153 document(s) resolve; exit 0
 
 ## Residual risk
 
-* **The shell validates, but does not canonicalise.** A valid address is still
-  sent as the user spelled it (`https://EXAMPLE.com` keeps its case in the tab
-  URL), because changing the string would change history and bookmark keys. The
-  parser's canonical form exists but is not adopted here.
+* **The shell validates, but did not canonicalise** at the time of this fix. A
+  valid address was sent as the user spelled it, because changing the string
+  changes history and bookmark keys. That residual was taken up and closed in
+  BUG-0036: the parser's canonical text is now the stored key on navigation and
+  on load.
 * **Only `litric-browser`'s `Session` and the shell omnibox are wired.** Any
   future caller of `interpret` must handle `AddressError`; the enum is not
   `#[non_exhaustive]` on `Intent`, so a new `match` will fail to compile rather

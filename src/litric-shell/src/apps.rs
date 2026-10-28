@@ -1213,16 +1213,20 @@ impl BrowserApp {
             None
         };
         let url = match address {
-            Some(url) => {
-                if let Err(error) = litric_browser::url::Url::parse(&url) {
+            Some(url) => match litric_browser::url::Url::parse(&url) {
+                // Store the parser's canonical text, not what was typed. The
+                // host is lowercased, the scheme's default port is dropped and
+                // an empty path becomes `/`, so three spellings of one page are
+                // one history entry, one bookmark and one Back step (BUG-0036).
+                Ok(parsed) => parsed.to_url(),
+                Err(error) => {
                     self.status = format!("that address is not valid: {error}");
                     if let Some(tab) = self.tabs.get_mut(self.active) {
                         tab.error = true;
                     }
                     return None;
                 }
-                url
-            }
+            },
             // A search URL is built by this file and its query is encoded, so
             // it is not parsed here: it is not an address and has no host to
             // validate.
@@ -1232,26 +1236,43 @@ impl BrowserApp {
         Some(url)
     }
 
+    /// The canonical spelling of an address for storage.
+    ///
+    /// The parser is the one authority for what an address is, and its text
+    /// form is what history and bookmarks are keyed on. Anything the parser
+    /// does not know -- a search URL built by this file, a test token -- is
+    /// returned unchanged, because it is not an address and has no canonical
+    /// form to adopt.
+    #[must_use]
+    pub fn canonical_address(input: &str) -> String {
+        litric_browser::url::Url::parse(input).map_or_else(|_| input.to_owned(), |u| u.to_url())
+    }
+
     /// Navigate the selected tab and append a real history entry.
     pub fn navigate_active_to(&mut self, url: &str) {
+        // Every writer of a stored address goes through here, so normalising
+        // at this point keeps the invariant even for callers that pass an
+        // older, non-canonical bookmark: `https://EXAMPLE.com` and
+        // `https://example.com:443` are the same key as `https://example.com/`.
+        let url = Self::canonical_address(url);
         if let Some(tab) = self.tabs.get_mut(self.active) {
             if tab
                 .history
                 .get(tab.history_index)
-                .is_none_or(|current| current != url)
+                .is_none_or(|current| current != &url)
             {
                 tab.history.truncate(tab.history_index.saturating_add(1));
-                tab.history.push(url.to_owned());
+                tab.history.push(url.clone());
                 if tab.history.len() > 100 {
                     tab.history.remove(0);
                 }
                 tab.history_index = tab.history.len().saturating_sub(1);
             }
-            tab.url = url.to_owned();
+            tab.url = url.clone();
             tab.error = false;
-            tab.title = url.to_owned();
+            tab.title = url.clone();
         }
-        self.record_visit(url);
+        self.record_visit(&url);
         self.omnibox_focus = false;
         self.panel = BrowserPanel::Page;
     }
@@ -2500,9 +2521,9 @@ mod tests {
         let mut b = BrowserApp::default();
         b.navigate_active_to("https://one.example");
         b.navigate_active_to("https://two.example");
-        assert_eq!(b.back().as_deref(), Some("https://one.example"));
-        assert_eq!(b.forward().as_deref(), Some("https://two.example"));
-        assert_eq!(b.back().as_deref(), Some("https://one.example"));
+        assert_eq!(b.back().as_deref(), Some("https://one.example/"));
+        assert_eq!(b.forward().as_deref(), Some("https://two.example/"));
+        assert_eq!(b.back().as_deref(), Some("https://one.example/"));
         b.navigate_active_to("https://three.example");
         assert!(
             !b.can_go_forward(),
@@ -2510,7 +2531,66 @@ mod tests {
         );
         assert_eq!(
             b.history.front().map(String::as_str),
-            Some("https://three.example")
+            Some("https://three.example/")
+        );
+    }
+
+    #[test]
+    fn one_site_has_one_entry_however_it_is_typed() {
+        // BUG-0036: the shell used the typed text as the key, so the same page
+        // reached by three spellings filled the recent list, added three Back
+        // steps and left the bookmark looking unset after a second visit.
+        let mut b = BrowserApp::default();
+        for spelling in [
+            "https://example.com",
+            "https://EXAMPLE.com/",
+            "https://example.com:443",
+        ] {
+            b.omnibox = spelling.to_owned();
+            assert_eq!(
+                b.commit_omnibox().as_deref(),
+                Some("https://example.com/"),
+                "{spelling} must resolve to the canonical text"
+            );
+        }
+        assert_eq!(
+            b.history.front().map(String::as_str),
+            Some("https://example.com/"),
+            "the recent list holds one spelling"
+        );
+        assert_eq!(
+            b.tabs.first().map(|tab| tab.history_index),
+            Some(1),
+            "the tab gained one entry, not three"
+        );
+        assert!(
+            b.toggle_bookmark(),
+            "the page can be bookmarked from the canonical address"
+        );
+        b.omnibox = "https://EXAMPLE.com:443/".to_owned();
+        assert_eq!(b.commit_omnibox().as_deref(), Some("https://example.com/"));
+        assert!(
+            b.is_bookmarked(),
+            "a second spelling must not read as unbookmarked"
+        );
+        assert!(!b.toggle_bookmark(), "toggling removes the saved address");
+        assert!(b.bookmarks.is_empty());
+    }
+
+    #[test]
+    fn canonicalisation_leaves_search_urls_and_plain_tokens_alone() {
+        // `canonical_address` is applied on the navigation path, which also
+        // carries the engine's own search URL. That URL is not an address the
+        // parser knows (its query is `/search?q=...` on a known host, so it is
+        // an address), but a non-URL token must pass through untouched.
+        assert_eq!(
+            BrowserApp::canonical_address("litric://about"),
+            "litric://about"
+        );
+        assert_eq!(BrowserApp::canonical_address("c"), "c");
+        assert_eq!(
+            BrowserApp::canonical_address("https://www.google.com/search?q=litric%20docs"),
+            "https://www.google.com/search?q=litric%20docs"
         );
     }
 
@@ -2543,7 +2623,7 @@ mod tests {
         b.omnibox = "example.com".to_owned();
         assert_eq!(
             browser_action(&mut b, Hot::BrowserGo).as_deref(),
-            Some("https://example.com")
+            Some("https://example.com/")
         );
         assert!(browser_action(&mut b, Hot::BrowserCloseTab(1)).is_none());
         assert_eq!(b.tabs.len(), 1);
@@ -2555,7 +2635,11 @@ mod tests {
             omnibox: "example.com".to_owned(),
             ..BrowserApp::default()
         };
-        assert_eq!(b.commit_omnibox().as_deref(), Some("https://example.com"));
+        assert_eq!(
+            b.commit_omnibox().as_deref(),
+            Some("https://example.com/"),
+            "the omnibox returns the canonical address"
+        );
         b.omnibox = "litric docs".to_owned();
         assert_eq!(
             b.commit_omnibox().as_deref(),
@@ -2600,7 +2684,7 @@ mod tests {
         b.omnibox = "example.com".to_owned();
         assert_eq!(
             browser_action(&mut b, Hot::BrowserGo).as_deref(),
-            Some("https://example.com")
+            Some("https://example.com/")
         );
         assert!(b.tabs.first().is_some_and(|tab| !tab.error));
         b.omnibox = "litric docs".to_owned();

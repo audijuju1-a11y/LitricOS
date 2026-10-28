@@ -1707,6 +1707,11 @@ fn load_browser_data(args: &Args) -> (Vec<String>, Vec<String>, Option<String>) 
             unreadable = unreadable.saturating_add(1);
             continue;
         };
+        // A store written before BUG-0036 holds whatever was typed. Adopting
+        // the parser's canonical text on load means a file carrying
+        // `https://EXAMPLE.com` and `https://example.com:443` becomes one page,
+        // instead of two rows that only collapse once each has been visited.
+        let value = litric_shell::apps::BrowserApp::canonical_address(&value);
         if value.len() > 4096 || value.is_empty() || value == "litric://about" {
             continue;
         }
@@ -3168,6 +3173,39 @@ mod tests {
         // Loading never edits the file: the malformed bytes are still there for a
         // person (or a later recovery) to look at.
         assert_eq!(fs::read_to_string(&path).expect("still readable"), original);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn saved_addresses_load_as_one_canonical_spelling() {
+        let root =
+            std::env::temp_dir().join(format!("litric-browser-canonical-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let args = Args {
+            root: root.clone(),
+            socket: root.join("missing.sock"),
+            ..Args::default()
+        };
+        let path = browser_data_path(&args);
+        fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+        // Two spellings of one page, plus a bookmark typed without a root
+        // slash: exactly what a build before BUG-0036 wrote down.
+        let stored = "history=https%3A%2F%2FEXAMPLE.com%2F\n\
+                      history=https%3A%2F%2Fexample.com%3A443%2F\n\
+                      bookmark=https%3A%2F%2Fexample.com\n";
+        fs::write(&path, stored).expect("fixture");
+        let (history, bookmarks, warning) = load_browser_data(&args);
+        assert_eq!(
+            history,
+            vec!["https://example.com/".to_owned()],
+            "one row for one page"
+        );
+        assert_eq!(
+            bookmarks,
+            vec!["https://example.com/".to_owned()],
+            "the saved bookmark is canonical too"
+        );
+        assert!(warning.is_none(), "{warning:?}");
         fs::remove_dir_all(&root).ok();
     }
 

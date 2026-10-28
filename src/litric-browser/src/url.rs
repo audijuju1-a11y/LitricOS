@@ -251,13 +251,25 @@ impl Url {
         self.scheme.is_secure()
     }
 
-    /// The full address as text.
+    /// The full address as text, in canonical form.
+    ///
+    /// `parse` already normalises the parts it can (host case, a scheme's
+    /// default port, an empty path), so this string is the one spelling of an
+    /// address: printing it means `https://EXAMPLE.com`, `https://example.com`
+    /// and `https://example.com:443` all come back as the same text, and
+    /// callers that key on the text -- history, bookmarks, a permission store
+    /// -- cannot end up with three of one page.
+    ///
+    /// A `//` authority is written whenever the scheme has a host, when one is
+    /// present, or when the path starts at the root. Without the last case,
+    /// `file:///etc/hostname` came back as `file:/etc/hostname`: a different
+    /// spelling of a file at a path a user could not recognise.
     #[must_use]
     pub fn to_url(&self) -> String {
         let mut s = String::new();
         s.push_str(self.scheme.name());
         s.push(':');
-        if self.scheme.needs_host() || !self.host.is_empty() {
+        if self.scheme.needs_host() || !self.host.is_empty() || self.path.starts_with('/') {
             s.push_str("//");
             s.push_str(&self.host);
             if let Some(p) = self.port {
@@ -447,6 +459,32 @@ mod tests {
         let u = Url::parse("https://example.com").expect("parses");
         assert_eq!(u.path, "/");
         assert_eq!(u.to_url(), "https://example.com/");
+    }
+
+    #[test]
+    fn one_site_has_one_canonical_text_form() {
+        // Three spellings of the same page. If they produced different text,
+        // the shell -- which keys history and bookmarks on that text -- would
+        // keep three entries for one site and call two of them unbookmarked.
+        let bare = Url::parse("https://example.com").expect("bare");
+        let upper = Url::parse("https://EXAMPLE.COM").expect("upper");
+        let port = Url::parse("https://example.com:443").expect("port");
+        assert_eq!(bare, upper);
+        assert_eq!(bare, port);
+        assert_eq!(bare.to_url(), "https://example.com/");
+        assert_eq!(upper.to_url(), bare.to_url());
+        assert_eq!(port.to_url(), bare.to_url());
+    }
+
+    #[test]
+    fn a_file_url_keeps_its_empty_authority_slashes() {
+        // `file:/etc/hostname` parses to the same path, but it is not the form
+        // a person or a specification writes, and an address bar showing it
+        // looks like a truncation.
+        let u = Url::parse("file:///etc/hostname").expect("file url");
+        assert_eq!(u.host, "");
+        assert_eq!(u.path, "/etc/hostname");
+        assert_eq!(u.to_url(), "file:///etc/hostname");
     }
 
     #[test]
@@ -716,6 +754,8 @@ mod tests {
             "https://sub.example.co.uk/path",
             "file:///etc/hostname",
             "litric:settings",
+            "https://EXAMPLE.COM:443/a?b=c#d",
+            "litric://about",
         ] {
             let u = Url::parse(raw).expect(raw);
             let again = Url::parse(&u.to_url()).expect("re-parses");
