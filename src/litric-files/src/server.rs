@@ -25,6 +25,8 @@ use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 /// `READTEXT` reads at most this many bytes (ADR-0019: first 64 KiB).
 const TEXT_CAP: usize = 64 * 1024;
@@ -1167,6 +1169,65 @@ fn bind_listener(socket: &Path) -> io::Result<UnixListener> {
     Ok(listener)
 }
 
+/// The most connections `litric-filesd` serves at once.
+///
+/// The accept loop used to spawn one thread per connection with no ceiling, so
+/// a client that opened connections faster than it closed them multiplied the
+/// per-connection line buffer (up to `FRAME_LIMIT` bytes) and its handler stack
+/// without limit. This is what the worst case is computed from. A connection
+/// over the cap is answered with one `ERR limit` line and closed, so a client
+/// can tell a busy daemon from a dead one and retry instead of guessing.
+const MAX_CONNECTIONS: usize = 16;
+
+/// Live handler count with a hard ceiling.
+#[derive(Debug)]
+struct Connections {
+    live: Arc<AtomicUsize>,
+}
+
+impl Connections {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            live: Arc::new(AtomicUsize::new(0)),
+        })
+    }
+
+    /// Take a slot, or `None` when every slot is already being served.
+    fn enter(self: &Arc<Self>) -> Option<ConnectionSlot> {
+        let mut live = self.live.load(Ordering::Relaxed);
+        loop {
+            if live >= MAX_CONNECTIONS {
+                return None;
+            }
+            match self.live.compare_exchange_weak(
+                live,
+                live.saturating_add(1),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Some(ConnectionSlot {
+                        live: Arc::clone(&self.live),
+                    })
+                }
+                Err(current) => live = current,
+            }
+        }
+    }
+}
+
+/// One served connection; dropping it frees the slot.
+#[derive(Debug)]
+struct ConnectionSlot {
+    live: Arc<AtomicUsize>,
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// Bind and serve LFP/1 on a Unix socket. The listener is created by systemd
 /// socket activation in production (`Accept=yes` gives one process per
 /// connection); this path is for standalone runs and integration tests.
@@ -1187,11 +1248,23 @@ pub fn serve_unix(socket: &Path, root: Root) -> io::Result<()> {
     // `UnixStream::peer_cred` is unstable on this toolchain, and reading
     // SO_PEERCRED directly would add the crate's first third-party dependency,
     // which the dependency policy forbids (tracker §27 records the gap).
+    let connections = Connections::new();
     for stream in listener.incoming() {
         match stream {
-            Ok(s) => {
+            Ok(mut s) => {
+                let Some(slot) = connections.enter() else {
+                    // One line, then close: the protocol has a kind for a
+                    // resource limit, so this is distinguishable from a crash.
+                    let _ = writeln!(
+                        s,
+                        "{}",
+                        proto::err(ErrorKind::Limit, "connection limit reached")
+                    );
+                    continue;
+                };
                 let root = root.clone();
                 std::thread::spawn(move || {
+                    let _slot = slot;
                     let Ok(reader) = s.try_clone() else {
                         return;
                     };
@@ -2244,6 +2317,111 @@ mod tests {
             input.left, 0,
             "the rest of the line is drained, not re-read"
         );
+    }
+
+    #[test]
+    fn the_connection_cap_serves_exactly_max_connections() {
+        let gate = Connections::new();
+        let mut held: Vec<_> = (0..MAX_CONNECTIONS).map(|_| gate.enter()).collect();
+        assert!(held.iter().all(Option::is_some), "a slot under the cap");
+        assert!(
+            gate.enter().is_none(),
+            "connection {} must be refused",
+            MAX_CONNECTIONS.saturating_add(1)
+        );
+        held.pop();
+        assert!(gate.enter().is_some(), "a closed connection frees its slot");
+    }
+
+    /// Resident size of this process in KiB, from `/proc/self/statm`.
+    #[cfg(unix)]
+    fn rss_kib() -> u64 {
+        let Ok(text) = std::fs::read_to_string("/proc/self/statm") else {
+            return 0;
+        };
+        let pages = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(0);
+        pages.saturating_mul(4)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_burst_above_the_connection_cap_is_refused_and_the_daemon_keeps_serving() {
+        use std::io::{BufRead as _, BufReader, Write as _};
+        use std::time::Duration;
+        let dir = temp_root("socket-cap");
+        let socket = dir.join("files.sock");
+        let (_, root) = open_root("socket-cap-root");
+        let path = socket.clone();
+        std::thread::spawn(move || {
+            let _ = serve_unix(&path, root);
+        });
+
+        fn connect_when_ready(socket: &Path) -> Option<UnixStream> {
+            for _ in 0..400 {
+                if let Ok(s) = UnixStream::connect(socket) {
+                    return Some(s);
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            None
+        }
+
+        // Hold `MAX_CONNECTIONS` handlers open with a request that never ends,
+        // exactly like a client that stalls in the middle of a line.
+        let before = rss_kib();
+        let mut held: Vec<UnixStream> = Vec::new();
+        for _ in 0..MAX_CONNECTIONS {
+            let Some(mut s) = connect_when_ready(&socket) else {
+                panic!("the listener never started");
+            };
+            let _ = s.write_all(b"HE");
+            held.push(s);
+        }
+
+        // The next connection is answered once and closed: the cap is the
+        // assertion's own constant, so raising it silently fails this test.
+        let Some(over) = connect_when_ready(&socket) else {
+            panic!("the listener stopped accepting");
+        };
+        over.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let mut reply = String::new();
+        let mut reader = BufReader::new(over);
+        let _ = reader.read_line(&mut reply);
+        assert!(
+            reply.contains(&pct::encode_field("connection limit reached")),
+            "the {}th connection must be refused with ERR limit, got: {reply:?}",
+            MAX_CONNECTIONS.saturating_add(1)
+        );
+
+        // One slot freed is enough for the next client to be served normally.
+        held.pop();
+        let mut served = false;
+        for _ in 0..100 {
+            let Some(mut s) = connect_when_ready(&socket) else {
+                panic!("the listener stopped accepting");
+            };
+            s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+            let _ = s.write_all(b"HELLO 1\n");
+            let mut line = String::new();
+            let mut reader = BufReader::new(s);
+            let _ = reader.read_line(&mut line);
+            if line.starts_with("OK 1") {
+                served = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(served, "a freed slot must serve the next client");
+
+        let after = rss_kib();
+        eprintln!(
+            "connection cap: {MAX_CONNECTIONS} served + 1 refused, RSS {before} KiB -> {after} KiB"
+        );
+        let _ = std::fs::remove_file(&socket);
     }
 
     #[test]

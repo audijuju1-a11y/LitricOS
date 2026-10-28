@@ -25,6 +25,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{io, thread};
@@ -251,20 +252,85 @@ pub fn bind(path: &Path) -> io::Result<UnixListener> {
     Ok(listener)
 }
 
+/// The most connections `litric-notifyd` serves at once.
+///
+/// The accept loop used to spawn one thread per connection with no ceiling, so
+/// a client that opened connections faster than it closed them multiplied the
+/// per-connection line buffer (up to `MAX_LINE + 1` bytes) and its handler
+/// stack without limit. This is what the worst case is computed from.
+const MAX_CONNECTIONS: usize = 16;
+
+/// Live handler count with a hard ceiling.
+#[derive(Debug)]
+struct Connections {
+    live: Arc<AtomicUsize>,
+}
+
+impl Connections {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            live: Arc::new(AtomicUsize::new(0)),
+        })
+    }
+
+    /// Take a slot, or `None` when every slot is already being served.
+    fn enter(self: &Arc<Self>) -> Option<ConnectionSlot> {
+        let mut live = self.live.load(Ordering::Relaxed);
+        loop {
+            if live >= MAX_CONNECTIONS {
+                return None;
+            }
+            match self.live.compare_exchange_weak(
+                live,
+                live.saturating_add(1),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Some(ConnectionSlot {
+                        live: Arc::clone(&self.live),
+                    })
+                }
+                Err(current) => live = current,
+            }
+        }
+    }
+}
+
+/// One served connection; dropping it frees the slot.
+#[derive(Debug)]
+struct ConnectionSlot {
+    live: Arc<AtomicUsize>,
+}
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.live.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 /// Serve until the listener fails.
 ///
 /// # Errors
 /// Any `accept` error that is not recoverable.
 pub fn serve(listener: &UnixListener, state: State) -> io::Result<()> {
     let shared = Arc::new(Mutex::new(state));
+    let connections = Connections::new();
     for conn in listener.incoming() {
         match conn {
             Ok(stream) => {
+                let Some(slot) = connections.enter() else {
+                    // This protocol answers only OK frames, so there is no error
+                    // frame to send. A closed connection is unambiguous and the
+                    // client retries; nothing was allocated for it.
+                    continue;
+                };
                 let shared = Arc::clone(&shared);
                 // A client that hangs must not stop the next one being served.
                 if let Err(e) = thread::Builder::new()
                     .name("litric-notifyd-conn".to_owned())
                     .spawn(move || {
+                        let _slot = slot;
                         if let Err(e) = handle(&stream, &shared) {
                             eprintln!("litric-notifyd: connection ended: {e}");
                         }
@@ -442,6 +508,20 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("mkdir");
         dir
+    }
+
+    #[test]
+    fn the_connection_cap_serves_exactly_max_connections() {
+        let gate = Connections::new();
+        let mut held: Vec<_> = (0..MAX_CONNECTIONS).map(|_| gate.enter()).collect();
+        assert!(held.iter().all(Option::is_some), "a slot under the cap");
+        assert!(
+            gate.enter().is_none(),
+            "connection {} must be refused",
+            MAX_CONNECTIONS.saturating_add(1)
+        );
+        held.pop();
+        assert!(gate.enter().is_some(), "a closed connection frees its slot");
     }
 
     #[test]

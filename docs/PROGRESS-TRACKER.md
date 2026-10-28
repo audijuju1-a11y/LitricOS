@@ -2504,3 +2504,116 @@ the broker as a separate process with the credential check above — that choice
 is architectural, not a patch.
 
 The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.
+## 31. Batch: a ceiling on concurrent connections (verified)
+
+### 31.1 What was actually unbounded
+
+Every point where a peer's input causes allocation or queueing in the four
+installed daemons, with the cap that applied before this batch:
+
+| Daemon | Peer-controlled allocation | Where | Cap before |
+|---|---|---|---|
+| `litric-filesd` | request line buffer | `src/litric-files/src/server.rs`, `read_frame` (line 1080), `FRAME_LIMIT` (line 1047) | **16,386 bytes** (`MAX_LINE + 2`) |
+| `litric-filesd` | file body read for `READTEXT` | same file, `read_file_capped` (line 865) | cap + 1 byte, caller's `cap` |
+| `litric-filesd` | handler thread + its buffers | same file, `serve_unix` (line 1188) | **none** |
+| `litric-notifyd` | request line buffer | `src/litric-notifyd/src/server.rs`, `read_line` (line 281) | `MAX_LINE + 1` |
+| `litric-notifyd` | note block lines | `src/litric-notifyd/src/proto.rs`, `MAX_BLOCK_LINES` | fixed count |
+| `litric-notifyd` | pending queue | `src/litric-notifyd/src/queue.rs`, `Queue::CAPACITY` (line 56) | **64**, evicts oldest |
+| `litric-notifyd` | handler thread + its buffers | `src/litric-notifyd/src/server.rs`, `serve` (line 260) | **none** |
+| `litric-sysd` | request line buffer | `src/litric-sysd/src/server.rs`, `handle` (line 118) | `MAX_LINE + 1` |
+| `litric-sysd` | handler thread + its buffers | same file, `serve` (line 87) | **none** |
+| `litric-browserd` | command line buffer | `src/litric-browser/src/bin/browserd.rs`, `serve` (line 1523) | `take(64 * 1024)` |
+| `litric-browserd` | frame buffer | same file, line 641 | sized from the engine's pixels, not a peer field |
+| `litric-browserd` | concurrent clients | same file, `run` (line 1545) | **1** — the accept loop serves serially |
+
+Framing, bodies and queues were already bounded. The genuinely unbounded path
+was concurrency: `filesd`, `notifyd` and `sysd` each spawned one thread per
+accepted connection with nothing counting the live handlers, so a client that
+opened connections faster than it closed them multiplied a per-handler line
+buffer (up to `MAX_LINE + 1` bytes) plus its stack without limit — the one
+thing in these daemons whose memory was a function of the peer's behaviour
+rather than a constant.
+
+### 31.2 What changed
+
+| File | Change |
+|---|---|
+| `src/litric-files/src/server.rs` | `MAX_CONNECTIONS = 16` and a `Connections`/`ConnectionSlot` atomic gate; a connection over the cap is answered `ERR limit connection%20limit%20reached` and closed; the slot is held for the handler's lifetime |
+| `src/litric-sysd/src/server.rs` | the same gate and `Response::err("limit", …)` refusal |
+| `src/litric-notifyd/src/server.rs` | the same gate; this protocol has no error frame, so an over-cap connection is closed without allocating a handler |
+| `src/litric-browserd` | unchanged: it already serves one connection at a time |
+
+No new dependency; the gate is `std::sync::atomic` only. Well-behaved clients
+see no change: the cap is far above what the shell opens (one LFP/1 connection
+per session, plus a probe), and a refusal is a single line then EOF.
+
+### 31.3 Tests that ran
+
+| Test | Where | Result |
+|---|---|---|
+| `the_connection_cap_serves_exactly_max_connections` | `litric-files` | ok |
+| `a_burst_above_the_connection_cap_is_refused_and_the_daemon_keeps_serving` | `litric-files` | ok |
+| `the_connection_cap_serves_exactly_max_connections` | `litric-sysd` | ok |
+| `the_connection_cap_serves_exactly_max_connections` | `litric-notifyd` | ok |
+
+The unit tests assert against `MAX_CONNECTIONS` itself, so raising the constant
+without changing the test fails it. The burst test holds `MAX_CONNECTIONS`
+handlers open with an unterminated line, then asserts the next connection gets
+`ERR limit`, then frees one slot and asserts a `HELLO 1` is answered `OK 1`.
+
+### 31.4 Measured memory
+
+From the burst test, run with `--nocapture`:
+
+```text
+cargo test -p litric-files --lib a_burst_above_the_connection_cap -- --nocapture
+connection cap: 16 served + 1 refused, RSS 1324 KiB -> 1476 KiB
+```
+
+The RSS reading is `/proc/self/statm` resident pages. **What this does and does
+not show, plainly:** it measures the capped daemon under a burst of 17
+connections (16 served, 1 refused) — a 152 KiB rise including the test's own
+buffers. It is *not* a before/after comparison: measuring the pre-fix tree would
+mean rebuilding the previous commit, and the old behaviour has no bound to
+measure (its memory is a function of how many connections the peer opens, so any
+single number would describe the burst, not the design). What is proven instead
+is the bound itself: at most `MAX_CONNECTIONS` handlers exist, each holding at
+most `FRAME_LIMIT` bytes for its line, so the daemon's per-peer memory is
+`16 × (16,386 + stack)` regardless of how many connections arrive. No
+system-wide RAM, boot footprint or cross-uid number was measured or claimed.
+
+### 31.5 Gates (exit statuses enforced, not piped)
+
+```text
+cargo fmt --check                                                  exit 0
+cargo clippy --workspace --all-targets -- -D warnings              exit 0
+cargo clippy -p litric-browser --features broker --all-targets -D  exit 0
+cargo test --workspace                 55 suites, 1,675 passed, 0 failed
+cargo test -p litric-browser --features broker --bin litric-browserd  12 passed
+python3 ci/check-python-syntax.py                                  exit 0 (62 files)
+python3 ci/lint-line-endings.py                                    exit 0 (353 files, all LF)
+python3 ci/lint-doc-refs.py                                        exit 0 (808 citations)
+python3 ci/lint-file-safety.py                                     exit 0 (71 sites, all reviewed)
+python3 ci/lint-unit-sockets.py                                    exit 0 (3 units)
+python3 ci/lint-unit-sockets.py --self-test                        exit 0
+bash ci/verify.sh                      29 pass, 2 fail, 4 skipped
+```
+
+1,675 is four above §30's 1,671: these four tests. The two failures are the
+known absent `keys/dev/` material (mkosi config and dev key pairs); nothing was
+generated or weakened.
+
+### 31.6 Limits and next gap
+
+No QEMU, image build, display or GPU here, so no boot or hardware claim. The cap
+bounds *memory*, not throughput: a client that opens 17 connections and keeps
+them open still occupies all 16 slots, and the 17th is refused rather than
+queued — deliberate, because queueing would reintroduce the unbounded buffer the
+cap exists to remove. The concurrency cap is per process; with `Accept=yes`
+(`filesd`, `browserd`) systemd starts one process per connection, so on that
+path the effective bound is `MaxConnections=` in the socket unit, which is not
+set for `litric-files.socket` — the next evidence-based non-UI row is to decide
+and test that unit limit, because it is the real ceiling on the installed
+socket-activated path.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.
