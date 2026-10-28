@@ -53,7 +53,7 @@ revert window for a scale change        15 s
 tests in litric-shell                   596
 ```
 
-Platform claims come from six sources inspected for this part (S3850–S3855).
+Platform claims come from seven sources inspected for this part (S3850–S3855, S3893).
 They are cited where they carry a number or a rule, not as background.
 
 ### 0.3 What this part does not measure

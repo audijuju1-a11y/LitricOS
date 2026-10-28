@@ -90,7 +90,7 @@ the sentence describes.
 **Repaired after the first pass:** the same "Reused" paragraph cited `S0930` as "registry", while
 `S0930` is a Windows-forum search article. No registry source exists in the register for that claim,
 so the false attribution was removed from Part 23 rather than repointed to a page that would have
-been equally wrong. The rest of the "Reused" list still needs a dedicated citation audit.
+been equally wrong. The rest of the "Reused" list was audited entry by entry in the next batch; the decisions are in `docs/PROGRESS-TRACKER.md` §6.
 
 ---
 
