@@ -2138,8 +2138,18 @@ impl Canvas {
         }
         let reach = grow.last().copied().unwrap_or(0.0);
 
-        let base = Rect::new(r.x, r.y + dy, r.w, r.h);
-        let (x0, y0, x1, y1) = self.span(&base.inflate(reach + 1.5));
+        // The shadow's own geometry, derived once. Both distance tests below
+        // share the horizontal term and the clamped radius; before this, every
+        // painted pixel recomputed the centre, both half-extents and the radius
+        // for the panel test and again for the shadow test. That is four divides
+        // a pixel for values that do not change inside the call.
+        let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
+        let (cx, cy) = r.center();
+        let qx_off = r.w / 2.0 - rad;
+        let qy_off = r.h / 2.0 - rad;
+        let base_cy = cy + dy;
+        let shadow = Rect::new(r.x, r.y + dy, r.w, r.h);
+        let (x0, y0, x1, y1) = self.span(&shadow.inflate(reach + 1.5));
 
         // What a run of fully covered rings does to one channel value, built
         // with the same `blend` the loop below uses. Most pixels of a shadow
@@ -2206,12 +2216,21 @@ impl Canvas {
                     continue;
                 }
                 let px = x as f32 + 0.5;
+                let qx = (px - cx).abs() - qx_off;
+                let ax = qx.max(0.0);
                 // Under the panel, past its first pixel: never visible.
-                if covered && sd_round_rect(px, py, &r, radius) < -1.0 {
-                    x = x.saturating_add(1);
-                    continue;
+                if covered {
+                    let qy = (py - cy).abs() - qy_off;
+                    let ay = qy.max(0.0);
+                    let panel = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - rad;
+                    if panel < -1.0 {
+                        x = x.saturating_add(1);
+                        continue;
+                    }
                 }
-                let d = sd_round_rect(px, py, &base, radius);
+                let qy = (py - base_cy).abs() - qy_off;
+                let ay = qy.max(0.0);
+                let d = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - rad;
                 // Outermost ring first, as it was drawn. Every ring whose grown
                 // edge has already passed this pixel covers it fully, so those
                 // are applied as one table lookup; the rings straddling the
@@ -2242,6 +2261,67 @@ impl Canvas {
                 }
                 x = x.saturating_add(1);
             }
+        }
+        if profile::is_on() {
+            // Where a shadow's pixels go. This is a diagnostic pass over the
+            // same predicates the loop above uses, and it runs only on the
+            // profiled frame; no timed frame pays for it.
+            let mut hidden_px = 0u64;
+            let mut under_px = 0u64;
+            let mut all_full_px = 0u64;
+            let mut mixed_px = 0u64;
+            let mut partial_px = 0u64;
+            let mut zero_px = 0u64;
+            let mut rows = 0u64;
+            for y in y0..y1 {
+                rows = rows.saturating_add(1);
+                let py = y as f32 + 0.5;
+                let mut x = x0;
+                while x < x1 {
+                    if y >= hy0 && y < hy1 && x >= hx0 && x < hx1 {
+                        let n =
+                            u64::try_from((hx1.min(x1)).saturating_sub(x.max(hx0))).unwrap_or(0);
+                        hidden_px = hidden_px.saturating_add(n);
+                        x = hx1;
+                        continue;
+                    }
+                    let px = x as f32 + 0.5;
+                    if covered && sd_round_rect(px, py, &r, radius) < -1.0 {
+                        under_px = under_px.saturating_add(1);
+                        x = x.saturating_add(1);
+                        continue;
+                    }
+                    let d = sd_round_rect(px, py, &shadow, radius);
+                    let full_from = grow.iter().position(|g| *g >= d + 0.5).unwrap_or(STEPS);
+                    if full_from == 0 {
+                        all_full_px = all_full_px.saturating_add(1);
+                    } else if full_from < STEPS {
+                        mixed_px = mixed_px.saturating_add(1);
+                    } else if (0..STEPS)
+                        .rev()
+                        .any(|i| grow.get(i).is_some_and(|g| coverage(d - *g) > 0.0))
+                    {
+                        partial_px = partial_px.saturating_add(1);
+                    } else {
+                        zero_px = zero_px.saturating_add(1);
+                    }
+                    x = x.saturating_add(1);
+                }
+            }
+            let span_w = u64::try_from(x1.saturating_sub(x0)).unwrap_or(0);
+            let span_h = u64::try_from(y1.saturating_sub(y0)).unwrap_or(0);
+            let walked = span_w.saturating_mul(span_h);
+            let visited = walked.saturating_sub(hidden_px);
+            profile::note_bucket("soft_shadow.hidden", hidden_px, 0);
+            profile::note_bucket("soft_shadow.under_panel", under_px, 0);
+            profile::note_bucket("soft_shadow.all_full", all_full_px, 0);
+            profile::note_bucket("soft_shadow.mixed", mixed_px, 0);
+            profile::note_bucket("soft_shadow.partial_only", partial_px, 0);
+            profile::note_bucket("soft_shadow.zero", zero_px, 0);
+            profile::note_bucket("soft_shadow.walked", walked, 0);
+            profile::note_counter("soft_shadow.rows", rows);
+            profile::note_counter("soft_shadow.zero_calls", u64::from(visited == hidden_px));
+            profile::note_max("soft_shadow.max_call_px", visited);
         }
         self.set_site(prev);
     }
@@ -3404,6 +3484,93 @@ mod tests {
                 "shadow differs for {r:?} radius {radius} spread {spread}"
             );
         }
+    }
+
+    #[test]
+    fn the_hoisted_shadow_geometry_equals_the_distance_function() {
+        // soft_shadow now derives the centre, half-extents and clamped radius
+        // once per call instead of once per pixel, and shares the horizontal
+        // term between the two distance tests. This pins the inlined math to
+        // sd_round_rect bit for bit over every pixel-class sample of every
+        // geometry, including fractional, degenerate and off-canvas rectangles.
+        let cases: [(Rect, f32, f32); 8] = [
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 12.0),
+            (Rect::new(11.25, 9.75, 120.5, 70.25), 9.0, 6.5),
+            (Rect::new(70.0, 40.0, 60.0, 60.0), 40.0, 10.0),
+            (Rect::new(70.0, 40.0, 60.0, 60.0), 500.0, 10.0),
+            (Rect::new(10.5, 20.25, 120.0, 70.0), 0.0, 7.0),
+            (Rect::new(30.0, 30.0, 0.0, 0.0), 4.0, 8.0),
+            (Rect::new(30.0, 30.0, -10.0, 20.0), 4.0, 8.0),
+            (Rect::new(-40.0, -30.0, 100.0, 80.0), 12.0, 8.0),
+        ];
+        for (rect, radius, dy) in cases {
+            let shadow = Rect::new(rect.x, rect.y + dy, rect.w, rect.h);
+            let rad = radius.min(rect.w / 2.0).min(rect.h / 2.0).max(0.0);
+            let (cx, cy) = rect.center();
+            let (qx_off, qy_off) = (rect.w / 2.0 - rad, rect.h / 2.0 - rad);
+            let mut y = -10.0f32;
+            while y < 190.0 {
+                let py = y + 0.5;
+                let mut x = -10.0f32;
+                while x < 240.0 {
+                    let px = x + 0.5;
+                    let qx = (px - cx).abs() - qx_off;
+                    let ax = qx.max(0.0);
+                    let qy = (py - cy).abs() - qy_off;
+                    let ay = qy.max(0.0);
+                    let panel = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - rad;
+                    assert_eq!(
+                        panel.to_bits(),
+                        sd_round_rect(px, py, &rect, radius).to_bits(),
+                        "{rect:?} radius {radius} at ({px}, {py})"
+                    );
+                    let qy = (py - (cy + dy)).abs() - qy_off;
+                    let ay = qy.max(0.0);
+                    let d = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - rad;
+                    assert_eq!(
+                        d.to_bits(),
+                        sd_round_rect(px, py, &shadow, radius).to_bits(),
+                        "{shadow:?} radius {radius} at ({px}, {py})"
+                    );
+                    x += 1.0;
+                }
+                y += 1.0;
+            }
+        }
+    }
+
+    #[test]
+    fn the_shadow_buckets_account_for_every_walked_pixel() {
+        // The diagnostic split must be disjoint and complete: the bucket areas
+        // add up to the rectangle the call walked, and both the covered and the
+        // visible paths are exercised.
+        let r = Rect::new(60.0, 50.0, 140.0, 90.0);
+        let mut c = textured(260, 200);
+        assert!(c.set_backdrop(Some(Rc::new(textured(260, 200)))));
+        profile::enable();
+        let _ = profile::take_buckets();
+        let _ = profile::take();
+        c.soft_shadow(r, 14.0, 30.0, 12.0, 0.6);
+        let buckets = profile::take_buckets();
+        let _ = profile::take();
+        let _ = profile::take_counters();
+        profile::disable();
+        let get = |name: &str| -> u64 {
+            buckets
+                .iter()
+                .find(|b| b.name == name)
+                .map_or(0, |b| b.pixels)
+        };
+        let walked = get("soft_shadow.walked");
+        let sum = get("soft_shadow.hidden")
+            + get("soft_shadow.under_panel")
+            + get("soft_shadow.all_full")
+            + get("soft_shadow.mixed")
+            + get("soft_shadow.partial_only")
+            + get("soft_shadow.zero");
+        assert_eq!(sum, walked, "{buckets:?}");
+        assert!(get("soft_shadow.hidden") > 0, "{buckets:?}");
+        assert!(get("soft_shadow.mixed") > 0, "{buckets:?}");
     }
 
     #[test]

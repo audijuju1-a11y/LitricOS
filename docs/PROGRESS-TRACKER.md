@@ -70,7 +70,7 @@ evidence, not throughput.
 
 | Item | State | Blocker |
 |---|---|---|
-| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17, §18, §19 and §20 (8.178 ms median; lock-customize 10.060 ms and open-window 15.127 ms are inside the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
+| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17, §18, §19, §20 and §21 (8.262 ms median; lock-customize 10.096 ms and open-window 15.092 ms are inside the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
@@ -1542,3 +1542,110 @@ The golden-frame gate remains **BLOCKED** on the missing Latin font face
 fixture. No GPU, VRAM, display or present-to-display measurement exists on this
 host, and none is claimed. The instrumented sums (30.462 ms before, 15.975 ms
 after) are not frame times; the timed frames are 20.337 and 15.127 ms.
+
+## 21. Batch: hoisting the shadow geometry out of its pixel loop (partially verified)
+
+### 21.1 Attribution, measured before the change
+
+The `window_profile` dump from §20 was extended with a shadow classification
+pass. It walks the same rectangle with the same expression as the painter, in an
+untimed frame, and reports disjoint buckets. One window frame walks
+**832,918** pixels for the four `soft_shadow` calls and paints only 137,271 of
+them (16.5 %):
+
+| Bucket | Pixels | Share of walked | What it costs in the painter |
+|---|---|---|---|
+| `hidden` | **605,923** | **72.7 %** | one bounds test per ring; no blend |
+| `mixed` | **108,587** | **13.0 %** | full rings plus one partial blend; the dominant painted class |
+| `under_panel` | 76,508 | 9.2 % | one distance test, skipped before the ring loop |
+| `all_full` | 22,008 | 2.6 % | every ring is full: ring-chain walk only |
+| `zero` | 13,216 | 1.6 % | coverage is 0: no blend |
+| `partial_only` | 6,676 | 0.8 % | every ring is partial |
+| `walked` | 832,918 | 100 % | the six buckets sum to it exactly |
+
+The row itself measures **6.001 ms** in this session's baseline (5.788-6.219
+across five processes), against 137,271 painted pixels: **43.7 ns per painted
+pixel**, and 79.1 % of those are `mixed`. The skip classes are not the cost;
+the painted pixel is, and every painted pixel ran `sd_round_rect` twice - once
+against the panel to decide whether the shadow is hidden, once against the
+offset shadow rectangle - and each call recomputed the centre, both
+half-extents, the clamped radius (two divides) and a square root.
+
+The four bench calls come from `views::draw_windows`: radius
+`t.px(chrome.radius)`, spread `t.px(mix(30.0, 18.0))`, offset
+`t.px(mix(12.0, 7.0))`, alpha `mix(0.60, 0.40)`, where `mix` interpolates
+between the focused and unfocused endpoints by the focus spring's elevation.
+The dump does not record the resolved per-call values, which is why they are
+named as expressions here rather than as invented numbers.
+
+### 21.2 Root cause and change
+
+`soft_shadow` derived the same geometry inside the pixel loop. The fix hoists
+`rad`, the centre, the quarter-pixel offsets and the shadow centre out of the
+loop, computes `qx`/`ax` once, and shares that horizontal term between the
+panel test and the shadow distance; the base rectangle is built once. Two square
+roots remain - they are the distance itself - but the four divides, the centre
+arithmetic and the radius clamping are now per call instead of per pixel.
+
+Files: `src/litric-shell/src/canvas.rs` (the loop and its tests), this tracker and
+`validation/perf/host-measurements.json`; the shadow classification pass already
+shipped in `f1c174d`'s `render_bench.rs` and is used unchanged.
+
+### 21.3 Pixel-identical proof
+
+`canvas::tests::the_hoisted_shadow_geometry_equals_the_distance_function` compares
+the inlined expression against `sd_round_rect` with `f32::to_bits()` equality for
+both the panel test and the shadow test, over eight geometries - plain,
+fractional, radius equal to half the extent, radius 500, radius 0, zero-size,
+negative-width and off-canvas - and a 250x200 sample grid each
+(**~640,000 bit-exact comparisons**). `the_one_pass_shadow_equals_the_twelve_ring_shadow`
+still compares whole canvases, and `the_shadow_buckets_account_for_every_walked_pixel`
+asserts the six buckets sum to `walked`.
+
+The extended matrix briefly included a negative-width rectangle in the
+twelve-ring comparison and it failed: the one-pass shadow and the twelve-ring
+*reference* already disagree for negative extents at `f1c174d`. That is a
+pre-existing divergence between the two implementations, unrelated to the
+hoist, and is recorded here as an observation rather than fixed in this batch.
+
+### 21.4 Measured result
+
+Identical protocol: release, 1280x800, 8-vCPU VM, no GPU and no display, 15
+frames per scene, five separate processes per phase, medians of the five
+per-process medians with min-max ranges. Raw logs:
+`evidence/bench/soft-shadow-2026-10-28/{before,after}/`.
+
+```text
+cd src && cargo build --release --example render_bench
+cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/<phase> > run$i.txt; done
+```
+
+| Item | Before | After | Verdict |
+|---|---|---|---|
+| `soft_shadow` row | 6.001 ms (5.788-6.219) | 5.805 ms (5.772-5.864) | **not claimed**: the ranges overlap |
+| `open_window_frame` | 15.815 ms (15.509-16.213) | **15.092 ms (15.060-15.195)** | ranges disjoint, 0.908 ms inside budget |
+| `full_frame` | 8.602 ms (8.154-9.447) | 8.262 ms (8.111-8.546) | ranges overlap; not claimed |
+| `lock_frame_customize` | 10.856 ms (10.251-11.196) | 10.096 ms (10.011-10.698) | ranges overlap; not claimed |
+| `primitive_fill_panel` | 0.052 ms | 0.050 ms | not claimed; inside the spread |
+| `primitive_fill_panel_translucent` | 0.329 ms | 0.334 ms | not claimed; inside the spread |
+| `primitive_fill_chip_translucent` | 0.008 ms | 0.008 ms | unchanged |
+
+The targeted row improves by 0.196 ms (3.3 %) at the median, but its ranges
+overlap, and the unchanged scenes moved in the same direction between the two
+blocks. The scene-level disjointness is therefore consistent with a block-wide
+drift and cannot be attributed to this change alone.
+
+### 21.5 Status and remaining distance
+
+**PARTIALLY VERIFIED.** The change is pixel-identical, removes real redundant
+work from the dominant painted class, and regresses nothing; the whole-scene
+number is inside budget with disjoint ranges, but the targeted row's ranges
+overlap and the unchanged scenes also moved, so no row-level win is claimed.
+
+`open_window_frame` is 0.908 ms inside the 16 ms budget in this session;
+`full_frame` is 7.738 ms inside and `lock_frame_customize` 5.904 ms inside. The
+remaining largest rows in the window frame are `stroke_round_rect`,
+`stroke_line`, `fill_round_rect` and the now-5.8 ms `soft_shadow`; this batch
+changes none of them beyond the hoist. The golden-frame gate remains
+**BLOCKED** on the missing Latin font face fixture and is not claimed.
+

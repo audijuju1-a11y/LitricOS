@@ -1725,5 +1725,80 @@
     "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
   ],
   "evidence": "evidence/bench/open-window-glass-2026-10-28/{before,after}/"
-}
+},
+    "open_window_shadow_geometry_hoist": {
+      "commit_before": "f1c174d",
+      "status": "PARTIALLY VERIFIED: output is bit-identical and no scene regressed, but the soft_shadow row ranges overlap and the unchanged scenes drifted in the same direction, so the row-level win is not claimed",
+      "finding": "One open_window_frame walks 832,918 pixels across four soft_shadow calls and paints 137,271 of them. hidden 605,923 (72.7 %) costs a bounds test per ring; mixed 108,587 (13.0 %) is the dominant painted class; under_panel 76,508; all_full 22,008; zero 13,216; partial_only 6,676; the buckets sum to walked exactly. The row measured 6.001 ms (5.788-6.219), i.e. 43.7 ns per painted pixel, and every painted pixel called sd_round_rect twice.",
+      "change": "Hoisted the clamped radius, centre, quarter-pixel offsets and shadow centre out of the pixel loop; shared the horizontal distance term between the panel test and the shadow test; built the shadow rectangle once. Both square roots remain.",
+      "bench_shadow_parameters": "views::draw_windows issues four soft_shadow calls with radius t.px(chrome.radius), spread t.px(mix(30.0, 18.0)), dy t.px(mix(12.0, 7.0)) and alpha mix(0.60, 0.40), where mix interpolates by the focus spring's elevation; the dump does not record the resolved per-call values",
+      "buckets": {
+        "walked": 832918,
+        "hidden": 605923,
+        "mixed": 108587,
+        "under_panel": 76508,
+        "all_full": 22008,
+        "zero": 13216,
+        "partial_only": 6676,
+        "painted": 137271
+      },
+      "before": {
+        "soft_shadow_row_ms": {
+          "median": 6.001,
+          "min": 5.788,
+          "max": 6.219
+        },
+        "open_window_frame_ms": {
+          "median": 15.815,
+          "min": 15.509,
+          "max": 16.213
+        },
+        "full_frame_ms": {
+          "median": 8.602,
+          "min": 8.154,
+          "max": 9.447
+        },
+        "lock_frame_customize_ms": {
+          "median": 10.856,
+          "min": 10.251,
+          "max": 11.196
+        }
+      },
+      "after": {
+        "soft_shadow_row_ms": {
+          "median": 5.805,
+          "min": 5.772,
+          "max": 5.864
+        },
+        "open_window_frame_ms": {
+          "median": 15.092,
+          "min": 15.06,
+          "max": 15.195
+        },
+        "full_frame_ms": {
+          "median": 8.262,
+          "min": 8.111,
+          "max": 8.546
+        },
+        "lock_frame_customize_ms": {
+          "median": 10.096,
+          "min": 10.011,
+          "max": 10.698
+        }
+      },
+      "verdict": {
+        "soft_shadow_row": "not claimed: 5.788-6.219 and 5.772-5.864 overlap",
+        "open_window_frame": "ranges 15.509-16.213 and 15.060-15.195 are disjoint; 0.908 ms inside the 16 ms budget",
+        "full_frame": "not claimed: ranges overlap and the scene was not changed",
+        "lock_frame_customize": "not claimed: ranges overlap and the scene was not changed"
+      },
+      "identical_output_proof": "canvas::tests::the_hoisted_shadow_geometry_equals_the_distance_function compares the inlined expression with sd_round_rect bit for bit over eight geometries and a 250x200 sample grid each (~640,000 comparisons); the_one_pass_shadow_equals_the_twelve_ring_shadow and the_shadow_buckets_account_for_every_walked_pixel still pass. A negative-width case exposed a pre-existing one-pass/twelve-ring divergence at f1c174d, unrelated to this change.",
+      "caveats": [
+        "composition only at 1280x800 on an 8-vCPU VM with no GPU and no display; no present-to-display, GPU, VRAM or idle-RAM number was measured",
+        "the soft_shadow row is instrumented time inside an untimed profile frame, not a frame time",
+        "the unchanged scenes moved down between blocks by 0.3-0.8 ms, so the scene-level improvement is consistent with block drift",
+        "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
+      ],
+      "evidence": "evidence/bench/soft-shadow-2026-10-28/{before,after}/"
+    }
 }
