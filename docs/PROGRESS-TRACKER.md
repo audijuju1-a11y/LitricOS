@@ -2617,3 +2617,112 @@ and test that unit limit, because it is the real ceiling on the installed
 socket-activated path.
 
 The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.
+## 32. Batch: the socket-activated ceiling, made explicit and enforced (verified)
+
+### 32.1 Correction to §31.6
+
+§31.6 said `MaxConnections=` "is not set for `litric-files.socket`". **That was
+wrong**, and this batch's audit is what found it: both shipped `Accept=yes`
+sockets already declare the value. The §31 audit grepped a directive list that
+did not include `MaxConnections`, so the absence was in the check, not the
+units. The error is recorded here rather than edited out of §31.
+
+### 32.2 Every shipped socket and the service behind it
+
+| Unit | Line of `MaxConnections` | `Accept` | `MaxConnections` | `SocketMode` | Service | `TasksMax` | `MemoryMax` |
+|---|---|---|---|---|---|---|---|
+| `image/mkosi.extra/usr/lib/systemd/system/litric-browser.socket` | 18 | `yes` | **1** | `0600` (line 12) | `litric-browser@.service` | 512 | 1536M |
+| `image/mkosi.extra/usr/lib/systemd/system/litric-files.socket` | 14 | `yes` | **8** | `0600` (line 11) | `litric-files@.service` | 16 | 256M |
+| `image/units-pending/litric-capd.socket` | — (absent) | `no` (line 24) | not required | `0600` (line 9) | `litric-capd.service` (parked, no binary) | 32 | 24M |
+
+`Restart=` is absent from both `@` units: they are socket-activated, so systemd
+starts one process per connection and there is no long-lived unit to restart.
+Both `@` services carry `StandardInput=socket` / `StandardOutput=socket`, which
+is the per-connection path the previous batch capped in code.
+
+**Before/after for every value: unchanged.** The audit found no unit that lacked
+a cap, so no limit was invented. What was missing was any check that this stays
+true.
+
+### 32.3 Why those two numbers, and what they cost
+
+* `litric-browser.socket`: one connection, because `litric-browser@.service`
+  declares `MemoryMax=1536M` and one instance drives one Chromium engine; a
+  second simultaneous instance would double the largest memory reservation on
+  the machine for a broker the shell opens once.
+* `litric-files.socket`: eight, because each instance carries
+  `MemoryMax=256M` and the daemon's own `MAX_CONNECTIONS` is 16 — the standalone
+  path's ceiling. Eight is a deliberate half of that: the worst case on this
+  path is 8 × 256M = 2 GiB if every instance reaches its own cap, which is a
+  number worth having in the record rather than discovering at a bad moment.
+* `litric-capd.socket`: `Accept=no`, and systemd states `MaxConnections=` has no
+  effect for such sockets, so requiring it there would be cargo cult. The lint
+  does check the value if one is ever added.
+
+### 32.4 The new gate
+
+`ci/lint-socket-connection-limits.py` fails when:
+
+* a socket has no `Accept=`;
+* an `Accept=yes` socket has no `MaxConnections=` (systemd would apply its
+  default of 64, which is what `man systemd.socket` documents and what this
+  environment's systemd 255 reports);
+* the value is not a plain integer, or is outside `1..=16` (`MAX_CONNECTIONS` in
+  `src/litric-files/src/server.rs` — a unit may promise less concurrency than the
+  daemon serves, never more).
+
+`Accept=no` sockets are exempt from the requirement, not from the range check.
+The `--self-test` writes its own fixtures in a temp directory: one conforming
+`Accept=yes` unit, one `Accept=no` unit, one missing the cap, one above it.
+
+It is wired into `ci/verify.sh` as `[3j]` (check plus self-test, exit status
+enforced by the same `check` helper as every other gate) and into
+`.github/workflows/ci.yml`.
+
+### 32.5 What actually ran
+
+```text
+python3 ci/lint-socket-connection-limits.py
+  OK: 3 socket unit(s) state their activation mode and concurrency cap
+python3 ci/lint-socket-connection-limits.py --self-test
+  OK: checker rejects a missing cap and an out-of-range cap (1 + 2 finding(s))
+python3 ci/lint-unit-sockets.py
+  OK: 3 socket unit(s) are owner-only, explicit and removed on stop
+python3 ci/lint-unit-sockets.py --self-test
+  OK: checker rejects a planted 0666 unit with 4 finding(s)
+
+systemd-analyze verify image/.../litric-files.socket image/.../litric-browser.socket
+  (no output, rc=0)
+
+bash ci/verify.sh
+  [3j] socket-activated units bound their concurrency
+    PASS  per-connection sockets declare MaxConnections
+    PASS  socket-limit linter detects a missing or oversized cap
+  summary: 31 pass, 2 fail, 4 skipped
+
+cargo fmt --check                                                  exit 0
+cargo clippy --workspace --all-targets -- -D warnings              exit 0
+cargo clippy -p litric-browser --features broker --all-targets -D  exit 0
+cargo test --workspace                 55 suites, 1,675 passed, 0 failed
+cargo test -p litric-browser --features broker --bin litric-browserd  12 passed
+python3 ci/check-python-syntax.py                                  exit 0 (63 files)
+python3 ci/lint-line-endings.py                                    exit 0 (354 files, all LF)
+python3 ci/lint-doc-refs.py                                        exit 0 (818 citations)
+python3 ci/lint-file-safety.py                                     exit 0
+```
+
+The two failures remain the absent `keys/dev/` material (mkosi config and dev
+key pairs); nothing was generated or weakened.
+
+### 32.6 Limits
+
+`systemd-analyze verify` proves the units parse and that systemd accepts the
+`MaxConnections=` values; it does **not** run the units. No boot, no QEMU, no
+image build here, so no runtime observation of systemd refusing the ninth
+connection is claimed — that behaviour is documented in `man systemd.socket` and
+encoded in the unit, not measured. No RAM number was measured or claimed this
+round. The lint reads declarations; the daemon-side behaviour (one process per
+connection, `0600`, connection cap in the standalone path) is covered by the
+tests recorded in §27–§31.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.

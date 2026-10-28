@@ -35,6 +35,8 @@ jobs:
         run: python3 ci/lint-line-endings.py
       - name: socket unit modes
         run: python3 ci/lint-unit-sockets.py
+      - name: socket connection limits
+        run: python3 ci/lint-socket-connection-limits.py
       - name: document citations
         run: python3 ci/lint-doc-refs.py
       - name: Chapter 45 harness (receipts are not rewritten in CI)

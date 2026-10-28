@@ -285,6 +285,25 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
+echo "[3j] socket-activated units bound their concurrency"
+# ---------------------------------------------------------------------------
+# `Accept=yes` starts one process per connection, so the real cap on concurrent
+# processes — and therefore on per-peer memory — is the unit's `MaxConnections=`.
+# Absent, systemd applies its own default of 64: a cap nobody chose, in front of
+# a service whose unit declares MemoryMax=256M (files) or 1536M (browser).
+# Both shipped sockets already state a value (8 and 1); this is what keeps the
+# next one from silently relying on the default.
+if [[ -n "$PY" ]]; then
+    check "per-connection sockets declare MaxConnections" \
+        "$PY" ci/lint-socket-connection-limits.py
+    check "socket-limit linter detects a missing or oversized cap" \
+        "$PY" ci/lint-socket-connection-limits.py --self-test
+else
+    skip "socket concurrency limits" "no python interpreter on PATH"
+fi
+
+# ---------------------------------------------------------------------------
+echo
 echo "[4] Development signing keys"
 # ---------------------------------------------------------------------------
 if have openssl; then
