@@ -1860,21 +1860,163 @@ impl Canvas {
         if let Some(source) = self.backdrop.clone() {
             let _attached = profile::Timer::new("glass_stage_attached");
             let (x0, y0, x1, y1) = self.span(&r.inflate(1.5));
-            // A core fast path was tried here (skip the distance for pixels the
-            // rounded outline covers completely, as `fill_round_rect` does). It
-            // moved the primitive 1.96 -> 1.61 ms but left the frame at
-            // 35.36 -> 35.15 ms, inside its own spread, so it was reverted:
-            // the remaining cost is the per-pixel blend and backdrop lookup,
-            // not the distance. PROGRESS-TRACKER §9 records the numbers.
+            let prof = profile::is_on();
+            let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
+            let (cx, cy) = r.center();
+            let qx_off = r.w / 2.0 - rad;
+            let qy_off = r.h / 2.0 - rad;
+            let full_cap = rad - 0.5;
+            let paint_cap = rad + 0.5;
+            let width = self.width as usize;
+            // The same three per-row classes as `fill_round_rect` (§19). At
+            // full coverage `blend(dst, source, 1.0)` is the source with an
+            // opaque alpha whatever is under it, so the whole interior is an
+            // opaque copy of the backdrop; only the one-pixel-class band where
+            // the rounded outline crosses the row needs the distance and the
+            // blend. The geometry is hoisted out of the pixel loop.
+            //
+            // An earlier core fast path here (§9) skipped the distance but
+            // kept a per-pixel lookup and blend, and the frame gain was inside
+            // its spread, so it was reverted. This one writes whole spans from
+            // the source and has the same proof obligation as the fill.
+            let bands_of = |y: i64| -> (i64, i64, i64, i64, f32, f32) {
+                let py = y as f32 + 0.5;
+                let qy = (py - cy).abs() - qy_off;
+                let ay = qy.max(0.0);
+                let full_half = if rad > 0.5 && ay <= full_cap {
+                    (full_cap * full_cap - ay * ay).max(0.0).sqrt()
+                } else if rad <= 0.5 && qy <= -0.5 {
+                    rad - 0.5
+                } else {
+                    -1.0
+                };
+                let paint_half = if ay < paint_cap {
+                    (paint_cap * paint_cap - ay * ay).max(0.0).sqrt()
+                } else {
+                    -1.0
+                };
+                let (paint_from, paint_to) = if paint_half >= 0.0 {
+                    let u = qx_off + paint_half + 0.25;
+                    (
+                        (((cx - u - 0.5).floor() as i64).saturating_add(1)).clamp(x0, x1),
+                        ((cx + u - 0.5).ceil() as i64).clamp(x0, x1),
+                    )
+                } else {
+                    (x0, x0)
+                };
+                let (full_from, full_to) = if full_half >= 0.0 {
+                    let u = (qx_off + full_half - 0.25).max(0.0);
+                    (
+                        ((cx - u - 0.5).ceil() as i64).clamp(x0, x1),
+                        (((cx + u - 0.5).floor() as i64).saturating_add(1)).clamp(x0, x1),
+                    )
+                } else {
+                    (x0, x0)
+                };
+                (paint_from, full_from, full_to, paint_to, qy, ay)
+            };
+            let mut full_px = 0u64;
+            let mut full_nanos = 0u64;
+            let mut partial_px = 0u64;
+            let mut partial_nanos = 0u64;
+            let mut rows_walked = 0u64;
             for y in y0..y1 {
-                for x in x0..x1 {
-                    let cov = coverage(sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius));
-                    if cov > 0.0 {
-                        if let Some(v) = source.get(x, y) {
-                            self.blend_in(x, y, v, cov);
+                let base = (y as usize).saturating_mul(width);
+                let (Some(row), Some(srow)) = (
+                    self.px.get_mut(base..base.saturating_add(width)),
+                    source.px.get(base..base.saturating_add(width)),
+                ) else {
+                    continue;
+                };
+                if prof {
+                    rows_walked = rows_walked.saturating_add(1);
+                }
+                let (paint_from, full_from, full_to, paint_to, qy, ay) = bands_of(y);
+                let (left_from, left_to, fill_from, fill_to, right_from, right_to) =
+                    if full_from < full_to {
+                        (paint_from, full_from, full_from, full_to, full_to, paint_to)
+                    } else {
+                        (
+                            paint_from, paint_from, paint_from, paint_from, paint_from, paint_to,
+                        )
+                    };
+                let copy_start = prof.then(std::time::Instant::now);
+                if fill_from < fill_to {
+                    if let (Some(dst), Some(src)) = (
+                        row.get_mut(fill_from as usize..fill_to as usize),
+                        srow.get(fill_from as usize..fill_to as usize),
+                    ) {
+                        for (d, src_px) in dst.iter_mut().zip(src) {
+                            *d = 0xFF00_0000 | (src_px & 0x00FF_FFFF);
                         }
                     }
                 }
+                if let Some(start) = copy_start {
+                    full_nanos = full_nanos.saturating_add(nanos_since(start));
+                }
+                let edge_start = prof.then(std::time::Instant::now);
+                for (from, to) in [(left_from, left_to), (right_from, right_to)] {
+                    for x in from..to {
+                        let cov = edge_coverage(x as f32 + 0.5, cx, qx_off, qy, ay, rad);
+                        if cov > 0.0 {
+                            if let (Some(p), Some(v)) =
+                                (row.get_mut(x as usize), srow.get(x as usize))
+                            {
+                                *p = blend(*p, *v, cov);
+                            }
+                        }
+                    }
+                }
+                if let Some(start) = edge_start {
+                    partial_nanos = partial_nanos.saturating_add(nanos_since(start));
+                }
+                full_px = full_px
+                    .saturating_add(u64::try_from(fill_to.saturating_sub(fill_from)).unwrap_or(0));
+                partial_px = partial_px.saturating_add(
+                    u64::try_from(left_to.saturating_sub(left_from))
+                        .unwrap_or(0)
+                        .saturating_add(
+                            u64::try_from(right_to.saturating_sub(right_from)).unwrap_or(0),
+                        ),
+                );
+            }
+            if prof {
+                // Classify the partial band with the same expression the blend
+                // uses, in an untimed pass; a counter may not disagree with the
+                // painted frame.
+                let mut partial_painted = 0u64;
+                for y in y0..y1 {
+                    let (paint_from, full_from, full_to, paint_to, qy, ay) = bands_of(y);
+                    let bands = if full_from < full_to {
+                        [(paint_from, full_from), (full_to, paint_to)]
+                    } else {
+                        [(paint_from, paint_from), (paint_from, paint_to)]
+                    };
+                    for (from, to) in bands {
+                        for x in from..to {
+                            if edge_coverage(x as f32 + 0.5, cx, qx_off, qy, ay, rad) > 0.0 {
+                                partial_painted = partial_painted.saturating_add(1);
+                            }
+                        }
+                    }
+                }
+                let span_w = u64::try_from(x1.saturating_sub(x0)).unwrap_or(0);
+                let span_h = u64::try_from(y1.saturating_sub(y0)).unwrap_or(0);
+                let walked = span_w.saturating_mul(span_h);
+                profile::note_bucket("glass_attached.full", full_px, full_nanos);
+                profile::note_bucket("glass_attached.partial_scanned", partial_px, partial_nanos);
+                profile::note_bucket("glass_attached.partial_painted", partial_painted, 0);
+                profile::note_bucket(
+                    "glass_attached.partial_zero",
+                    partial_px.saturating_sub(partial_painted),
+                    0,
+                );
+                profile::note_bucket(
+                    "glass_attached.skipped",
+                    walked.saturating_sub(full_px).saturating_sub(partial_px),
+                    0,
+                );
+                profile::note_counter("glass_attached.rows", rows_walked);
             }
             return;
         }
@@ -2655,6 +2797,61 @@ mod tests {
             source.brightest(panel),
             "the solver must search the same pixels the panel shows"
         );
+    }
+
+    #[test]
+    fn the_attached_glass_matches_the_per_pixel_distance() {
+        // The attached path used to be one distance and one blend per pixel
+        // inside the rounded shape. This is that implementation verbatim; the
+        // row-split path must leave every pixel equal for straight, fractional,
+        // circular, over-large-radius, degenerate and clipped panels.
+        fn reference(dst: &mut Canvas, source: &Canvas, r: Rect, radius: f32) {
+            let (x0, y0, x1, y1) = dst.span(&r.inflate(1.5));
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let cov = coverage(sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius));
+                    if cov > 0.0 {
+                        if let Some(v) = source.get(x, y) {
+                            dst.blend_in(x, y, v, cov);
+                        }
+                    }
+                }
+            }
+        }
+        let source = Rc::new(textured(160, 120));
+        for (r, radius) in [
+            (Rect::new(10.0, 10.0, 80.0, 50.0), 0.0),
+            (Rect::new(10.5, 9.25, 80.75, 50.5), 14.0),
+            (Rect::new(20.0, 20.0, 100.0, 30.0), 15.0),
+            (Rect::new(20.3, 20.7, 30.0, 30.0), 500.0),
+            (Rect::new(50.0, 30.0, 40.0, 40.0), 20.0),
+            (Rect::new(40.0, 40.0, 0.4, 60.0), 0.0),
+            (Rect::new(30.0, 30.0, 0.0, 0.0), 0.0),
+            (Rect::new(30.0, 30.0, -10.0, 20.0), 4.0),
+            (Rect::new(-40.0, -30.0, 100.0, 80.0), 12.0),
+            (Rect::new(5.0, 5.0, 150.0, 110.0), 24.0),
+        ] {
+            for clip in [
+                None,
+                Some(Rect::new(25.0, 15.0, 90.5, 70.0)),
+                Some(Rect::new(0.0, 0.0, 1.0, 1.0)),
+                Some(Rect::new(100.0, 80.0, 0.0, 0.0)),
+            ] {
+                let mut want = textured(160, 120);
+                let mut got = textured(160, 120);
+                for c in [&mut want, &mut got] {
+                    let _ = c.set_clip(clip);
+                    assert!(c.set_backdrop(Some(Rc::clone(&source))));
+                }
+                reference(&mut want, &source, r, radius);
+                got.glass_backdrop(r, radius, 9, 1.6);
+                assert_eq!(
+                    want.pixels(),
+                    got.pixels(),
+                    "{r:?} radius {radius} clip {clip:?}"
+                );
+            }
+        }
     }
 
     #[test]

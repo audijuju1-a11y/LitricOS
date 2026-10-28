@@ -70,7 +70,7 @@ evidence, not throughput.
 
 | Item | State | Blocker |
 |---|---|---|
-| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17, §18 and §19 (10.470 ms median after the per-row full-coverage split); the lock-customize scene is 12.527 ms, inside the 16 ms budget; display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
+| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17, §18, §19 and §20 (8.178 ms median; lock-customize 10.060 ms and open-window 15.127 ms are inside the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
@@ -1390,3 +1390,155 @@ is held to the same budget; it is the next scene with a measured overage.
 The golden-frame gate remains **BLOCKED** on the missing Latin font face
 fixture. No GPU, VRAM, display or present-to-display measurement exists on this
 host, and none is claimed.
+
+§20 applies the same per-row split to the attached glass path: the window
+frame's largest row, `glass_backdrop`, falls from 5.430 to 0.625 ms, and
+`open_window_frame` from 20.337 to 15.127 ms.
+
+## 20. Batch: attached glass copies its interior instead of blending it (VERIFIED)
+
+### 20.1 Why the window scene needed its own attribution
+
+`render_bench` timed `open_window_frame` but every call-level profile so far
+came from the full-frame or lock scenes. The bench now composes one untimed
+frame in the same open-window state immediately after the timed loop, with the
+existing call timers on, and prints rows, the disjoint pixel buckets and the
+frame's damage facts. Buckets and counters are cleared before the profile, the
+defect §19 fixed for the lock dump, so this scene cannot inherit the earlier
+full-frame profile's pixels.
+
+### 20.2 The measured attribution
+
+Before the change, one instrumented open-window frame (printed row sum
+30.462 ms; the timed frame is 20.337 ms, the difference is instrumentation
+overhead):
+
+| Row | Calls | ms | Share | Pixels | ns/px |
+|---|---|---|---|---|---|
+| `glass_backdrop` | 4 | **5.430** | 17.8 % | - | - |
+| `glass_stage_attached` (inner) | 4 | 5.427 | 17.8 % | - | - |
+| `soft_shadow` | 4 | 4.190 | 13.8 % | - | - |
+| `stroke_round_rect` | 16 | 3.657 | 12.0 % | - | - |
+| `stroke_line` | 3094 | 3.166 | 10.4 % | - | - |
+| `fill_round_rect` | 102 | 2.716 | 8.9 % | 841,611 | 3.23 |
+| `glass_panel_l` (inner) | 1 | 2.981 | 9.8 % | 380,000 | **7.84** |
+| `glass_panel_m` (inner) | 2 | 2.109 | 6.9 % | 268,395 | **7.86** |
+| `glass_panel_s` (inner) | 1 | 0.339 | 1.1 % | 41,540 | **8.16** |
+| `blit_from` | 1 | 0.256 | 0.8 % | - | - |
+| `draw_argb` | 10 | 0.190 | 0.6 % | - | - |
+
+The four glass calls add up to 5.429 ms, 689,935 panel pixels, all on the
+attached path at 7.84-8.16 ns/px. The fill row is the control that shows this is
+not the new fill split: its buckets are already 737,035 interior pixels at
+1.33 ns/px plus only 104,576 edge pixels at 8.96 ns/px. The dominant contributor
+is therefore the attached glass copy, not the fill, shadow or strokes.
+
+### 20.3 Root cause
+
+The attached branch called `sd_round_rect` for every pixel of the panel's
+bounding box. That function recomputes the centre, both half-extents, the clamped
+radius and two divides per pixel, then takes a square root; the result is fed to
+`blend_in`, which recomputes the pixel index and runs the three-channel float
+blend. At full coverage, however, `blend(dst, source, 1.0)` returns the source
+with an opaque alpha whatever is underneath, so the whole interior is an opaque
+copy of the backdrop and needs neither the distance nor the blend.
+
+§9 tried a smaller version of this (skip the distance in the covered core)
+and reverted it because the frame gain sat inside the spread. That attempt still
+paid a per-pixel lookup and a per-pixel blend. This one writes whole runs from
+the backdrop and hoists the geometry to the row, so it does not repeat it.
+
+### 20.4 What changed
+
+`src/litric-shell/src/canvas.rs`:
+
+* the attached branch derives the centre, half-extents and clamped radius once
+  per call and splits each row by the same `d = -0.5` and `d = 0.5` boundaries
+  as the fill: a full-coverage span, a partial band on each side, and nothing
+  beyond the coverage ramp;
+* the full span is copied from the backdrop as `0xFF000000 | (source & 0xFFFFFF)`,
+  which is exactly what `blend(..., 1.0)` writes;
+* only the partial band runs `edge_coverage` and `blend`;
+* the quarter-pixel margins shrink the full span and grow the partial band, so a
+  boundary pixel that is not provably full still takes the original distance
+  test;
+* profiling reports `glass_attached.full`, `.partial_scanned`,
+  `.partial_painted`, `.partial_zero` and `.skipped` as disjoint buckets, plus a
+  rows counter, filled by an untimed pass that reuses `edge_coverage`.
+
+`src/litric-shell/examples/render_bench.rs` prints the window scene's rows,
+buckets and counters in the existing dump, after clearing the accumulators.
+
+The degenerate cases are the ones the fill already covers and the new test
+exercises: zero and negative extents, radius larger than half the extent, a
+circle, fractional panels, panels partly off the canvas, and four clip cases
+including an empty clip.
+
+### 20.5 Proof of identical output
+
+`canvas::tests::the_attached_glass_matches_the_per_pixel_distance` compares the
+new path with the old branch verbatim (one `sd_round_rect`, one `blend_in` per
+pixel inside the shape) over 10 panels and 4 clips: plain, fractional, pill,
+radius 500, circle, 0.4-px wide, zero-size, negative-width, off-canvas and
+canvas-sized. Every pixel is equal.
+
+The existing 51 canvas tests still pass, including
+`glass_with_a_backdrop_ignores_what_is_under_it`, the fill reference test from
+§19 and the bucket-accounting test. The golden-frame gate remains
+**BLOCKED** on the missing Latin font face fixture; it is not claimed.
+
+### 20.6 Measured result
+
+```text
+cd src && cargo build --release --example render_bench
+cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/<phase> > run$i.txt; done
+```
+
+Release, 1280x800, 8-vCPU VM, no GPU and no display, 15 frames per scene, five
+separate processes per phase; medians of the five per-process medians, ranges
+min-max. Raw logs: `evidence/bench/open-window-glass-2026-10-28/` (`before/`,
+`after/`).
+
+| Scene | Before | After | Change | Verdict |
+|---|---|---|---|---|
+| `open_window_frame` | **20.337 ms** (20.196-21.232) | **15.127 ms** (14.930-15.502) | -25.6 % | kept; ranges disjoint, now under 16 ms |
+| `full_frame` (shipped) | 10.687 ms (10.501-11.199) | **8.178 ms** (8.061-8.543) | -23.5 % | kept; ranges disjoint |
+| `lock_frame_customize` | 12.746 ms (12.609-14.295) | **10.060 ms** (10.056-10.164) | -21.1 % | kept; ranges disjoint |
+| `primitive_fill_panel` | 0.050 ms | 0.051 ms | +2 % | **not claimed**: the fill path was not changed; inside the spread |
+| `primitive_fill_panel_translucent` | 0.335 ms (0.331-0.342) | 0.335 ms (0.332-0.336) | 0 | not claimed; unchanged |
+| `primitive_fill_chip_translucent` | 0.008 ms | 0.008 ms | 0 | not claimed; unchanged |
+
+The `glass_backdrop` row falls from **5.430 ms to 0.625 ms** (-88.5 %); the four
+panels from 2.981/2.109/0.339 to 0.271/0.314/0.040 ms (0.71/1.17/0.96 ns/px of
+panel area). After the change one instrumented window frame prints (row sum
+15.975 ms):
+
+| Bucket | Pixels | ns | ns/px |
+|---|---|---|---|
+| `glass_attached.full` | **686,910** | 336,840 | **0.49** |
+| `glass_attached.partial_scanned` | 5,565 | 106,139 | 19.07 |
+| of which `partial_painted` | 4,154 | - | - |
+| of which `partial_zero` | 1,411 | - | - |
+| `glass_attached.skipped` | 11,440 | - | - |
+
+686,910 + 5,565 + 11,440 = 703,915 pixels of bounding box, and the copy path
+covers 97.5 % of the glass area. The remaining window rows are now
+`soft_shadow` 4.171 ms (26.1 %), `stroke_round_rect` 3.630 ms (22.7 %),
+`stroke_line` 3.158 ms (19.8 %) and `fill_round_rect` 2.724 ms (17.1 %).
+
+### 20.7 Status and remaining distance
+
+**VERIFIED**: the dominant row was identified by measurement, the change
+targets it, the old implementation is the reference in a per-pixel equality
+test, and every kept number comes from before/after ranges that do not overlap.
+
+`open_window_frame` is **0.873 ms inside** the 16 ms budget at 15.127 ms.
+`full_frame` is **7.822 ms inside** at 8.178 ms, and `lock_frame_customize`
+**5.940 ms inside** at 10.060 ms. All three profiled scenes are now under the
+budget. The largest remaining rows in the window frame are the four named
+above; none is over budget on its own, and this batch does not change them.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font face
+fixture. No GPU, VRAM, display or present-to-display measurement exists on this
+host, and none is claimed. The instrumented sums (30.462 ms before, 15.975 ms
+after) are not frame times; the timed frames are 20.337 and 15.127 ms.

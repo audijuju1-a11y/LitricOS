@@ -468,6 +468,73 @@ fn main() -> ExitCode {
     }
     report("open_window_frame", times);
 
+    // One frame with the call timers on, in the same open-window state the
+    // timed scene produced. It runs after the timed loop, so no measured frame
+    // pays for it. Rows say which entry point the frame spends its time in;
+    // buckets say which pixels inside a row, and are cleared first because
+    // they are a separate accumulator from the timer rows.
+    b.shell.open_app(App::Files);
+    now = now.saturating_add(16);
+    b.shell.tick(now);
+    let _ = litric_shell::canvas::profile::take_buckets();
+    let _ = litric_shell::canvas::profile::take_counters();
+    litric_shell::canvas::profile::enable();
+    let wf = frame(&mut b);
+    litric_shell::canvas::profile::disable();
+    let mut window_rows = litric_shell::canvas::profile::take();
+    window_rows.sort_by_key(|row| std::cmp::Reverse(row.nanos));
+    let window_timed: u64 = window_rows.iter().map(|row| row.nanos).sum();
+    for row in &window_rows {
+        let ms = row.nanos as f64 / 1_000_000.0;
+        let share = if window_timed > 0 {
+            row.nanos as f64 * 100.0 / window_timed as f64
+        } else {
+            0.0
+        };
+        let per_px = if row.pixels > 0 {
+            row.nanos as f64 / row.pixels as f64
+        } else {
+            0.0
+        };
+        println!(
+            "window_profile.{}.calls={} window_profile.{}.ms={ms:.3} window_profile.{}.share_pct={share:.1} window_profile.{}.px={} window_profile.{}.ns_per_px={per_px:.2}",
+            row.name, row.calls, row.name, row.name, row.name, row.pixels, row.name
+        );
+    }
+    println!(
+        "window_profile.timed_ms={:.3}",
+        window_timed as f64 / 1_000_000.0
+    );
+    println!(
+        "window_profile.full={} damage_rects={} restored_px={:.0} visited_px={}",
+        wf.full,
+        wf.damage.len(),
+        wf.restored_px,
+        wf.visited_px
+    );
+    let mut window_buckets = litric_shell::canvas::profile::take_buckets();
+    window_buckets.sort_by_key(|b| std::cmp::Reverse(b.pixels));
+    for bucket in &window_buckets {
+        let per_px = if bucket.pixels > 0 {
+            bucket.nanos as f64 / bucket.pixels as f64
+        } else {
+            0.0
+        };
+        println!(
+            "window_bucket.{}.px={} window_bucket.{}.ns={} window_bucket.{}.ns_per_px={per_px:.2}",
+            bucket.name, bucket.pixels, bucket.name, bucket.nanos, bucket.name
+        );
+    }
+    for c in litric_shell::canvas::profile::take_counters() {
+        println!("window_counter.{}.value={}", c.name, c.value);
+    }
+    if let Some(id) = b.shell.wm.focused() {
+        b.shell.wm.close(id);
+    }
+    now = now.saturating_add(16);
+    b.shell.tick(now);
+    let _ = frame(&mut b);
+
     // ---- the box blur on its own -------------------------------------------
     for radius in [3_u32, 10, 30] {
         let mut times = Vec::with_capacity(RUNS);

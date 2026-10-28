@@ -1448,5 +1448,282 @@
     "open_window_frame remains 20.136 ms, over the 16 ms budget, and is the next measured overage"
   ],
   "evidence": "evidence/bench/fill-round-rect-row-split-2026-10-28/{before,before-clean,after}/"
+},
+  "open_window_glass_row_split": {
+  "commit_before": "66c92ed",
+  "status": "VERIFIED: the attached glass path now copies full-coverage spans from the backdrop; open_window_frame is under 16 ms and all five-process ranges are disjoint",
+  "finding": "open_window_frame was dominated by glass_backdrop: 5.430 ms, 17.8 % of the instrumented frame, over four attached panels covering 689,935 pixels at 7.84-8.16 ns/px. The attached branch called sd_round_rect (centre, two half-extents, clamped radius, two divides and a square root) and blend_in for every pixel of the panel's bounding box, though at full coverage blend(dst, source, 1.0) is just the source with an opaque alpha.",
+  "change": "The attached branch splits each row at d = -0.5 and d = 0.5: the full-coverage span is written as 0xFF000000 | (source & 0xFFFFFF) in one slice pass, and only the one-pixel-class partial band runs edge_coverage and blend. Geometry is hoisted out of the pixel loop, with the same quarter-pixel safety margins as the fill split in 19. Profiling buckets (full, partial_scanned, partial_painted, partial_zero, skipped) and a rows counter were added.",
+  "distinction_from_section_9": "The earlier attached-glass core fast path skipped only the distance while keeping a per-pixel lookup and blend, and its frame gain was inside the spread; this change copies whole runs from the backdrop and hoists the geometry, and its ranges are disjoint.",
+  "instrumentation": {
+    "profile_api": "existing Bucket/Counter API from 19; no new accumulator type",
+    "buckets": [
+      "glass_attached.full",
+      "glass_attached.partial_scanned",
+      "glass_attached.partial_painted",
+      "glass_attached.partial_zero",
+      "glass_attached.skipped"
+    ],
+    "counters": [
+      "glass_attached.rows"
+    ],
+    "bench": "one untimed open-window frame after the timed loop, clearing buckets and counters first",
+    "cost_when_off": "one profile::is_on() read per glass call; no timestamps or counting pass on a timed frame"
+  },
+  "protocol": "release, 1280x800, 8-vCPU VM, no GPU, no display, 15 frames per scene, five separate processes per phase; median of the five per-process medians; ranges are min-max of those medians",
+  "conditions": {
+    "uname": "Linux-6.1.102-x86_64-with-glibc2.39",
+    "nproc": 8,
+    "gpu": "none",
+    "display": "none"
+  },
+  "commands": [
+    "cd src && cargo build --release --example render_bench",
+    "cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/<phase> > run$i.txt; done"
+  ],
+  "before_attribution": {
+    "source": "evidence/bench/open-window-glass-2026-10-28/before/run1.txt",
+    "instrumented_total_ms": 30.462,
+    "timed_frame_ms": 20.337,
+    "rows": [
+      {
+        "entry": "glass_backdrop",
+        "calls": 4,
+        "ms": 5.43,
+        "share_pct": 17.8
+      },
+      {
+        "entry": "soft_shadow",
+        "calls": 4,
+        "ms": 4.19,
+        "share_pct": 13.8
+      },
+      {
+        "entry": "stroke_round_rect",
+        "calls": 16,
+        "ms": 3.657,
+        "share_pct": 12.0
+      },
+      {
+        "entry": "stroke_line",
+        "calls": 3094,
+        "ms": 3.166,
+        "share_pct": 10.4
+      },
+      {
+        "entry": "fill_round_rect",
+        "calls": 102,
+        "ms": 2.716,
+        "share_pct": 8.9,
+        "pixels": 841611,
+        "ns_per_px": 3.23
+      },
+      {
+        "entry": "glass_panel_l",
+        "calls": 1,
+        "ms": 2.981,
+        "pixels": 380000,
+        "ns_per_px": 7.84
+      },
+      {
+        "entry": "glass_panel_m",
+        "calls": 2,
+        "ms": 2.109,
+        "pixels": 268395,
+        "ns_per_px": 7.86
+      },
+      {
+        "entry": "glass_panel_s",
+        "calls": 1,
+        "ms": 0.339,
+        "pixels": 41540,
+        "ns_per_px": 8.16
+      }
+    ],
+    "fill_buckets": {
+      "interior": {
+        "pixels": 737035,
+        "ns_per_px": 1.33
+      },
+      "edge_scanned": {
+        "pixels": 104576,
+        "ns_per_px": 8.96
+      },
+      "edge_painted_pixels": 102038,
+      "edge_zero_pixels": 2538,
+      "outside_shape_pixels": 39182,
+      "clipped_pixels": 1728
+    }
+  },
+  "after_attribution": {
+    "source": "evidence/bench/open-window-glass-2026-10-28/after/run1.txt",
+    "instrumented_total_ms": 15.975,
+    "timed_frame_ms": 15.127,
+    "rows": [
+      {
+        "entry": "soft_shadow",
+        "calls": 4,
+        "ms": 4.171,
+        "share_pct": 26.1
+      },
+      {
+        "entry": "stroke_round_rect",
+        "calls": 16,
+        "ms": 3.63,
+        "share_pct": 22.7
+      },
+      {
+        "entry": "stroke_line",
+        "calls": 3094,
+        "ms": 3.158,
+        "share_pct": 19.8
+      },
+      {
+        "entry": "fill_round_rect",
+        "calls": 102,
+        "ms": 2.724,
+        "share_pct": 17.1
+      },
+      {
+        "entry": "glass_backdrop",
+        "calls": 4,
+        "ms": 0.625,
+        "share_pct": 3.9
+      },
+      {
+        "entry": "glass_panel_l",
+        "calls": 1,
+        "ms": 0.271,
+        "pixels": 380000,
+        "ns_per_px": 0.71
+      },
+      {
+        "entry": "glass_panel_m",
+        "calls": 2,
+        "ms": 0.314,
+        "pixels": 268395,
+        "ns_per_px": 1.17
+      },
+      {
+        "entry": "glass_panel_s",
+        "calls": 1,
+        "ms": 0.04,
+        "pixels": 41540,
+        "ns_per_px": 0.96
+      }
+    ],
+    "buckets": {
+      "full": {
+        "pixels": 686910,
+        "nanos": 336840,
+        "ns_per_px": 0.49
+      },
+      "partial_scanned": {
+        "pixels": 5565,
+        "nanos": 106139,
+        "ns_per_px": 19.07
+      },
+      "partial_painted_pixels": 4154,
+      "partial_zero_pixels": 1411,
+      "skipped_pixels": 11440,
+      "accounting": "686,910 + 5,565 + 11,440 = 703,915 bounding-box pixels; 97.5 % of glass area on the copy path",
+      "rows": 1195
+    }
+  },
+  "before_ms": {
+    "open_window_frame": {
+      "median": 20.337,
+      "min": 20.196,
+      "max": 21.232
+    },
+    "full_frame": {
+      "median": 10.687,
+      "min": 10.501,
+      "max": 11.199
+    },
+    "lock_frame_customize": {
+      "median": 12.746,
+      "min": 12.609,
+      "max": 14.295
+    },
+    "primitive_fill_panel": {
+      "median": 0.05,
+      "min": 0.05,
+      "max": 0.05
+    },
+    "primitive_fill_panel_translucent": {
+      "median": 0.335,
+      "min": 0.331,
+      "max": 0.342
+    },
+    "primitive_fill_chip_translucent": {
+      "median": 0.008,
+      "min": 0.008,
+      "max": 0.012
+    }
+  },
+  "after_ms": {
+    "open_window_frame": {
+      "median": 15.127,
+      "min": 14.93,
+      "max": 15.502
+    },
+    "full_frame": {
+      "median": 8.178,
+      "min": 8.061,
+      "max": 8.543
+    },
+    "lock_frame_customize": {
+      "median": 10.06,
+      "min": 10.056,
+      "max": 10.164
+    },
+    "primitive_fill_panel": {
+      "median": 0.051,
+      "min": 0.05,
+      "max": 0.051
+    },
+    "primitive_fill_panel_translucent": {
+      "median": 0.335,
+      "min": 0.332,
+      "max": 0.336
+    },
+    "primitive_fill_chip_translucent": {
+      "median": 0.008,
+      "min": 0.008,
+      "max": 0.008
+    }
+  },
+  "change_pct": {
+    "open_window_frame": -25.6,
+    "full_frame": -23.5,
+    "lock_frame_customize": -21.1,
+    "glass_backdrop_row": -88.5
+  },
+  "verdict_by_scene": {
+    "open_window_frame": "kept: before 20.196-21.232 and after 14.930-15.502 do not overlap; now under 16 ms",
+    "full_frame": "kept: before 10.501-11.199 and after 8.061-8.543 do not overlap",
+    "lock_frame_customize": "kept: before 12.609-14.295 and after 10.056-10.164 do not overlap",
+    "primitive_fill_panel": "not claimed: the fill path was not changed; 0.050 -> 0.051 ms is inside the spread",
+    "primitive_fill_panel_translucent": "not claimed: unchanged at 0.335 ms",
+    "primitive_fill_chip_translucent": "not claimed: unchanged at 0.008 ms"
+  },
+  "identical_output_proof": "canvas::tests::the_attached_glass_matches_the_per_pixel_distance compares against the old branch verbatim (sd_round_rect + blend_in per pixel) over 10 panels (plain, fractional, pill, radius 500, circle, 0.4 px wide, zero-size, negative-width, off-canvas, canvas-sized) and 4 clips (none, fractional, one-pixel, empty). The existing 51 canvas tests, including the fill reference and bucket-accounting tests, still pass.",
+  "budget": {
+    "budget_ms": 16.0,
+    "open_window_frame_median_ms": 15.127,
+    "open_window_frame_headroom_ms": 0.873,
+    "full_frame_median_ms": 8.178,
+    "full_frame_headroom_ms": 7.822,
+    "lock_frame_customize_median_ms": 10.06,
+    "lock_frame_customize_headroom_ms": 5.94
+  },
+  "caveats": [
+    "composition only at 1280x800 on an 8-vCPU VM with no GPU and no display; no present-to-display, GPU, VRAM or idle-RAM number was measured",
+    "the instrumented window frame prints 30.462 ms before and 15.975 ms after, while the timed frames are 20.337 and 15.127 ms; shares are relative to the instrumented sums",
+    "soft_shadow, stroke_round_rect and stroke_line were not changed; they are now the largest rows in the window frame",
+    "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
+  ],
+  "evidence": "evidence/bench/open-window-glass-2026-10-28/{before,after}/"
 }
 }
