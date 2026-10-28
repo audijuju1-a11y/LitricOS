@@ -2726,3 +2726,125 @@ connection, `0600`, connection cap in the standalone path) is covered by the
 tests recorded in §27–§31.
 
 The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.
+## 33. Batch: the socket-activated worst case is derived by the budget gate (verified)
+
+### 33.1 The gate as found
+
+`ci/check-memory-budget.py` reads `docs/PERF-budget.md` and the units under
+`image/mkosi.extra/usr/lib/systemd/system/`. Its idle table's `Enforced by` cell
+is a claim (`MemoryMax=140M`) that must be configured for the named unit and be
+the value that actually applies along that unit's slice chain
+(`EffectiveMemoryMax=` semantics); `TARGET (not enforced: …)` and
+`[ACK: reason — BUG-0000]` are printed as `ACKNOWLEDGED`; the budget column is
+summed against the `**TOTAL**` row; every shipped `Memory*` cap must appear
+somewhere in the ledger; a slice whose limits govern no shipped unit is an
+error. Exit 0 on no errors, 1 otherwise; `--strict` also fails on acknowledged
+gaps; `--self-test` runs ten fixtures. It is wired at `ci/verify.sh:202` and
+`ci/verify.sh:204` (check and self-test).
+
+**What it could not see:** the loader only reads `*.service` and `*.slice`, so
+every `*.socket` was invisible, and the `| Unit | MemoryMax |` table (§3b) was
+read only to mark those units as "listed" — never to multiply anything. The
+installed-path ceiling `MaxConnections= × MemoryMax=` could therefore change
+without any checked number moving.
+
+### 33.2 The inputs, with their real locations
+
+| Input | Value | Where |
+|---|---:|---|
+| `litric-files.socket` `MaxConnections=` | 8 | `image/mkosi.extra/usr/lib/systemd/system/litric-files.socket:14` |
+| `litric-files@.service` `MemoryMax=` | 256M | `image/mkosi.extra/usr/lib/systemd/system/litric-files@.service:78` |
+| `litric-browser.socket` `MaxConnections=` | 1 | `image/mkosi.extra/usr/lib/systemd/system/litric-browser.socket:18` |
+| `litric-browser@.service` `MemoryMax=` | 1536M | `image/mkosi.extra/usr/lib/systemd/system/litric-browser@.service:64` |
+| `litric-capd.socket` `Accept=` | `no` | `image/units-pending/litric-capd.socket:24` |
+| daemon's standalone handler cap | 16 | `src/litric-files/src/server.rs:1180` (`MAX_CONNECTIONS`) |
+| per-handler line ceiling | 16,386 B | `src/litric-files/src/server.rs:1049` (`FRAME_LIMIT`) |
+
+Neither socket declares `Service=`, so systemd's defaults apply:
+`<stem>@.service` for `Accept=yes`, `<stem>.service` otherwise. The gate encodes
+that rule rather than assuming a name.
+
+Derived worst case, from those numbers only:
+
+```text
+litric-browser.socket   1 x 1536M = 1536M
+litric-files.socket     8 x  256M = 2048M
+                          TOTAL   = 3584M
+```
+
+These are ceilings, not usage, and they are not part of the 320 MB idle total.
+The 3584M is now written into the ledger (§3b.1) and recomputed on every run.
+
+### 33.3 What changed
+
+| File | Change |
+|---|---|
+| `ci/check-memory-budget.py` | parses `*.socket` (`Accept`, `MaxConnections`, `Service`), resolves each socket's service and its effective `MemoryMax`, computes `MaxConnections × MemoryMax`, and compares it with the new ledger table row by row and in total. It fails when an `Accept=yes` socket is missing from the table, when the recorded `MaxConnections`/service/`MemoryMax`/worst case disagrees with the shipped units, when a socket-activated service has no `MemoryMax` at all, when the table names a socket the repository does not ship, and when the socket TOTAL is absent or differs. |
+| `docs/PERF-budget.md` | new §3b.1 with the socket table above, the derivation rule, and the statement that these are ceilings rather than usage. |
+| Self-test | three fixtures added: consistent (passes), `MaxConnections` raised without the ledger (fails), socket missing from the ledger (fails). All thirteen cases pass. |
+
+A real defect was found while doing this, by the change itself: `total_row()`
+searched the whole document for `**TOTAL**`, so once a second table had its own
+TOTAL the idle check compared 320 MB with 3584 MB. It is now scoped to the idle
+table, and the failure it produced is quoted below rather than quietly fixed.
+
+### 33.4 The check actually biting
+
+Temporarily raising the shipped cap, with the real output and exit status:
+
+```text
+$ sed -i 's/^MaxConnections=8$/MaxConnections=9/' image/.../litric-files.socket
+$ python3 ci/check-memory-budget.py ; echo rc=$?
+ERROR          PERF-budget.md (socket TOTAL row): declares 3584M but the shipped MaxConnections x effective MemoryMax sums to 3840M
+ERROR          PERF-budget.md:197 (litric-files.socket): the socket-activated worst case and the ledger disagree: recorded MaxConnections=8, shipped 9; recorded worst case 2048 MB, derived 2304M
+ERROR            : 2
+RESULT: FAIL -- static policy check only; says nothing about measured runtime memory
+rc=1
+```
+
+Restored to `MaxConnections=8`, same command:
+
+```text
+$ python3 ci/check-memory-budget.py ; echo rc=$?
+RESULT: PASS -- static policy only: every ledger claim is configured, every shipped cap is accounted for, and every divergence is acknowledged with a review condition
+rc=0
+```
+
+`git status` after the demo shows only the intended edits (this checker and the
+ledger); the unit file is byte-identical to what was shipped.
+
+### 33.5 Gates (exit statuses enforced)
+
+```text
+python3 ci/check-memory-budget.py                    rc=0 (PASS)
+python3 ci/check-memory-budget.py --self-test        rc=0 (13 PASS, 0 FAIL)
+python3 ci/lint-unit-sockets.py                      rc=0 (3 units)
+python3 ci/lint-unit-sockets.py --self-test          rc=0
+python3 ci/lint-socket-connection-limits.py          rc=0 (3 units)
+python3 ci/lint-socket-connection-limits.py --self-test rc=0
+cargo fmt --check                                                  exit 0
+cargo clippy --workspace --all-targets -- -D warnings              exit 0
+cargo clippy -p litric-browser --features broker --all-targets -D  exit 0
+cargo test --workspace                 55 suites, 1,675 passed, 0 failed
+cargo test -p litric-browser --features broker --bin litric-browserd  12 passed
+python3 ci/check-python-syntax.py                                  exit 0 (63 files)
+python3 ci/lint-line-endings.py                                    exit 0 (354 files, all LF)
+python3 ci/lint-doc-refs.py                                        exit 0 (825 citations)
+python3 ci/lint-file-safety.py                                     exit 0
+bash ci/verify.sh                      31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the known absent `keys/dev/` material (mkosi config and dev
+key pairs); no key was created and no gate was relaxed.
+
+### 33.6 Limits and the decision left to the user
+
+The gate proves the ledger and the units agree; it does not measure a machine.
+No boot, QEMU, image build or cgroup reader exists here, so the 3584M is a
+configured ceiling, not observed usage, and no RAM number is claimed. No shipped
+limit was changed: `MaxConnections=8` for files and `1` for the browser stand.
+Whether files should be 4 instead of 8 — halving the socket-activated ceiling
+from 2 GiB to 1 GiB — is a product decision, and the number is now written where
+that decision can be made against it rather than guessed at.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.

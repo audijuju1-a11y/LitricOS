@@ -199,6 +199,58 @@ def load_units(unit_dir: Path) -> dict[str, Unit]:
     return units
 
 
+class Socket:
+    """One `.socket` unit: who starts, and how many at once."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.accept: str | None = None
+        self.max_connections: str | None = None
+        self.service: str | None = None
+
+
+def load_sockets(unit_dir: Path) -> dict[str, Socket]:
+    """Every socket unit in the tree, with the three keys this check needs."""
+    sockets: dict[str, Socket] = {}
+    if not unit_dir.is_dir():
+        return sockets
+    for path in sorted(unit_dir.glob("*.socket")):
+        if not path.is_file():
+            continue
+        sock = Socket(path.name)
+        section = ""
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = _strip_comment(raw)
+            if not line:
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip()
+                continue
+            if section != "Socket" or "=" not in line:
+                continue
+            key, value = (p.strip() for p in line.split("=", 1))
+            if key == "Accept":
+                sock.accept = value
+            elif key == "MaxConnections":
+                sock.max_connections = value
+            elif key == "Service":
+                sock.service = value
+        sockets[path.name] = sock
+    return sockets
+
+
+def socket_service(sock: Socket) -> str:
+    """The unit systemd starts for this socket, spelled out.
+
+    `Accept=yes` defaults to `<stem>@.service` and `Accept=no` to
+    `<stem>.service` (systemd.socket); an explicit `Service=` wins either way.
+    """
+    if sock.service:
+        return sock.service
+    stem = sock.name[: -len(".socket")]
+    return f"{stem}@.service" if sock.accept == "yes" else f"{stem}.service"
+
+
 def parse_dropins(unit_dir: Path) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     if not unit_dir.is_dir():
@@ -306,9 +358,25 @@ def idle_rows(path: Path) -> list[Row]:
 
 
 def total_row(path: Path) -> int | None:
+    """The idle table's TOTAL cell, scoped to that table.
+
+    Scoped, not a whole-file search: the socket worst-case table (§3b.1) has a
+    TOTAL row of its own, and a whole-file search read that one as this one —
+    the first cut of the socket check reported `declares 3584 MB but the budget
+    column sums to 320 MB`, which is two different tables being subtracted from
+    each other.
+    """
+    in_table = False
     for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("|") and "**TOTAL**" in line:
-            m = re.search(r"\*\*(\d+)\*\*\s*\|", line)
+        if line.startswith("| # | Component | Budget | Enforced by"):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if not line.startswith("|"):
+            break
+        if "**TOTAL**" in line:
+            m = re.search(r"\*\*(\d+)\*\*", line)
             if m:
                 return int(m.group(1))
     return None
@@ -333,6 +401,76 @@ def capped_rows(path: Path) -> list[Row]:
             continue
         rows.append(Row(lineno, cells))
     return rows
+
+
+SOCKET_TABLE_HEADER = "| Socket | MaxConnections | Service | Service MemoryMax | Worst case (MB) |"
+
+
+class SocketRow:
+    """One row of the socket-activated worst-case table."""
+
+    def __init__(self, lineno: int, cells: list[str]) -> None:
+        self.lineno, self.cells = lineno, cells
+
+    @property
+    def socket(self) -> str:
+        return self.cells[0].replace("`", "").strip()
+
+    @property
+    def max_connections(self) -> str:
+        return self.cells[1].replace("*", "").strip()
+
+    @property
+    def service(self) -> str:
+        return self.cells[2].replace("`", "").strip()
+
+    @property
+    def memory_max(self) -> str:
+        return self.cells[3].replace("*", "").strip()
+
+    @property
+    def worst_case_mb(self) -> int | None:
+        raw = self.cells[4].replace("*", "").strip()
+        return int(raw) if raw.isdigit() else None
+
+
+def socket_rows(path: Path) -> list[SocketRow]:
+    """Rows of the socket worst-case table, if the ledger has one."""
+    rows: list[SocketRow] = []
+    in_table = False
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if line.startswith(SOCKET_TABLE_HEADER):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if not line.startswith("|"):
+            if rows:
+                break
+            continue
+        if "**TOTAL**" in line:
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 5 or set(cells[0]) <= set("-: "):
+            continue
+        rows.append(SocketRow(lineno, cells))
+    return rows
+
+
+def socket_total(path: Path) -> int | None:
+    """The socket table's TOTAL cell, in bytes."""
+    in_table = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith(SOCKET_TABLE_HEADER):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if line.startswith("|") and "**TOTAL**" in line:
+            m = re.search(r"\*\*(\d+)\*\*", line)
+            if m:
+                return int(m.group(1)) * 1024 ** 2
+    return None
 
 
 def ack_text(cell: str) -> str | None:
@@ -549,6 +687,93 @@ def check(root: Path, ledger: Path, unit_dir: Path) -> list[Finding]:
             "ships a memory limit the ledger does not list; add it to the idle "
             "table or to the non-idle table so the budget accounts for it"))
 
+    # --- socket-activated worst case ---------------------------------------
+    # `Accept=yes` starts one process per connection, so the memory a peer can
+    # ask the machine to hold is MaxConnections x the service's effective
+    # MemoryMax. The idle table cannot carry that product (caps are not usage),
+    # and before this block nothing multiplied the two: raising either input
+    # changed the real ceiling without changing any checked number.
+    sockets = load_sockets(unit_dir)
+    entries = {row.socket: row for row in socket_rows(ledger)}
+    derived: dict[str, int] = {}
+    for name in sorted(sockets):
+        sock = sockets[name]
+        if sock.accept != "yes":
+            continue  # systemd.socket: MaxConnections has no effect for Accept=no.
+        service_name = socket_service(sock)
+        service = units.get(service_name)
+        if service is None:
+            out.append(Finding(
+                "ERROR", name,
+                f"Accept=yes but the unit it starts ({service_name}) is not "
+                f"shipped, so no MemoryMax can be resolved for its worst case"))
+            continue
+        raw = sock.max_connections
+        if raw is None or not raw.isdigit() or int(raw) < 1:
+            out.append(Finding(
+                "ERROR", f"{name}: MaxConnections={raw}",
+                "a socket-activated unit must state a positive MaxConnections=; "
+                "unset means systemd's default of 64"))
+            continue
+        count = int(raw)
+        cap, origin = effective(units, service, "MemoryMax")
+        if cap is None:
+            out.append(Finding(
+                "ERROR", service_name,
+                f"no MemoryMax on {service_name} or its slices, so the worst "
+                f"case of {count} concurrent instances is unbounded"))
+            continue
+        worst = count * cap
+        derived[name] = worst
+
+        row = entries.get(name)
+        if row is None:
+            out.append(Finding(
+                "ERROR", f"{ledger.name} (socket table)",
+                f"{name} is Accept=yes and its worst case is "
+                f"{count} x {human(cap)} = {human(worst)}, but the socket table "
+                f"does not list it"))
+            continue
+        mismatches = []
+        if row.max_connections != str(count):
+            mismatches.append(
+                f"recorded MaxConnections={row.max_connections}, shipped {count}")
+        if row.service != service_name:
+            mismatches.append(
+                f"recorded service {row.service}, shipped {service_name}")
+        if size_bytes(row.memory_max) != cap:
+            mismatches.append(
+                f"recorded MemoryMax={row.memory_max}, effective {human(cap)} "
+                f"(from {origin})")
+        if row.worst_case_mb != worst // (1024 ** 2):
+            mismatches.append(
+                f"recorded worst case {row.worst_case_mb} MB, derived {human(worst)}")
+        if mismatches:
+            out.append(Finding(
+                "ERROR", f"{ledger.name}:{row.lineno} ({name})",
+                "the socket-activated worst case and the ledger disagree: "
+                + "; ".join(mismatches)))
+
+    for name, row in entries.items():
+        if name not in sockets:
+            out.append(Finding(
+                "ERROR", f"{ledger.name}:{row.lineno} ({name})",
+                "the socket table names a socket this repository does not ship"))
+
+    declared_socket_total = socket_total(ledger)
+    if derived and declared_socket_total is None:
+        out.append(Finding(
+            "ERROR", f"{ledger.name} (socket table)",
+            "socket-activated units are listed but the table has no **TOTAL** row"))
+    elif declared_socket_total is not None:
+        derived_total = sum(derived.values())
+        if derived_total != declared_socket_total:
+            out.append(Finding(
+                "ERROR", f"{ledger.name} (socket TOTAL row)",
+                f"declares {human(declared_socket_total)} but the shipped "
+                f"MaxConnections x effective MemoryMax sums to "
+                f"{human(derived_total)}"))
+
     # --- slices with limits that nothing joins ------------------------------
     ack_for: dict[str, str] = {}
     for row in rows:
@@ -605,14 +830,47 @@ UNITS_OK = {
         "[Unit]\nDescription=x\n[Slice]\nMemoryAccounting=yes\nMemoryMax=140M\n",
 }
 
+LEDGER_SOCKET = """\
+# fake ledger
 
-def _fixture(root: Path, ledger_text: str, units: dict[str, str]):
+| # | Component | Budget | Enforced by | Notes |
+|---|---|---:|---|---|
+| 1 | litric-shell | 110 MB | `MemoryMax=140M` | |
+| | **TOTAL** | **110** | | |
+
+| Unit | MemoryMax | Why it is not in the idle total |
+|---|---:|---|
+| `litric-files@.service` | 256M | socket-activated |
+
+| Socket | MaxConnections | Service | Service MemoryMax | Worst case (MB) |
+|---|---|---:|---:|---:|
+| `litric-files.socket` | 2 | `litric-files@.service` | 256M | 512 |
+| | **TOTAL** | | | **512** |
+"""
+
+UNITS_SOCKET = {
+    **UNITS_OK,
+    "litric-files@.service":
+        "[Service]\nMemoryMax=256M\nExecStart=/bin/true\n",
+}
+
+SOCKET_OK = {
+    "litric-files.socket":
+        "[Socket]\nListenStream=/run/litric/files.sock\n"
+        "Accept=yes\nMaxConnections=2\n",
+}
+
+
+def _fixture(root: Path, ledger_text: str, units: dict[str, str],
+             sockets: dict[str, str] | None = None):
     ledger = root / "docs" / "PERF-budget.md"
     ledger.parent.mkdir(parents=True, exist_ok=True)
     ledger.write_text(ledger_text, encoding="utf-8")
     unit_dir = root / "unit"
     unit_dir.mkdir(parents=True, exist_ok=True)
     for name, body in units.items():
+        (unit_dir / name).write_text(body, encoding="utf-8")
+    for name, body in (sockets or {}).items():
         (unit_dir / name).write_text(body, encoding="utf-8")
     return ledger, unit_dir
 
@@ -668,6 +926,30 @@ def self_test() -> int:
                 units = {}
 
             ledger, unit_dir = _fixture(root, ledger_text, units)
+            findings = check(root, ledger, unit_dir)
+            if want_sev == "":
+                ok = not findings
+                detail = "; ".join(str(f) for f in findings)
+            else:
+                hits = [f for f in findings if f.severity == want_sev and needle in f.message]
+                ok = bool(hits)
+                detail = "; ".join(str(f) for f in findings[:3])
+            print(f"{'PASS' if ok else 'FAIL'}  self-test: {name}"
+                  + ("" if ok else f"\n        {detail}"))
+            rc |= 0 if ok else 1
+
+    socket_cases: list[tuple[str, str, dict[str, str], dict[str, str], str, str]] = [
+        ("socket worst case consistent", LEDGER_SOCKET, UNITS_SOCKET, SOCKET_OK, "", ""),
+        ("socket cap raised without the ledger", LEDGER_SOCKET, UNITS_SOCKET,
+         {"litric-files.socket": SOCKET_OK["litric-files.socket"].replace(
+             "MaxConnections=2", "MaxConnections=4")}, "ERROR", "disagree"),
+        ("socket missing from the ledger", LEDGER_OK, UNITS_SOCKET, SOCKET_OK,
+         "ERROR", "does not list"),
+    ]
+    for name, ledger_text, unit_text, socket_text, want_sev, needle in socket_cases:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ledger, unit_dir = _fixture(root, ledger_text, unit_text, socket_text)
             findings = check(root, ledger, unit_dir)
             if want_sev == "":
                 ok = not findings

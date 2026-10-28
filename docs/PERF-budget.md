@@ -171,6 +171,37 @@ from the manifest's resource class applied by `litric-capd` at launch. That is a
 documented absence rather than an oversight, and the checker reads an unlisted
 *cap* as an error, not an unlisted absence.
 
+### 3b.1 Socket-activated worst case — derived, not remembered
+
+`MaxConnections=` in a socket unit multiplies with the service's `MemoryMax=` to
+decide how much memory a peer can ask the machine to hold. The idle table cannot
+carry that product, and until this section existed nothing multiplied the two, so
+raising either input changed the real ceiling while every checked number stayed
+the same. `ci/check-memory-budget.py` now derives the product from the shipped
+units on every run:
+
+* every `Accept=yes` socket must appear here, with the `MaxConnections=` and the
+  service the unit actually declares;
+* the `Worst case (MB)` cell must equal `MaxConnections ×` the service's
+  effective `MemoryMax=` (resolved along its slice chain, the same way the idle
+  table resolves its claims);
+* the TOTAL must equal what the shipped units sum to, so a raised cap or a
+  raised `MemoryMax=` fails the gate until someone writes the new number down.
+
+`litric-capd.socket` is `Accept=no`; systemd ignores `MaxConnections=` there, so
+it has no row.
+
+| Socket | MaxConnections | Service | Service MemoryMax | Worst case (MB) |
+|---|---|---:|---:|---:|
+| `litric-browser.socket` | 1 | `litric-browser@.service` | 1536M | 1536 |
+| `litric-files.socket` | 8 | `litric-files@.service` | 256M | 2048 |
+| | **TOTAL** | | | **3584** |
+
+These are ceilings, not usage: 3.5 GiB is what the caps permit if every
+per-connection instance simultaneously reached its own limit, which is why the
+number belongs in the budget rather than in nobody's head. It is not part of the
+320 MB idle total, and it is not a measurement.
+
 ### 3c. The runtime measurement: `budget-snapshot` and `check-memory-snapshot.py`
 
 The static checker above proves the ledger and the units agree. It cannot prove
