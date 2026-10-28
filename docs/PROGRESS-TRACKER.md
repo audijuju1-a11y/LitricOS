@@ -70,7 +70,7 @@ evidence, not throughput.
 
 | Item | State | Blocker |
 |---|---|---|
-| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16 and §17 (12.054 ms median after the exact blend table, under the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
+| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17 and §18 (11.927 ms median, under the 16 ms budget); the lock-customize scene is 16.223 ms, 0.223 ms over; display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
@@ -684,7 +684,10 @@ present-to-display; no GPU or DRM device was measured.
 §16 supersedes the `fill_round_rect` part of this section: the same scene now
 measures **14.404 ms** median after the run-based fill. The 15.076 ms figure
 above is §12's measurement as it stood; §16 records the new runs. §17 lowers the same scene to 12.054 ms by
-replacing the translucent core blend with an exact table.
+replacing the translucent core blend with an exact table. §18 adds the missing
+per-row attribution for `lock_frame_customize` itself and records three
+attempted optimizations that were measured and reverted; `full_frame` stays at
+11.927 ms and `lock_frame_customize` at 16.223 ms.
 
 ## 13. Batch: browser origin canonicalisation and the queue's load bound
 
@@ -1097,3 +1100,134 @@ target. The largest rows left in the instrumented frame are `glass_backdrop`
 2.548 ms (15.4 %), `soft_shadow` 2.436 ms (14.7 %), `stroke_line` 2.244 ms
 (13.5 %, 2239 calls), `fill_round_rect` 2.135 ms (12.9 %) and
 `stroke_round_rect` 1.553 ms (9.4 %).
+
+## 18. Batch: the lock screen attributed, three optimizations measured and reverted
+
+### 18.1 Why the scene needed its own attribution
+
+`render_bench` timed `lock_frame_customize`, but every call-level profile so far
+came from the shipped full-frame scene. Those are different scenes with
+different paint: the lock sheet is 62 rounded fills, 1261 short stroke segments,
+four glass backdrops and one soft shadow, and none of the earlier row tables
+say how they split. Guessing from the full-frame rows would have been a guess.
+
+The bench now keeps the lock scenes timed exactly as before and, after the last
+one, turns on the existing `canvas::profile`, sets `lock.edit = true` and
+`lock.stage = Entry`, ticks one frame, and prints the sorted rows as
+`lock_profile.*`. The profiled frame runs after every timed lock scene, so no
+measured frame is disturbed. A `primitive_fill_chip_translucent` control (24x24,
+radius 6, alpha 0.12) was added next to the panel control so the small-fill path
+is a direct measurement rather than an inference. Both changes are in
+`src/litric-shell/examples/render_bench.rs`; no renderer code changed in this
+batch.
+
+### 18.2 The measured attribution
+
+```text
+cd src && cargo build --release --example render_bench
+cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/<phase> > run$i.txt; done
+```
+
+Release, 1280x800, 8-vCPU VM, no GPU and no display, 15 frames per scene, five
+separate processes per phase; each figure is the median of the five
+per-process medians, ranges are min-max of those medians. Raw logs:
+`evidence/bench/lock-frame-customize-2026-10-28/`.
+
+Rows from one instrumented customize frame (`evidence/bench/lock-frame-customize-2026-10-28/baseline-2-final/run1.txt`); the
+printed row sum is 20.582 ms, and the shares are shares of that sum. The table
+includes nested rows (`glass_stage_attached`, `glass_panel_l`,
+`glass_panel_s` are inside `glass_backdrop`), so the rows cannot be added up.
+The timed frame is 16.223 ms; the difference is instrumentation overhead.
+
+| Row | Calls | ms | Share | Pixels | ns/px |
+|---|---|---|---|---|---|
+| `fill_round_rect` | 62 | **4.829** | 23.5 % | 573,051 | 8.43 |
+| `stroke_line` | 1261 | 3.252 | 15.8 % | - | - |
+| `glass_backdrop` | 4 | 2.599 | 12.6 % | - | - |
+| `glass_stage_attached` (inner) | 4 | 2.595 | 12.6 % | - | - |
+| `stroke_round_rect` | 20 | 2.570 | 12.5 % | - | - |
+| `glass_panel_l` (inner) | 1 | 2.263 | 11.0 % | 295,960 | 7.65 |
+| `soft_shadow` | 1 | 1.976 | 9.6 % | - | - |
+| `glass_panel_s` (inner) | 3 | 0.335 | 1.6 % | 38,160 | 8.79 |
+| `blit_from` | 1 | 0.163 | 0.8 % | - | - |
+
+Scene medians on the final tree (no renderer change kept):
+
+| Scene | Median | Range |
+|---|---|---|
+| `full_frame` (shipped) | **11.927 ms** | 11.819-12.201 |
+| `open_window_frame` | 21.593 ms | 21.557-22.387 |
+| `lock_frame_customize` | **16.223 ms** | 16.155-16.436 |
+| `primitive_fill_panel` (opaque 600x420) | 0.222 ms | 0.221-0.227 |
+| `primitive_fill_panel_translucent` | 0.799 ms | 0.796-0.801 |
+| `primitive_fill_chip_translucent` | 0.011 ms | 0.011-0.012 |
+
+A first baseline of the same renderer, taken before the chip control existed,
+measured `lock_frame_customize` at 16.398 ms (16.237-16.544), so the scene sits
+within about 0.2 ms of the budget across independent batches, not at a stable
+single value.
+
+### 18.3 Three changes: each attempted, measured, reverted
+
+Every attempt used the same five-process protocol in the same session, against
+the baseline taken immediately before it, and was then removed with
+`git checkout -- src/litric-shell/src/canvas.rs`. This commit therefore changes
+no renderer code: `canvas.rs` is byte-identical to e7530b0.
+
+**A - reject the empty part of each `stroke_line` bounding box.** A per-pixel
+capsule test before the projection and square root. `lock_frame_customize`
+16.398 -> **16.891 ms** (16.608-17.182) and the `stroke_line` row 3.302 ->
+3.623 ms. The lock's segments are short, so their boxes are already mostly
+capsule and the extra test costs more than it skips. Reverted.
+
+**B - cache the exact 256-entry blend table by colour.** This would remove the
+1024-core-pixel gate that §17 introduced, so a small translucent fill would
+reuse the table instead of building it per call or blending directly.
+`lock_frame_customize` 16.223 -> **16.174 ms** (16.136-16.442) - the ranges
+overlap, the `fill_round_rect` row moved 4.829 -> 4.822 ms (inside noise), and
+only the direct chip control moved (0.011 -> 0.010 ms). No disjoint gain, so
+reverted rather than kept.
+
+**C - reject provably empty edge pixels without the square root.** In the edge
+run, `sqrt(ax^2 + ay^2) >= max(ax, ay)`, so a bound built from `max` can prove a
+pixel has zero coverage. `lock_frame_customize` 16.223 -> **16.407 ms**
+(16.386-16.799) and the `fill_round_rect` row 4.829 -> 5.154 ms. This is a
+regression: the check is paid on every edge pixel, and the edge runs that matter
+are short enough that the skipped work does not repay it. Reverted.
+
+### 18.4 What the numbers establish, and what they do not
+
+The overage is **0.223 ms** on the second baseline (16.223 ms) and **0.398 ms**
+on the first (16.398 ms); the honest reading is that the scene is about a
+quarter to four tenths of a millisecond over, not that 16.223 is exact.
+
+The `fill_round_rect` row is 62 mixed fills whose bounding boxes total 573,051
+pixels, 8.43 ns/px. It is not explained by table construction: the isolated
+large translucent panel measures 0.799 ms over 252,000 bounding-box pixels
+(3.17 ns/px; 3.63 ns per core pixel), and the chip's table is amortised over one
+call at 0.011 ms. Sixty-two calls at even 20 us of setup would be 1.2 ms, far
+short of 4.829 ms. Attempts B and C rule out two mechanical explanations - the
+small-fill table build and the empty stretches of the edge runs - and both made
+the number worse, not better. The remaining cost is spread across the per-pixel
+edge coverage and blending of many differently sized, mostly translucent fills;
+a direct core-versus-edge pixel counter is not emitted, so this batch does
+**not** claim a single root cause for the row. That counter is the next
+measurement, not a conclusion.
+
+### 18.5 Status and remaining distance
+
+**NOT VERIFIED** for the target: `lock_frame_customize` is still over the 16 ms
+budget and no renderer change was kept. **VERIFIED** for the instrumentation:
+the attribution above is produced by the shipped bench, reproducible with the
+commands in 18.2, and its raw logs are committed.
+
+`full_frame` is **4.073 ms inside** the budget (11.927 ms).
+`lock_frame_customize` is **0.223 ms over** at 16.223 ms. The next named target
+is the `stroke_line` row (3.252 ms, 15.8 %): the cheap bounding-box reject
+failed, so the next attempt must start from a different mechanism (for example
+per-segment capsule bounds rather than the inflated box, or an exact
+precomputed cap table) and be measured the same way. `glass_backdrop`
+(2.599 ms) and `stroke_round_rect` (2.570 ms) follow. The golden-frame gate
+remains **BLOCKED** on the missing Latin font face fixture; it is not passing.
+No GPU, VRAM, display or present-to-display measurement exists on this host,
+and none is claimed.

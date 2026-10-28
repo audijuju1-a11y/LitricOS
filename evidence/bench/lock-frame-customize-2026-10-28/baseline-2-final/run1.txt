@@ -1,0 +1,149 @@
+canvas=1280x800
+full_frame.visited_px=2605144
+full_frame.sites_per_frame=draw=2091707 brightest=19583 shadow=392576 text=101278
+full_frame.min_ms=11.763
+full_frame.median_ms=11.823
+full_frame.mean_ms=11.856
+full_frame.stddev_ms=0.073
+full_frame.runs=15
+full_frame_live_blur.min_ms=32.689
+full_frame_live_blur.median_ms=32.793
+full_frame_live_blur.mean_ms=32.860
+full_frame_live_blur.stddev_ms=0.205
+full_frame_live_blur.runs=15
+profile.glass_backdrop.calls=3 profile.glass_backdrop.ms=2.571 profile.glass_backdrop.share_pct=15.4 profile.glass_backdrop.px=0 profile.glass_backdrop.ns_per_px=0.00
+profile.glass_stage_attached.calls=3 profile.glass_stage_attached.ms=2.569 profile.glass_stage_attached.share_pct=15.4 profile.glass_stage_attached.px=0 profile.glass_stage_attached.ns_per_px=0.00
+profile.soft_shadow.calls=3 profile.soft_shadow.ms=2.476 profile.soft_shadow.share_pct=14.8 profile.soft_shadow.px=0 profile.soft_shadow.ns_per_px=0.00
+profile.stroke_line.calls=2239 profile.stroke_line.ms=2.255 profile.stroke_line.share_pct=13.5 profile.stroke_line.px=0 profile.stroke_line.ns_per_px=0.00
+profile.glass_panel_m.calls=2 profile.glass_panel_m.ms=2.227 profile.glass_panel_m.share_pct=13.3 profile.glass_panel_m.px=268395 profile.glass_panel_m.ns_per_px=8.30
+profile.fill_round_rect.calls=75 profile.fill_round_rect.ms=2.134 profile.fill_round_rect.share_pct=12.8 profile.fill_round_rect.px=380749 profile.fill_round_rect.ns_per_px=5.60
+profile.stroke_round_rect.calls=5 profile.stroke_round_rect.ms=1.555 profile.stroke_round_rect.share_pct=9.3 profile.stroke_round_rect.px=0 profile.stroke_round_rect.ns_per_px=0.00
+profile.blit_from.calls=1 profile.blit_from.ms=0.371 profile.blit_from.share_pct=2.2 profile.blit_from.px=0 profile.blit_from.ns_per_px=0.00
+profile.glass_panel_s.calls=1 profile.glass_panel_s.ms=0.343 profile.glass_panel_s.share_pct=2.1 profile.glass_panel_s.px=41540 profile.glass_panel_s.ns_per_px=8.27
+profile.draw_argb.calls=10 profile.draw_argb.ms=0.208 profile.draw_argb.share_pct=1.2 profile.draw_argb.px=0 profile.draw_argb.ns_per_px=0.00
+profile.glass_panel_m.dims=435x355
+profile.glass_panel_s.dims=670x62
+profile.glass_panel_m.rect=780.8,92.0,435.2x262.5
+profile.glass_panel_m.rect=64.0,92.0,435.2x355.1
+profile.glass_panel_s.rect=305.0,726.0,670.0x62.0
+profile.glass_rects.count=3 profile.glass_rects.overlapping_pairs=0 profile.glass_rects.overlap_px=0 profile.glass_rects.area_sum_px=310320
+profile.timed_ms=16.708
+pointer_move.run0.full=true damage_rects=2 restored_px=1024000 changed_px=15703 visited_px=2607270
+pointer_move.run14.full=false damage_rects=2 restored_px=1440 changed_px=59288 visited_px=1602076
+pointer_move_frame.min_ms=12.033
+pointer_move_frame.median_ms=12.253
+pointer_move_frame.mean_ms=12.238
+pointer_move_frame.stddev_ms=0.089
+pointer_move_frame.runs=15
+open_window.run0.full=true damage_rects=5 restored_px=1024000 changed_px=377611 visited_px=4500586
+open_window.run14.full=true damage_rects=5 restored_px=1024000 changed_px=349005 visited_px=4492048
+open_window_frame.min_ms=21.453
+open_window_frame.median_ms=21.633
+open_window_frame.mean_ms=21.712
+open_window_frame.stddev_ms=0.355
+open_window_frame.runs=15
+blur_full_screen_r3_2passes.min_ms=36.345
+blur_full_screen_r3_2passes.median_ms=36.426
+blur_full_screen_r3_2passes.mean_ms=36.753
+blur_full_screen_r3_2passes.stddev_ms=1.200
+blur_full_screen_r3_2passes.runs=15
+blur_full_screen_r10_2passes.min_ms=38.037
+blur_full_screen_r10_2passes.median_ms=38.190
+blur_full_screen_r10_2passes.mean_ms=38.277
+blur_full_screen_r10_2passes.stddev_ms=0.340
+blur_full_screen_r10_2passes.runs=15
+blur_full_screen_r30_2passes.min_ms=38.178
+blur_full_screen_r30_2passes.median_ms=38.327
+blur_full_screen_r30_2passes.mean_ms=38.318
+blur_full_screen_r30_2passes.stddev_ms=0.067
+blur_full_screen_r30_2passes.runs=15
+present_full.bytes=4096000
+present_full.min_ms=3.857
+present_full.median_ms=3.878
+present_full.mean_ms=3.895
+present_full.stddev_ms=0.051
+present_full.runs=15
+present_pointer_damage.rows=32 bytes=163840
+present_pointer_damage.min_ms=0.150
+present_pointer_damage.median_ms=0.151
+present_pointer_damage.mean_ms=0.153
+present_pointer_damage.stddev_ms=0.004
+present_pointer_damage.runs=15
+lock.interval_ms=33
+lock_frame.full=false damage_rects=0 restored_px=0 visited_px=1648081
+lock_frame.sites_per_frame=draw=1470220 text=177861
+lock_frame.min_ms=5.982
+lock_frame.median_ms=6.015
+lock_frame.mean_ms=9.211
+lock_frame.stddev_ms=11.930
+lock_frame.runs=15
+lock_frame_entry.full=false damage_rects=0 restored_px=0 visited_px=1648081
+lock_frame_entry.sites_per_frame=draw=1470220 text=177861
+lock_frame_entry.min_ms=6.007
+lock_frame_entry.median_ms=6.017
+lock_frame_entry.mean_ms=6.024
+lock_frame_entry.stddev_ms=0.018
+lock_frame_entry.runs=15
+lock_frame_customize.full=false damage_rects=0 restored_px=0 visited_px=3262475
+lock_frame_customize.sites_per_frame=draw=2692136 shadow=371358 text=198981
+lock_frame_customize.min_ms=16.098
+lock_frame_customize.median_ms=16.155
+lock_frame_customize.mean_ms=17.229
+lock_frame_customize.stddev_ms=3.916
+lock_frame_customize.runs=15
+lock_frame_still.full=false damage_rects=0 restored_px=0 visited_px=1648081
+lock_frame_still.sites_per_frame=draw=1470220 text=177861
+lock_frame_still.min_ms=5.998
+lock_frame_still.median_ms=6.022
+lock_frame_still.mean_ms=6.030
+lock_frame_still.stddev_ms=0.031
+lock_frame_still.runs=15
+lock_profile.fill_round_rect.calls=62 lock_profile.fill_round_rect.ms=4.829 lock_profile.fill_round_rect.share_pct=23.5 lock_profile.fill_round_rect.px=573051 lock_profile.fill_round_rect.ns_per_px=8.43
+lock_profile.stroke_line.calls=1261 lock_profile.stroke_line.ms=3.252 lock_profile.stroke_line.share_pct=15.8 lock_profile.stroke_line.px=0 lock_profile.stroke_line.ns_per_px=0.00
+lock_profile.glass_backdrop.calls=4 lock_profile.glass_backdrop.ms=2.599 lock_profile.glass_backdrop.share_pct=12.6 lock_profile.glass_backdrop.px=0 lock_profile.glass_backdrop.ns_per_px=0.00
+lock_profile.glass_stage_attached.calls=4 lock_profile.glass_stage_attached.ms=2.595 lock_profile.glass_stage_attached.share_pct=12.6 lock_profile.glass_stage_attached.px=0 lock_profile.glass_stage_attached.ns_per_px=0.00
+lock_profile.stroke_round_rect.calls=20 lock_profile.stroke_round_rect.ms=2.570 lock_profile.stroke_round_rect.share_pct=12.5 lock_profile.stroke_round_rect.px=0 lock_profile.stroke_round_rect.ns_per_px=0.00
+lock_profile.glass_panel_l.calls=1 lock_profile.glass_panel_l.ms=2.263 lock_profile.glass_panel_l.share_pct=11.0 lock_profile.glass_panel_l.px=295960 lock_profile.glass_panel_l.ns_per_px=7.65
+lock_profile.soft_shadow.calls=1 lock_profile.soft_shadow.ms=1.976 lock_profile.soft_shadow.share_pct=9.6 lock_profile.soft_shadow.px=0 lock_profile.soft_shadow.ns_per_px=0.00
+lock_profile.glass_panel_s.calls=3 lock_profile.glass_panel_s.ms=0.335 lock_profile.glass_panel_s.share_pct=1.6 lock_profile.glass_panel_s.px=38160 lock_profile.glass_panel_s.ns_per_px=8.79
+lock_profile.blit_from.calls=1 lock_profile.blit_from.ms=0.163 lock_profile.blit_from.share_pct=0.8 lock_profile.blit_from.px=0 lock_profile.blit_from.ns_per_px=0.00
+lock_profile.timed_ms=20.582
+primitive_blit_full_screen.size=1280x800
+primitive_blit_full_screen.min_ms=0.159
+primitive_blit_full_screen.median_ms=0.167
+primitive_blit_full_screen.mean_ms=0.189
+primitive_blit_full_screen.stddev_ms=0.069
+primitive_blit_full_screen.runs=15
+primitive_fill_panel.size=600x420
+primitive_fill_panel.min_ms=0.218
+primitive_fill_panel.median_ms=0.221
+primitive_fill_panel.mean_ms=0.223
+primitive_fill_panel.stddev_ms=0.004
+primitive_fill_panel.runs=15
+primitive_fill_panel_translucent.size=600x420
+primitive_fill_panel_translucent.min_ms=0.790
+primitive_fill_panel_translucent.median_ms=0.796
+primitive_fill_panel_translucent.mean_ms=0.798
+primitive_fill_panel_translucent.stddev_ms=0.007
+primitive_fill_panel_translucent.runs=15
+primitive_fill_chip_translucent.size=24x24
+primitive_fill_chip_translucent.min_ms=0.010
+primitive_fill_chip_translucent.median_ms=0.011
+primitive_fill_chip_translucent.mean_ms=0.011
+primitive_fill_chip_translucent.stddev_ms=0.000
+primitive_fill_chip_translucent.runs=15
+primitive_soft_shadow_panel.min_ms=1.651
+primitive_soft_shadow_panel.median_ms=1.672
+primitive_soft_shadow_panel.mean_ms=1.674
+primitive_soft_shadow_panel.stddev_ms=0.016
+primitive_soft_shadow_panel.runs=15
+primitive_glass_backdrop_panel.min_ms=1.924
+primitive_glass_backdrop_panel.median_ms=1.941
+primitive_glass_backdrop_panel.mean_ms=1.943
+primitive_glass_backdrop_panel.stddev_ms=0.011
+primitive_glass_backdrop_panel.runs=15
+primitive_text_10_lines.min_ms=3.103
+primitive_text_10_lines.median_ms=3.448
+primitive_text_10_lines.mean_ms=3.676
+primitive_text_10_lines.stddev_ms=0.597
+primitive_text_10_lines.runs=15

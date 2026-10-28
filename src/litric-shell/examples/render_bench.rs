@@ -569,6 +569,42 @@ fn main() -> ExitCode {
     locked.shell.lock.tweaks.breathe = false;
     lock_frames(&mut locked, &mut now, "lock_frame_still");
 
+    // The customize sheet is the lock scene held to the 16 ms budget, and the
+    // full-frame attribution earlier in this file is a different scene. Time
+    // one customize frame with the same call timers, after every timed lock
+    // scene is done, so nothing above is disturbed by the extra frame.
+    locked.shell.lock.edit = true;
+    locked.shell.lock.stage = Stage::Entry;
+    litric_shell::canvas::profile::enable();
+    now = now.saturating_add(33);
+    locked.shell.tick(now);
+    let _ = frame(&mut locked);
+    litric_shell::canvas::profile::disable();
+    let mut lock_rows = litric_shell::canvas::profile::take();
+    lock_rows.sort_by_key(|row| std::cmp::Reverse(row.nanos));
+    let lock_timed: u64 = lock_rows.iter().map(|row| row.nanos).sum();
+    for row in &lock_rows {
+        let ms = row.nanos as f64 / 1_000_000.0;
+        let share = if lock_timed > 0 {
+            row.nanos as f64 * 100.0 / lock_timed as f64
+        } else {
+            0.0
+        };
+        let per_px = if row.pixels > 0 {
+            row.nanos as f64 / row.pixels as f64
+        } else {
+            0.0
+        };
+        println!(
+            "lock_profile.{}.calls={} lock_profile.{}.ms={ms:.3} lock_profile.{}.share_pct={share:.1} lock_profile.{}.px={} lock_profile.{}.ns_per_px={per_px:.2}",
+            row.name, row.calls, row.name, row.name, row.name, row.pixels, row.name
+        );
+    }
+    println!(
+        "lock_profile.timed_ms={:.3}",
+        lock_timed as f64 / 1_000_000.0
+    );
+
     // ---- primitives -------------------------------------------------------
     //
     // A scene costs what its loops cost. Each primitive below is the one the
@@ -608,6 +644,20 @@ fn main() -> ExitCode {
     }
     println!("primitive_fill_panel_translucent.size=600x420");
     report("primitive_fill_panel_translucent", times);
+
+    // A small translucent chip, the shape a dense surface is made of. Its table
+    // is tiny compared with the build, so this row separates the small-fill
+    // path from the panel above.
+    let chip = Rect::new(620.0, 240.0, 24.0, 24.0);
+    let mut times = Vec::with_capacity(RUNS);
+    for _ in 0..RUNS {
+        let t = Instant::now();
+        b.scene
+            .fill_round_rect(chip, 6.0, with_alpha(rgb(0xFFFFFF), 0.12));
+        times.push(elapsed_ms(t));
+    }
+    println!("primitive_fill_chip_translucent.size=24x24");
+    report("primitive_fill_chip_translucent", times);
 
     let mut times = Vec::with_capacity(RUNS);
     for _ in 0..RUNS {

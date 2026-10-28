@@ -1034,5 +1034,239 @@
       "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing; the reference test is the output proof",
       "no present-to-display, GPU, VRAM or idle-RAM measurement was possible on this host"
     ]
-  }
+  },
+  "lock_frame_customize_attribution": {
+  "commit_before": "e7530b0",
+  "status": "NOT VERIFIED for the 16 ms target: all three renderer attempts were measured and reverted; the lock-scene instrumentation is VERIFIED",
+  "finding": "lock_frame_customize has its own attribution now. Its largest row is fill_round_rect at 4.829 ms / 573,051 bbox px / 8.43 ns/px, followed by stroke_line 3.252 ms (1261 calls). Three single-mechanism changes were measured and reverted: a stroke_line capsule reject (16.398 -> 16.891 ms), a colour-keyed blend-table cache (16.223 -> 16.174 ms, overlapping ranges) and a conservative max(ax,ay) edge reject (16.223 -> 16.407 ms, the row rose to 5.154 ms). No renderer code changed in this batch; canvas.rs is byte-identical to e7530b0.",
+  "instrumentation": {
+    "file": "src/litric-shell/examples/render_bench.rs",
+    "lock_profile": "after every timed lock scene, one untimed frame is composed with lock.edit=true and lock.stage=Entry while canvas::profile is enabled, and the sorted rows are printed as lock_profile.*",
+    "chip_control": "primitive_fill_chip_translucent, 24x24 radius 6 at alpha 0.12, so the small-fill path is a direct measurement"
+  },
+  "protocol": "release, 1280x800, 8-vCPU VM, no GPU, no display, 15 frames per scene, five separate processes per phase; median of the five per-process medians; ranges are min-max of those medians",
+  "conditions": {
+    "uname": "Linux-6.1.102-x86_64-with-glibc2.39",
+    "nproc": 8,
+    "gpu": "none",
+    "display": "none"
+  },
+  "commands": [
+    "cd src && cargo build --release --example render_bench",
+    "cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/<phase> > run$i.txt; done"
+  ],
+  "baseline_1": {
+    "note": "same renderer as baseline_2_final, taken before the chip control existed",
+    "lock_frame_customize": {
+      "median": 16.398,
+      "min": 16.237,
+      "max": 16.544
+    },
+    "fill_round_rect_row": {
+      "ms": 4.88,
+      "pixels": 573051,
+      "ns_per_px": 8.52,
+      "share_pct": 23.3
+    },
+    "stroke_line_row": {
+      "ms": 3.302,
+      "calls": 1261
+    }
+  },
+  "baseline_2_final": {
+    "lock_frame_customize": {
+      "median": 16.223,
+      "min": 16.155,
+      "max": 16.436
+    },
+    "full_frame": {
+      "median": 11.927,
+      "min": 11.819,
+      "max": 12.201
+    },
+    "open_window_frame": {
+      "median": 21.593,
+      "min": 21.557,
+      "max": 22.387
+    },
+    "primitive_fill_panel": {
+      "median": 0.222,
+      "min": 0.221,
+      "max": 0.227
+    },
+    "primitive_fill_panel_translucent": {
+      "median": 0.799,
+      "min": 0.796,
+      "max": 0.801
+    },
+    "primitive_fill_chip_translucent": {
+      "median": 0.011,
+      "min": 0.011,
+      "max": 0.012
+    }
+  },
+  "lock_attribution": {
+    "source": "baseline-2-final/run1.txt",
+    "instrumented_total_ms": 20.582,
+    "timed_frame_ms": 16.223,
+    "note": "the printed row sum includes nested rows (glass_stage_attached, glass_panel_l and glass_panel_s sit inside glass_backdrop), so rows must not be added together",
+    "rows": [
+      {
+        "entry": "fill_round_rect",
+        "calls": 62,
+        "ms": 4.829,
+        "share_pct": 23.5,
+        "pixels": 573051,
+        "ns_per_px": 8.43
+      },
+      {
+        "entry": "stroke_line",
+        "calls": 1261,
+        "ms": 3.252,
+        "share_pct": 15.8
+      },
+      {
+        "entry": "glass_backdrop",
+        "calls": 4,
+        "ms": 2.599,
+        "share_pct": 12.6
+      },
+      {
+        "entry": "glass_stage_attached",
+        "calls": 4,
+        "ms": 2.595,
+        "share_pct": 12.6
+      },
+      {
+        "entry": "stroke_round_rect",
+        "calls": 20,
+        "ms": 2.57,
+        "share_pct": 12.5
+      },
+      {
+        "entry": "glass_panel_l",
+        "calls": 1,
+        "ms": 2.263,
+        "share_pct": 11.0,
+        "pixels": 295960,
+        "ns_per_px": 7.65
+      },
+      {
+        "entry": "soft_shadow",
+        "calls": 1,
+        "ms": 1.976,
+        "share_pct": 9.6
+      },
+      {
+        "entry": "glass_panel_s",
+        "calls": 3,
+        "ms": 0.335,
+        "share_pct": 1.6,
+        "pixels": 38160,
+        "ns_per_px": 8.79
+      },
+      {
+        "entry": "blit_from",
+        "calls": 1,
+        "ms": 0.163,
+        "share_pct": 0.8
+      }
+    ]
+  },
+  "attempts": [
+    {
+      "name": "stroke_line capsule reject",
+      "change": "per-pixel capsule test before the projection and square root, to skip the empty part of the inflated bounding box",
+      "lock_frame_customize_before": {
+        "median": 16.398,
+        "min": 16.237,
+        "max": 16.544
+      },
+      "lock_frame_customize_after": {
+        "median": 16.891,
+        "min": 16.608,
+        "max": 17.182
+      },
+      "row_before": {
+        "entry": "stroke_line",
+        "ms": 3.302
+      },
+      "row_after": {
+        "entry": "stroke_line",
+        "ms": 3.623
+      },
+      "verdict": "reverted: the lock's segments are short, so their boxes are already mostly capsule and the test costs more than it skips"
+    },
+    {
+      "name": "colour-keyed blend-table cache",
+      "change": "cache the exact 256-entry table by colour so small translucent fills reuse it instead of the 1024-pixel gate or a direct blend",
+      "lock_frame_customize_before": {
+        "median": 16.223,
+        "min": 16.155,
+        "max": 16.436
+      },
+      "lock_frame_customize_after": {
+        "median": 16.174,
+        "min": 16.136,
+        "max": 16.442
+      },
+      "row_before": {
+        "entry": "fill_round_rect",
+        "ms": 4.829
+      },
+      "row_after": {
+        "entry": "fill_round_rect",
+        "ms": 4.822
+      },
+      "chip_before": {
+        "median": 0.011
+      },
+      "chip_after": {
+        "median": 0.01
+      },
+      "verdict": "reverted: ranges overlap and the fill row did not move outside noise"
+    },
+    {
+      "name": "conservative edge-pixel reject",
+      "change": "in the edge run, skip the square root and blend when max(ax, ay) + inner - radius proves coverage is zero",
+      "lock_frame_customize_before": {
+        "median": 16.223,
+        "min": 16.155,
+        "max": 16.436
+      },
+      "lock_frame_customize_after": {
+        "median": 16.407,
+        "min": 16.386,
+        "max": 16.799
+      },
+      "row_before": {
+        "entry": "fill_round_rect",
+        "ms": 4.829
+      },
+      "row_after": {
+        "entry": "fill_round_rect",
+        "ms": 5.154
+      },
+      "verdict": "reverted: measured regression; the check is paid on every edge pixel and the short runs do not repay it"
+    }
+  ],
+  "kept_renderer_change": false,
+  "canvas_identical_to": "e7530b0",
+  "budget": {
+    "budget_ms": 16.0,
+    "full_frame_median_ms": 11.927,
+    "full_frame_headroom_ms": 4.073,
+    "lock_frame_customize_median_ms": 16.223,
+    "lock_frame_customize_over_budget_ms": 0.223
+  },
+  "next_named_target": "stroke_line (3.252 ms, 15.8 % of the instrumented lock frame): the bounding-box reject failed, so the next attempt needs a different mechanism, plus a core-versus-edge pixel counter for fill_round_rect before that row is touched again",
+  "caveats": [
+    "abstract composition only at 1280x800 on an 8-vCPU VM with no GPU and no display; no present-to-display, VRAM or idle-RAM number was measured",
+    "the instrumented lock frame prints a row sum of 20.582 ms against a 16.223 ms timed frame, so its shares are relative to 20.582 ms and include instrumentation overhead",
+    "the row sum contains nested rows and must not be added up",
+    "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing; no output change was made in this batch",
+    "the root cause of the fill_round_rect row's 8.43 ns/px is not established; attempts B and C falsified two hypotheses, and a core-versus-edge counter is the next measurement"
+  ],
+  "evidence": "evidence/bench/lock-frame-customize-2026-10-28/{baseline-1,baseline-2-final,attempt-stroke-line-capsule,attempt-table-cache,attempt-edge-reject}/"
+}
 }
