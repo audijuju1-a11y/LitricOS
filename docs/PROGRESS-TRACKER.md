@@ -411,3 +411,45 @@ this batch's evidence.
 `fill_round_rect` (15 %) and `soft_shadow` (14 %) as the measured order. The
 next real step would be the glass design change above, or a GPU/DRM present
 path — neither can be validated on this host, which has no display device.
+
+## 10. Batch: glass aggregate confirmed, per-panel split not delivered
+
+Ground truth re-measured on `3bed3ef` before touching anything: `full_frame`
+**35.36 ms** median (spread 35.23–35.52) over five `render_bench` processes.
+§9's aggregate reproduced: `glass_backdrop` **20.08 ms / 57.8 %** in 3 calls,
+`fill_round_rect` 5.28 ms, `soft_shadow` 5.14 ms, `stroke_line` 2.22 ms over
+2,239 calls, `stroke_round_rect` 1.53 ms (`profile.timed_ms` 34.45–34.72).
+
+### 10.1 Per-panel split: attempted, not delivered
+
+`glass_backdrop` was instrumented with area buckets (`glass_panel_s/l/xl`,
+pixel area recorded via `profile::note_pixels`) so the three calls could be
+separated. The bucket rows **never appeared** in the bench output — the outer
+`glass_backdrop` row reported `px=0` and no `glass_panel_*` line was printed,
+even after `touch`ing the crate and rebuilding. Rather than present an
+aggregate as if it were a per-panel table, the bucket code was removed and this
+paragraph records the failure. Per-panel attribution is **NOT DELIVERED**.
+
+### 10.2 Hot path: two attempts, both reverted
+
+| Attempt | Before | After | Spread | Verdict |
+|---|---|---|---|---|
+| Row-offset direct read/write loop in the attached-backdrop branch (skip three per-pixel bounds checks, same `blend`) | 35.36 ms | 35.57 ms | 35.34–36.05 | **reverted**, no gain |
+| Hoist `y + 0.5` out of the inner loop | — | — | — | reverted with the row loop; below resolution |
+
+All 49 canvas tests (including the shadow reference test) passed with both
+attempts in place, so they were exact — they were simply not faster. **No
+hot-path change is kept.**
+
+### 10.3 What the numbers say, and the next concrete blocker
+
+`glass_backdrop` is 20 ms for 3 calls, ~58 % of a 35 ms frame, and §9 already
+showed the distance function is not the cost (the core fast path moved the
+primitive but not the frame). The two exact per-pixel shortcuts tried here also
+did not move the frame. The remaining hypotheses are structural: the panels are
+large and every pixel is blended from the backdrop with no reuse between
+overlapping panels, which needs a cached glass source keyed on backdrop and
+panel geometry — a design change, not an exact micro-edit. The concrete blocker
+for validating any of it further is the same as §7: no display/GPU path and no
+sampler on this host, so frame-time attribution beyond these entry points is
+inference, not measurement.

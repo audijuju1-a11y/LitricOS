@@ -460,5 +460,69 @@
       "attribution": "grep 'profile\\.' <render_bench output>",
       "tests": "cargo test -p litric-shell --lib canvas::"
     }
+  },
+  "glass_attribution": {
+    "commit": "3bed3ef7e9b6245119ada00a2327fd3f47e618a5",
+    "method": "render_bench with canvas::profile enabled for one frame after the timed loop; 5 processes, median of per-process medians",
+    "full_frame_baseline_ms": 35.36,
+    "spread_ms": [
+      35.23,
+      35.52
+    ],
+    "rows": [
+      {
+        "entry": "glass_backdrop",
+        "calls": 3,
+        "ms": 20.08,
+        "share_pct": 57.8
+      },
+      {
+        "entry": "fill_round_rect",
+        "calls": 75,
+        "ms": 5.28,
+        "share_pct": 15.3
+      },
+      {
+        "entry": "soft_shadow",
+        "calls": 3,
+        "ms": 5.14,
+        "share_pct": 14.8
+      },
+      {
+        "entry": "stroke_line",
+        "calls": 2239,
+        "ms": 2.22,
+        "share_pct": 6.4
+      },
+      {
+        "entry": "stroke_round_rect",
+        "calls": 5,
+        "ms": 1.53,
+        "share_pct": 4.4
+      }
+    ],
+    "per_panel_breakdown": "NOT DELIVERED: the area-bucket timers added inside glass_backdrop never emitted rows in the bench output, so no per-panel table is claimed; the bucket code was removed rather than reported as if it worked.",
+    "attempts": [
+      {
+        "change": "row-offset direct read/write loop in glass_backdrop's attached branch",
+        "full_frame_before_ms": 35.36,
+        "full_frame_after_ms": 35.57,
+        "after_spread_ms": [
+          35.34,
+          36.05
+        ],
+        "verdict": "reverted, no gain (inside/above spread)"
+      },
+      {
+        "change": "hoist the row-centre py out of the inner x loop",
+        "verdict": "reverted with the row loop; too small to measure separately"
+      }
+    ],
+    "commands": {
+      "build": "cd src && cargo build --release -p litric-shell --examples",
+      "measure": "src/target/release/examples/render_bench <dir>  (5 processes)",
+      "attribution": "grep 'profile\\.' <render_bench output>",
+      "tests": "cargo test -p litric-shell --lib canvas::"
+    }
   }
 }
