@@ -4,12 +4,23 @@ Documentation=file:///usr/share/doc/litric/API-00-contracts.md
 
 [Socket]
 ListenStream=/run/litric/capd.sock
-SocketMode=0666
-# 0666 is correct and deliberate: every process on the system must be able to ASK.
-# Authorisation happens inside the broker using SO_PEERCRED plus the caller's
-# cgroup-derived application identity, never by filesystem permission on the
-# socket. Relying on socket mode for authorisation is exactly the confused-deputy
-# bug that RUNTIME section 37 exists to prevent.
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+# 0600, and this file used to say 0666 was deliberate: "every process must be
+# able to ASK ... Authorisation happens inside the broker using SO_PEERCRED plus
+# the caller's cgroup-derived application identity". That authorisation does not
+# exist. There is no `litric-capd` binary in src/, `litric-caps` is a pure
+# library with no socket and no I/O, and ADR-0016 puts the broker inside
+# `litric-sysd` — whose own socket is 0600. A world-connectable socket in front
+# of a broker that cannot attribute a peer is a door with no lock, so the mode
+# is the boundary.
+#
+# Widening this requires, in this order: a `litric-capd` binary; SO_PEERCRED
+# uid/pid plus cgroup identity checked before any request byte is decoded; tests
+# that prove the refusal; ci/lint-unit-sockets.py given a reviewed exception
+# with that test named; and only then this comment rewritten. Owner-only is not
+# a fallback here, it is the design.
 Accept=no
 RemoveOnStop=yes
 

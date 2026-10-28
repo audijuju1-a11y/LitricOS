@@ -19,7 +19,11 @@ ExecStart=/usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock
 # The socket is a runtime object and must not survive a reboot. It could not
 # live anywhere else anyway: / is a read-only dm-verity root.
 RuntimeDirectory=litric
-RuntimeDirectoryMode=0755
+# 0700, matching litric-shell and litric-notifyd. This directory also holds the
+# shell's Wayland socket, which is an unauthenticated door to the compositor;
+# a unit that asked for 0755 would widen the directory whenever it creates it
+# first, so all three units state the same restrictive mode.
+RuntimeDirectoryMode=0700
 # Both litric-sysd and litric-shell declare /run/litric. Without this, systemd
 # deletes the directory when EITHER unit stops -- taking the other one's socket
 # or status file with it, and producing a shell that cannot reach a daemon that

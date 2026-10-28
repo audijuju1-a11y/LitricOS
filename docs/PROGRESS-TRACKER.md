@@ -2404,3 +2404,103 @@ deserves a deliberate decision before that unit leaves `units-pending`. That is
 the next non-UI row.
 
 The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.
+## 30. Batch: the capability socket's mode, and a gate for every socket (verified)
+
+### 30.1 What the audit found
+
+Every `*.socket` under `image/`, with the daemon that serves it:
+
+| Unit | Installed? | `ListenStream` | `Accept` | `SocketMode` before |
+|---|---|---|---|---|
+| `litric-browser.socket` | yes (`mkosi.extra`) | `/run/litric/browser.sock` | `yes` | `0600` |
+| `litric-files.socket` | yes (`mkosi.extra`) | `/run/litric/files.sock` | `yes` | `0600` |
+| `litric-capd.socket` | no (`units-pending`) | `/run/litric/capd.sock` | `no` | **`0666`** |
+
+`litric-capd.socket` said the mode was deliberate: "every process on the system
+must be able to ASK ... Authorisation happens inside the broker using
+SO_PEERCRED plus the caller's cgroup-derived application identity". That
+authorisation does not exist anywhere in `src/`:
+
+* there is no `litric-capd` binary — `src/litric-caps` is a pure library whose
+  own doc comment says it "contains no I/O" and that a daemon would own the
+  socket, persistence and transport;
+* `image/units-pending/README.md` records that ADR-0016 decided the broker lives
+  **inside** `litric-sysd`, and that these capd units "should be removed rather
+  than left to look like they work";
+* the broker that does exist serves on `sysd`'s socket, which `litric-sysd`
+  binds `0600` (§29) and which has no peer-credential check either — it does not
+  need one, because the socket is owner-only.
+
+A world-connectable socket in front of a broker that cannot attribute a peer is
+a door with no lock, and a comment that describes a check is not a check.
+
+Two further contradictions were found in the same audit:
+
+* `litric-sysd.service` asked for `RuntimeDirectoryMode=0755` while
+  `litric-shell.service` and `litric-notifyd.service` both ask for `0700`;
+  whichever unit creates `/run/litric` first sets the mode, and the directory
+  holds the shell's Wayland socket — an unauthenticated door to the compositor.
+* No unit named `SocketUser=`/`SocketGroup=` for the `Accept=no` listener, so its
+  ownership was whatever systemd happened to run as.
+
+### 30.2 What changed
+
+| File | Before | After |
+|---|---|---|
+| `image/units-pending/litric-capd.socket` | `SocketMode=0666`, no user/group, comment claiming SO_PEERCRED | `SocketMode=0600`, `SocketUser=root`, `SocketGroup=root`, comment now states that the claimed authorisation does not exist and lists what widening would require |
+| `image/mkosi.extra/usr/lib/systemd/system/litric-sysd.service` | `RuntimeDirectoryMode=0755` | `RuntimeDirectoryMode=0700`, matching the two units that share the directory |
+| `ci/lint-unit-sockets.py` | — | new gate: every socket unit must be `0600`, listen under `/run/litric/`, state `Accept=`, name `SocketUser`/`SocketGroup` when `Accept=no`, and `RemoveOnStop=yes` |
+| `ci/verify.sh` | — | runs the new gate and its self-test as `[3i]` |
+| `.github/workflows/ci.yml` | — | runs the new gate in CI |
+
+**Path chosen for peer credentials: none added.** The sockets this tree ships
+are owner-only, so a userspace uid check would duplicate a decision the kernel
+already makes (`EACCES` on `connect`) for the price of the file layer's first
+`libc`/`rustix` dependency, which `ci/dep-policy-allow.txt` forbids. The
+`0600` mode is therefore the enforcement point and the unit says so; widening
+the capd socket now requires the binary, the credential check, tests that prove
+the refusal, and a reviewed exception in the new linter — in that order.
+
+### 30.3 Tests and gates that actually ran
+
+```text
+python3 ci/lint-unit-sockets.py
+  OK: 3 socket unit(s) are owner-only, explicit and removed on stop
+python3 ci/lint-unit-sockets.py --self-test
+  OK: checker rejects a planted 0666 unit with 4 finding(s)
+
+bash ci/verify.sh
+  [3i] socket units declare an owner-only socket
+    PASS  socket units are owner-only and explicit
+    PASS  socket-unit linter detects a world-connectable socket
+  summary: 29 pass, 2 fail, 4 skipped
+
+cargo fmt --check                                                  exit 0
+cargo clippy --workspace --all-targets -- -D warnings              exit 0
+cargo clippy -p litric-browser --features broker --all-targets -D  exit 0
+cargo test --workspace                 55 suites, 1,671 passed, 0 failed
+cargo test -p litric-browser --features broker --bin litric-browserd  12 passed
+python3 ci/check-python-syntax.py                                  exit 0 (62 files)
+python3 ci/lint-line-endings.py                                    exit 0 (353 files, all LF)
+python3 ci/lint-doc-refs.py                                        exit 0 (802 citations)
+python3 ci/lint-file-safety.py                                     exit 0
+```
+
+The two verifier failures remain the absent `keys/dev/` material, which also
+fails the mkosi lint on the same missing paths. No key was generated and the
+gate was not weakened.
+
+### 30.4 Limits
+
+The new lint reads declarations, not a running system: no QEMU and no image
+build here, so it proves what the units say, not what systemd applies at boot.
+That is why the daemon-side bind tests from §27–§29 exist alongside it — unit
+and code now make the same statement (`0600`), and each is checked where it
+lives. No cross-uid test was run (no second uid), so no `EACCES` was observed;
+no RAM, GPU or present-to-display number was measured for this batch, and no
+claim is made. `litric-capd` remains parked with no binary; the next evidence-
+based non-UI gap is to either delete those pending units per ADR-0016 or build
+the broker as a separate process with the credential check above — that choice
+is architectural, not a patch.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.

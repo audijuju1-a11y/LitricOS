@@ -267,6 +267,24 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
+echo "[3i] socket units declare an owner-only socket"
+# ---------------------------------------------------------------------------
+# `litric-capd.socket` set `SocketMode=0666` and said it was deliberate because
+# the broker would authorise callers with SO_PEERCRED. No such code exists:
+# there is no capd binary, and the broker that does exist (inside litric-sysd)
+# uses a 0600 socket. A comment describing a check is not a check, so this reads
+# the units themselves.
+if [[ -n "$PY" ]]; then
+    check "socket units are owner-only and explicit" \
+        "$PY" ci/lint-unit-sockets.py
+    check "socket-unit linter detects a world-connectable socket" \
+        "$PY" ci/lint-unit-sockets.py --self-test
+else
+    skip "socket unit modes" "no python interpreter on PATH"
+fi
+
+# ---------------------------------------------------------------------------
+echo
 echo "[4] Development signing keys"
 # ---------------------------------------------------------------------------
 if have openssl; then

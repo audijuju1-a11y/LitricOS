@@ -33,6 +33,8 @@ jobs:
         run: python3 ci/check-python-syntax.py
       - name: line endings
         run: python3 ci/lint-line-endings.py
+      - name: socket unit modes
+        run: python3 ci/lint-unit-sockets.py
       - name: document citations
         run: python3 ci/lint-doc-refs.py
       - name: Chapter 45 harness (receipts are not rewritten in CI)
