@@ -366,6 +366,98 @@ fn clip_pixels(c: &Rect) -> (i64, i64, i64, i64) {
     )
 }
 
+/// Opt-in call-level timers for the frame path.
+///
+/// This host has no sampling profiler (`perf`, `valgrind`, `heaptrack` and
+/// `bpftrace` are all absent, and `perf_event_paranoid` is 2), so a frame is
+/// attributed by timing the drawing entry points themselves. Profiling is off
+/// by default: a call pays one flag read, and nothing is allocated until a
+/// name is recorded the first time.
+pub mod profile {
+    use std::cell::{Cell, RefCell};
+    use std::time::Instant;
+
+    /// One entry point's accumulated cost since the last [`take`].
+    #[derive(Clone, Copy)]
+    pub struct Row {
+        /// The drawing entry point this row times.
+        pub name: &'static str,
+        /// How many times it was called since the last [`take`].
+        pub calls: u64,
+        /// Total time inside it, in nanoseconds.
+        pub nanos: u64,
+    }
+
+    thread_local! {
+        static ON: Cell<bool> = const { Cell::new(false) };
+        static ROWS: RefCell<Vec<Row>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Start timing calls on this thread.
+    pub fn enable() {
+        ON.with(|on| on.set(true));
+    }
+
+    /// Stop timing calls on this thread.
+    pub fn disable() {
+        ON.with(|on| on.set(false));
+    }
+
+    /// Whether calls are being timed.
+    #[must_use]
+    pub fn is_on() -> bool {
+        ON.with(Cell::get)
+    }
+
+    fn record(name: &'static str, nanos: u64) {
+        ROWS.with(|rows| {
+            let mut rows = rows.borrow_mut();
+            if let Some(row) = rows.iter_mut().find(|row| row.name == name) {
+                row.calls = row.calls.saturating_add(1);
+                row.nanos = row.nanos.saturating_add(nanos);
+            } else {
+                rows.push(Row {
+                    name,
+                    calls: 1,
+                    nanos,
+                });
+            }
+        });
+    }
+
+    /// Take what has been recorded, leaving the counters empty.
+    #[must_use]
+    pub fn take() -> Vec<Row> {
+        ROWS.with(|rows| std::mem::take(&mut *rows.borrow_mut()))
+    }
+
+    /// Times its own lifetime when profiling is on.
+    pub struct Timer {
+        name: &'static str,
+        start: Option<Instant>,
+    }
+
+    impl Timer {
+        /// Start a timer for `name`, or do nothing when profiling is off.
+        #[must_use]
+        pub fn new(name: &'static str) -> Self {
+            Self {
+                name,
+                start: is_on().then(Instant::now),
+            }
+        }
+    }
+
+    impl Drop for Timer {
+        fn drop(&mut self) {
+            if let Some(start) = self.start {
+                let nanos = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+                record(self.name, nanos);
+            }
+        }
+    }
+}
+
 /// A canvas of `0xAARRGGBB` pixels.
 #[derive(Debug, Clone)]
 pub struct Canvas {
@@ -815,6 +907,7 @@ impl Canvas {
     /// Without it, a window that moves leaves a copy of itself behind. Between
     /// canvases of the same size each row is one slice copy.
     pub fn blit_from(&mut self, src: &Self, r: Rect) {
+        let _prof = profile::Timer::new("blit_from");
         let (x0, y0, x1, y1) = self.span(&r);
         if x1 <= x0 || y1 <= y0 {
             return;
@@ -1040,6 +1133,7 @@ impl Canvas {
 
     /// A filled, anti-aliased rounded rectangle. `radius` of 0 is a plain rect.
     pub fn fill_round_rect(&mut self, r: Rect, radius: f32, color: u32) {
+        let _prof = profile::Timer::new("fill_round_rect");
         let (x0, y0, x1, y1) = self.span(&r.inflate(1.5));
         // The core: pixels whose centres lie in the rectangle inset by the
         // corner radius (and by at least half a pixel, so a plain rectangle's
@@ -1068,6 +1162,7 @@ impl Canvas {
 
     /// A one-pixel-wide (or thicker) rounded outline.
     pub fn stroke_round_rect(&mut self, r: Rect, radius: f32, width: f32, color: u32) {
+        let _prof = profile::Timer::new("stroke_round_rect");
         let half = width / 2.0;
         let (x0, y0, x1, y1) = self.span(&r.inflate(width + 1.5));
         for y in y0..y1 {
@@ -1086,6 +1181,7 @@ impl Canvas {
 
     /// An anti-aliased line of the given width, with round caps.
     pub fn stroke_line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: u32) {
+        let _prof = profile::Timer::new("stroke_line");
         let half = width / 2.0;
         let minx = x0.min(x1) - half - 1.5;
         let miny = y0.min(y1) - half - 1.5;
@@ -1120,6 +1216,7 @@ impl Canvas {
     /// pixel is blended over what is already on the canvas by its own alpha,
     /// times `alpha`, so a whole icon can fade in.
     pub fn draw_argb(&mut self, x: i64, y: i64, w: u32, h: u32, px: &[u32], alpha: f32) {
+        let _prof = profile::Timer::new("draw_argb");
         // The span is the bitmap's box cut to the canvas and the clip, so a
         // partial repaint blends the artwork only inside its own region: drawn
         // again outside it, a soft edge would be blended over itself.
@@ -1324,8 +1421,15 @@ impl Canvas {
     /// function that draws the panel is what makes the material end exactly
     /// where the panel ends.
     pub fn glass_backdrop(&mut self, r: Rect, radius: f32, blur: u32, saturation: f32) {
+        let _prof = profile::Timer::new("glass_backdrop");
         if let Some(source) = self.backdrop.clone() {
             let (x0, y0, x1, y1) = self.span(&r.inflate(1.5));
+            // A core fast path was tried here (skip the distance for pixels the
+            // rounded outline covers completely, as `fill_round_rect` does). It
+            // moved the primitive 1.96 -> 1.61 ms but left the frame at
+            // 35.36 -> 35.15 ms, inside its own spread, so it was reverted:
+            // the remaining cost is the per-pixel blend and backdrop lookup,
+            // not the distance. PROGRESS-TRACKER §9 records the numbers.
             for y in y0..y1 {
                 for x in x0..x1 {
                     let cov = coverage(sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius));
@@ -1431,6 +1535,7 @@ impl Canvas {
     ///   are part of its look and are kept. The one-pixel margin leaves the
     ///   anti-aliased edge, which is blended and does show what is under it.
     pub fn soft_shadow(&mut self, r: Rect, radius: f32, spread: f32, dy: f32, alpha: f32) {
+        let _prof = profile::Timer::new("soft_shadow");
         const STEPS: usize = 12;
         let prev = self.set_site(Site::Shadow);
 

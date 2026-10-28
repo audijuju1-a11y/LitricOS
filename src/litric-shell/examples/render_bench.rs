@@ -308,6 +308,30 @@ fn main() -> ExitCode {
     println!("full_frame.sites_per_frame={split}");
     report("full_frame", times);
 
+    // One frame with the call timers on. Enabled only here, after the timed
+    // loop, so the numbers above pay nothing for instrumentation; this pass is
+    // about which drawing entry point the frame spends its time in.
+    litric_shell::canvas::profile::enable();
+    b.shell.request_full_redraw();
+    let _ = frame(&mut b);
+    litric_shell::canvas::profile::disable();
+    let mut rows = litric_shell::canvas::profile::take();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.nanos));
+    let timed: u64 = rows.iter().map(|row| row.nanos).sum();
+    for row in &rows {
+        let ms = row.nanos as f64 / 1_000_000.0;
+        let share = if timed > 0 {
+            row.nanos as f64 * 100.0 / timed as f64
+        } else {
+            0.0
+        };
+        println!(
+            "profile.{}.calls={} profile.{}.ms={ms:.3} profile.{}.share_pct={share:.1}",
+            row.name, row.calls, row.name, row.name
+        );
+    }
+    println!("profile.timed_ms={:.3}", timed as f64 / 1_000_000.0);
+
     // ---- one pointer move over empty desktop ------------------------------
     let mut times = Vec::with_capacity(RUNS);
     let mut pointer_damage = Vec::new();

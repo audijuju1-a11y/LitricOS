@@ -351,3 +351,63 @@ it further needs a profiler that can attribute *inside* `views::draw`, which
 this host does not have. No second change was made, because the primitive
 timings did not justify one — guessing at the draw loop would be exactly the
 kind of unfounded optimisation this batch exists to avoid.
+
+## 9. Batch: call-level attribution of the draw site (instrumented, one revert)
+
+Ground truth re-measured on `9419eb0` before touching anything: `full_frame`
+**35.36 ms** median (spread 35.23–35.52) over five `render_bench` processes.
+
+### 9.1 Instrumentation added
+
+`src/litric-shell/src/canvas.rs` gained `canvas::profile`: opt-in, thread-local
+call timers. Off by default — a call pays one flag read and nothing is
+allocated until a name is first recorded. Seven drawing entry points are timed:
+`blit_from`, `fill_round_rect`, `stroke_round_rect`, `stroke_line`,
+`draw_argb`, `glass_backdrop`, `soft_shadow`. `render_bench` enables them for
+one extra frame *after* the timed loop, so the reported frame times pay no
+instrumentation cost, and prints calls, ms and share per name.
+
+### 9.2 Attribution of a 35.2 ms full frame (real output)
+
+| Entry point | Calls | ms | Share |
+|---|---|---|---|
+| `glass_backdrop` | 3 | 20.49 | **58.2 %** |
+| `fill_round_rect` | 75 | 5.40 | 15.3 % |
+| `soft_shadow` | 3 | 5.04 | 14.3 % |
+| `stroke_line` | 2,239 | 2.23 | 6.3 % |
+| `stroke_round_rect` | 5 | 1.57 | 4.5 % |
+| `blit_from` | 1 | 0.25 | 0.7 % |
+| `draw_argb` | 10 | 0.23 | 0.7 % |
+| **timed total** | | **35.21** | 100 % |
+
+(Figures from `render_bench`'s `profile.*` lines; the shadow primitive is
+already down from 46.46 ms to 3.8 ms after §8, and the 75 fills plus 2,239
+stroke calls are the icons and window chrome.)
+
+### 9.3 Experiment: core fast path in `glass_backdrop` — reverted
+
+Since `fill_round_rect` already skips the signed-distance square root for
+pixels the rounded outline covers completely, the same core rule was added to
+`glass_backdrop`'s attached-backdrop branch with the same coverage function.
+The pixels are bit-identical by construction (same `coverage(d)` value of 1.0),
+and all 49 canvas tests — including the reference tests — passed.
+
+| Measurement | Before | After | Spread | Verdict |
+|---|---|---|---|---|
+| `primitive_glass_backdrop_panel` | 1.96 ms | 1.61 ms | outside spread | real, −18 % |
+| `full_frame` | 35.36 ms | 35.15 ms | 34.68–35.57 (inside) | **noise** |
+
+Because the frame gain is inside its own spread, the change was **reverted**
+and the revert is recorded in the code comment where it was tried. What the
+experiment proves is useful: the remaining 20 ms of glass is *not* the distance
+function, it is the per-pixel backdrop lookup and blend that both paths share.
+Attacking that needs a different design (e.g. blitting glass from a cached
+source), which is not a small exact-equivalence change and is not justified by
+this batch's evidence.
+
+### 9.4 Where the frame stands
+
+35.4 ms on this VM, 2.2× the 16 ms active budget, with `glass_backdrop` (58 %),
+`fill_round_rect` (15 %) and `soft_shadow` (14 %) as the measured order. The
+next real step would be the glass design change above, or a GPU/DRM present
+path — neither can be validated on this host, which has no display device.
