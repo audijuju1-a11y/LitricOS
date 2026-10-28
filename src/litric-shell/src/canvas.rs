@@ -442,7 +442,11 @@ pub mod profile {
             } else {
                 rows.push(Row {
                     name,
-                    calls: 1,
+                    // The call counter belongs to the timer that is already
+                    // running for this call; a placeholder of 1 here made every
+                    // bucket that note_pixels created read one call high
+                    // (2 panels + 1 reported as 3 + 2 against an outer 3).
+                    calls: 0,
                     nanos: 0,
                     pixels,
                 });

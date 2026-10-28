@@ -515,3 +515,58 @@ was made** rather than a speculative one. Remaining: 35.45 ms against the 16 ms
 budget, 2.2×; the next named blocker is that the blur's cost is structural
 (large translucent panels blurred per frame) and would need a different design
 plus a display path to validate, neither of which this host has.
+
+### 11.5 The 5-vs-3 count mystery: solved
+
+**Confirmed cause, from the code.** `profile::note_pixels` created a missing row
+with a placeholder `calls: 1`:
+
+```rust
+            } else {
+                rows.push(Row {
+                    name,
+                    calls: 1,      // <- placeholder, counted as a real call
+                    nanos: 0,
+                    pixels,
+                });
+```
+
+and the timer for that same call then added one more:
+
+```rust
+    fn record(name: &'static str, nanos: u64) {
+            if let Some(row) = rows.iter_mut().find(|row| row.name == name) {
+                row.calls = row.calls.saturating_add(1);
+```
+
+So each bucket that `note_pixels` created read exactly one call high: the two
+real medium panels reported 3 and the one small panel reported 2. It was a
+bookkeeping bug in the instrumentation, not a second draw and not a reset.
+Seeding with `calls: 0` fixes it. No renderer code was involved.
+
+Raw instrumented frame after the fix (run 1 of 5):
+
+```text
+profile.glass_backdrop.calls=3   ms=20.329
+profile.glass_panel_m.calls=2    ms=16.440  px=268395  ns_per_px=61.25
+profile.glass_panel_s.calls=1    ms=3.889   px=41540   ns_per_px=93.62
+profile.glass_stage_blur.calls=3        ms=14.892
+profile.glass_stage_mask_blend.calls=3  ms=2.768
+profile.glass_stage_saturate.calls=3    ms=1.868
+profile.glass_stage_copy.calls=3        ms=0.796
+profile.glass_panel_m.dims=435x355
+profile.glass_panel_s.dims=670x62
+profile.timed_ms=75.305
+```
+
+Panels: 2 + 1 = **3 calls**, matching the outer row, and 16.440 + 3.889 =
+**20.329 ms**, equal to the outer 20.329. Stages sum 14.892 + 2.768 + 1.868 +
+0.796 = **20.324 ms**, 0.005 ms from the outer row. Nothing is left unreconciled.
+
+Timed scenes, five processes on this commit: `full_frame` **35.85 ms** median
+(spread 35.42–38.63, min 35.27), `open_window_frame` 72.55 ms, lock customize
+22.00 ms, primitive glass 1.93 ms. **No hot-path change**: the blur is 14.892 of
+20.329 ms (73.3 %) and already a separable two-pass sliding-window blur over
+the clipped region, so the finding stands that this is per-pixel work. 35.85 ms
+remains 2.2× the 16 ms budget; next blocker unchanged — a structural design
+change plus a display path to validate it.

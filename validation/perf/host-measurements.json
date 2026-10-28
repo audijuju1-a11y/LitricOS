@@ -508,24 +508,26 @@
         {
           "panel": "glass_panel_m",
           "dims": "435x355",
-          "calls": 3,
+          "calls": 2,
           "px": 268395,
-          "ms": 16.485,
-          "ns_per_px": 61.42
+          "ms": 16.44,
+          "ns_per_px": 61.25
         },
         {
           "panel": "glass_panel_s",
           "dims": "670x62",
-          "calls": 2,
+          "calls": 1,
           "px": 41540,
-          "ms": 3.919,
-          "ns_per_px": 94.34
+          "ms": 3.889,
+          "ns_per_px": 93.62
         }
       ],
-      "sum_ms": 20.404,
-      "outer_row_ms": 20.405,
+      "sum_ms": 20.329,
+      "outer_row_ms": 20.329,
       "tolerance_ms": 0.05,
-      "caveat": "bucket call counts (5) do not equal the outer glass_backdrop calls (3) while the time sums match exactly; cause not established, so the counts are reported as printed and not interpreted"
+      "sum_px": 309935,
+      "counts_reconciled": true,
+      "resolved_cause": "profile::note_pixels pushed a new Row with calls: 1, and Timer::drop -> record added one per call, so every bucket note_pixels created read one call high. Seeding new rows with calls: 0 reconciles 2 + 1 = 3 against the outer glass_backdrop row."
     },
     "attempts": [
       {
@@ -579,7 +581,8 @@
       "profiled_frame_timed_ms": 77.844,
       "note": "timers are on only for this one frame, so its wall time is inflated and shares are relative to 77.844 ms, not to the 35.45 ms timed frame"
     },
-    "hot_path_decision": "none: the blur is 14.92 ms of the 20.41 ms (73%) and is already a separable two-pass sliding-window blur over the minimal clipped region; no exact equivalent was found that removes per-pixel work, so no renderer change was made",
-    "correction": "\u00a79.3's core fast path sat in the attached-backdrop branch too and therefore never executed in the measured frame; its in-frame 'no gain' result measured nothing"
+    "hot_path_decision": "none: blur 14.892 ms of 20.329 ms (73.3%) is already a separable two-pass sliding-window blur over the clipped region; no exact equivalent removes per-pixel work",
+    "correction": "\u00a79.3's core fast path sat in the attached-backdrop branch too and therefore never executed in the measured frame; its in-frame 'no gain' result measured nothing",
+    "measured_commit": "02b5b8c4034134f068e5bc13c72155bf2a26148d + count fix"
   }
 }
