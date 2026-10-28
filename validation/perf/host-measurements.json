@@ -1,0 +1,346 @@
+{
+  "schema": 1,
+  "generated_unix": 1793163365,
+  "git_head": "52ba41ce21b361f91e9ea2372b9a6e5e8d58bc43",
+  "host": {
+    "uname": "Linux-6.1.102-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "nproc": 8,
+    "mem_total_kb": 16377168
+  },
+  "runs_per_component": 5,
+  "components": [
+    {
+      "name": "litric-shell --once 1280x800",
+      "kind": "one-shot",
+      "status": "MEASURED",
+      "runs_requested": 5,
+      "runs_measured": 5,
+      "wall_ms": {
+        "median": 129.488,
+        "min": 126.341,
+        "max": 133.066,
+        "n": 5
+      },
+      "peak_rss_kb": {
+        "median": 32044.0,
+        "min": 31812.0,
+        "max": 32172.0,
+        "n": 5
+      },
+      "reason": null,
+      "notes": "process start + one composed frame + PNG encode; no present-to-display"
+    },
+    {
+      "name": "litric-shell --once 1920x1080",
+      "kind": "one-shot",
+      "status": "MEASURED",
+      "runs_requested": 5,
+      "runs_measured": 5,
+      "wall_ms": {
+        "median": 227.463,
+        "min": 222.496,
+        "max": 232.302,
+        "n": 5
+      },
+      "peak_rss_kb": {
+        "median": 59644.0,
+        "min": 59396.0,
+        "max": 59720.0,
+        "n": 5
+      },
+      "reason": null,
+      "notes": "same path at 2.25x the pixels, to show how the one-frame cost scales"
+    },
+    {
+      "name": "litric-filesd --serve",
+      "kind": "daemon",
+      "status": "MEASURED",
+      "runs_requested": 5,
+      "runs_measured": 5,
+      "ready_ms": {
+        "median": 10.593,
+        "min": 10.49,
+        "max": 10.648,
+        "n": 5
+      },
+      "rss_kb": {
+        "median": 1284.0,
+        "min": 1264.0,
+        "max": 1316.0,
+        "n": 5
+      },
+      "peak_rss_kb": {
+        "median": 1284.0,
+        "min": 1264.0,
+        "max": 1316.0,
+        "n": 5
+      },
+      "idle_cpu_pct": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "n": 5
+      },
+      "reason": null,
+      "notes": "spawn to accepting socket; RSS with no client"
+    },
+    {
+      "name": "litric-sysd --serve",
+      "kind": "daemon",
+      "status": "MEASURED",
+      "runs_requested": 5,
+      "runs_measured": 5,
+      "ready_ms": {
+        "median": 20.675,
+        "min": 20.662,
+        "max": 20.762,
+        "n": 5
+      },
+      "rss_kb": {
+        "median": 2840.0,
+        "min": 2816.0,
+        "max": 2884.0,
+        "n": 5
+      },
+      "peak_rss_kb": {
+        "median": 2840.0,
+        "min": 2816.0,
+        "max": 2884.0,
+        "n": 5
+      },
+      "idle_cpu_pct": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "n": 5
+      },
+      "reason": null,
+      "notes": "spawn to accepting socket; facts read from this host's real /proc"
+    },
+    {
+      "name": "litric-notifyd --serve",
+      "kind": "daemon",
+      "status": "MEASURED",
+      "runs_requested": 5,
+      "runs_measured": 5,
+      "ready_ms": {
+        "median": 10.577,
+        "min": 10.549,
+        "max": 10.745,
+        "n": 5
+      },
+      "rss_kb": {
+        "median": 1244.0,
+        "min": 1240.0,
+        "max": 1248.0,
+        "n": 5
+      },
+      "peak_rss_kb": {
+        "median": 1244.0,
+        "min": 1240.0,
+        "max": 1248.0,
+        "n": 5
+      },
+      "idle_cpu_pct": {
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.0,
+        "n": 5
+      },
+      "reason": null,
+      "notes": "spawn to accepting socket; empty queue"
+    },
+    {
+      "name": "render_bench",
+      "kind": "bench",
+      "status": "MEASURED",
+      "runs_requested": 5,
+      "runs_measured": 5,
+      "process_wall_ms": {
+        "median": 10067.616,
+        "min": 10023.749,
+        "max": 10135.035,
+        "n": 5
+      },
+      "peak_rss_kb": {
+        "median": 31412.0,
+        "min": 31220.0,
+        "max": 31444.0,
+        "n": 5
+      },
+      "scenes": {
+        "full_frame": {
+          "median_ms": {
+            "median": 86.139,
+            "min": 86.058,
+            "max": 86.719,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 85.683,
+            "min": 85.634,
+            "max": 86.126,
+            "n": 5
+          }
+        },
+        "pointer_move_frame": {
+          "median_ms": {
+            "median": 87.753,
+            "min": 87.208,
+            "max": 87.968,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 86.57,
+            "min": 86.165,
+            "max": 87.662,
+            "n": 5
+          }
+        },
+        "open_window_frame": {
+          "median_ms": {
+            "median": 184.167,
+            "min": 182.942,
+            "max": 185.595,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 182.97,
+            "min": 182.445,
+            "max": 183.555,
+            "n": 5
+          }
+        },
+        "blur_full_screen_r3_2passes": {
+          "median_ms": {
+            "median": 35.338,
+            "min": 35.014,
+            "max": 35.454,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 34.927,
+            "min": 34.074,
+            "max": 35.208,
+            "n": 5
+          }
+        },
+        "blur_full_screen_r10_2passes": {
+          "median_ms": {
+            "median": 37.238,
+            "min": 37.091,
+            "max": 37.809,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 37.156,
+            "min": 36.62,
+            "max": 37.647,
+            "n": 5
+          }
+        },
+        "blur_full_screen_r30_2passes": {
+          "median_ms": {
+            "median": 37.787,
+            "min": 37.654,
+            "max": 38.23,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 37.626,
+            "min": 37.552,
+            "max": 37.75,
+            "n": 5
+          }
+        },
+        "present_full": {
+          "median_ms": {
+            "median": 3.873,
+            "min": 3.853,
+            "max": 3.914,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 3.837,
+            "min": 3.833,
+            "max": 3.856,
+            "n": 5
+          }
+        },
+        "present_pointer_damage": {
+          "median_ms": {
+            "median": 0.149,
+            "min": 0.149,
+            "max": 0.151,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 0.149,
+            "min": 0.149,
+            "max": 0.15,
+            "n": 5
+          }
+        },
+        "lock_frame": {
+          "median_ms": {
+            "median": 6.112,
+            "min": 6.079,
+            "max": 6.153,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 6.068,
+            "min": 6.056,
+            "max": 6.094,
+            "n": 5
+          }
+        },
+        "lock_frame_entry": {
+          "median_ms": {
+            "median": 6.099,
+            "min": 6.087,
+            "max": 6.127,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 6.063,
+            "min": 6.056,
+            "max": 6.084,
+            "n": 5
+          }
+        },
+        "lock_frame_customize": {
+          "median_ms": {
+            "median": 71.701,
+            "min": 71.479,
+            "max": 72.106,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 71.334,
+            "min": 66.523,
+            "max": 71.609,
+            "n": 5
+          }
+        },
+        "lock_frame_still": {
+          "median_ms": {
+            "median": 6.105,
+            "min": 6.097,
+            "max": 6.128,
+            "n": 5
+          },
+          "min_ms": {
+            "median": 6.078,
+            "min": 6.066,
+            "max": 6.087,
+            "n": 5
+          }
+        }
+      },
+      "reason": null,
+      "notes": "the example's own 15-frame timings; composition + file-backed present, no DRM"
+    }
+  ]
+}

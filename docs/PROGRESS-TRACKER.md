@@ -70,19 +70,20 @@ evidence, not throughput.
 
 | Item | State | Blocker |
 |---|---|---|
-| Frame time, RAM, startup time, GPU use | **NOT MEASURED** | No display session or booted image in this workspace; timing a headless frame loop would not represent the desktop |
+| Frame time, RAM, startup time, GPU use | **PARTIAL — host-side numbers in §7, desktop not measured** | The binaries compose and serve headlessly and were measured (§7). Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
-| Installer/image build and QEMU boot | **NOT RUN** | The archive ships the build tooling, but this workspace has no image and the task was scoped to the codebase this turn |
+| Installer/image build and QEMU boot | **NOT RUN** | This workspace has no image, no `qemu-system-x86_64`/`qemu-img`/`mkosi`, and no way to install them: `sudo` is refused (`no new privileges` flag) and the package index has no `qemu-system-x86` (§7 Phase 1 quotes both) |
 
 ## 5. Next verified step
 
 Run `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`
 on every change; the new workflow does this on push. The next measurement that
 would move the tracker is a QEMU boot with `tools/measure-ui.py` and
-`tools/measure-idle.py`, because every performance row above is blocked on the
-same missing image.
+`tools/measure-idle.py`, because every whole-machine performance row is blocked
+on the same missing image. What *can* be measured without one is in §7, and is
+reproduced by `python3 tools/measure-host.py`.
 
 ## 6. Batch: Part 23 citation audit and the trash-name guard (verified)
 
@@ -140,3 +141,120 @@ $ python3 tools/validate_chapter45.py --check
 $ python3 tools/fix_source_id_keys.py --check
 no-op: 4208 rows, 4208 distinct ids, 0 duplicates; nothing written
 ```
+
+## 7. Batch: host-side measurement — real numbers, no image
+
+Starting point: `HEAD` and `@{u}` were both
+`52ba41ce21b361f91e9ea2372b9a6e5e8d58bc43`, working tree clean.
+
+### 7.1 Feasibility probe (every line run in this workspace)
+
+```text
+$ uname -a
+Linux freestyle-vm 6.1.102 #1 SMP PREEMPT_DYNAMIC Wed Aug 26 20:12:24 UTC 2026 x86_64
+$ nproc
+8
+$ free -m
+               total        used        free      shared  buff/cache   available
+Mem:           15993         536       11230           1        4557       15456
+$ grep -m1 'model name' /proc/cpuinfo
+model name	: 19/01
+$ ls -l /dev/kvm
+crw-rw---- 1 root kvm 10, 232 Oct 28 04:04 /dev/kvm
+$ command -v qemu-system-x86_64 qemu-img mkosi systemd-nspawn /usr/bin/time
+(no output: none of the five exists)
+$ apt-get install -s --no-install-recommends qemu-system-x86
+E: Unable to locate package qemu-system-x86
+$ sudo -n true
+sudo: The "no new privileges" flag is set, which prevents sudo from running as root.
+$ ls *.img
+ls: cannot access '*.img': No such file or directory
+```
+
+`/dev/kvm` exists but is `root:kvm 0660`, this account is not in `kvm`, and
+`sudo` is refused, so neither the group nor a package index can be obtained.
+`tools/measure-idle.py` needs `build/out/litricos.raw` plus OVMF, and
+`.gitignore` excludes `*.raw`/`*.img`: no image exists in this checkout. The
+QEMU/image path is therefore **blocked with evidence**, not skipped. The CPU
+model string is the masked `19/01` a virtual machine reports, so no clock or
+microarchitecture claim is available from it.
+
+### 7.2 Measured on this host (headless, no display, no image)
+
+Both commands below were run in this turn; the JSON is the machine-readable
+record (`validation/perf/host-measurements.json`).
+
+```text
+$ (cd src && cargo build --release --workspace)
+BUILD_EXIT=0
+
+$ python3 tools/measure-host.py --runs 5
+component                      n   ready/wall ms (med)   rss kB (med)   peak kB (med)   idle cpu % (med)
+--------------------------------------------------------------------------------------------------------
+litric-shell --once 1280x800   5        129.5 [126.3-133.1]          -         32044            -
+litric-shell --once 1920x1080  5        227.5 [222.5-232.3]          -         59644            -
+litric-filesd --serve          5         10.6 [10.5-10.6]       1284          1284         0.00
+litric-sysd --serve            5         20.7 [20.7-20.8]       2840          2840         0.00
+litric-notifyd --serve          5         10.6 [10.5-10.7]       1244          1244         0.00
+render_bench                   5      10067.6 [10023.7-10135.0]          -         31412            -
+```
+
+`render_bench` (the repository's own 15-frame-per-scene example, median of the
+per-run medians over 5 processes):
+
+| Scene | Median | What it is |
+|---|---|---|
+| `full_frame` | **86.14 ms** | wallpaper restore + whole desktop draw, 1280x800 |
+| `pointer_move_frame` | 87.75 ms | the benchmark draws unclipped; the shipping path clips (see 7.3) |
+| `open_window_frame` | 184.17 ms | first frame of a new window |
+| `blur_full_screen_r3_2passes` | 35.34 ms | one full-screen box blur, two passes |
+| `present_full` | 3.87 ms | blit to a file standing in for `/dev/fb0` |
+| `present_pointer_damage` | 0.15 ms | 32 damage rows |
+| `lock_frame` / `_entry` / `_still` | 6.11 / 6.10 / 6.11 ms | locked shell, no wallpaper restore |
+| `lock_frame_customize` | 71.70 ms | locked shell with the customize sheet open |
+
+One-frame wall time scales with pixels the way a scalar compositor plus PNG
+encode should: 1.024 Mpx → 129.5 ms and 2.074 Mpx → 227.5 ms, i.e. about
+**93 ms per megapixel plus 34 ms of process startup** (two points, so this is a
+linear fit, not a model). Peak RSS over the same two sizes is 32.0 MB and
+59.6 MB.
+
+### 7.3 What these numbers do and do not say
+
+* **Valid:** process start, one composed frame, daemon ready latency, daemon
+  steady RSS and idle CPU on this machine. Peak RSS comes from `wait4(2)`
+  `ru_maxrss` / `VmHWM`, never from an estimate.
+* **Not valid as a desktop claim:** there is no `present()` to a DRM/KMS
+  device, no GPU, no systemd and no boot. `full_frame` is composition only.
+* **A caveat found while reading the benchmark:** `render_bench`'s `frame()`
+  calls `views::draw` on the whole scene, while the shipping
+  `Compositor::repaint` (`src/litric-shell/src/desktop.rs:253-262`) sets a clip
+  to each damage region. So `pointer_move_frame` (87.4 ms) measures the
+  *unclipped* worst case, not what a pointer move costs on the machine. The
+  `full_frame` and `present_*` rows are not affected by this.
+* 86 ms for a full 1280x800 frame is 5.4x the 16 ms active budget. That is
+  consistent with BUG-0015/BUG-0018 ("the renderer is over budget today") and
+  with `docs/DESKTOP-APP.md`'s 204 over-budget frames in 518; it is **not** new
+  evidence that real hardware misses the budget.
+
+### 7.4 Code change decision
+
+No product code was changed. The measurement produced no small, low-risk
+correctness or performance defect with an obvious fix; the one large finding
+(full-frame composition cost) is already tracked as BUG-0015/BUG-0018 and
+cannot be validated here without a display. Churning the renderer against a
+number this host cannot confirm would be guessing, so it was not done.
+
+Added instead: `tools/measure-host.py`, the harness that produced 7.2. It is
+read-only with respect to the product, writes its JSON under `validation/perf/`,
+and exits 1 when a component cannot be run, with the reason recorded rather
+than a substituted number.
+
+### 7.5 Still blocked
+
+| Item | State | Concrete blocker |
+|---|---|---|
+| `tools/measure-idle.py` / `measure-ui.py` | **NOT RUN** | no image, no QEMU, no root (7.1) |
+| Boot time, whole-machine idle RAM, idle CPU | **NOT RUN** | same |
+| GPU use, present-to-display frame time | **NOT RUN** | no DRM device in this VM |
+| `VP-01`–`VP-27`, Chapter L live rows | **NOT RUN** | need Windows/macOS/DE sessions or the image |
