@@ -35,6 +35,7 @@ use litric_locale::Regional;
 use litric_shell::canvas::{rgb, Canvas, Rect, Site};
 use litric_shell::desktop;
 use litric_shell::fb::{FbInfo, Framebuffer};
+use litric_shell::font::{self, Style};
 use litric_shell::lock::Stage;
 use litric_shell::shell::{DesktopMode, EnvRow, Shell};
 use litric_shell::shortcuts::App;
@@ -278,14 +279,33 @@ fn main() -> ExitCode {
     // ---- full frames ------------------------------------------------------
     let mut times = Vec::with_capacity(RUNS);
     let mut visited = 0;
+    // Where a full frame's pixels went, summed over the runs: the number that
+    // says which loop to profile rather than which one looks expensive.
+    let mut sites = [0_u64; Site::COUNT];
     for _ in 0..RUNS {
         b.shell.request_full_redraw();
         let t = Instant::now();
         let f = frame(&mut b);
         times.push(elapsed_ms(t));
         visited = f.visited_px;
+        for (s, n) in b.scene.pixels_visited_by_site() {
+            if let Some(c) = sites.get_mut(s.index()) {
+                *c = c.saturating_add(n);
+            }
+        }
     }
     println!("full_frame.visited_px={visited}");
+    let split = Site::ALL
+        .into_iter()
+        .filter_map(|s| {
+            sites.get(s.index()).copied().filter(|n| *n > 0).map(|n| {
+                let per_run = n.checked_div(RUNS as u64).unwrap_or(0);
+                format!("{}={per_run}", s.label())
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("full_frame.sites_per_frame={split}");
     report("full_frame", times);
 
     // ---- one pointer move over empty desktop ------------------------------
@@ -453,6 +473,64 @@ fn main() -> ExitCode {
     locked.shell.lock.tweaks.motion = 0;
     locked.shell.lock.tweaks.breathe = false;
     lock_frames(&mut locked, &mut now, "lock_frame_still");
+
+    // ---- primitives -------------------------------------------------------
+    //
+    // A scene costs what its loops cost. Each primitive below is the one the
+    // desktop actually calls, timed on the same 1280x800 canvas, so the
+    // full-frame number can be attributed to a primitive instead of guessed.
+    // The panel is a window-sized rectangle: the size the chrome draws.
+    let screen = Rect::new(0.0, 0.0, W as f32, H as f32);
+    let panel = Rect::new(340.0, 190.0, 600.0, 420.0);
+
+    let mut times = Vec::with_capacity(RUNS);
+    for _ in 0..RUNS {
+        let t = Instant::now();
+        b.scene.blit_from(&b.wallpaper, screen);
+        times.push(elapsed_ms(t));
+    }
+    println!("primitive_blit_full_screen.size={W}x{H}");
+    report("primitive_blit_full_screen", times);
+
+    let mut times = Vec::with_capacity(RUNS);
+    for _ in 0..RUNS {
+        let t = Instant::now();
+        b.scene.fill_round_rect(panel, 16.0, rgb(0x202430));
+        times.push(elapsed_ms(t));
+    }
+    println!("primitive_fill_panel.size=600x420");
+    report("primitive_fill_panel", times);
+
+    let mut times = Vec::with_capacity(RUNS);
+    for _ in 0..RUNS {
+        let t = Instant::now();
+        b.scene.soft_shadow(panel, 16.0, 36.0, 10.0, 0.5);
+        times.push(elapsed_ms(t));
+    }
+    report("primitive_soft_shadow_panel", times);
+
+    let source = std::rc::Rc::new(b.wallpaper.glass_source(6, 1.2));
+    let _ = b.scene.set_backdrop(Some(source));
+    let mut times = Vec::with_capacity(RUNS);
+    for _ in 0..RUNS {
+        let t = Instant::now();
+        b.scene.glass_backdrop(panel, 16.0, 6, 1.2);
+        times.push(elapsed_ms(t));
+    }
+    report("primitive_glass_backdrop_panel", times);
+
+    let style = Style::new(24.0, rgb(0xFFFFFF));
+    let sample = "The quick brown fox jumps over the lazy dog 0123456789";
+    let mut times = Vec::with_capacity(RUNS);
+    for _ in 0..RUNS {
+        let t = Instant::now();
+        for i in 0..10_u32 {
+            let baseline = 100.0 + f32::from(u16::try_from(i).unwrap_or(0)) * 30.0;
+            font::draw_literal(&mut b.scene, sample, 40.0, baseline, &style);
+        }
+        times.push(elapsed_ms(t));
+    }
+    report("primitive_text_10_lines", times);
 
     ExitCode::SUCCESS
 }

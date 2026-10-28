@@ -1452,6 +1452,40 @@ impl Canvas {
         let base = Rect::new(r.x, r.y + dy, r.w, r.h);
         let (x0, y0, x1, y1) = self.span(&base.inflate(reach + 1.5));
 
+        // What a run of fully covered rings does to one channel value, built
+        // with the same `blend` the loop below uses. Most pixels of a shadow
+        // lie inside several of the twelve rings at coverage 1.0, and composing
+        // those one blend at a time was measured at 46 ms of an 86 ms frame
+        // (`render_bench`, 1280x800, 600x420 panel). The composite of a fixed
+        // order of fixed alphas is a pure function of the value it starts from,
+        // so `chain[n][v]` is what the outermost `n` rings do to `v`, and a
+        // pixel those rings cover fully costs one lookup instead of `n` blends.
+        // `chain` is built by calling `blend` itself, so the shortcut cannot
+        // drift from the loop it replaces.
+        let mut chain = [[0_u8; 256]; STEPS.saturating_add(1)];
+        if let Some(row) = chain.first_mut() {
+            for (v, slot) in row.iter_mut().enumerate() {
+                *slot = u8::try_from(v).unwrap_or(u8::MAX);
+            }
+        }
+        for n in 1..=STEPS {
+            let ring = STEPS.saturating_sub(n);
+            let Some(color) = tint.get(ring).copied() else {
+                continue;
+            };
+            let prev = chain.get(n.saturating_sub(1)).copied().unwrap_or([0; 256]);
+            let Some(row) = chain.get_mut(n) else {
+                continue;
+            };
+            for v in 0..256_usize {
+                let start = prev.get(v).copied().unwrap_or(0);
+                let out = blend(rgb(u32::from(start)), color, 1.0) & 0xFF;
+                if let Some(cell) = row.get_mut(v) {
+                    *cell = u8::try_from(out).unwrap_or(u8::MAX);
+                }
+            }
+        }
+
         // A rectangle that lies wholly inside `r`'s rounded outline, so the
         // common case -- the middle of a window -- is skipped a row at a time
         // without a distance calculation per pixel.
@@ -1489,9 +1523,26 @@ impl Canvas {
                     continue;
                 }
                 let d = sd_round_rect(px, py, &base, radius);
-                // Outermost ring first, as it was drawn; a ring whose grown
-                // edge is still short of this pixel has zero coverage.
-                for i in (0..STEPS).rev() {
+                // Outermost ring first, as it was drawn. Every ring whose grown
+                // edge has already passed this pixel covers it fully, so those
+                // are applied as one table lookup; the rings straddling the
+                // edge are blended one at a time in the same order.
+                let full_from = grow.iter().position(|g| *g >= d + 0.5).unwrap_or(STEPS);
+                let full = STEPS.saturating_sub(full_from);
+                if full > 0 {
+                    let row = chain.get(full).copied().unwrap_or([0; 256]);
+                    if let Some(p) = self.get(x, y) {
+                        let r = row.get(((p >> 16) & 0xFF) as usize).copied().unwrap_or(0);
+                        let g = row.get(((p >> 8) & 0xFF) as usize).copied().unwrap_or(0);
+                        let b = row.get((p & 0xFF) as usize).copied().unwrap_or(0);
+                        self.put_in(
+                            x,
+                            y,
+                            0xFF00_0000 | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b),
+                        );
+                    }
+                }
+                for i in (0..full_from).rev() {
                     let (Some(g), Some(c)) = (grow.get(i), tint.get(i)) else {
                         continue;
                     };

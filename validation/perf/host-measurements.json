@@ -342,5 +342,51 @@
       "reason": null,
       "notes": "the example's own 15-frame timings; composition + file-backed present, no DRM"
     }
-  ]
+  ],
+  "optimization": {
+    "batch": "soft-shadow ring-chain shortcut",
+    "baseline_git_head": "824800235fc7813d292dc0777c8f08d198052a53",
+    "protocol": "5 processes of src/target/release/examples/render_bench, each timing 15 frames per scene; values are the median of the five per-process medians",
+    "commands": {
+      "build": "cd src && cargo build --release -p litric-shell --examples",
+      "measure": "src/target/release/examples/render_bench <dir>  (run 5 times)",
+      "attribution": "full_frame.sites_per_frame and primitive_* lines printed by render_bench",
+      "pixel_equality": "cargo test -p litric-shell --lib canvas:: (the_one_pass_shadow_equals_the_twelve_ring_shadow)"
+    },
+    "before_ms": {
+      "full_frame": 86.93,
+      "pointer_move_frame": 88.38,
+      "open_window_frame": 183.7,
+      "lock_frame_customize": 72.05,
+      "primitive_soft_shadow_panel": 46.46,
+      "blur_full_screen_r3_2passes": 35.49,
+      "present_full": 3.93,
+      "lock_frame": 6.12
+    },
+    "after_ms": {
+      "full_frame": 35.45,
+      "pointer_move_frame": 35.62,
+      "open_window_frame": 71.56,
+      "lock_frame_customize": 22.15,
+      "primitive_soft_shadow_panel": 3.83,
+      "blur_full_screen_r3_2passes": 35.83,
+      "present_full": 3.9,
+      "lock_frame": 6.11
+    },
+    "change_pct": {
+      "full_frame": -59.2,
+      "pointer_move_frame": -59.7,
+      "open_window_frame": -61.0,
+      "lock_frame_customize": -69.3,
+      "primitive_soft_shadow_panel": -91.8,
+      "blur_full_screen_r3_2passes": 1.0,
+      "present_full": -0.8,
+      "lock_frame": -0.2
+    },
+    "notes": [
+      "no perf/valgrind/heaptrack/bpftrace on this host (all MISSING), perf_event_paranoid=2",
+      "golden-frame gate could not run: frame_dump has no fonts in this sandbox",
+      "output pixels unchanged: the site pixel split is identical before and after"
+    ]
+  }
 }

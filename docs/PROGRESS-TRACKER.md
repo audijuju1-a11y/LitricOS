@@ -258,3 +258,96 @@ than a substituted number.
 | Boot time, whole-machine idle RAM, idle CPU | **NOT RUN** | same |
 | GPU use, present-to-display frame time | **NOT RUN** | no DRM device in this VM |
 | `VP-01`–`VP-27`, Chapter L live rows | **NOT RUN** | need Windows/macOS/DE sessions or the image |
+
+## 8. Batch: profiled the full frame, fixed the shadow (verified)
+
+Baseline on `8248002`, re-measured rather than trusted: five processes of
+`render_bench`, each timing 15 frames per scene.
+
+```text
+$ src/target/release/examples/render_bench <dir>   (5 processes)
+full_frame        median 86.93 ms   spread 86.10-88.30
+open_window_frame median 183.70 ms  spread 183.21-183.97
+```
+
+### 8.1 Profiling method (what this host actually has)
+
+```text
+$ command -v perf valgrind heaptrack bpftrace
+(all MISSING)
+$ cat /proc/sys/kernel/perf_event_paranoid
+2
+```
+
+No sampling profiler and no way to install one (no root, no package index —
+§7.1). So the attribution is Rust-level instrumentation in the bench path:
+
+1. `Canvas` already bills every pixel loop by `Site`; `render_bench` now prints
+   `full_frame.sites_per_frame` for the full frame.
+2. `render_bench` now times the primitives the frame is built from, on the same
+   1280x800 canvas: full-screen blit, a 600x420 panel fill, a 600x420
+   `soft_shadow`, a 600x420 `glass_backdrop`, and ten 51-character text lines.
+
+```text
+full_frame.sites_per_frame=draw=1772848 glass=462944 shadow=392576 text=101278 brightest=19583
+primitive_soft_shadow_panel      median 46.46 ms
+primitive_glass_backdrop_panel   median  1.98 ms
+primitive_fill_panel             median  1.19 ms
+primitive_text_10_lines          median  3.45 ms
+primitive_blit_full_screen       median  0.17 ms
+```
+
+**Attribution:** 46.46 ms of an 86.93 ms frame — 53 % — was `soft_shadow`,
+which blends up to twelve rings into every pixel it covers. Everything else the
+frame draws is 1–3 ms per primitive. The remaining `draw` site is large in
+pixels but cheap per pixel (the panel fill measures 4.7 ns/px), which is why the
+shadow was the first target and the draw loops were not touched.
+
+### 8.2 The change (multiple files)
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/canvas.rs` | `soft_shadow` composes the rings a pixel is *fully* inside as one table lookup: `chain[n][v]` is what the outermost `n` rings do to channel value `v`, built by calling the same `blend` in the same order, so the arithmetic and rounding are the loop's own. Rings straddling the edge are still blended one at a time, in the original outermost-first order. |
+| `src/litric-shell/examples/render_bench.rs` | the per-site split for `full_frame` and the five primitive timings above, so the next person can re-derive the attribution instead of trusting this table |
+
+Pixel equality is asserted by the repository's own reference test, which renders
+each case twice — once through `soft_shadow`, once through the literal
+twelve-ring implementation — and compares every pixel. It covers four real
+panel shapes including `radius = 0` and a fractional origin, and passes:
+
+```text
+$ cargo test -p litric-shell --lib canvas::
+test result: ok. 49 passed; 0 failed
+  incl. the_one_pass_shadow_equals_the_twelve_ring_shadow
+```
+
+The golden-frame gate could not be used as a second proof here: `frame_dump`
+reports `no Latin text face is installed` in this sandbox (the image's fonts are
+not present), so it wrote no frames and `ci/check-golden-frames.py` reported
+`no frame directory at build/frames`. That is a missing fixture, not a pass.
+
+### 8.3 Measured result (5 processes, same host, same protocol)
+
+| Scene | Before | After | Change |
+|---|---|---|---|
+| `full_frame` | 86.93 ms | **35.45 ms** | **−59.2 %** |
+| `pointer_move_frame` | 88.38 ms | 35.62 ms | −59.7 % |
+| `open_window_frame` | 183.70 ms | 71.56 ms | −61.0 % |
+| `lock_frame_customize` | 72.05 ms | 22.15 ms | −69.3 % |
+| `primitive_soft_shadow_panel` | 46.46 ms | **3.83 ms** | **−91.8 %** |
+| `blur_full_screen_r3_2passes` | 35.49 ms | 35.83 ms | unchanged (not touched) |
+| `present_full` | 3.93 ms | 3.90 ms | unchanged |
+| `lock_frame` | 6.12 ms | 6.11 ms | unchanged |
+
+`full_frame.sites_per_frame` is byte-for-byte the same split after the change
+(shadow still bills 392,576 pixel visits), which is what a pure shortcut should
+look like: the same pixels, the same arithmetic, fewer operations.
+
+### 8.4 What is left toward the 16 ms budget
+
+35.45 ms is 2.2× the active-frame budget on this 8-vCPU VM with no GPU. The
+next cost is the `draw` site (1.77 M visits) but it is cheap per pixel; splitting
+it further needs a profiler that can attribute *inside* `views::draw`, which
+this host does not have. No second change was made, because the primitive
+timings did not justify one — guessing at the draw loop would be exactly the
+kind of unfounded optimisation this batch exists to avoid.
