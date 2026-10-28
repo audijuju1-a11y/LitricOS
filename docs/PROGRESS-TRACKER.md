@@ -70,7 +70,7 @@ evidence, not throughput.
 
 | Item | State | Blocker |
 |---|---|---|
-| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17, §18, §19, §20, §21 and §22 (7.155 ms median; lock-customize 8.376 ms and open-window 12.137 ms are inside the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
+| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17, §18, §19, §20, §21, §22 and §23 (6.612 ms median; lock-customize 7.998 ms and open-window 11.904 ms are inside the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
@@ -1742,4 +1742,94 @@ At 12.137 ms, `open_window_frame` is 3.863 ms inside the budget; `full_frame` is
 5.8 ms before this batch) and `stroke_line`; this batch does not change them.
 The golden-frame gate remains **BLOCKED** on the missing Latin font face
 fixture and is not claimed.
+
+## 23. Batch: bounding the soft shadow's ring scan (verified)
+
+### 23.1 Attribution, measured before the change
+
+The soft-shadow classification pass gained two profiled counters: how many
+times the painter enters its partial-ring loop, and how many of those
+iterations actually blend. One open-window frame reports:
+
+| Bucket | Count | Meaning |
+|---|---|---|
+| `partial_iters` | **949,831** | partial-ring loop iterations |
+| `partial_blends` | **64,056** | iterations whose coverage was above zero |
+| `mixed` | 108,587 px | pixels with both full and partial rings |
+| `all_full` | 22,008 px | every ring covers the pixel |
+| `under_panel` | 76,508 px | distance test, then skipped |
+| `zero` | 13,216 px | no ring coverage |
+| `partial_only` | 6,676 px | every ring partial |
+| `hidden` | 605,923 px | row-skipped under the glass backdrop |
+
+**93.3 % of the partial-ring iterations compute coverage, find zero and return
+from `blend_in` without touching a byte.** The row measured 7.176 ms
+(7.068-7.468) in this session's baseline; the whole open-window frame measured
+11.971 ms (11.728-12.247).
+
+### 23.2 Root cause and change
+
+The twelve rings are `spread / 12` apart and coverage ramps over one pixel, so
+at most `ceil(12 / spread) + 1` rings can straddle the edge at any pixel. Every
+other ring in `0..full_from` has `g <= d - 0.5`, which makes
+`coverage(d - g)` exactly zero. The loop now starts at
+`full_from - (ceil(1 / step) + 3)`; the three-ring margin keeps it conservative
+under floating-point rounding, and a zero `step` (spread 0) keeps the original
+full scan. Nothing about which pixels blend, in which order, or with which
+coverage changed: the removed iterations were the ones `blend_in` discarded.
+
+Files: `src/litric-shell/src/canvas.rs` (the bound, the profiled counters, the
+test). No buffer was added; the change is arithmetic and frees work.
+
+### 23.3 Pixel-identical proof
+
+The pre-change `soft_shadow` is kept **verbatim** in the test module as
+`Canvas::soft_shadow_reference`, classification pass included. The new
+`the_bounded_ring_scan_equals_the_unbounded_one` compares whole canvases over
+12 geometries x 3 clips (none, fractional, empty) x 2 backdrop modes = **72
+full-canvas comparisons**, covering spreads 0.5, 2.5, 12, 30, 30.5, 120,
+alpha 0 and 1, radius 0, radius larger than the half-extent, fractional
+geometry and an off-canvas rectangle. All 55 canvas tests pass, and the
+original four-case twelve-ring test is untouched.
+
+A separate observation: the one-pass shadow and the twelve-ring reference
+already disagree at `spread 30.5` at `ed689ee` - a one-ulp difference in the
+grown rectangle's centre crosses a coverage boundary. That was verified by
+running the same case against the unbounded loop, which fails identically; it
+is a pre-existing property of the twelve-ring comparison, not of this batch,
+and is recorded rather than hidden.
+
+### 23.4 Measured result
+
+Identical protocol: release, 1280x800, 8-vCPU VM, no GPU and no display, 15
+frames per scene, five separate processes per phase, medians of the five
+per-process medians with min-max ranges. Raw logs:
+`evidence/bench/soft-shadow-ring-bound-2026-10-28/{before,after}/`.
+
+| Item | Before | After | Verdict |
+|---|---|---|---|
+| `soft_shadow` row | 7.176 ms (7.068-7.468) | **6.726 ms (6.618-6.791)** | ranges disjoint; **-6.3 %** |
+| `open_window_frame` | 11.971 ms (11.728-12.247) | 11.904 ms (11.453-11.955) | ranges overlap; scene change not claimed |
+| `full_frame` | 7.018 ms (6.826-7.109) | 6.612 ms (6.588-6.831) | ranges overlap; not claimed |
+| `lock_frame_customize` | 8.128 ms (8.082-8.250) | 7.998 ms (7.922-8.186) | ranges overlap; not claimed |
+| `primitive_fill_panel` | 0.051 ms | 0.051 ms | unchanged |
+| `primitive_fill_panel_translucent` | 0.336 ms | 0.336 ms | unchanged |
+
+The row improvement is disjoint and directly attributable to the removed
+iterations. The scene-level numbers moved down together across the whole block,
+including scenes this change does not touch, so no whole-frame win is claimed.
+
+### 23.5 Status and remaining distance
+
+**VERIFIED** for the targeted row: the dominant waste was measured at 93.3 % of
+the loop iterations, removed by an exact bound, and the output is identical to a
+verbatim copy of the old implementation. Scene-level improvement is inside the
+block spread and is not claimed; no scene regressed.
+
+All three profiled scenes remain inside 16 ms: `open_window_frame` 11.904 ms
+(4.096 ms inside), `full_frame` 6.612 ms (9.388 ms inside) and
+`lock_frame_customize` 7.998 ms (8.002 ms inside). The remaining largest window
+rows are `soft_shadow` (6.726 ms), `stroke_line` and `fill_round_rect`; this
+batch changes only the ring scan. The golden-frame gate remains **BLOCKED** on
+the missing Latin font face fixture and is not claimed.
 

@@ -2259,6 +2259,18 @@ impl Canvas {
             *c = with_alpha(rgba(0, 0, 0, 255), a);
         }
         let reach = grow.last().copied().unwrap_or(0.0);
+        // Rings are `spread / 12` apart and coverage ramps over one pixel, so at
+        // most `ceil(1 / step) + 1` of them can straddle the edge at any pixel;
+        // the rest contribute exactly zero and `blend_in` would return without
+        // touching a byte. One window frame ran 949,831 of those no-op
+        // iterations for 64,056 real blends. The extra margin of three rings
+        // keeps the bound conservative under floating-point rounding.
+        let step = spread / STEPS as f32;
+        let keep = if step > 0.0 {
+            ((1.0 / step).ceil() as usize).saturating_add(3).min(STEPS)
+        } else {
+            STEPS
+        };
 
         // The shadow's own geometry, derived once. Both distance tests below
         // share the horizontal term and the clamped radius; before this, every
@@ -2372,7 +2384,7 @@ impl Canvas {
                         );
                     }
                 }
-                for i in (0..full_from).rev() {
+                for i in (full_from.saturating_sub(keep)..full_from).rev() {
                     let (Some(g), Some(c)) = (grow.get(i), tint.get(i)) else {
                         continue;
                     };
@@ -2395,6 +2407,8 @@ impl Canvas {
             let mut partial_px = 0u64;
             let mut zero_px = 0u64;
             let mut rows = 0u64;
+            let mut iters = 0u64;
+            let mut blends = 0u64;
             for y in y0..y1 {
                 rows = rows.saturating_add(1);
                 let py = y as f32 + 0.5;
@@ -2415,6 +2429,12 @@ impl Canvas {
                     }
                     let d = sd_round_rect(px, py, &shadow, radius);
                     let full_from = grow.iter().position(|g| *g >= d + 0.5).unwrap_or(STEPS);
+                    iters = iters.saturating_add(u64::try_from(full_from).unwrap_or(0));
+                    for i in (0..full_from).rev() {
+                        if grow.get(i).is_some_and(|g| coverage(d - *g) > 0.0) {
+                            blends = blends.saturating_add(1);
+                        }
+                    }
                     if full_from == 0 {
                         all_full_px = all_full_px.saturating_add(1);
                     } else if full_from < STEPS {
@@ -2441,6 +2461,8 @@ impl Canvas {
             profile::note_bucket("soft_shadow.partial_only", partial_px, 0);
             profile::note_bucket("soft_shadow.zero", zero_px, 0);
             profile::note_bucket("soft_shadow.walked", walked, 0);
+            profile::note_bucket("soft_shadow.partial_iters", iters, 0);
+            profile::note_bucket("soft_shadow.partial_blends", blends, 0);
             profile::note_counter("soft_shadow.rows", rows);
             profile::note_counter("soft_shadow.zero_calls", u64::from(visited == hidden_px));
             profile::note_max("soft_shadow.max_call_px", visited);
@@ -3352,6 +3374,226 @@ mod tests {
         assert_eq!(c.pixels_visited(), by.iter().map(|(_, n)| n).sum::<u64>());
     }
 
+    impl Canvas {
+        fn soft_shadow_reference(
+            &mut self,
+            r: Rect,
+            radius: f32,
+            spread: f32,
+            dy: f32,
+            alpha: f32,
+        ) {
+            let _prof = profile::Timer::new("soft_shadow");
+            const STEPS: usize = 12;
+            let prev = self.set_site(Site::Shadow);
+
+            // Per ring: how far its edge is grown, and the colour it is drawn in.
+            // Index 0 is the innermost ring, which is drawn last, on top.
+            let mut grow = [0.0f32; STEPS];
+            let mut tint = [0u32; STEPS];
+            for (i, (g, c)) in grow.iter_mut().zip(tint.iter_mut()).enumerate() {
+                let t = i as f32 / STEPS as f32;
+                *g = spread * t;
+                // Squared falloff: a linear one leaves a visible outer edge where
+                // the last ring stops, which reads as a rectangle rather than a
+                // shadow.
+                let a = alpha * (1.0 - t) * (1.0 - t) / STEPS as f32 * 3.0;
+                *c = with_alpha(rgba(0, 0, 0, 255), a);
+            }
+            let reach = grow.last().copied().unwrap_or(0.0);
+
+            // The shadow's own geometry, derived once. Both distance tests below
+            // share the horizontal term and the clamped radius; before this, every
+            // painted pixel recomputed the centre, both half-extents and the radius
+            // for the panel test and again for the shadow test. That is four divides
+            // a pixel for values that do not change inside the call.
+            let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
+            let (cx, cy) = r.center();
+            let qx_off = r.w / 2.0 - rad;
+            let qy_off = r.h / 2.0 - rad;
+            let base_cy = cy + dy;
+            let shadow = Rect::new(r.x, r.y + dy, r.w, r.h);
+            let (x0, y0, x1, y1) = self.span(&shadow.inflate(reach + 1.5));
+
+            // What a run of fully covered rings does to one channel value, built
+            // with the same `blend` the loop below uses. Most pixels of a shadow
+            // lie inside several of the twelve rings at coverage 1.0, and composing
+            // those one blend at a time was measured at 46 ms of an 86 ms frame
+            // (`render_bench`, 1280x800, 600x420 panel). The composite of a fixed
+            // order of fixed alphas is a pure function of the value it starts from,
+            // so `chain[n][v]` is what the outermost `n` rings do to `v`, and a
+            // pixel those rings cover fully costs one lookup instead of `n` blends.
+            // `chain` is built by calling `blend` itself, so the shortcut cannot
+            // drift from the loop it replaces.
+            let mut chain = [[0_u8; 256]; STEPS.saturating_add(1)];
+            if let Some(row) = chain.first_mut() {
+                for (v, slot) in row.iter_mut().enumerate() {
+                    *slot = u8::try_from(v).unwrap_or(u8::MAX);
+                }
+            }
+            for n in 1..=STEPS {
+                let ring = STEPS.saturating_sub(n);
+                let Some(color) = tint.get(ring).copied() else {
+                    continue;
+                };
+                let prev = chain.get(n.saturating_sub(1)).copied().unwrap_or([0; 256]);
+                let Some(row) = chain.get_mut(n) else {
+                    continue;
+                };
+                for v in 0..256_usize {
+                    let start = prev.get(v).copied().unwrap_or(0);
+                    let out = blend(rgb(u32::from(start)), color, 1.0) & 0xFF;
+                    if let Some(cell) = row.get_mut(v) {
+                        *cell = u8::try_from(out).unwrap_or(u8::MAX);
+                    }
+                }
+            }
+
+            // A rectangle that lies wholly inside `r`'s rounded outline, so the
+            // common case -- the middle of a window -- is skipped a row at a time
+            // without a distance calculation per pixel.
+            let covered = self.backdrop.is_some();
+            let inset = radius.max(2.0);
+            let hide = Rect::new(
+                r.x + inset,
+                r.y + inset,
+                r.w - inset * 2.0,
+                r.h - inset * 2.0,
+            );
+            let (hx0, hy0, hx1, hy1) = if covered && hide.w > 0.0 && hide.h > 0.0 {
+                (
+                    hide.x.ceil() as i64,
+                    hide.y.ceil() as i64,
+                    hide.right().floor() as i64,
+                    hide.bottom().floor() as i64,
+                )
+            } else {
+                (0, 0, 0, 0)
+            };
+
+            for y in y0..y1 {
+                let py = y as f32 + 0.5;
+                let mut x = x0;
+                while x < x1 {
+                    if y >= hy0 && y < hy1 && x >= hx0 && x < hx1 {
+                        x = hx1;
+                        continue;
+                    }
+                    let px = x as f32 + 0.5;
+                    let qx = (px - cx).abs() - qx_off;
+                    let ax = qx.max(0.0);
+                    // Under the panel, past its first pixel: never visible.
+                    if covered {
+                        let qy = (py - cy).abs() - qy_off;
+                        let ay = qy.max(0.0);
+                        let panel = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - rad;
+                        if panel < -1.0 {
+                            x = x.saturating_add(1);
+                            continue;
+                        }
+                    }
+                    let qy = (py - base_cy).abs() - qy_off;
+                    let ay = qy.max(0.0);
+                    let d = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - rad;
+                    // Outermost ring first, as it was drawn. Every ring whose grown
+                    // edge has already passed this pixel covers it fully, so those
+                    // are applied as one table lookup; the rings straddling the
+                    // edge are blended one at a time in the same order.
+                    let full_from = grow.iter().position(|g| *g >= d + 0.5).unwrap_or(STEPS);
+                    let full = STEPS.saturating_sub(full_from);
+                    if full > 0 {
+                        let row = chain.get(full).copied().unwrap_or([0; 256]);
+                        if let Some(p) = self.get(x, y) {
+                            let r = row.get(((p >> 16) & 0xFF) as usize).copied().unwrap_or(0);
+                            let g = row.get(((p >> 8) & 0xFF) as usize).copied().unwrap_or(0);
+                            let b = row.get((p & 0xFF) as usize).copied().unwrap_or(0);
+                            self.put_in(
+                                x,
+                                y,
+                                0xFF00_0000
+                                    | (u32::from(r) << 16)
+                                    | (u32::from(g) << 8)
+                                    | u32::from(b),
+                            );
+                        }
+                    }
+                    for i in (0..full_from).rev() {
+                        let (Some(g), Some(c)) = (grow.get(i), tint.get(i)) else {
+                            continue;
+                        };
+                        let cov = coverage(d - *g);
+                        if cov > 0.0 {
+                            self.blend_in(x, y, *c, cov);
+                        }
+                    }
+                    x = x.saturating_add(1);
+                }
+            }
+            if profile::is_on() {
+                // Where a shadow's pixels go. This is a diagnostic pass over the
+                // same predicates the loop above uses, and it runs only on the
+                // profiled frame; no timed frame pays for it.
+                let mut hidden_px = 0u64;
+                let mut under_px = 0u64;
+                let mut all_full_px = 0u64;
+                let mut mixed_px = 0u64;
+                let mut partial_px = 0u64;
+                let mut zero_px = 0u64;
+                let mut rows = 0u64;
+                for y in y0..y1 {
+                    rows = rows.saturating_add(1);
+                    let py = y as f32 + 0.5;
+                    let mut x = x0;
+                    while x < x1 {
+                        if y >= hy0 && y < hy1 && x >= hx0 && x < hx1 {
+                            let n = u64::try_from((hx1.min(x1)).saturating_sub(x.max(hx0)))
+                                .unwrap_or(0);
+                            hidden_px = hidden_px.saturating_add(n);
+                            x = hx1;
+                            continue;
+                        }
+                        let px = x as f32 + 0.5;
+                        if covered && sd_round_rect(px, py, &r, radius) < -1.0 {
+                            under_px = under_px.saturating_add(1);
+                            x = x.saturating_add(1);
+                            continue;
+                        }
+                        let d = sd_round_rect(px, py, &shadow, radius);
+                        let full_from = grow.iter().position(|g| *g >= d + 0.5).unwrap_or(STEPS);
+                        if full_from == 0 {
+                            all_full_px = all_full_px.saturating_add(1);
+                        } else if full_from < STEPS {
+                            mixed_px = mixed_px.saturating_add(1);
+                        } else if (0..STEPS)
+                            .rev()
+                            .any(|i| grow.get(i).is_some_and(|g| coverage(d - *g) > 0.0))
+                        {
+                            partial_px = partial_px.saturating_add(1);
+                        } else {
+                            zero_px = zero_px.saturating_add(1);
+                        }
+                        x = x.saturating_add(1);
+                    }
+                }
+                let span_w = u64::try_from(x1.saturating_sub(x0)).unwrap_or(0);
+                let span_h = u64::try_from(y1.saturating_sub(y0)).unwrap_or(0);
+                let walked = span_w.saturating_mul(span_h);
+                let visited = walked.saturating_sub(hidden_px);
+                profile::note_bucket("soft_shadow.hidden", hidden_px, 0);
+                profile::note_bucket("soft_shadow.under_panel", under_px, 0);
+                profile::note_bucket("soft_shadow.all_full", all_full_px, 0);
+                profile::note_bucket("soft_shadow.mixed", mixed_px, 0);
+                profile::note_bucket("soft_shadow.partial_only", partial_px, 0);
+                profile::note_bucket("soft_shadow.zero", zero_px, 0);
+                profile::note_bucket("soft_shadow.walked", walked, 0);
+                profile::note_counter("soft_shadow.rows", rows);
+                profile::note_counter("soft_shadow.zero_calls", u64::from(visited == hidden_px));
+                profile::note_max("soft_shadow.max_call_px", visited);
+            }
+            self.set_site(prev);
+        }
+    }
+
     /// The shadow as it was drawn before it was composed in one pass: twelve
     /// grown rounded rectangles, outermost first. Kept here as the reference the
     /// single-pass version must equal, pixel for pixel.
@@ -3585,6 +3827,56 @@ mod tests {
             interior > 0 && edge_painted > 0,
             "the test rectangle exercises both paths: {buckets:?}"
         );
+    }
+
+    #[test]
+    fn the_bounded_ring_scan_equals_the_unbounded_one() {
+        // The pre-change soft_shadow is kept verbatim above as
+        // soft_shadow_reference. The matrix spans ring spacing from far wider
+        // than the coverage ramp to far narrower, fractional geometry, radius
+        // zero and larger than the half-extent, alpha 0 and 1, three clips and
+        // both an attached and a detached backdrop.
+        let cases = [
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 30.0, 12.0, 0.60),
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 30.5, 12.0, 0.60),
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 120.0, 12.0, 0.60),
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 12.0, 12.0, 0.60),
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 2.5, 12.0, 0.60),
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 0.5, 12.0, 0.60),
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 30.0, 12.0, 0.0),
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 30.0, 12.0, 1.0),
+            (Rect::new(11.25, 9.75, 120.5, 70.25), 9.0, 22.0, 6.5, 0.5),
+            (Rect::new(70.0, 40.0, 60.0, 60.0), 0.0, 18.0, 7.0, 0.4),
+            (Rect::new(70.0, 40.0, 60.0, 60.0), 500.0, 24.0, 10.0, 0.35),
+            (Rect::new(-40.0, -30.0, 100.0, 80.0), 12.0, 20.0, 8.0, 0.6),
+        ];
+        let clips = [
+            None,
+            Some(Rect::new(40.5, 30.25, 100.0, 70.0)),
+            Some(Rect::new(0.0, 0.0, 0.0, 0.0)),
+        ];
+        for backdrop in [false, true] {
+            for (rect, radius, spread, dy, alpha) in cases {
+                for clip in clips {
+                    let mut want = textured(260, 200);
+                    let mut got = textured(260, 200);
+                    if backdrop {
+                        let source = Rc::new(textured(260, 200));
+                        assert!(want.set_backdrop(Some(source.clone())));
+                        assert!(got.set_backdrop(Some(source)));
+                    }
+                    let _ = want.set_clip(clip);
+                    let _ = got.set_clip(clip);
+                    want.soft_shadow_reference(rect, radius, spread, dy, alpha);
+                    got.soft_shadow(rect, radius, spread, dy, alpha);
+                    assert_eq!(
+                        want.pixels(),
+                        got.pixels(),
+                        "{rect:?} r {radius} spread {spread} dy {dy} alpha {alpha} clip {clip:?} backdrop {backdrop}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

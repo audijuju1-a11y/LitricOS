@@ -1870,5 +1870,76 @@
         "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
       ],
       "evidence": "evidence/bench/stroke-round-rect-2026-10-28/{before,after}/"
+    },
+    "open_window_shadow_ring_bound": {
+      "commit_before": "ed689ee",
+      "status": "VERIFIED for the targeted row: the partial-ring scan was bounded by the coverage ramp after measuring 93.3 % wasted iterations; output equals a verbatim copy of the pre-change implementation. Scene-level movement is inside the block spread and is not claimed.",
+      "finding": "One open_window_frame ran 949,831 partial-ring loop iterations for 64,056 real blends. The twelve rings are spread/12 apart and coverage ramps over one pixel, so at most ceil(12/spread)+1 rings can straddle the edge; every earlier ring had coverage exactly zero and blend_in returned immediately. The row measured 7.176 ms (7.068-7.468).",
+      "change": "Start the partial-ring loop at full_from - (ceil(1/step) + 3), clipped to STEPS, with the original full scan when step is zero. No pixel, order or coverage value changes; only iterations that blended nothing are skipped. Profiled counters partial_iters and partial_blends were added to the existing classification pass.",
+      "counters": {
+        "partial_iters": 949831,
+        "partial_blends": 64056,
+        "wasted_pct": 93.3
+      },
+      "before": {
+        "soft_shadow_row_ms": {
+          "median": 7.176,
+          "min": 7.068,
+          "max": 7.468
+        },
+        "open_window_frame_ms": {
+          "median": 11.971,
+          "min": 11.728,
+          "max": 12.247
+        },
+        "full_frame_ms": {
+          "median": 7.018,
+          "min": 6.826,
+          "max": 7.109
+        },
+        "lock_frame_customize_ms": {
+          "median": 8.128,
+          "min": 8.082,
+          "max": 8.25
+        }
+      },
+      "after": {
+        "soft_shadow_row_ms": {
+          "median": 6.726,
+          "min": 6.618,
+          "max": 6.791
+        },
+        "open_window_frame_ms": {
+          "median": 11.904,
+          "min": 11.453,
+          "max": 11.955
+        },
+        "full_frame_ms": {
+          "median": 6.612,
+          "min": 6.588,
+          "max": 6.831
+        },
+        "lock_frame_customize_ms": {
+          "median": 7.998,
+          "min": 7.922,
+          "max": 8.186
+        }
+      },
+      "verdict": {
+        "soft_shadow_row": "kept: 7.068-7.468 and 6.618-6.791 are disjoint, -6.3 %",
+        "open_window_frame": "not claimed: 11.728-12.247 and 11.453-11.955 overlap",
+        "full_frame": "not claimed: ranges overlap and the scene does not exercise a different shadow path",
+        "lock_frame_customize": "not claimed: ranges overlap",
+        "primitive_fill_panel": "unchanged within spread",
+        "primitive_fill_panel_translucent": "unchanged within spread"
+      },
+      "identical_output_proof": "canvas::tests::the_bounded_ring_scan_equals_the_unbounded_one compares against Canvas::soft_shadow_reference, a verbatim copy of the pre-change implementation, over 12 geometries x 3 clips (none, fractional, empty) x 2 backdrop modes = 72 full-canvas comparisons, including spreads 0.5/2.5/12/30/30.5/120, alpha 0 and 1, radius 0 and radius 500. All 55 canvas tests pass; the original twelve-ring matrix is untouched.",
+      "caveats": [
+        "composition only at 1280x800 on an 8-vCPU VM with no GPU and no display; no present-to-display, GPU, VRAM or idle-RAM number was measured",
+        "the shadow row is instrumented time inside an untimed profile frame; the scene numbers are the timed frames",
+        "the one-pass shadow and the twelve-ring reference already disagree at spread 30.5 at ed689ee (one-ulp centre rounding); verified against the unbounded loop and recorded, not fixed",
+        "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
+      ],
+      "evidence": "evidence/bench/soft-shadow-ring-bound-2026-10-28/{before,after}/"
     }
 }
