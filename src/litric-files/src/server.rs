@@ -563,6 +563,9 @@ impl Connection {
                 Ok(n) => n,
                 Err(e) => return Outcome::Fail(e),
             };
+            if name.is_empty() {
+                return Outcome::Fail(Error::new(ErrorKind::BadRequest, "empty trash name"));
+            }
             let name = name.as_str();
             let Some(item) = disk.get(name) else {
                 return Outcome::Fail(Error::new(
@@ -641,6 +644,9 @@ impl Connection {
                 Ok(n) => n,
                 Err(e) => return Outcome::Fail(e),
             };
+            if name.is_empty() {
+                return Outcome::Fail(Error::new(ErrorKind::BadRequest, "empty trash name"));
+            }
             match disk.purge(&name) {
                 Ok(_) => removed = removed.saturating_add(1),
                 Err(e) => return Outcome::Fail(partial(e, &name, index, total)),

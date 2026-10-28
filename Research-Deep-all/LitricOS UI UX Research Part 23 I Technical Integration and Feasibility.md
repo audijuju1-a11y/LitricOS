@@ -166,8 +166,8 @@ compatibility — a manifest from a newer build will not install at all.
 
 | OS | Store | Property that matters |
 |---|---|---|
-| Windows | Registry (S0930, inspected) | A namespace every app can read, with typed values and ACLs |
-| macOS | `defaults` / property lists (3 inspected sources) | Per-app domain, atomic-ish, readable by `defaults` |
+| Windows | Registry (S3893, inspected) | A system-defined database every app reads and writes through the registry API |
+| macOS | `defaults` / property lists (2 inspected sources) | Per-app domain, atomic-ish, readable by `defaults` |
 | Linux | GSettings/dconf, KConfig | Schema with typed keys, change notification, per-user overlays |
 | LitricOS | `prefstore.rs` | 9 keys, `key=value`, version 1, atomic write, `0600` |
 
@@ -571,8 +571,8 @@ are undecided; none of those three can be closed by writing a test first.
 
 ### Reused
 
-S0941/S3079/S0112b (`defaults`), S1740 family (WinUI),
-S3716 family (GTK), S3042 family (AppKit), S0130/S0131 (notification APIs),
+S3079/S0112b (`defaults`), S1740 (WinUI compact sizing),
+S3716 (GTK 4 Entry), S3042 (AppKit, WWDC26), S0130/S0131 (notification settings and DND),
 S3852 (XDG Desktop Portal), S3845–S3849 (Chapter H).
 
 ---

@@ -21,6 +21,16 @@ use std::path::PathBuf;
 /// trash. `ops.rs` excludes it from `RECENT` under this exact name.
 pub const TRASH_DIR_NAME: &str = ".local/share/Trash";
 
+/// Whether `name` can address exactly one entry inside `files/`.
+///
+/// A trash name is one path segment. The empty string is the dangerous one: it
+/// joins to `files/` itself, so `purge("")` would delete the whole trash and
+/// `restore("")` would move the directory somewhere else. `/` and a leading `.`
+/// escape the directory, which `get`, `restore` and `purge` all refuse.
+fn valid_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains('/') && !name.starts_with('.')
+}
+
 /// One entry read back off the disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnDiskItem {
@@ -279,7 +289,7 @@ impl DiskTrash {
     /// Look up one entry by trash name.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<OnDiskItem> {
-        if name.contains('/') || name.starts_with('.') {
+        if !valid_name(name) {
             return None;
         }
         self.read_one(name)
@@ -297,7 +307,7 @@ impl DiskTrash {
         // trash name is one segment inside `files/`, never a path. The
         // server resolves the name through `get` first, so this is the
         // second of two independent checks, not the only one.
-        if name.contains('/') || name.starts_with('.') {
+        if !valid_name(name) {
             return Err(Error::new(ErrorKind::InvalidName, "bad trash name"));
         }
         if fs::symlink_metadata(dest).is_ok() {
@@ -321,7 +331,7 @@ impl DiskTrash {
     /// # Errors
     /// `not-found` when the entry is gone; I/O errors otherwise.
     pub fn purge(&self, name: &str) -> Result<u64, Error> {
-        if name.contains('/') || name.starts_with('.') {
+        if !valid_name(name) {
             return Err(Error::new(ErrorKind::InvalidName, "bad trash name"));
         }
         let host = self.files_dir.join(name);
@@ -569,6 +579,33 @@ mod tests {
         assert!(
             !kept.outside_root,
             "an entry from this root stays restorable"
+        );
+    }
+
+    #[test]
+    fn an_empty_trash_name_cannot_address_the_trash_directory_itself() {
+        let (dir, root) = open_root("empty-name");
+        fs::create_dir_all(dir.join("Documents")).expect("Documents");
+        fs::write(dir.join("Documents/memo.txt"), "x").expect("file");
+        let disk = DiskTrash::open(&root).expect("trash");
+        let item = disk
+            .put(&root, &logical("/Documents/memo.txt"), 0)
+            .expect("trashed");
+        let base = dir.join(TRASH_DIR_NAME);
+
+        assert!(disk.get("").is_none(), "empty is not an entry name");
+        assert_eq!(
+            disk.restore("", &dir.join("moved")).map_err(|e| e.kind()),
+            Err(ErrorKind::InvalidName)
+        );
+        assert_eq!(
+            disk.purge("").map_err(|e| e.kind()),
+            Err(ErrorKind::InvalidName)
+        );
+        assert!(base.join("files").is_dir(), "files/ must survive");
+        assert!(
+            base.join("files").join(&item.name).exists(),
+            "the queued entry must survive"
         );
     }
 }
