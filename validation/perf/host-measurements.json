@@ -501,7 +501,32 @@
         "share_pct": 4.4
       }
     ],
-    "per_panel_breakdown": "NOT DELIVERED: the area-bucket timers added inside glass_backdrop never emitted rows in the bench output, so no per-panel table is claimed; the bucket code was removed rather than reported as if it worked.",
+    "per_panel_breakdown": {
+      "status": "DELIVERED",
+      "root_cause_of_previous_failure": "render_bench::build() gives its scene no backdrop (set_backdrop is called only later, for the primitive benchmark), so the frame under test takes glass_backdrop's live-blur branch. The \u00a710 buckets were inside the attached-backdrop branch, so they could never run. They are now recorded at function entry, before the branch.",
+      "rows": [
+        {
+          "panel": "glass_panel_m",
+          "dims": "435x355",
+          "calls": 3,
+          "px": 268395,
+          "ms": 16.485,
+          "ns_per_px": 61.42
+        },
+        {
+          "panel": "glass_panel_s",
+          "dims": "670x62",
+          "calls": 2,
+          "px": 41540,
+          "ms": 3.919,
+          "ns_per_px": 94.34
+        }
+      ],
+      "sum_ms": 20.404,
+      "outer_row_ms": 20.405,
+      "tolerance_ms": 0.05,
+      "caveat": "bucket call counts (5) do not equal the outer glass_backdrop calls (3) while the time sums match exactly; cause not established, so the counts are reported as printed and not interpreted"
+    },
     "attempts": [
       {
         "change": "row-offset direct read/write loop in glass_backdrop's attached branch",
@@ -523,6 +548,38 @@
       "measure": "src/target/release/examples/render_bench <dir>  (5 processes)",
       "attribution": "grep 'profile\\.' <render_bench output>",
       "tests": "cargo test -p litric-shell --lib canvas::"
-    }
+    },
+    "per_stage_breakdown": {
+      "status": "DELIVERED",
+      "rows": [
+        {
+          "stage": "glass_stage_blur",
+          "calls": 3,
+          "ms": 14.92
+        },
+        {
+          "stage": "glass_stage_mask_blend",
+          "calls": 3,
+          "ms": 2.761
+        },
+        {
+          "stage": "glass_stage_saturate",
+          "calls": 3,
+          "ms": 1.897
+        },
+        {
+          "stage": "glass_stage_copy",
+          "calls": 3,
+          "ms": 0.803
+        }
+      ],
+      "sum_ms": 20.381,
+      "outer_row_ms": 20.405,
+      "delta_ms": 0.024,
+      "profiled_frame_timed_ms": 77.844,
+      "note": "timers are on only for this one frame, so its wall time is inflated and shares are relative to 77.844 ms, not to the 35.45 ms timed frame"
+    },
+    "hot_path_decision": "none: the blur is 14.92 ms of the 20.41 ms (73%) and is already a separable two-pass sliding-window blur over the minimal clipped region; no exact equivalent was found that removes per-pixel work, so no renderer change was made",
+    "correction": "\u00a79.3's core fast path sat in the attached-backdrop branch too and therefore never executed in the measured frame; its in-frame 'no gain' result measured nothing"
   }
 }

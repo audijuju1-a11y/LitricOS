@@ -325,10 +325,18 @@ fn main() -> ExitCode {
         } else {
             0.0
         };
+        let per_px = if row.pixels > 0 {
+            row.nanos as f64 / row.pixels as f64
+        } else {
+            0.0
+        };
         println!(
-            "profile.{}.calls={} profile.{}.ms={ms:.3} profile.{}.share_pct={share:.1}",
-            row.name, row.calls, row.name, row.name
+            "profile.{}.calls={} profile.{}.ms={ms:.3} profile.{}.share_pct={share:.1} profile.{}.px={} profile.{}.ns_per_px={per_px:.2}",
+            row.name, row.calls, row.name, row.name, row.name, row.pixels, row.name
         );
+    }
+    for (name, w, h) in litric_shell::canvas::profile::take_dims() {
+        println!("profile.{name}.dims={w}x{h}");
     }
     println!("profile.timed_ms={:.3}", timed as f64 / 1_000_000.0);
 

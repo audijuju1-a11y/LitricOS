@@ -453,3 +453,65 @@ panel geometry — a design change, not an exact micro-edit. The concrete blocke
 for validating any of it further is the same as §7: no display/GPU path and no
 sampler on this host, so frame-time attribution beyond these entry points is
 inference, not measurement.
+
+## 11. Batch: why the buckets vanished, and the stage table at last
+
+### 11.1 Root cause (code evidence, not a guess)
+
+`render_bench`'s `build()` makes the scene with `let scene = wallpaper.clone();`
+and never calls `set_backdrop` — the only `set_backdrop` in the example is at
+line 537, for the *primitive* glass benchmark, long after the profiled frame.
+So the frame under test runs `glass_backdrop`'s **live-blur branch**, and §10's
+buckets plus `note_pixels` sat inside the `if let Some(source) = ...` branch
+that never executes. That is why no `glass_panel_*` row printed even though the
+code was present and rebuilt.
+
+**This also corrects §9.3.** The "core fast path" tried there was in the same
+attached-backdrop branch, so it never ran in the measured frame; its 35.36 →
+35.15 ms result measured nothing but noise. The revert was right for the wrong
+reason, and the record now says so.
+
+### 11.2 What prints now (raw, one instrumented frame, 5 processes of run 1)
+
+```text
+profile.glass_backdrop.calls=3  ms=20.405  px=0    ns_per_px=0.00
+profile.glass_panel_m.calls=3   ms=16.485  px=268395 ns_per_px=61.42
+profile.glass_stage_blur.calls=3        ms=14.920
+profile.soft_shadow.calls=3             ms=7.302
+profile.fill_round_rect.calls=75        ms=5.166
+profile.glass_panel_s.calls=2   ms=3.919   px=41540  ns_per_px=94.34
+profile.glass_stage_mask_blend.calls=3  ms=2.761
+profile.stroke_line.calls=2239          ms=2.241
+profile.glass_stage_saturate.calls=3    ms=1.897
+profile.glass_stage_copy.calls=3        ms=0.803
+profile.glass_panel_m.dims=435x355
+profile.glass_panel_s.dims=670x62
+profile.timed_ms=77.844
+```
+
+Timed frame on this commit: `full_frame` **35.45 ms** median (spread
+35.40–37.68), `open_window_frame` 71.76 ms, primitive glass 1.94 ms.
+
+### 11.3 Sums and the one thing that does not add up
+
+* Stages: 14.920 + 2.761 + 1.897 + 0.803 = **20.381 ms** against the outer
+  **20.405 ms** — a 0.024 ms (0.1 %) gap, inside the stated 0.05 ms tolerance.
+* Panels: 16.485 + 3.919 = **20.404 ms** against the same outer row (0.001 ms).
+* **But** the panel rows report 5 calls (3 + 2) where the outer row reports 3.
+  The times agree exactly and the counts do not; the cause was not established
+  in this batch, so the counts are reported as printed and not interpreted. This
+  is the next thing to fix in the instrumentation, not in the renderer.
+
+The instrumented frame is slower (77.8 ms timed) because timers are on for it;
+shares in the raw output are relative to that, not to the 35.45 ms frame.
+
+### 11.4 Hot path: no change, and why
+
+The blur is **14.92 ms of 20.41 ms (73 %)**. It is already a separable
+two-pass sliding-window box blur, over a working region already cut to the clip
+(§8's BUG-0015 note). No exact equivalent was found that removes per-pixel work
+— the cost is the pixels themselves. Per the batch rule, **no renderer change
+was made** rather than a speculative one. Remaining: 35.45 ms against the 16 ms
+budget, 2.2×; the next named blocker is that the blur's cost is structural
+(large translucent panels blurred per frame) and would need a different design
+plus a display path to validate, neither of which this host has.

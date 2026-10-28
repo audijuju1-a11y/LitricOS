@@ -386,11 +386,14 @@ pub mod profile {
         pub calls: u64,
         /// Total time inside it, in nanoseconds.
         pub nanos: u64,
+        /// Pixels the calls were given, when the caller reported them.
+        pub pixels: u64,
     }
 
     thread_local! {
         static ON: Cell<bool> = const { Cell::new(false) };
         static ROWS: RefCell<Vec<Row>> = const { RefCell::new(Vec::new()) };
+        static DIMS: RefCell<Vec<(&'static str, u32, u32)>> = const { RefCell::new(Vec::new()) };
     }
 
     /// Start timing calls on this thread.
@@ -420,9 +423,53 @@ pub mod profile {
                     name,
                     calls: 1,
                     nanos,
+                    pixels: 0,
                 });
             }
         });
+    }
+
+    /// Add the pixel area one call was given, once per call and only while
+    /// profiling, so the report can divide time by pixels.
+    pub fn note_pixels(name: &'static str, pixels: u64) {
+        if !is_on() {
+            return;
+        }
+        ROWS.with(|rows| {
+            let mut rows = rows.borrow_mut();
+            if let Some(row) = rows.iter_mut().find(|row| row.name == name) {
+                row.pixels = row.pixels.saturating_add(pixels);
+            } else {
+                rows.push(Row {
+                    name,
+                    calls: 1,
+                    nanos: 0,
+                    pixels,
+                });
+            }
+        });
+    }
+
+    /// Remember the last rectangle a name was called with, for the report.
+    pub fn note_dims(name: &'static str, w: u32, h: u32) {
+        if !is_on() {
+            return;
+        }
+        DIMS.with(|dims| {
+            let mut dims = dims.borrow_mut();
+            if let Some(entry) = dims.iter_mut().find(|entry| entry.0 == name) {
+                entry.1 = w;
+                entry.2 = h;
+            } else {
+                dims.push((name, w, h));
+            }
+        });
+    }
+
+    /// Take the remembered rectangles.
+    #[must_use]
+    pub fn take_dims() -> Vec<(&'static str, u32, u32)> {
+        DIMS.with(|dims| std::mem::take(&mut *dims.borrow_mut()))
     }
 
     /// Take what has been recorded, leaving the counters empty.
@@ -1422,7 +1469,23 @@ impl Canvas {
     /// where the panel ends.
     pub fn glass_backdrop(&mut self, r: Rect, radius: f32, blur: u32, saturation: f32) {
         let _prof = profile::Timer::new("glass_backdrop");
+        // Which panel this call is. Recorded for BOTH branches, because the
+        // frame under test has no backdrop attached and therefore runs the
+        // live-blur branch -- §10's buckets sat only in the attached branch and
+        // so never printed a row.
+        let bucket = if r.w * r.h >= 160_000.0 {
+            "glass_panel_l"
+        } else if r.w * r.h >= 60_000.0 {
+            "glass_panel_m"
+        } else {
+            "glass_panel_s"
+        };
+        let _panel = profile::Timer::new(bucket);
+        let px_area = u64::from(r.w.max(0.0) as u32).saturating_mul(u64::from(r.h.max(0.0) as u32));
+        profile::note_pixels(bucket, px_area);
+        profile::note_dims(bucket, r.w.max(0.0) as u32, r.h.max(0.0) as u32);
         if let Some(source) = self.backdrop.clone() {
+            let _attached = profile::Timer::new("glass_stage_attached");
             let (x0, y0, x1, y1) = self.span(&r.inflate(1.5));
             // A core fast path was tried here (skip the distance for pixels the
             // rounded outline covers completely, as `fill_round_rect` does). It
@@ -1478,13 +1541,17 @@ impl Canvas {
         let h = y1.saturating_sub(y0) as usize;
 
         let mut buf: Vec<u32> = Vec::with_capacity(w.saturating_mul(h));
-        for y in y0..y1 {
-            for x in x0..x1 {
-                buf.push(self.get(x, y).unwrap_or(0xFF00_0000));
+        {
+            let _stage = profile::Timer::new("glass_stage_copy");
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    buf.push(self.get(x, y).unwrap_or(0xFF00_0000));
+                }
             }
         }
 
         if blur > 0 {
+            let _stage = profile::Timer::new("glass_stage_blur");
             let mut tmp = buf.clone();
             for _ in 0..2 {
                 box_blur_pass(&buf, &mut tmp, w, h, blur as usize, true);
@@ -1492,11 +1559,13 @@ impl Canvas {
             }
         }
         if (saturation - 1.0).abs() > f32::EPSILON {
+            let _stage = profile::Timer::new("glass_stage_saturate");
             for p in &mut buf {
                 *p = saturate_px(*p, saturation);
             }
         }
 
+        let _stage = profile::Timer::new("glass_stage_mask_blend");
         let mut i = 0usize;
         for y in y0..y1 {
             for x in x0..x1 {
