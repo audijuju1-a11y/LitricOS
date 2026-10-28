@@ -586,6 +586,36 @@ mod tests {
     }
 
     #[test]
+    fn a_default_port_cannot_step_around_a_refusal() {
+        // The origin is the permission key, and `https://site:443` is the same
+        // origin as `https://site`. Before the parser normalised it, the second
+        // spelling missed the stored Deny and fell back to Ask.
+        let mut p = policy();
+        p.decide(
+            &url("https://example.com/"),
+            SitePermission::Camera,
+            Decision::Deny,
+        );
+        assert_eq!(
+            p.permission(&url("https://example.com:443/"), SitePermission::Camera),
+            Decision::Deny,
+            "the default port must not create a second origin"
+        );
+    }
+
+    #[test]
+    fn a_tracker_cannot_hide_behind_a_default_port_or_a_bad_one() {
+        let p = policy();
+        assert!(matches!(
+            p.check_navigation(&url("https://tracker.test:443/pixel")),
+            Err(Refusal::Tracker { .. })
+        ));
+        // A non-numeric port no longer becomes part of the host, so the address
+        // is refused as malformed before any host-based decision is made.
+        assert!(Url::parse("https://tracker.test:abc/pixel").is_err());
+    }
+
+    #[test]
     fn status_lines_report_the_policy_in_force() {
         let lines = policy().lines();
         assert!(

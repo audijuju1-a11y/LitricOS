@@ -173,17 +173,24 @@ impl Url {
             return Err(UrlError::EmbeddedCredentials);
         }
 
-        let (host_part, port) = match authority.rsplit_once(':') {
-            // An IPv6 literal contains colons; only treat the last one as a
-            // port when what follows is entirely digits.
-            Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
-                let n: u16 = p.parse().map_err(|_| UrlError::BadPort)?;
-                if n == 0 {
-                    return Err(UrlError::BadPort);
-                }
-                (h, Some(n))
+        // A bare IPv6 literal is brackets and colons and has no port. Every
+        // other colon in the authority separates a port, and a port that is not
+        // a number is an error rather than part of the host: before this,
+        // `:abc` stayed glued to the name, so `https://ads.example:abc/` had a
+        // host the tracker list could not match and a typo became a site.
+        let (host_part, port) = if authority.starts_with('[') && authority.ends_with(']') {
+            (authority, None)
+        } else if let Some((h, p)) = authority.rsplit_once(':') {
+            if p.is_empty() || !p.chars().all(|c| c.is_ascii_digit()) {
+                return Err(UrlError::BadPort);
             }
-            _ => (authority, None),
+            let n: u16 = p.parse().map_err(|_| UrlError::BadPort)?;
+            if n == 0 {
+                return Err(UrlError::BadPort);
+            }
+            (h, Some(n))
+        } else {
+            (authority, None)
         };
 
         let host = host_part.to_ascii_lowercase();
@@ -193,6 +200,12 @@ impl Url {
             }
             validate_host(&host)?;
         }
+        // A default port is not part of an origin: `https://site:443` and
+        // `https://site` are the same site. Treating them as two origins let a
+        // site step around a permission the user refused -- a Deny stored for
+        // one spelling did not apply to the other, which then fell back to Ask.
+        // Dropping it here makes `origin()` canonical for every caller.
+        let port = port.filter(|p| Some(*p) != scheme.default_port());
 
         let (path_and_query, fragment) = match after.split_once('#') {
             Some((a, b)) => (a, Some(b.to_owned())),
@@ -429,6 +442,48 @@ mod tests {
             Url::parse("https://example.com:99999/"),
             Err(UrlError::BadPort)
         );
+        // A port that is not a number is an error, not part of the host. When
+        // it was folded into the host, `https://ads.example:abc/` produced a
+        // host the tracker list could not match.
+        assert_eq!(
+            Url::parse("https://example.com:abc/"),
+            Err(UrlError::BadPort)
+        );
+        assert_eq!(Url::parse("https://example.com:/"), Err(UrlError::BadPort));
+        assert_eq!(
+            Url::parse("https://example.com:65536/"),
+            Err(UrlError::BadPort)
+        );
+    }
+
+    #[test]
+    fn an_ipv6_literal_keeps_its_colons_and_still_takes_a_port() {
+        let bare = Url::parse("https://[::1]/").expect("bare v6");
+        assert_eq!(bare.host, "[::1]");
+        assert_eq!(bare.port, None);
+        let with_port = Url::parse("https://[::1]:8443/").expect("v6 with port");
+        assert_eq!(with_port.host, "[::1]");
+        assert_eq!(with_port.port, Some(8443));
+    }
+
+    #[test]
+    fn a_default_port_is_the_same_origin_as_no_port() {
+        // Permissions are keyed on the origin string. If `:443` made a second
+        // origin, a site could vary the spelling to step around a refusal the
+        // user stored for the ordinary one.
+        let bare = Url::parse("https://example.com/").expect("bare");
+        let explicit = Url::parse("https://example.com:443/x").expect("explicit");
+        assert_eq!(explicit.port, None);
+        assert_eq!(explicit.origin(), bare.origin());
+        assert_eq!(explicit.to_url(), "https://example.com/x");
+        assert_eq!(
+            Url::parse("http://example.com:80/").expect("http").port,
+            None
+        );
+        // A port that is not the scheme's default is still an origin of its
+        // own, and is still shown.
+        let other = Url::parse("https://example.com:8443/").expect("other");
+        assert_ne!(other.origin(), bare.origin());
     }
 
     #[test]

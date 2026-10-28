@@ -223,6 +223,14 @@ pub fn parse(text: &str) -> (Queue, usize) {
         // been half written, and half a message shown as a whole one is a lie.
         skipped = skipped.saturating_add(1);
     }
+    // The file is the queue's only input, and `CAPACITY` is the bound the
+    // daemon promises. A file written by a buggy build, or edited by hand, must
+    // not load an unbounded list into memory: the oldest overflow goes, and is
+    // counted as skipped so the daemon logs that something was dropped rather
+    // than losing it silently.
+    let loaded = queue.items.len();
+    queue.items.truncate(Queue::CAPACITY);
+    skipped = skipped.saturating_add(loaded.saturating_sub(queue.items.len()));
     (queue, skipped)
 }
 
@@ -543,6 +551,28 @@ end
             .collect();
         assert_eq!(names, vec!["queue.conf".to_owned()], "{names:?}");
         cleanup(&path);
+    }
+
+    #[test]
+    fn a_file_holding_more_notes_than_capacity_loads_only_the_capacity() {
+        // The file is the queue's only input. A hand-edited or buggily written
+        // one must not load an unbounded list, and the overflow must be counted
+        // rather than discarded in silence.
+        let mut text = String::from("version=1\n");
+        for i in 1..=Queue::CAPACITY.saturating_add(5) {
+            text.push_str(&format!(
+                "note\nid={i}\napp=a\npriority=low\ntitle=t{i}\ncreated_ms=1\nexpires_ms=0\nend\n"
+            ));
+        }
+        let (queue, skipped) = parse(&text);
+        assert_eq!(queue.count(), Queue::CAPACITY);
+        assert_eq!(skipped, 5);
+        assert_eq!(queue.list()[0].title, "t1", "the newest record is kept");
+        assert_eq!(
+            queue.next_id(),
+            Queue::CAPACITY as u32 + 5,
+            "dropping notes must not reissue an id the desktop has seen"
+        );
     }
 
     #[test]

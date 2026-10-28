@@ -680,3 +680,76 @@ the missing Latin font face fixture — not passing.
 Caveats: the profiled frame runs instrumented (19.598 ms against a 15.076 ms
 timed frame), so its shares are relative to 19.598 ms; this is composition, not
 present-to-display; no GPU or DRM device was measured.
+
+## 13. Batch: browser origin canonicalisation and the queue's load bound
+
+Security pass over the layer that reads untrusted text: the address bar and the
+one persisted service file. Two real defects, both fixed with regression tests;
+no renderer or shell behaviour changed.
+
+### 13.1 BUG-0033 — a default port was a second origin
+
+`Policy::permission` keys every decision on `url.origin()`, and `Url::parse`
+kept an explicit default port. `https://example.com:443/` therefore produced
+the origin `https://example.com:443`, not `https://example.com`, so a stored
+`Deny` (e.g. Camera) was not found for that spelling and the decision fell back
+to `Ask` — the refusal was re-asked instead of enforced. The same parser also
+folded a non-numeric port into the host: `https://tracker.test:abc/pixel`
+became host `tracker.test:abc`, which `Policy::is_tracker` could not match, so
+the navigation was allowed.
+
+Fix in `src/litric-browser/src/url.rs`: a bare IPv6 literal is the only
+authority allowed to end in colons; every other port must be non-empty digits
+inside `u16` (`BadPort` otherwise), and a port equal to the scheme's default is
+dropped, making `origin()` canonical for every caller.
+
+Tests: `a_default_port_is_the_same_origin_as_no_port`,
+`a_bad_port_is_refused`, `an_ipv6_literal_keeps_its_colons_and_still_takes_a_port`,
+`policy::a_default_port_cannot_step_around_a_refusal`,
+`policy::a_tracker_cannot_hide_behind_a_default_port_or_a_bad_one`.
+
+Full record: `docs/bugs/BUG-0033-a-default-port-made-a-second-origin.md`.
+
+### 13.2 BUG-0034 — the queue file ignored `CAPACITY` on load
+
+`Queue::post` enforced the 64-note ceiling, `parse` did not: every readable
+record in the file was pushed, so a hand-edited, restored or buggily written
+queue loaded an unbounded list. `parse` now truncates to `Queue::CAPACITY` and
+adds the dropped records to the skipped count, which the daemon logs. Because
+`encode` writes newest first and `parse` pushes in file order, the truncation
+drops the oldest — the same order `post` evicts in — and `next_id` still keeps
+the highest id seen.
+
+Test: `queue::a_file_holding_more_notes_than_capacity_loads_only_the_capacity`.
+Full record: `docs/bugs/BUG-0034-the-notification-queue-file-was-not-capped-on-load.md`.
+
+### 13.3 Verification and what was not fixed
+
+```text
+$ cargo test -p litric-browser -p litric-notifyd --lib
+litric-browser: 89 passed, 0 failed
+litric-notifyd: 47 passed, 0 failed
+$ cargo test --workspace
+TESTS passed=1643 failed=0        (was 1638; +5 tests in this batch)
+$ cargo clippy --workspace --all-targets -- -D warnings
+exit 0
+$ cargo fmt --check
+exit 0
+$ python3 ci/check-python-syntax.py        OK: 61 file(s); exit 0
+$ python3 ci/lint-line-endings.py          OK: 352 file(s), all LF; exit 0
+$ python3 ci/lint-doc-refs.py              OK: 762 citations / 151 docs; exit 0
+$ python3 tools/validate_chapter45.py --check   8 checks: 2 PASS, 6 PARTIAL, 0 FAIL; exit 0
+$ python3 tools/fix_source_id_keys.py --check   no-op: 4208 rows, 0 duplicates; exit 0
+```
+
+**Found and not fixed:** `url::interpret` returns `Intent::Search` for an
+address that carries a supported scheme but fails to parse, while the comment
+above it says the user should get an error about the address instead. With no
+search provider configured the text goes nowhere, so it is not exploitable
+today; fixing it needs a new intent/outcome variant and a UI path, and is
+recorded as residual risk in BUG-0033 rather than half-done here.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font face
+fixture. No claim of zero vulnerabilities is made: this pass covered the
+address-bar parser, the browser permission/tracker policy and the notification
+queue file, not every crate.
