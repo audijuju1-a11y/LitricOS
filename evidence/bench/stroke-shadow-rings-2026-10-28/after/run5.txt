@@ -1,0 +1,271 @@
+canvas=1280x800
+full_frame.visited_px=2605144
+full_frame.sites_per_frame=draw=2091707 brightest=19583 shadow=392576 text=101278
+full_frame.min_ms=6.384
+full_frame.median_ms=6.446
+full_frame.mean_ms=6.497
+full_frame.stddev_ms=0.099
+full_frame.runs=15
+full_frame_live_blur.min_ms=29.710
+full_frame_live_blur.median_ms=29.938
+full_frame_live_blur.mean_ms=30.132
+full_frame_live_blur.stddev_ms=0.463
+full_frame_live_blur.runs=15
+profile.stroke_line.calls=2239 profile.stroke_line.ms=4.099 profile.stroke_line.share_pct=29.3 profile.stroke_line.px=0 profile.stroke_line.ns_per_px=0.00
+profile.soft_shadow.calls=3 profile.soft_shadow.ms=3.711 profile.soft_shadow.share_pct=26.5 profile.soft_shadow.px=0 profile.soft_shadow.ns_per_px=0.00
+profile.stroke_line_attrib.calls=2239 profile.stroke_line_attrib.ms=1.748 profile.stroke_line_attrib.share_pct=12.5 profile.stroke_line_attrib.px=0 profile.stroke_line_attrib.ns_per_px=0.00
+profile.stroke_round_rect.calls=5 profile.stroke_round_rect.ms=1.650 profile.stroke_round_rect.share_pct=11.8 profile.stroke_round_rect.px=0 profile.stroke_round_rect.ns_per_px=0.00
+profile.fill_round_rect.calls=75 profile.fill_round_rect.ms=1.016 profile.fill_round_rect.share_pct=7.3 profile.fill_round_rect.px=355070 profile.fill_round_rect.ns_per_px=2.86
+profile.glass_backdrop.calls=3 profile.glass_backdrop.ms=0.446 profile.glass_backdrop.share_pct=3.2 profile.glass_backdrop.px=0 profile.glass_backdrop.ns_per_px=0.00
+profile.glass_stage_attached.calls=3 profile.glass_stage_attached.ms=0.445 profile.glass_stage_attached.share_pct=3.2 profile.glass_stage_attached.px=0 profile.glass_stage_attached.ns_per_px=0.00
+profile.glass_panel_m.calls=2 profile.glass_panel_m.ms=0.390 profile.glass_panel_m.share_pct=2.8 profile.glass_panel_m.px=268395 profile.glass_panel_m.ns_per_px=1.45
+profile.blit_from.calls=1 profile.blit_from.ms=0.240 profile.blit_from.share_pct=1.7 profile.blit_from.px=0 profile.blit_from.ns_per_px=0.00
+profile.draw_argb.calls=10 profile.draw_argb.ms=0.196 profile.draw_argb.share_pct=1.4 profile.draw_argb.px=0 profile.draw_argb.ns_per_px=0.00
+profile.glass_panel_s.calls=1 profile.glass_panel_s.ms=0.056 profile.glass_panel_s.share_pct=0.4 profile.glass_panel_s.px=41540 profile.glass_panel_s.ns_per_px=1.35
+profile.glass_panel_m.dims=435x355
+profile.glass_panel_s.dims=670x62
+profile.glass_panel_m.rect=780.8,92.0,435.2x262.5
+profile.glass_panel_m.rect=64.0,92.0,435.2x355.1
+profile.glass_panel_s.rect=305.0,726.0,670.0x62.0
+profile.glass_rects.count=3 profile.glass_rects.overlapping_pairs=0 profile.glass_rects.overlap_px=0 profile.glass_rects.area_sum_px=310320
+profile.timed_ms=13.996
+pointer_move.run0.full=true damage_rects=2 restored_px=1024000 changed_px=15703 visited_px=2607270
+pointer_move.run14.full=false damage_rects=2 restored_px=1440 changed_px=59288 visited_px=1602076
+pointer_move_frame.min_ms=6.707
+pointer_move_frame.median_ms=7.056
+pointer_move_frame.mean_ms=7.153
+pointer_move_frame.stddev_ms=0.574
+pointer_move_frame.runs=15
+open_window.run0.full=true damage_rects=5 restored_px=1024000 changed_px=377611 visited_px=4500586
+open_window.run14.full=true damage_rects=5 restored_px=1024000 changed_px=349005 visited_px=4492048
+open_window_frame.min_ms=11.318
+open_window_frame.median_ms=11.553
+open_window_frame.mean_ms=11.540
+open_window_frame.stddev_ms=0.143
+open_window_frame.runs=15
+window_profile.soft_shadow.calls=4 window_profile.soft_shadow.ms=6.425 window_profile.soft_shadow.share_pct=27.3 window_profile.soft_shadow.px=0 window_profile.soft_shadow.ns_per_px=0.00
+window_profile.stroke_line.calls=3094 window_profile.stroke_line.ms=5.699 window_profile.stroke_line.share_pct=24.2 window_profile.stroke_line.px=0 window_profile.stroke_line.ns_per_px=0.00
+window_profile.stroke_round_rect.calls=16 window_profile.stroke_round_rect.ms=3.886 window_profile.stroke_round_rect.share_pct=16.5 window_profile.stroke_round_rect.px=0 window_profile.stroke_round_rect.ns_per_px=0.00
+window_profile.fill_round_rect.calls=102 window_profile.fill_round_rect.ms=2.729 window_profile.fill_round_rect.share_pct=11.6 window_profile.fill_round_rect.px=841611 window_profile.fill_round_rect.ns_per_px=3.24
+window_profile.stroke_line_attrib.calls=3094 window_profile.stroke_line_attrib.ms=2.390 window_profile.stroke_line_attrib.share_pct=10.1 window_profile.stroke_line_attrib.px=0 window_profile.stroke_line_attrib.ns_per_px=0.00
+window_profile.glass_backdrop.calls=4 window_profile.glass_backdrop.ms=0.658 window_profile.glass_backdrop.share_pct=2.8 window_profile.glass_backdrop.px=0 window_profile.glass_backdrop.ns_per_px=0.00
+window_profile.glass_stage_attached.calls=4 window_profile.glass_stage_attached.ms=0.657 window_profile.glass_stage_attached.share_pct=2.8 window_profile.glass_stage_attached.px=0 window_profile.glass_stage_attached.ns_per_px=0.00
+window_profile.glass_panel_m.calls=2 window_profile.glass_panel_m.ms=0.315 window_profile.glass_panel_m.share_pct=1.3 window_profile.glass_panel_m.px=268395 window_profile.glass_panel_m.ns_per_px=1.17
+window_profile.glass_panel_l.calls=1 window_profile.glass_panel_l.ms=0.297 window_profile.glass_panel_l.share_pct=1.3 window_profile.glass_panel_l.px=380000 window_profile.glass_panel_l.ns_per_px=0.78
+window_profile.blit_from.calls=1 window_profile.blit_from.ms=0.271 window_profile.blit_from.share_pct=1.2 window_profile.blit_from.px=0 window_profile.blit_from.ns_per_px=0.00
+window_profile.draw_argb.calls=10 window_profile.draw_argb.ms=0.196 window_profile.draw_argb.share_pct=0.8 window_profile.draw_argb.px=0 window_profile.draw_argb.ns_per_px=0.00
+window_profile.glass_panel_s.calls=1 window_profile.glass_panel_s.ms=0.046 window_profile.glass_panel_s.share_pct=0.2 window_profile.glass_panel_s.px=41540 window_profile.glass_panel_s.ns_per_px=1.11
+window_profile.timed_ms=23.570
+window_profile.full=true damage_rects=5 restored_px=1024000 visited_px=4492048
+window_bucket.soft_shadow.partial_iters.px=949831 window_bucket.soft_shadow.partial_iters.ns=0 window_bucket.soft_shadow.partial_iters.ns_per_px=0.00
+window_bucket.soft_shadow.walked.px=832918 window_bucket.soft_shadow.walked.ns=0 window_bucket.soft_shadow.walked.ns_per_px=0.00
+window_bucket.stroke_round_rect.walked.px=832335 window_bucket.stroke_round_rect.walked.ns=0 window_bucket.stroke_round_rect.walked.ns_per_px=0.00
+window_bucket.stroke_round_rect.zero.px=812711 window_bucket.stroke_round_rect.zero.ns=0 window_bucket.stroke_round_rect.zero.ns_per_px=0.00
+window_bucket.fill_round_rect.interior.px=737035 window_bucket.fill_round_rect.interior.ns=976895 window_bucket.fill_round_rect.interior.ns_per_px=1.33
+window_bucket.glass_attached.full.px=686910 window_bucket.glass_attached.full.ns=358467 window_bucket.glass_attached.full.ns_per_px=0.52
+window_bucket.soft_shadow.hidden.px=605923 window_bucket.soft_shadow.hidden.ns=0 window_bucket.soft_shadow.hidden.ns_per_px=0.00
+window_bucket.stroke_line.walked.px=155310 window_bucket.stroke_line.walked.ns=0 window_bucket.stroke_line.walked.ns_per_px=0.00
+window_bucket.stroke_line.zero.px=118663 window_bucket.stroke_line.zero.ns=0 window_bucket.stroke_line.zero.ns_per_px=0.00
+window_bucket.soft_shadow.mixed.px=108587 window_bucket.soft_shadow.mixed.ns=0 window_bucket.soft_shadow.mixed.ns_per_px=0.00
+window_bucket.fill_round_rect.edge_scanned.px=104576 window_bucket.fill_round_rect.edge_scanned.ns=926930 window_bucket.fill_round_rect.edge_scanned.ns_per_px=8.86
+window_bucket.fill_round_rect.edge_painted.px=102038 window_bucket.fill_round_rect.edge_painted.ns=0 window_bucket.fill_round_rect.edge_painted.ns_per_px=0.00
+window_bucket.soft_shadow.under_panel.px=76508 window_bucket.soft_shadow.under_panel.ns=0 window_bucket.soft_shadow.under_panel.ns_per_px=0.00
+window_bucket.soft_shadow.partial_blends.px=64056 window_bucket.soft_shadow.partial_blends.ns=0 window_bucket.soft_shadow.partial_blends.ns_per_px=0.00
+window_bucket.fill_round_rect.outside_shape.px=39182 window_bucket.fill_round_rect.outside_shape.ns=0 window_bucket.fill_round_rect.outside_shape.ns_per_px=0.00
+window_bucket.stroke_line.partial.px=32753 window_bucket.stroke_line.partial.ns=0 window_bucket.stroke_line.partial.ns_per_px=0.00
+window_bucket.soft_shadow.all_full.px=22008 window_bucket.soft_shadow.all_full.ns=0 window_bucket.soft_shadow.all_full.ns_per_px=0.00
+window_bucket.stroke_round_rect.partial.px=19616 window_bucket.stroke_round_rect.partial.ns=0 window_bucket.stroke_round_rect.partial.ns_per_px=0.00
+window_bucket.soft_shadow.zero.px=13216 window_bucket.soft_shadow.zero.ns=0 window_bucket.soft_shadow.zero.ns_per_px=0.00
+window_bucket.glass_attached.skipped.px=11440 window_bucket.glass_attached.skipped.ns=0 window_bucket.glass_attached.skipped.ns_per_px=0.00
+window_bucket.soft_shadow.partial_only.px=6676 window_bucket.soft_shadow.partial_only.ns=0 window_bucket.soft_shadow.partial_only.ns_per_px=0.00
+window_bucket.glass_attached.partial_scanned.px=5565 window_bucket.glass_attached.partial_scanned.ns=107535 window_bucket.glass_attached.partial_scanned.ns_per_px=19.32
+window_bucket.glass_attached.partial_painted.px=4154 window_bucket.glass_attached.partial_painted.ns=0 window_bucket.glass_attached.partial_painted.ns_per_px=0.00
+window_bucket.stroke_line.full.px=3894 window_bucket.stroke_line.full.ns=0 window_bucket.stroke_line.full.ns_per_px=0.00
+window_bucket.fill_round_rect.edge_zero.px=2538 window_bucket.fill_round_rect.edge_zero.ns=0 window_bucket.fill_round_rect.edge_zero.ns_per_px=0.00
+window_bucket.fill_round_rect.clipped.px=1728 window_bucket.fill_round_rect.clipped.ns=0 window_bucket.fill_round_rect.clipped.ns_per_px=0.00
+window_bucket.glass_attached.partial_zero.px=1411 window_bucket.glass_attached.partial_zero.ns=0 window_bucket.glass_attached.partial_zero.ns_per_px=0.00
+window_bucket.stroke_round_rect.full.px=8 window_bucket.stroke_round_rect.full.ns=0 window_bucket.stroke_round_rect.full.ns_per_px=0.00
+window_bucket.stroke_line.clipped.px=0 window_bucket.stroke_line.clipped.ns=0 window_bucket.stroke_line.clipped.ns_per_px=0.00
+window_counter.soft_shadow.rows.value=1332
+window_counter.soft_shadow.zero_calls.value=0
+window_counter.soft_shadow.max_call_px.value=76000
+window_counter.glass_attached.rows.value=1195
+window_counter.fill_round_rect.calls.value=102
+window_counter.fill_round_rect.translucent_calls.value=51
+window_counter.fill_round_rect.rows.value=2803
+window_counter.fill_round_rect.zero_calls.value=0
+window_counter.fill_round_rect.max_call_px.value=380912
+window_counter.stroke_round_rect.rows.value=1997
+window_counter.stroke_round_rect.calls.value=16
+window_counter.stroke_round_rect.zero_calls.value=0
+window_counter.stroke_round_rect.max_call_px.value=387596
+window_counter.stroke_line.calls.value=3094
+window_counter.stroke_line.zero_len_calls.value=0
+window_counter.stroke_line.axis_calls.value=836
+window_counter.stroke_line.h_axis_calls.value=287
+window_counter.stroke_line.v_axis_calls.value=549
+window_counter.stroke_line.thin_calls.value=103
+window_counter.stroke_line.zero_paint_calls.value=0
+window_counter.stroke_line.hidden_calls.value=0
+window_counter.stroke_line.len_px.value=9599
+window_counter.stroke_line.clipped_calls.value=0
+window_counter.stroke_line.max_call_px.value=1576
+blur_full_screen_r3_2passes.min_ms=37.004
+blur_full_screen_r3_2passes.median_ms=37.884
+blur_full_screen_r3_2passes.mean_ms=38.651
+blur_full_screen_r3_2passes.stddev_ms=1.957
+blur_full_screen_r3_2passes.runs=15
+blur_full_screen_r10_2passes.min_ms=38.393
+blur_full_screen_r10_2passes.median_ms=39.212
+blur_full_screen_r10_2passes.mean_ms=39.792
+blur_full_screen_r10_2passes.stddev_ms=1.603
+blur_full_screen_r10_2passes.runs=15
+blur_full_screen_r30_2passes.min_ms=38.791
+blur_full_screen_r30_2passes.median_ms=38.971
+blur_full_screen_r30_2passes.mean_ms=39.306
+blur_full_screen_r30_2passes.stddev_ms=1.091
+blur_full_screen_r30_2passes.runs=15
+present_full.bytes=4096000
+present_full.min_ms=3.878
+present_full.median_ms=3.907
+present_full.mean_ms=4.079
+present_full.stddev_ms=0.520
+present_full.runs=15
+present_pointer_damage.rows=32 bytes=163840
+present_pointer_damage.min_ms=0.150
+present_pointer_damage.median_ms=0.151
+present_pointer_damage.mean_ms=0.154
+present_pointer_damage.stddev_ms=0.006
+present_pointer_damage.runs=15
+lock.interval_ms=33
+lock_frame.full=false damage_rects=0 restored_px=0 visited_px=1648081
+lock_frame.sites_per_frame=draw=1470220 text=177861
+lock_frame.min_ms=4.299
+lock_frame.median_ms=4.358
+lock_frame.mean_ms=7.643
+lock_frame.stddev_ms=12.141
+lock_frame.runs=15
+lock_frame_entry.full=false damage_rects=0 restored_px=0 visited_px=1648081
+lock_frame_entry.sites_per_frame=draw=1470220 text=177861
+lock_frame_entry.min_ms=4.300
+lock_frame_entry.median_ms=4.320
+lock_frame_entry.mean_ms=4.334
+lock_frame_entry.stddev_ms=0.033
+lock_frame_entry.runs=15
+lock_frame_customize.full=false damage_rects=0 restored_px=0 visited_px=3262475
+lock_frame_customize.sites_per_frame=draw=2692136 shadow=371358 text=198981
+lock_frame_customize.min_ms=7.568
+lock_frame_customize.median_ms=7.691
+lock_frame_customize.mean_ms=8.780
+lock_frame_customize.stddev_ms=4.080
+lock_frame_customize.runs=15
+lock_frame_still.full=false damage_rects=0 restored_px=0 visited_px=1648081
+lock_frame_still.sites_per_frame=draw=1470220 text=177861
+lock_frame_still.min_ms=4.317
+lock_frame_still.median_ms=4.336
+lock_frame_still.mean_ms=4.344
+lock_frame_still.stddev_ms=0.022
+lock_frame_still.runs=15
+lock_profile.stroke_line.calls=1261 lock_profile.stroke_line.ms=5.107 lock_profile.stroke_line.share_pct=33.8 lock_profile.stroke_line.px=0 lock_profile.stroke_line.ns_per_px=0.00
+lock_profile.soft_shadow.calls=1 lock_profile.soft_shadow.ms=2.872 lock_profile.soft_shadow.share_pct=19.0 lock_profile.soft_shadow.px=0 lock_profile.soft_shadow.ns_per_px=0.00
+lock_profile.stroke_round_rect.calls=20 lock_profile.stroke_round_rect.ms=2.753 lock_profile.stroke_round_rect.share_pct=18.2 lock_profile.stroke_round_rect.px=0 lock_profile.stroke_round_rect.ns_per_px=0.00
+lock_profile.stroke_line_attrib.calls=1261 lock_profile.stroke_line_attrib.ms=1.840 lock_profile.stroke_line_attrib.share_pct=12.2 lock_profile.stroke_line_attrib.px=0 lock_profile.stroke_line_attrib.ns_per_px=0.00
+lock_profile.fill_round_rect.calls=62 lock_profile.fill_round_rect.ms=1.584 lock_profile.fill_round_rect.share_pct=10.5 lock_profile.fill_round_rect.px=527459 lock_profile.fill_round_rect.ns_per_px=3.00
+lock_profile.glass_backdrop.calls=4 lock_profile.glass_backdrop.ms=0.271 lock_profile.glass_backdrop.share_pct=1.8 lock_profile.glass_backdrop.px=0 lock_profile.glass_backdrop.ns_per_px=0.00
+lock_profile.glass_stage_attached.calls=4 lock_profile.glass_stage_attached.ms=0.270 lock_profile.glass_stage_attached.share_pct=1.8 lock_profile.glass_stage_attached.px=0 lock_profile.glass_stage_attached.ns_per_px=0.00
+lock_profile.glass_panel_l.calls=1 lock_profile.glass_panel_l.ms=0.170 lock_profile.glass_panel_l.share_pct=1.1 lock_profile.glass_panel_l.px=295960 lock_profile.glass_panel_l.ns_per_px=0.57
+lock_profile.blit_from.calls=1 lock_profile.blit_from.ms=0.159 lock_profile.blit_from.share_pct=1.0 lock_profile.blit_from.px=0 lock_profile.blit_from.ns_per_px=0.00
+lock_profile.glass_panel_s.calls=3 lock_profile.glass_panel_s.ms=0.101 lock_profile.glass_panel_s.share_pct=0.7 lock_profile.glass_panel_s.px=38160 lock_profile.glass_panel_s.ns_per_px=2.65
+lock_profile.timed_ms=15.126
+lock_bucket.stroke_round_rect.walked.px=528550 lock_bucket.stroke_round_rect.walked.ns=0 lock_bucket.stroke_round_rect.walked.ns_per_px=0.00
+lock_bucket.fill_round_rect.interior.px=510782 lock_bucket.fill_round_rect.interior.ns=674803 lock_bucket.fill_round_rect.interior.ns_per_px=1.32
+lock_bucket.stroke_round_rect.zero.px=509417 lock_bucket.stroke_round_rect.zero.ns=0 lock_bucket.stroke_round_rect.zero.ns_per_px=0.00
+lock_bucket.soft_shadow.partial_iters.px=442536 lock_bucket.soft_shadow.partial_iters.ns=0 lock_bucket.soft_shadow.partial_iters.ns_per_px=0.00
+lock_bucket.soft_shadow.walked.px=371358 lock_bucket.soft_shadow.walked.ns=0 lock_bucket.soft_shadow.walked.ns_per_px=0.00
+lock_bucket.glass_attached.full.px=329530 lock_bucket.glass_attached.full.ns=113826 lock_bucket.glass_attached.full.ns_per_px=0.35
+lock_bucket.soft_shadow.hidden.px=208840 lock_bucket.soft_shadow.hidden.ns=0 lock_bucket.soft_shadow.hidden.ns_per_px=0.00
+lock_bucket.stroke_line.walked.px=200640 lock_bucket.stroke_line.walked.ns=0 lock_bucket.stroke_line.walked.ns_per_px=0.00
+lock_bucket.stroke_line.zero.px=102561 lock_bucket.stroke_line.zero.ns=0 lock_bucket.stroke_line.zero.ns_per_px=0.00
+lock_bucket.soft_shadow.under_panel.px=83512 lock_bucket.soft_shadow.under_panel.ns=0 lock_bucket.soft_shadow.under_panel.ns_per_px=0.00
+lock_bucket.stroke_line.full.px=69336 lock_bucket.stroke_line.full.ns=0 lock_bucket.stroke_line.full.ns_per_px=0.00
+lock_bucket.soft_shadow.mixed.px=55982 lock_bucket.soft_shadow.mixed.ns=0 lock_bucket.soft_shadow.mixed.ns_per_px=0.00
+lock_bucket.fill_round_rect.outside_shape.px=45592 lock_bucket.fill_round_rect.outside_shape.ns=0 lock_bucket.fill_round_rect.outside_shape.ns_per_px=0.00
+lock_bucket.stroke_line.partial.px=28743 lock_bucket.stroke_line.partial.ns=0 lock_bucket.stroke_line.partial.ns_per_px=0.00
+lock_bucket.stroke_round_rect.partial.px=18192 lock_bucket.stroke_round_rect.partial.ns=0 lock_bucket.stroke_round_rect.partial.ns_per_px=0.00
+lock_bucket.fill_round_rect.edge_scanned.px=16677 lock_bucket.fill_round_rect.edge_scanned.ns=492190 lock_bucket.fill_round_rect.edge_scanned.ns_per_px=29.51
+lock_bucket.soft_shadow.all_full.px=15104 lock_bucket.soft_shadow.all_full.ns=0 lock_bucket.soft_shadow.all_full.ns_per_px=0.00
+lock_bucket.fill_round_rect.edge_painted.px=14728 lock_bucket.fill_round_rect.edge_painted.ns=0 lock_bucket.fill_round_rect.edge_painted.ns_per_px=0.00
+lock_bucket.soft_shadow.partial_blends.px=14074 lock_bucket.soft_shadow.partial_blends.ns=0 lock_bucket.soft_shadow.partial_blends.ns_per_px=0.00
+lock_bucket.glass_attached.skipped.px=10138 lock_bucket.glass_attached.skipped.ns=0 lock_bucket.glass_attached.skipped.ns_per_px=0.00
+lock_bucket.soft_shadow.zero.px=6204 lock_bucket.soft_shadow.zero.ns=0 lock_bucket.soft_shadow.zero.ns_per_px=0.00
+lock_bucket.glass_attached.partial_scanned.px=2908 lock_bucket.glass_attached.partial_scanned.ns=75269 lock_bucket.glass_attached.partial_scanned.ns_per_px=25.88
+lock_bucket.glass_attached.partial_painted.px=2264 lock_bucket.glass_attached.partial_painted.ns=0 lock_bucket.glass_attached.partial_painted.ns_per_px=0.00
+lock_bucket.fill_round_rect.edge_zero.px=1949 lock_bucket.fill_round_rect.edge_zero.ns=0 lock_bucket.fill_round_rect.edge_zero.ns_per_px=0.00
+lock_bucket.soft_shadow.partial_only.px=1716 lock_bucket.soft_shadow.partial_only.ns=0 lock_bucket.soft_shadow.partial_only.ns_per_px=0.00
+lock_bucket.stroke_round_rect.full.px=941 lock_bucket.stroke_round_rect.full.ns=0 lock_bucket.stroke_round_rect.full.ns_per_px=0.00
+lock_bucket.glass_attached.partial_zero.px=644 lock_bucket.glass_attached.partial_zero.ns=0 lock_bucket.glass_attached.partial_zero.ns_per_px=0.00
+lock_bucket.stroke_line.clipped.px=0 lock_bucket.stroke_line.clipped.ns=0 lock_bucket.stroke_line.clipped.ns_per_px=0.00
+lock_bucket.fill_round_rect.clipped.px=0 lock_bucket.fill_round_rect.clipped.ns=0 lock_bucket.fill_round_rect.clipped.ns_per_px=0.00
+lock_counter.stroke_line.calls.value=1261
+lock_counter.stroke_line.zero_len_calls.value=0
+lock_counter.stroke_line.axis_calls.value=271
+lock_counter.stroke_line.h_axis_calls.value=102
+lock_counter.stroke_line.v_axis_calls.value=169
+lock_counter.stroke_line.thin_calls.value=0
+lock_counter.stroke_line.zero_paint_calls.value=0
+lock_counter.stroke_line.hidden_calls.value=0
+lock_counter.stroke_line.len_px.value=4376
+lock_counter.stroke_line.clipped_calls.value=0
+lock_counter.stroke_line.max_call_px.value=484
+lock_counter.fill_round_rect.calls.value=62
+lock_counter.fill_round_rect.translucent_calls.value=42
+lock_counter.fill_round_rect.rows.value=2168
+lock_counter.fill_round_rect.zero_calls.value=0
+lock_counter.fill_round_rect.max_call_px.value=295448
+lock_counter.glass_attached.rows.value=498
+lock_counter.stroke_round_rect.rows.value=1400
+lock_counter.stroke_round_rect.calls.value=20
+lock_counter.stroke_round_rect.zero_calls.value=0
+lock_counter.stroke_round_rect.max_call_px.value=303688
+lock_counter.soft_shadow.rows.value=351
+lock_counter.soft_shadow.zero_calls.value=0
+lock_counter.soft_shadow.max_call_px.value=162518
+primitive_blit_full_screen.size=1280x800
+primitive_blit_full_screen.min_ms=0.158
+primitive_blit_full_screen.median_ms=0.160
+primitive_blit_full_screen.mean_ms=0.185
+primitive_blit_full_screen.stddev_ms=0.073
+primitive_blit_full_screen.runs=15
+primitive_fill_panel.size=600x420
+primitive_fill_panel.min_ms=0.051
+primitive_fill_panel.median_ms=0.052
+primitive_fill_panel.mean_ms=0.054
+primitive_fill_panel.stddev_ms=0.005
+primitive_fill_panel.runs=15
+primitive_fill_panel_translucent.size=600x420
+primitive_fill_panel_translucent.min_ms=0.333
+primitive_fill_panel_translucent.median_ms=0.341
+primitive_fill_panel_translucent.mean_ms=0.339
+primitive_fill_panel_translucent.stddev_ms=0.006
+primitive_fill_panel_translucent.runs=15
+primitive_fill_chip_translucent.size=24x24
+primitive_fill_chip_translucent.min_ms=0.008
+primitive_fill_chip_translucent.median_ms=0.008
+primitive_fill_chip_translucent.mean_ms=0.008
+primitive_fill_chip_translucent.stddev_ms=0.000
+primitive_fill_chip_translucent.runs=15
+primitive_soft_shadow_panel.min_ms=1.365
+primitive_soft_shadow_panel.median_ms=1.384
+primitive_soft_shadow_panel.mean_ms=1.582
+primitive_soft_shadow_panel.stddev_ms=0.715
+primitive_soft_shadow_panel.runs=15
+primitive_glass_backdrop_panel.min_ms=0.082
+primitive_glass_backdrop_panel.median_ms=0.091
+primitive_glass_backdrop_panel.mean_ms=0.101
+primitive_glass_backdrop_panel.stddev_ms=0.033
+primitive_glass_backdrop_panel.runs=15
+primitive_text_10_lines.min_ms=3.096
+primitive_text_10_lines.median_ms=3.456
+primitive_text_10_lines.mean_ms=3.746
+primitive_text_10_lines.stddev_ms=0.630
+primitive_text_10_lines.runs=15

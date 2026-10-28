@@ -1919,3 +1919,110 @@ interior). Any further stroke work needs to reduce **per-call** cost, not bbox
 area. The golden-frame gate remains **BLOCKED** on the missing Latin font face
 fixture and is not claimed.
 
+## 25. Batch: the shadow's panel interior skipped as a row interval (verified)
+
+### 25.1 What was measured first
+
+This batch started where §24 stopped: `stroke_line`'s per-call cost. The row was
+split so the diagnostic pass no longer hides inside the paint number, and calls
+were counted by class. One profiled `open_window_frame` (1280x800, the same
+benchmark scene):
+
+| Item | Value |
+|---|---|
+| `stroke_line` calls | 3,094 |
+| axis-aligned (horizontal / vertical) | 836 (287 / 549) |
+| zero length | 0 |
+| width <= 1 px | 103 |
+| fully clipped / partly clipped | 0 / 0 |
+| segment length actually drawn | 9,599 px (3.1 px per call) |
+| pixels walked | 155,310 |
+| of those: zero / partial / full coverage | 118,663 / 32,753 / 3,894 |
+| `stroke_line` row, instrumented frame | 5.700 ms |
+| of which the diagnostic pass itself | 2.392 ms |
+
+So the row is 42 % instrumentation and about 3.31 ms of painting, i.e. 21 ns per
+walked pixel. With 3.1 px average length and 76 % of the box painting nothing,
+§24 already measured that cutting the box costs more than it saves; this batch
+therefore left the stroke loop unchanged and kept the split, the class counters
+and a permanent verbatim `stroke_line_reference` harness (144 full-canvas
+comparisons: 12 geometries x 4 clips x 3 colours, including zero length, 1 px,
+fractional, off-canvas and a NaN endpoint).
+
+The shadow was the next row, and its buckets named the waste:
+
+| `soft_shadow` bucket (one frame, 4 calls) | px |
+|---|---|
+| walk box | 832,918 |
+| skipped by the inset hide rectangle | 605,923 |
+| **under the panel, past the first pixel** | **76,508** |
+| mixed (rings straddle the edge) | 108,587 |
+| all rings full | 22,008 |
+| only partial rings | 6,676 |
+| no ring paints | 13,216 |
+| real ring blends | 64,056 |
+
+### 25.2 The change
+
+76,508 pixels paid a full rounded-rectangle distance (a square root) only to be
+discarded by `panel < -1.0`. That region is the panel's interior eroded by one
+pixel, which is exactly a rounded rectangle with both half-extents and the
+radius reduced by one, so its half-width per row is one
+`rounded_row_half_width` call. The painter now computes that interval once per
+row, shrinks it by a pixel on each side, and jumps the columns inside it; the
+boundary columns keep the per-pixel test. No pixel's colour arithmetic changed.
+
+### 25.3 Parity
+
+The pre-change implementation is kept verbatim as `soft_shadow_reference`
+(per-pixel panel test for every pixel). The new path was compared against it
+over 11 geometries x 3 clips (none, fractional, empty) x 2 backdrop states
+(detached, attached -- attached is what hides a shadow under its own panel)
+= **66 full-canvas comparisons**, including radius 0, radius 500, spread 0 /
+0.5 / 1 / 36, zero and negative extents, an off-canvas rectangle and alpha 0.
+All matched on every pixel. Canvas tests: 63 passed, 0 failed.
+
+The bucket split is kept exact as well: the interval's overlap with the inset
+rectangle is still reported as `hidden`, the rest as `under_panel`, so the
+disjoint buckets still sum to the walked box (asserted by
+`the_shadow_buckets_account_for_every_walked_pixel`).
+
+### 25.4 Measured result
+
+Same protocol as §23/§24: `cargo build --release --example render_bench`, five
+separate processes, 1280x800, 15 frames per scene, median of the five
+per-process medians, min-max across processes. Raw logs:
+`evidence/bench/stroke-shadow-rings-2026-10-28/{before,after}/`.
+
+| Item | Before | After | Verdict |
+|---|---|---|---|
+| `primitive_soft_shadow_panel` (600x420) | 1.463 ms (1.443-1.494) | **1.384 ms (1.381-1.394)** | **disjoint, 5.4 % faster** |
+| `open_window_frame` | 11.668 ms (11.413-11.912) | 11.462 ms (11.409-12.513) | ranges overlap: no claim |
+| `full_frame` | 6.553 ms (6.546-6.794) | 6.651 ms (6.446-6.958) | +0.10 ms at the median, inside the spread |
+| `lock_frame_customize` | 7.931 ms (7.848-7.999) | 7.691 ms (7.610-7.888) | ranges overlap: no claim |
+| `primitive_fill_panel` (control) | 0.050 ms | 0.050 ms | unchanged |
+| `primitive_fill_panel_translucent` (control) | 0.337 ms | 0.336 ms | unchanged |
+
+The claim this batch makes is the primitive row only: every after median is
+below every before median. At frame level the change is inside the spread and
+is reported as such; `full_frame` is the one row that read slightly worse at the
+median while its ranges overlap, which is stated rather than hidden.
+
+### 25.5 Status and remaining distance
+
+**VERIFIED for the shadow interval on the primitive row; the frame-level gain is
+NOT VERIFIED.** All profiled scenes are inside the 16 ms budget: open window
+11.462 ms (4.538 ms of headroom), full frame 6.651 ms, lock 7.691 ms.
+
+Remaining window rows, measured this session: `soft_shadow` 6.365 ms
+(instrumented frame, 2 calls per panel and 4 per frame), `stroke_line` 5.700 ms
+of which 2.392 ms is the diagnostic pass (3,094 calls, 3.1 px each), and
+`fill_round_rect` 2.783 ms (1.31 ns/px interior). The stroke's remaining cost is
+per-pixel and per-call, not bbox area: 76 % of its walked pixels paint nothing
+but they are spread 38 per call, so both a row band (§24) and a
+closed-form axis specialisation cost more than they save at this length
+distribution.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font face
+fixture and is not claimed.
+

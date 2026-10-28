@@ -2023,5 +2023,133 @@
         "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
       ],
       "evidence": "evidence/bench/stroke-line-band-2026-10-28/{before,after}/"
-    }
+    },
+  "soft_shadow_panel_interval": {
+    "batch": 25,
+    "date": "2026-10-28",
+    "base_commit": "fa9c17f629fc8b0300a728613588ae86ea6b252b",
+    "change": "soft_shadow skips the panel's eroded interior as one interval per row instead of one rounded-rectangle distance per pixel; the exact per-pixel test still runs on the boundary columns",
+    "protocol": "cd src && cargo build --release --example render_bench; five separate processes, 1280x800, 15 frames per scene, median of five per-process medians, min-max across processes",
+    "before": {
+      "primitive_soft_shadow_panel_ms": {
+        "median": 1.463,
+        "min": 1.443,
+        "max": 1.494
+      },
+      "open_window_frame_ms": {
+        "median": 11.668,
+        "min": 11.413,
+        "max": 11.912
+      },
+      "full_frame_ms": {
+        "median": 6.553,
+        "min": 6.546,
+        "max": 6.794
+      },
+      "lock_frame_customize_ms": {
+        "median": 7.931,
+        "min": 7.848,
+        "max": 7.999
+      },
+      "stroke_line_row_ms": {
+        "median": 5.725,
+        "min": 5.7,
+        "max": 5.76
+      },
+      "soft_shadow_row_ms": {
+        "median": 6.665,
+        "min": 6.6,
+        "max": 6.7
+      },
+      "primitive_fill_panel_ms": {
+        "median": 0.05,
+        "min": 0.049,
+        "max": 0.052
+      },
+      "primitive_fill_panel_translucent_ms": {
+        "median": 0.337,
+        "min": 0.336,
+        "max": 0.34
+      }
+    },
+    "after": {
+      "primitive_soft_shadow_panel_ms": {
+        "median": 1.384,
+        "min": 1.381,
+        "max": 1.394
+      },
+      "open_window_frame_ms": {
+        "median": 11.462,
+        "min": 11.409,
+        "max": 12.513
+      },
+      "full_frame_ms": {
+        "median": 6.651,
+        "min": 6.446,
+        "max": 6.958
+      },
+      "lock_frame_customize_ms": {
+        "median": 7.691,
+        "min": 7.61,
+        "max": 7.888
+      },
+      "stroke_line_row_ms": {
+        "median": 5.7,
+        "min": 5.68,
+        "max": 5.72
+      },
+      "soft_shadow_row_ms": {
+        "median": 6.365,
+        "min": 6.34,
+        "max": 6.39
+      },
+      "primitive_fill_panel_ms": {
+        "median": 0.05,
+        "min": 0.049,
+        "max": 0.051
+      },
+      "primitive_fill_panel_translucent_ms": {
+        "median": 0.336,
+        "min": 0.335,
+        "max": 0.338
+      }
+    },
+    "verdict": "primitive_soft_shadow_panel is 5.4 % faster with disjoint five-process ranges (1.443-1.494 -> 1.381-1.394); open_window_frame and lock_frame_customize read better at the median but their ranges overlap, so no frame-level claim is made; full_frame read 0.10 ms worse at the median inside the spread.",
+    "parity": {
+      "soft_shadow_vs_soft_shadow_reference": 66,
+      "stroke_line_vs_stroke_line_reference": 144,
+      "canvas_tests_passed": 63
+    },
+    "attribution": {
+      "stroke_line.calls": 3094,
+      "stroke_line.h_axis_calls": 287,
+      "stroke_line.v_axis_calls": 549,
+      "stroke_line.thin_calls": 103,
+      "stroke_line.zero_len_calls": 0,
+      "stroke_line.hidden_calls": 0,
+      "stroke_line.clipped_calls": 0,
+      "stroke_line.len_px": 9599,
+      "stroke_line.walked": 155310,
+      "stroke_line.zero": 118663,
+      "stroke_line.partial": 32753,
+      "stroke_line.full": 3894,
+      "stroke_line_attrib_ms": 2.392,
+      "soft_shadow.calls": 4,
+      "soft_shadow.walked": 832918,
+      "soft_shadow.hidden": 605923,
+      "soft_shadow.under_panel": 76508,
+      "soft_shadow.mixed": 108587,
+      "soft_shadow.all_full": 22008,
+      "soft_shadow.partial_only": 6676,
+      "soft_shadow.zero": 13216,
+      "soft_shadow.partial_blends": 64056
+    },
+    "caveats": [
+      "composition only at 1280x800 on an 8-vCPU VM with no GPU and no display; no present-to-display, GPU, VRAM or idle-RAM number was measured",
+      "row times come from one instrumented frame that also runs the profiled classification pass; stroke_line's row includes its own 2.392 ms diagnostic pass, so it is not renderer cost",
+      "frame-level ranges overlap for open_window_frame and lock_frame_customize, so no speed is claimed there",
+      "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
+    ],
+    "evidence": "evidence/bench/stroke-shadow-rings-2026-10-28/{before,after}/"
+  }
 }

@@ -1752,6 +1752,10 @@ impl Canvas {
             }
         }
         if prof {
+            // The row timer already includes this pass, so the diagnostic walk
+            // is timed as its own row: without the split, the instrumentation's
+            // own cost reads as renderer cost.
+            let _attrib = profile::Timer::new("stroke_line_attrib");
             // Where a line's walked pixels go. Same expression as the painter,
             // in an untimed pass, so the buckets cannot disagree with it. Icons
             // issue thousands of short strokes, so this also records how many
@@ -1788,6 +1792,26 @@ impl Canvas {
                 u64::from(len2 <= f32::EPSILON),
             );
             profile::note_counter("stroke_line.axis_calls", u64::from(dx == 0.0 || dy == 0.0));
+            // The two axis classes separately: a horizontal rule and a vertical
+            // divider have different capsule geometry, and only counts this fine
+            // can say whether an axis fast path would reach the hot calls.
+            profile::note_counter(
+                "stroke_line.h_axis_calls",
+                u64::from(dy == 0.0 && dx != 0.0),
+            );
+            profile::note_counter(
+                "stroke_line.v_axis_calls",
+                u64::from(dx == 0.0 && dy != 0.0),
+            );
+            // A pen no wider than a pixel has no fully covered interior column,
+            // so a solid-run fast path could never fire on it.
+            profile::note_counter("stroke_line.thin_calls", u64::from(width <= 1.0));
+            // The whole call painted nothing. A non-zero count is a call that a
+            // cheaper exit could have skipped.
+            profile::note_counter(
+                "stroke_line.zero_paint_calls",
+                u64::from(walked > 0 && zero == walked),
+            );
             profile::note_counter(
                 "stroke_line.hidden_calls",
                 u64::from(by1 <= by0 || bx1 <= bx0),
@@ -1798,6 +1822,7 @@ impl Canvas {
             profile::note_bucket("stroke_line.partial", partial, 0);
             profile::note_bucket("stroke_line.full", full, 0);
             profile::note_bucket("stroke_line.clipped", raw.saturating_sub(walked), 0);
+            profile::note_counter("stroke_line.clipped_calls", u64::from(walked < raw));
             profile::note_max("stroke_line.max_call_px", walked);
         }
     }
@@ -2395,10 +2420,38 @@ impl Canvas {
 
         for y in y0..y1 {
             let py = y as f32 + 0.5;
+            // The panel's interior -- the part of the shadow the panel itself
+            // replaces -- as one interval for the whole row. The eroded rounded
+            // rectangle is where the per-pixel test below is guaranteed to
+            // answer "under the panel", so its columns can be skipped without a
+            // distance calculation each; a one-pixel margin either side keeps
+            // the boundary on the exact per-pixel test.
+            let (ix0, ix1) = if covered {
+                let hwi = rounded_row_half_width(
+                    (py - cy).abs(),
+                    r.w / 2.0 - 1.0,
+                    r.h / 2.0 - 1.0,
+                    rad - 1.0,
+                );
+                if hwi > 1.0 {
+                    (
+                        (cx - hwi + 1.0).ceil() as i64,
+                        (cx + hwi - 1.0).floor() as i64,
+                    )
+                } else {
+                    (0, 0)
+                }
+            } else {
+                (0, 0)
+            };
             let mut x = x0;
             while x < x1 {
                 if y >= hy0 && y < hy1 && x >= hx0 && x < hx1 {
                     x = hx1;
+                    continue;
+                }
+                if x >= ix0 && x < ix1 {
+                    x = ix1;
                     continue;
                 }
                 let px = x as f32 + 0.5;
@@ -2464,6 +2517,27 @@ impl Canvas {
             for y in y0..y1 {
                 rows = rows.saturating_add(1);
                 let py = y as f32 + 0.5;
+                // The same interval the painter computes, from the same call:
+                // a column skipped here is one the painter skipped too, so the
+                // buckets cannot report a pixel as painted that was not.
+                let (ix0, ix1) = if covered {
+                    let hwi = rounded_row_half_width(
+                        (py - cy).abs(),
+                        r.w / 2.0 - 1.0,
+                        r.h / 2.0 - 1.0,
+                        rad - 1.0,
+                    );
+                    if hwi > 1.0 {
+                        (
+                            (cx - hwi + 1.0).ceil() as i64,
+                            (cx + hwi - 1.0).floor() as i64,
+                        )
+                    } else {
+                        (0, 0)
+                    }
+                } else {
+                    (0, 0)
+                };
                 let mut x = x0;
                 while x < x1 {
                     if y >= hy0 && y < hy1 && x >= hx0 && x < hx1 {
@@ -2471,6 +2545,24 @@ impl Canvas {
                             u64::try_from((hx1.min(x1)).saturating_sub(x.max(hx0))).unwrap_or(0);
                         hidden_px = hidden_px.saturating_add(n);
                         x = hx1;
+                        continue;
+                    }
+                    if x >= ix0 && x < ix1 {
+                        // The interval subsumes the inset rectangle, so the
+                        // split is kept explicit: pixels also inside that
+                        // rectangle are the ones the backdrop hides, and the
+                        // rest is the interior the panel covers at its edge.
+                        let a = x.max(ix0);
+                        let b = ix1.min(x1);
+                        let n = u64::try_from(b.saturating_sub(a)).unwrap_or(0);
+                        let hid = if y >= hy0 && y < hy1 {
+                            u64::try_from(b.min(hx1).saturating_sub(a.max(hx0))).unwrap_or(0)
+                        } else {
+                            0
+                        };
+                        hidden_px = hidden_px.saturating_add(hid);
+                        under_px = under_px.saturating_add(n.saturating_sub(hid));
+                        x = ix1;
                         continue;
                     }
                     let px = x as f32 + 0.5;
@@ -3929,6 +4021,153 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `stroke_line` at fa9c17f, verbatim: one distance test and one blend for
+    /// every pixel of the inflated bounds. Kept as the reference the current
+    /// implementation must equal, pixel for pixel.
+    fn stroke_line_reference(
+        c: &mut Canvas,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        width: f32,
+        color: u32,
+    ) {
+        let half = width / 2.0;
+        let minx = x0.min(x1) - half - 1.5;
+        let miny = y0.min(y1) - half - 1.5;
+        let maxx = x0.max(x1) + half + 1.5;
+        let maxy = y0.max(y1) + half + 1.5;
+        let bounds = Rect::new(minx, miny, maxx - minx, maxy - miny);
+        let (bx0, by0, bx1, by1) = c.span(&bounds);
+        let dx = x1 - x0;
+        let dy = y1 - y0;
+        let len2 = dx * dx + dy * dy;
+        for y in by0..by1 {
+            for x in bx0..bx1 {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let t = if len2 <= f32::EPSILON {
+                    0.0
+                } else {
+                    (((px - x0) * dx + (py - y0) * dy) / len2).clamp(0.0, 1.0)
+                };
+                let qx = px - (x0 + dx * t);
+                let qy = py - (y0 + dy * t);
+                let d = (qx * qx + qy * qy).sqrt() - half;
+                c.blend_in(x, y, color, coverage(d));
+            }
+        }
+    }
+
+    #[test]
+    fn the_stroke_line_equals_the_per_pixel_distance() {
+        // Horizontal, vertical, diagonal, fractional, zero-length, off-canvas,
+        // single-pixel, hairline and thick pens, over four clips (including an
+        // empty one) and opaque, translucent and zero-alpha colours. Every
+        // pixel of both canvases must agree.
+        let cases: [(f32, f32, f32, f32, f32); 12] = [
+            (30.0, 30.0, 90.0, 30.0, 1.0),
+            (30.0, 30.0, 30.0, 90.0, 2.0),
+            (30.0, 30.0, 90.0, 70.0, 1.0),
+            (30.25, 30.75, 90.5, 70.25, 1.5),
+            (50.0, 40.0, 50.0, 40.0, 1.0),
+            (50.0, 40.0, 50.0, 40.0, 9.0),
+            (60.0, 60.0, 60.5, 60.0, 0.5),
+            (-40.0, -20.0, 200.0, 160.0, 3.0),
+            (40.0, 150.0, 40.0, -50.0, 2.0),
+            (10.0, 10.0, 200.0, 10.0, 12.0),
+            (80.0, 20.0, 21.5, 140.5, 7.0),
+            (f32::NAN, 10.0, 40.0, 10.0, 1.0),
+        ];
+        let clips = [
+            None,
+            Some(Rect::new(30.5, 20.25, 100.0, 70.0)),
+            Some(Rect::new(55.0, 45.0, 1.0, 1.0)),
+            Some(Rect::new(0.0, 0.0, 0.0, 0.0)),
+        ];
+        let colors = [
+            rgb(0xFFFFFF),
+            with_alpha(rgb(0x3A7BD5), 0.35),
+            with_alpha(rgb(0xFFFFFF), 0.0),
+        ];
+        let mut compared = 0_u32;
+        for (x0, y0, x1, y1, width) in cases {
+            for clip in clips {
+                for color in colors {
+                    let mut want = textured(220, 180);
+                    let mut got = textured(220, 180);
+                    let _ = want.set_clip(clip);
+                    let _ = got.set_clip(clip);
+                    stroke_line_reference(&mut want, x0, y0, x1, y1, width, color);
+                    got.stroke_line(x0, y0, x1, y1, width, color);
+                    assert_eq!(
+                        want.pixels(),
+                        got.pixels(),
+                        "{x0},{y0} -> {x1},{y1} width {width} clip {clip:?} colour {color:#010X}"
+                    );
+                    compared = compared.saturating_add(1);
+                }
+            }
+        }
+        assert_eq!(compared, 144, "every case in the matrix was compared");
+    }
+
+    #[test]
+    fn the_shadow_panel_interval_changes_no_pixel() {
+        // `soft_shadow_reference` is the implementation before the ring bound
+        // and before this row interval: it applies the per-pixel panel test to
+        // every pixel of the shadow's box. The interval must skip exactly the
+        // pixels that test would have thrown away, so both canvases agree on
+        // every pixel, with and without a backdrop attached (the backdrop is
+        // what makes the panel hide its own shadow), across clips including an
+        // empty one and spreads from 0 to 36.
+        let cases: [(Rect, f32, f32, f32, f32); 11] = [
+            (Rect::new(60.0, 50.0, 140.0, 90.0), 14.0, 30.0, 12.0, 0.60),
+            (Rect::new(40.0, 120.0, 150.0, 30.0), 15.0, 40.0, 14.0, 0.45),
+            (Rect::new(70.0, 40.0, 60.0, 60.0), 40.0, 24.0, 10.0, 0.35),
+            (Rect::new(10.5, 20.25, 120.0, 70.0), 0.0, 18.0, 7.0, 0.40),
+            (Rect::new(30.0, 30.0, 100.0, 80.0), 8.0, 0.0, 0.0, 0.5),
+            (Rect::new(30.0, 30.0, 100.0, 80.0), 8.0, 0.5, 4.0, 0.5),
+            (Rect::new(30.0, 30.0, 100.0, 80.0), 8.0, 1.0, 4.0, 1.0),
+            (Rect::new(30.0, 30.0, 100.0, 80.0), 500.0, 36.0, 10.0, 0.5),
+            (Rect::new(20.0, 20.0, 0.0, 0.0), 4.0, 12.0, 6.0, 0.5),
+            (Rect::new(30.0, 30.0, 60.0, 40.0), 6.0, 36.0, 10.0, 0.0),
+            (Rect::new(-40.0, -30.0, 120.0, 90.0), 12.0, 36.0, 10.0, 0.6),
+        ];
+        let clips = [
+            None,
+            Some(Rect::new(35.0, 25.0, 90.0, 70.0)),
+            Some(Rect::new(0.0, 0.0, 0.0, 0.0)),
+        ];
+        let mut compared = 0_u32;
+        for (r, radius, spread, dy, alpha) in cases {
+            for clip in clips {
+                for backdrop in [false, true] {
+                    let mut want = textured(220, 180);
+                    let mut got = textured(220, 180);
+                    let _ = want.set_clip(clip);
+                    let _ = got.set_clip(clip);
+                    if backdrop {
+                        let source = std::rc::Rc::new(textured(220, 180));
+                        let _ = want.set_backdrop(Some(std::rc::Rc::clone(&source)));
+                        let _ = got.set_backdrop(Some(source));
+                    }
+                    want.soft_shadow_reference(r, radius, spread, dy, alpha);
+                    got.soft_shadow(r, radius, spread, dy, alpha);
+                    assert_eq!(
+                        want.pixels(),
+                        got.pixels(),
+                        "{r:?} radius {radius} spread {spread} dy {dy} alpha {alpha} \
+                         clip {clip:?} backdrop {backdrop}"
+                    );
+                    compared = compared.saturating_add(1);
+                }
+            }
+        }
+        assert_eq!(compared, 66, "every case in the matrix was compared");
     }
 
     #[test]
