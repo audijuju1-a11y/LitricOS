@@ -1479,6 +1479,83 @@ mod tests {
     }
 
     #[test]
+    fn every_verb_refuses_a_path_that_leaves_the_root() {
+        // One hostile input of each shape a client can put on the wire, against
+        // every verb whose argument shape is already pinned by another test in
+        // this module. A refusal is the contract; creating something outside the
+        // root is the failure this test exists to catch, so the tree is checked
+        // afterwards as well as the reply.
+        let (dir, root) = open_root("traversal-matrix");
+        let mut conn = Connection::new(root);
+        // Encoded separators and dot segments: not a name this broker accepts,
+        // because a decoded `/` or a `..` segment would address something else.
+        let hostile_names = ["..%2Fescape", "%2E%2E%2Fescape", "a%2F..%2Fb"];
+        let hostile_paths = ["/Documents/../../escape", "/..", "/Documents/..", "/a/./b"];
+        let mut refused = 0_u32;
+        for name in hostile_names {
+            for line in [
+                format!("MKDIR /Documents {name}"),
+                format!("NEWFILE /Documents {name}"),
+                format!("WRITETEXT /Documents {name} x"),
+            ] {
+                match conn.dispatch(&line, &mut |_, _| {}) {
+                    Outcome::Fail(e) => assert_eq!(e.kind(), ErrorKind::InvalidName, "{line}"),
+                    other => panic!("{line} was not refused: {other:?}"),
+                }
+                refused = refused.saturating_add(1);
+            }
+        }
+        for path in hostile_paths {
+            for line in [
+                format!("STAT {path}"),
+                format!("LIST {path}"),
+                format!("DU {path}"),
+                format!("TRASH {path}"),
+            ] {
+                match conn.dispatch(&line, &mut |_, _| {}) {
+                    Outcome::Fail(e) => assert_eq!(e.kind(), ErrorKind::InvalidName, "{line}"),
+                    other => panic!("{line} was not refused: {other:?}"),
+                }
+                refused = refused.saturating_add(1);
+            }
+        }
+        assert_eq!(
+            refused, 25,
+            "every hostile input was tried against every verb"
+        );
+        assert!(
+            !dir.join("escape").exists(),
+            "traversal wrote outside Documents"
+        );
+        assert!(!dir.join("Documents/escape").exists());
+        let left = fs::read_dir(dir.join("Documents")).expect("Documents exists");
+        assert_eq!(
+            left.count(),
+            0,
+            "a refused request created something under the root"
+        );
+
+        // A backslash is not a path separator on this platform: a client that
+        // encodes one gets a file whose name contains it, inside the requested
+        // folder. That is the honest Linux answer, and it is safe because the
+        // name is one segment -- unlike an archive entry name, which may have
+        // been authored on Windows and is therefore refused (see `archive.rs`).
+        let line = one_line(&mut conn, "MKDIR /Documents ..%5Cescape");
+        assert!(line.starts_with("path="), "got: {line}");
+        assert!(
+            dir.join("Documents/..\\escape").is_dir(),
+            "the backslash is a literal name byte"
+        );
+        assert!(!dir.join("escape").exists(), "and it is still one segment");
+        assert_eq!(
+            fs::read_dir(dir.join("Documents"))
+                .expect("Documents exists")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn rename_refuses_to_overwrite() {
         let (_dir, root) = open_root("rename");
         let mut conn = Connection::new(root);

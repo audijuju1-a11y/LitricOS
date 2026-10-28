@@ -2026,3 +2026,84 @@ distribution.
 The golden-frame gate remains **BLOCKED** on the missing Latin font face
 fixture and is not claimed.
 
+## 26. Batch: the file broker's containment, tested verb by verb (verified)
+
+### 26.1 Why this row, and not another frame
+
+§25 closed the last profiled frame row: every scene in `render_bench` is inside
+the 16 ms budget (`open_window_frame` 11.462 ms, `full_frame` 6.651 ms,
+`lock_frame_customize` 7.691 ms), and two independent attempts to cut the
+stroke's remaining 3.31 ms of paint were rejected by measurement (§24) or
+inside the spread (§25). The gate matrix's P0 list is therefore where the next
+work is, not the renderer.
+
+The one P0 row in that matrix with a self-contained, verifiable boundary is the
+file broker: the shell holds no writable path and every operation crosses LFP/1
+to `litric-filesd` (ADR-0019). Its confinement lives in exactly one place —
+`LogicalPath::parse` — but only a handful of verbs had adversarial coverage:
+`WRITETEXT` and `IMPORT` had a traversal test each, everything else relied on
+the shared parser without a test that named it.
+
+Gate [4] of `ci/verify.sh` reports FAIL in a clean checkout (development signing
+keys absent). That is setup, not a defect: `tools/gen-dev-keys.sh` exists,
+`keys/.gitignore` excludes what it writes, and `docs/GATES.md` already records
+the gate as PASS *after* generation. Committing key material to make a gate
+green is the one thing the mission forbids, so the gate was left alone.
+
+### 26.2 What was added
+
+`every_verb_refuses_a_path_that_leaves_the_root` in
+`src/litric-files/src/server.rs` drives **25 hostile requests** through
+`Connection::dispatch`, the same entry point the socket uses:
+
+| Verb | Hostile input | Expectation |
+|---|---|---|
+| `MKDIR`, `NEWFILE`, `WRITETEXT` | `..%2Fescape`, `%2E%2E%2Fescape`, `a%2F..%2Fb` as the name | `InvalidName` |
+| `STAT`, `LIST`, `DU`, `TRASH` | `/Documents/../../escape`, `/..`, `/Documents/..`, `/a/./b` as the path | `InvalidName` |
+
+After the refusals the test inspects the host tree: no `escape` anywhere, and
+`Documents` still empty — a refusal that creates an empty directory is still a
+write.
+
+### 26.3 What the matrix found
+
+`..%5Cescape` was **accepted**, and that is correct: a backslash is a literal
+name byte on Linux, so the request creates one directory whose name contains
+it, inside the folder that was asked for. It is safe because it is one
+segment; it was simply undocumented and untested. The test now pins both
+halves of the rule — encoded separators and dot segments are refused, a
+backslash is a name byte that stays inside the root — and contrasts it with
+`archive.rs`, which refuses backslashes because an archive entry name may have
+been authored on Windows. That asymmetry is deliberate and is now written down
+rather than implied.
+
+**No production behaviour changed in this batch.** It is a test-and-document
+batch: the boundary already held, and now a regression that moves it fails a
+named test instead of passing silently. The mission's rule is that a claim
+needs evidence, and "the broker is confined" had less evidence than the
+renderer rows did.
+
+### 26.4 Checks
+
+```text
+cargo fmt --check                                    exit 0
+cargo clippy --workspace --all-targets -- -D warnings exit 0
+cargo test --workspace     55 suites, 1,661 passed, 0 failed
+python3 ci/check-python-syntax.py                    exit 0 (61 files)
+python3 ci/lint-line-endings.py                      exit 0 (352 files, all LF)
+python3 ci/lint-doc-refs.py                          exit 0 (787 citations)
+bash ci/verify.sh            21 pass, 2 fail, 5 skipped
+```
+
+The two failures are gate [4]'s absent development keys (setup: run
+`tools/gen-dev-keys.sh`, which is not committed by design) and nothing else;
+the five skips are the image build, boot, idle-RAM, cargo and golden-frame
+checks that need mkosi, QEMU, a toolchain on PATH or the font fixture.
+
+### 26.5 Limits
+
+Composition and host-level tests only: no QEMU, no image build, no display and
+no GPU in this environment, so nothing here is a boot, install or hardware
+claim, and no RAM, GPU or present-to-display number was measured. The
+golden-frame gate remains **BLOCKED** on the missing Latin font face fixture.
+
