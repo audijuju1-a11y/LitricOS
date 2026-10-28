@@ -351,6 +351,24 @@ fn coverage(d: f32) -> f32 {
     (0.5 - d).clamp(0.0, 1.0)
 }
 
+/// Coverage of one pixel from the geometry [`Canvas::fill_round_rect`] derives
+/// once per call.
+///
+/// Shared with the profiling counter so the reported pixel buckets are
+/// classified by exactly the arithmetic the fill uses.
+#[inline]
+#[must_use]
+fn edge_coverage(px: f32, cx: f32, qx_off: f32, qy: f32, ay: f32, rad: f32) -> f32 {
+    let qx = (px - cx).abs() - qx_off;
+    let ax = qx.max(0.0);
+    coverage((ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - rad)
+}
+
+/// Nanoseconds since `start`, saturating instead of wrapping.
+fn nanos_since(start: std::time::Instant) -> u64 {
+    u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
 /// The pixels whose centres lie inside a clip rectangle, as a half-open range
 /// `(x0, y0, x1, y1)`.
 ///
@@ -500,6 +518,97 @@ pub mod profile {
     #[must_use]
     pub fn take() -> Vec<Row> {
         ROWS.with(|rows| std::mem::take(&mut *rows.borrow_mut()))
+    }
+
+    /// One measured slice of a drawing row's pixels.
+    ///
+    /// A [`Row`] says how long an entry point took; a bucket says which part of
+    /// its pixel work that time went to. The slices are disjoint, so their
+    /// pixels add up to the area the entry point walked.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Bucket {
+        /// The slice this bucket measures.
+        pub name: &'static str,
+        /// Pixels in the slice.
+        pub pixels: u64,
+        /// Time spent on the slice, in nanoseconds, when it was timed.
+        pub nanos: u64,
+    }
+
+    /// A whole-call count that is not a pixel area.
+    #[derive(Clone, Copy)]
+    pub struct Counter {
+        /// What is counted.
+        pub name: &'static str,
+        /// The accumulated value.
+        pub value: u64,
+    }
+
+    thread_local! {
+        static BUCKETS: RefCell<Vec<Bucket>> = const { RefCell::new(Vec::new()) };
+        static COUNTERS: RefCell<Vec<Counter>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Add one call's slice to a bucket. Nothing happens on a timed frame.
+    pub fn note_bucket(name: &'static str, pixels: u64, nanos: u64) {
+        if !is_on() {
+            return;
+        }
+        BUCKETS.with(|buckets| {
+            let mut buckets = buckets.borrow_mut();
+            if let Some(b) = buckets.iter_mut().find(|b| b.name == name) {
+                b.pixels = b.pixels.saturating_add(pixels);
+                b.nanos = b.nanos.saturating_add(nanos);
+            } else {
+                buckets.push(Bucket {
+                    name,
+                    pixels,
+                    nanos,
+                });
+            }
+        });
+    }
+
+    /// Add `value` to a whole-call counter.
+    pub fn note_counter(name: &'static str, value: u64) {
+        if !is_on() {
+            return;
+        }
+        COUNTERS.with(|counters| {
+            let mut counters = counters.borrow_mut();
+            if let Some(c) = counters.iter_mut().find(|c| c.name == name) {
+                c.value = c.value.saturating_add(value);
+            } else {
+                counters.push(Counter { name, value });
+            }
+        });
+    }
+
+    /// Keep the largest `value` seen for a whole-call counter.
+    pub fn note_max(name: &'static str, value: u64) {
+        if !is_on() {
+            return;
+        }
+        COUNTERS.with(|counters| {
+            let mut counters = counters.borrow_mut();
+            if let Some(c) = counters.iter_mut().find(|c| c.name == name) {
+                c.value = c.value.max(value);
+            } else {
+                counters.push(Counter { name, value });
+            }
+        });
+    }
+
+    /// Take the buckets, leaving them empty.
+    #[must_use]
+    pub fn take_buckets() -> Vec<Bucket> {
+        BUCKETS.with(|buckets| std::mem::take(&mut *buckets.borrow_mut()))
+    }
+
+    /// Take the whole-call counters, leaving them empty.
+    #[must_use]
+    pub fn take_counters() -> Vec<Counter> {
+        COUNTERS.with(|counters| std::mem::take(&mut *counters.borrow_mut()))
     }
 
     /// Times its own lifetime when profiling is on.
@@ -1205,20 +1314,32 @@ impl Canvas {
     /// A filled, anti-aliased rounded rectangle. `radius` of 0 is a plain rect.
     pub fn fill_round_rect(&mut self, r: Rect, radius: f32, color: u32) {
         let _prof = profile::Timer::new("fill_round_rect");
-        let (x0, y0, x1, y1) = self.span(&r.inflate(1.5));
-        // The core: pixels whose centres lie in the rectangle inset by the
-        // corner radius (and by at least half a pixel, so a plain rectangle's
-        // straight edges are not in it). Inside it the signed distance is at
-        // most `-max(radius, 0.5)`, so coverage is exactly 1 and the distance
-        // -- a square root per pixel -- need not be computed. The pixel is still
-        // composited by the same blend call, so the result is the same bit for
-        // bit.
+        let prof = profile::is_on();
+        let bbox = r.inflate(1.5);
+        // Pixels the inflated shape touches before the canvas and the clip cut
+        // it, so the report can name the clip-cut slice. Only computed while
+        // profiling; a timed frame pays one flag read.
+        let clipped_px = if prof {
+            let raw_w = (bbox.right().ceil() - bbox.x.floor()).max(0.0);
+            let raw_h = (bbox.bottom().ceil() - bbox.y.floor()).max(0.0);
+            let raw = (raw_w * raw_h) as u64;
+            let (bx0, by0, bx1, by1) = self.bounds_of(&bbox);
+            let (mut cx0, mut cy0, mut cx1, mut cy1) = (bx0, by0, bx1, by1);
+            if let Some(c) = self.clip {
+                let (k0, k1, k2, k3) = clip_pixels(&c);
+                cx0 = cx0.max(k0);
+                cy0 = cy0.max(k1);
+                cx1 = cx1.min(k2);
+                cy1 = cy1.min(k3);
+            }
+            let kept_w = u64::try_from(cx1.max(cx0).saturating_sub(cx0)).unwrap_or(0);
+            let kept_h = u64::try_from(cy1.max(cy0).saturating_sub(cy0)).unwrap_or(0);
+            raw.saturating_sub(kept_w.saturating_mul(kept_h))
+        } else {
+            0
+        };
+        let (x0, y0, x1, y1) = self.span(&bbox);
         let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
-        let inset = rad.max(0.5);
-        let core_x0 = (r.x + inset - 0.5).ceil() as i64;
-        let core_x1 = ((r.right() - inset - 0.5).floor() as i64).saturating_add(1);
-        let core_y0 = (r.y + inset - 0.5).ceil() as i64;
-        let core_y1 = ((r.bottom() - inset - 0.5).floor() as i64).saturating_add(1);
         // Everything the signed distance needs from the rectangle, derived once
         // per call rather than once per pixel. The old loop recomputed the
         // centre, both half-extents and the clamped radius -- two divides and a
@@ -1229,17 +1350,27 @@ impl Canvas {
         let qy_off = r.h / 2.0 - rad;
         let width = self.width as usize;
         let opaque = (color >> 24) & 0xFF == 0xFF;
+        // The three per-row classes come from the distance itself. A pixel's
+        // centre is at most `u = |x + 0.5 - cx|` from the middle line, and
+        // `d(u) = sqrt(max(u - qx_off, 0)^2 + ay^2) - rad`. It is exactly full
+        // coverage where `d <= -0.5`, partial where `-0.5 < d < 0.5`, and
+        // untouched beyond that. Solving both boundaries gives one square root
+        // per row instead of one per edge pixel. The quarter-pixel margins keep
+        // boundary pixels on the exact side: the full span is shrunk and the
+        // partial band grown, so a misclassified boundary pixel still goes
+        // through the same distance test and only an exactly-full one can be
+        // written by the fast path.
+        let full_cap = rad - 0.5;
+        let paint_cap = rad + 0.5;
         // A translucent core cannot be a plain fill, but for a fixed colour and
         // full coverage a channel's result depends only on that channel's
         // destination value. 256 samples of `blend` therefore hold every
         // possible output, and the table is built *with* `blend`, so the pixels
-        // are the same integers rather than an approximation of them. It is
-        // only worth building when enough pixels will read it.
-        let core_w = core_x1.min(x1).saturating_sub(core_x0.max(x0)).max(0);
-        let core_h = core_y1.min(y1).saturating_sub(core_y0.max(y0)).max(0);
-        let core_area = core_w.saturating_mul(core_h);
+        // are the same integers rather than an approximation of them.
+        let full_est =
+            ((r.w - 1.0).max(0.0) * (r.h - 1.0).max(0.0) - (4.0 - PI) * rad * rad).max(0.0);
         let mut blend_table = [0u32; 256];
-        let use_table = !opaque && core_area >= 1024;
+        let use_table = !opaque && full_est >= 1024.0;
         if use_table {
             for d in 0..256_u32 {
                 let sample = 0xFF00_0000 | (d << 16) | (d << 8) | d;
@@ -1249,17 +1380,49 @@ impl Canvas {
             }
         }
         let mut painted = 0u64;
-        // Pixels the core does not own are coloured by this closure: one
-        // square root each, but only where the distance can matter. It takes
-        // the row slice and the two per-row terms, so the call pays neither a
-        // `self` borrow nor a page lookup per pixel.
+        // Per-slice accounting, accumulated in registers and reported once per
+        // call. Zero work on a timed frame: the timestamps are only taken when
+        // `prof` is true, and the counting pass below does not run at all.
+        let mut edge_nanos = 0u64;
+        let mut core_nanos = 0u64;
+        let mut edge_scanned = 0u64;
+        let mut interior = 0u64;
+        let mut rows_walked = 0u64;
+        // Write a run whose coverage is exactly 1. `blend` returns an opaque
+        // source unchanged at full coverage, and the table's entries were built
+        // with `blend` at full coverage, so both are the same integers the
+        // distance path would have written.
+        let fill_run = |row: &mut [u32], from: i64, to: i64| {
+            let Some(seg) = row.get_mut(from as usize..to as usize) else {
+                return;
+            };
+            if opaque {
+                seg.fill(color);
+            } else if use_table {
+                for p in seg.iter_mut() {
+                    let v = *p;
+                    let tr = blend_table
+                        .get(((v >> 16) & 0xFF) as usize)
+                        .copied()
+                        .unwrap_or(0);
+                    let tg = blend_table
+                        .get(((v >> 8) & 0xFF) as usize)
+                        .copied()
+                        .unwrap_or(0);
+                    let tb = blend_table.get((v & 0xFF) as usize).copied().unwrap_or(0);
+                    *p = 0xFF00_0000 | (tr & 0x00FF_0000) | (tg & 0x0000_FF00) | (tb & 0xFF);
+                }
+            } else {
+                for p in seg.iter_mut() {
+                    *p = blend(*p, color, 1.0);
+                }
+            }
+        };
+        // Pixels outside the full span but inside the coverage ramp: the only
+        // ones that need a square root.
         let edge_run = |row: &mut [u32], from: i64, to: i64, qy: f32, ay: f32| -> u64 {
             for x in from..to {
-                let px = x as f32 + 0.5;
-                let qx = (px - cx).abs() - qx_off;
-                let ax = qx.max(0.0);
-                let d = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - rad;
-                let cov = coverage(d);
+                let cov = edge_coverage(x as f32 + 0.5, cx, qx_off, qy, ay, rad);
                 if cov > 0.0 {
                     if let Some(p) = row.get_mut(x as usize) {
                         *p = blend(*p, color, cov);
@@ -1273,48 +1436,145 @@ impl Canvas {
             let Some(row) = self.px.get_mut(base..base.saturating_add(width)) else {
                 continue;
             };
+            if prof {
+                rows_walked = rows_walked.saturating_add(1);
+            }
             let py = y as f32 + 0.5;
             let qy = (py - cy).abs() - qy_off;
             let ay = qy.max(0.0);
-            let in_rows = y >= core_y0 && y < core_y1 && core_x0 < core_x1;
-            // The pixel test the old loop made per pixel chooses exactly these
-            // three runs; visiting them in order keeps the same pixels written
-            // once each, in the same left-to-right order, with the same blend.
-            let core_from = if in_rows { core_x0.clamp(x0, x1) } else { x0 };
-            let core_to = if in_rows { core_x1.clamp(x0, x1) } else { x0 };
-            painted = painted.saturating_add(edge_run(row, x0, core_from, qy, ay));
-            if core_from < core_to {
-                let n = u64::try_from(core_to.saturating_sub(core_from)).unwrap_or(0);
-                if let Some(seg) = row.get_mut(core_from as usize..core_to as usize) {
-                    if opaque {
-                        // `blend` returns an opaque source unchanged at full
-                        // coverage, so writing it directly is the same frame
-                        // without a float multiply per channel per pixel.
-                        seg.fill(color);
-                    } else if use_table {
-                        for p in seg.iter_mut() {
-                            let v = *p;
-                            let tr = blend_table
-                                .get(((v >> 16) & 0xFF) as usize)
-                                .copied()
-                                .unwrap_or(0);
-                            let tg = blend_table
-                                .get(((v >> 8) & 0xFF) as usize)
-                                .copied()
-                                .unwrap_or(0);
-                            let tb = blend_table.get((v & 0xFF) as usize).copied().unwrap_or(0);
-                            *p =
-                                0xFF00_0000 | (tr & 0x00FF_0000) | (tg & 0x0000_FF00) | (tb & 0xFF);
-                        }
-                    } else {
-                        for p in seg.iter_mut() {
-                            *p = blend(*p, color, 1.0);
+            let full_half = if rad > 0.5 && ay <= full_cap {
+                (full_cap * full_cap - ay * ay).max(0.0).sqrt()
+            } else if rad <= 0.5 && qy <= -0.5 {
+                rad - 0.5
+            } else {
+                -1.0
+            };
+            let paint_half = if ay < paint_cap {
+                (paint_cap * paint_cap - ay * ay).max(0.0).sqrt()
+            } else {
+                -1.0
+            };
+            let (paint_from, paint_to) = if paint_half >= 0.0 {
+                let u = qx_off + paint_half + 0.25;
+                (
+                    (((cx - u - 0.5).floor() as i64).saturating_add(1)).clamp(x0, x1),
+                    ((cx + u - 0.5).ceil() as i64).clamp(x0, x1),
+                )
+            } else {
+                (x0, x0)
+            };
+            let (full_from, full_to) = if full_half >= 0.0 {
+                let u = (qx_off + full_half - 0.25).max(0.0);
+                (
+                    ((cx - u - 0.5).ceil() as i64).clamp(x0, x1),
+                    (((cx + u - 0.5).floor() as i64).saturating_add(1)).clamp(x0, x1),
+                )
+            } else {
+                (x0, x0)
+            };
+            let (left_from, left_to, fill_from, fill_to, right_from, right_to) =
+                if full_from < full_to {
+                    (paint_from, full_from, full_from, full_to, full_to, paint_to)
+                } else {
+                    (
+                        paint_from, paint_from, paint_from, paint_from, paint_from, paint_to,
+                    )
+                };
+            let edge_start = prof.then(std::time::Instant::now);
+            let mut n_edge = edge_run(row, left_from, left_to, qy, ay);
+            n_edge = n_edge.saturating_add(edge_run(row, right_from, right_to, qy, ay));
+            if let Some(start) = edge_start {
+                edge_nanos = edge_nanos.saturating_add(nanos_since(start));
+            }
+            let core_start = prof.then(std::time::Instant::now);
+            let n_core = u64::try_from(fill_to.saturating_sub(fill_from)).unwrap_or(0);
+            if fill_from < fill_to {
+                fill_run(row, fill_from, fill_to);
+            }
+            if let Some(start) = core_start {
+                core_nanos = core_nanos.saturating_add(nanos_since(start));
+            }
+            interior = interior.saturating_add(n_core);
+            edge_scanned = edge_scanned.saturating_add(n_edge);
+            painted = painted.saturating_add(n_core).saturating_add(n_edge);
+        }
+        if prof {
+            // One untimed second pass classifies the pixels the partial bands
+            // visited. It uses the same coverage expression as the fill, so a
+            // bucket cannot say something the painted frame contradicts. It
+            // runs only on the profiled frame, never on a timed one.
+            let mut edge_painted = 0u64;
+            for y in y0..y1 {
+                let base = (y as usize).saturating_mul(width);
+                if self.px.get(base..base.saturating_add(width)).is_none() {
+                    continue;
+                }
+                let py = y as f32 + 0.5;
+                let qy = (py - cy).abs() - qy_off;
+                let ay = qy.max(0.0);
+                let full_half = if rad > 0.5 && ay <= full_cap {
+                    (full_cap * full_cap - ay * ay).max(0.0).sqrt()
+                } else if rad <= 0.5 && qy <= -0.5 {
+                    rad - 0.5
+                } else {
+                    -1.0
+                };
+                let paint_half = if ay < paint_cap {
+                    (paint_cap * paint_cap - ay * ay).max(0.0).sqrt()
+                } else {
+                    -1.0
+                };
+                let (paint_from, paint_to) = if paint_half >= 0.0 {
+                    let u = qx_off + paint_half + 0.25;
+                    (
+                        (((cx - u - 0.5).floor() as i64).saturating_add(1)).clamp(x0, x1),
+                        ((cx + u - 0.5).ceil() as i64).clamp(x0, x1),
+                    )
+                } else {
+                    (x0, x0)
+                };
+                let (full_from, full_to) = if full_half >= 0.0 {
+                    let u = (qx_off + full_half - 0.25).max(0.0);
+                    (
+                        ((cx - u - 0.5).ceil() as i64).clamp(x0, x1),
+                        (((cx + u - 0.5).floor() as i64).saturating_add(1)).clamp(x0, x1),
+                    )
+                } else {
+                    (x0, x0)
+                };
+                let bands = if full_from < full_to {
+                    [(paint_from, full_from), (full_to, paint_to)]
+                } else {
+                    [(paint_from, paint_from), (paint_from, paint_to)]
+                };
+                for (from, to) in bands {
+                    for x in from..to {
+                        if edge_coverage(x as f32 + 0.5, cx, qx_off, qy, ay, rad) > 0.0 {
+                            edge_painted = edge_painted.saturating_add(1);
                         }
                     }
                 }
-                painted = painted.saturating_add(n);
             }
-            painted = painted.saturating_add(edge_run(row, core_to, x1, qy, ay));
+            let span_w = u64::try_from(x1.saturating_sub(x0)).unwrap_or(0);
+            let span_h = u64::try_from(y1.saturating_sub(y0)).unwrap_or(0);
+            let walked = span_w.saturating_mul(span_h);
+            profile::note_bucket("fill_round_rect.interior", interior, core_nanos);
+            profile::note_bucket("fill_round_rect.edge_scanned", edge_scanned, edge_nanos);
+            profile::note_bucket("fill_round_rect.edge_painted", edge_painted, 0);
+            profile::note_bucket(
+                "fill_round_rect.edge_zero",
+                edge_scanned.saturating_sub(edge_painted),
+                0,
+            );
+            profile::note_bucket(
+                "fill_round_rect.outside_shape",
+                walked.saturating_sub(interior).saturating_sub(edge_scanned),
+                0,
+            );
+            profile::note_bucket("fill_round_rect.clipped", clipped_px, 0);
+            profile::note_counter("fill_round_rect.rows", rows_walked);
+            profile::note_counter("fill_round_rect.zero_calls", u64::from(painted == 0));
+            profile::note_max("fill_round_rect.max_call_px", painted);
         }
         profile::note_pixels("fill_round_rect", painted);
     }
@@ -2824,6 +3084,10 @@ mod tests {
             // Large enough that the translucent core takes the lookup table,
             // and clipped by the canvas on two sides.
             (Rect::new(15.0, 12.0, 130.0, 100.0), 20.0),
+            // A circle: radius equal to half the extent, so the full-coverage
+            // span is a disc rather than a rectangle and the per-row boundary
+            // is the circle's, not a straight edge.
+            (Rect::new(50.0, 30.0, 40.0, 40.0), 20.0),
         ] {
             for colour in [
                 rgb(0x336699),
@@ -2858,6 +3122,70 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_fill_buckets_account_for_every_pixel_it_walks() {
+        // The profiled fill reports disjoint slices. Every pixel whose
+        // reference coverage is above zero must be either written by the
+        // full-coverage span or visited by the partial band, and the buckets
+        // must add up to the area the fill walked. A counter that disagrees
+        // with the renderer would send the next optimization at the wrong
+        // pixels.
+        let r = Rect::new(15.0, 12.0, 130.0, 100.0);
+        let radius = 20.0_f32;
+        let colour = with_alpha(rgb(0x336699), 0.37);
+        // The clip must reach the shape's left and top edges, or every clipped
+        // row is fully covered and the partial band is legitimately empty.
+        let clip = Some(Rect::new(10.0, 8.0, 100.0, 80.0));
+        let mut c = textured(160, 120);
+        let _ = c.set_clip(clip);
+        let (x0, y0, x1, y1) = c.span(&r.inflate(1.5));
+        let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
+        let mut painted_ref = 0u64;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if coverage(sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, rad)) > 0.0 {
+                    painted_ref = painted_ref.saturating_add(1);
+                }
+            }
+        }
+        let walked = u64::try_from(x1 - x0).unwrap() * u64::try_from(y1 - y0).unwrap();
+        profile::enable();
+        let _ = profile::take_buckets();
+        c.fill_round_rect(r, radius, colour);
+        let buckets = profile::take_buckets();
+        let _ = profile::take();
+        let _ = profile::take_counters();
+        profile::disable();
+        let get = |name: &str| -> u64 {
+            buckets
+                .iter()
+                .find(|b| b.name == name)
+                .map_or(0, |b| b.pixels)
+        };
+        let interior = get("fill_round_rect.interior");
+        let edge_painted = get("fill_round_rect.edge_painted");
+        let edge_scanned = get("fill_round_rect.edge_scanned");
+        assert_eq!(
+            interior.saturating_add(edge_painted),
+            painted_ref,
+            "every painted pixel is accounted for once: {buckets:?}"
+        );
+        assert_eq!(
+            get("fill_round_rect.edge_zero"),
+            edge_scanned.saturating_sub(edge_painted),
+            "{buckets:?}"
+        );
+        assert_eq!(
+            get("fill_round_rect.outside_shape"),
+            walked.saturating_sub(interior).saturating_sub(edge_scanned),
+            "{buckets:?}"
+        );
+        assert!(
+            interior > 0 && edge_painted > 0,
+            "the test rectangle exercises both paths: {buckets:?}"
+        );
     }
 
     #[test]

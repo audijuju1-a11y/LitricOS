@@ -575,6 +575,10 @@ fn main() -> ExitCode {
     // scene is done, so nothing above is disturbed by the extra frame.
     locked.shell.lock.edit = true;
     locked.shell.lock.stage = Stage::Entry;
+    // Discard buckets left by the full-frame profile earlier in this process,
+    // so the lock dump describes the lock frame only.
+    let _ = litric_shell::canvas::profile::take_buckets();
+    let _ = litric_shell::canvas::profile::take_counters();
     litric_shell::canvas::profile::enable();
     now = now.saturating_add(33);
     locked.shell.tick(now);
@@ -604,6 +608,25 @@ fn main() -> ExitCode {
         "lock_profile.timed_ms={:.3}",
         lock_timed as f64 / 1_000_000.0
     );
+
+    // Which part of fill_round_rect's pixels the time went to. The slices are
+    // disjoint, so their `px` values add up to the area the fills walked.
+    let mut lock_buckets = litric_shell::canvas::profile::take_buckets();
+    lock_buckets.sort_by_key(|b| std::cmp::Reverse(b.pixels));
+    for b in &lock_buckets {
+        let per_px = if b.pixels > 0 {
+            b.nanos as f64 / b.pixels as f64
+        } else {
+            0.0
+        };
+        println!(
+            "lock_bucket.{}.px={} lock_bucket.{}.ns={} lock_bucket.{}.ns_per_px={per_px:.2}",
+            b.name, b.pixels, b.name, b.nanos, b.name
+        );
+    }
+    for c in litric_shell::canvas::profile::take_counters() {
+        println!("lock_counter.{}.value={}", c.name, c.value);
+    }
 
     // ---- primitives -------------------------------------------------------
     //

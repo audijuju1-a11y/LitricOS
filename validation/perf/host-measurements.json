@@ -1268,5 +1268,185 @@
     "the root cause of the fill_round_rect row's 8.43 ns/px is not established; attempts B and C falsified two hypotheses, and a core-versus-edge counter is the next measurement"
   ],
   "evidence": "evidence/bench/lock-frame-customize-2026-10-28/{baseline-1,baseline-2-final,attempt-stroke-line-capsule,attempt-table-cache,attempt-edge-reject}/"
+},
+  "fill_round_rect_row_split": {
+  "commit_before": "dd3bc88",
+  "status": "VERIFIED: the fill row now writes every full-coverage pixel through the fast path; lock_frame_customize and full_frame ranges are disjoint and the lock scene is under 16 ms",
+  "finding": "The pre-change fill spent 284,779 of its 573,051 lock pixels on the square-root edge path at 16.02 ns/px while the 288,272 interior pixels cost 1.37 ns/px, and 237,238 of those edge pixels were actually painted. The old core was inset by the corner radius on all four sides, so the straight-edge bands and the middle of the top/bottom bands paid a square root for coverage that is exactly 1.",
+  "change": "Each row is split by the distance boundaries d = -0.5 (full) and d = 0.5 (painted), giving one square root per row instead of one per edge pixel. The full span uses the existing opaque fill or the exact 256-entry translucent table; only the partial band runs the distance loop. Quarter-pixel margins keep boundary pixels on the exact side.",
+  "instrumentation": {
+    "profile_api": "src/litric-shell/src/canvas.rs profile module: Bucket, Counter, note_bucket, note_counter, note_max, take_buckets, take_counters",
+    "buckets": [
+      "fill_round_rect.interior",
+      "fill_round_rect.edge_scanned",
+      "fill_round_rect.edge_painted",
+      "fill_round_rect.edge_zero",
+      "fill_round_rect.outside_shape",
+      "fill_round_rect.clipped"
+    ],
+    "counters": [
+      "fill_round_rect.rows",
+      "fill_round_rect.zero_calls",
+      "fill_round_rect.max_call_px"
+    ],
+    "cost_when_off": "one profile::is_on() read per call; no timestamps and no counting pass on a timed frame",
+    "defect_found": "buckets were a separate accumulator and inherited the full-frame profile's 380,749 px; the bench now clears buckets and counters before the lock profile, and the pre-change split was re-measured as before-clean"
+  },
+  "protocol": "release, 1280x800, 8-vCPU VM, no GPU, no display, 15 frames per scene, five separate processes per phase; median of the five per-process medians; ranges are min-max of those medians",
+  "conditions": {
+    "uname": "Linux-6.1.102-x86_64-with-glibc2.39",
+    "nproc": 8,
+    "gpu": "none",
+    "display": "none"
+  },
+  "commands": [
+    "cd src && cargo build --release --example render_bench",
+    "cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/<phase> > run$i.txt; done"
+  ],
+  "before_buckets": {
+    "source": "evidence/bench/fill-round-rect-row-split-2026-10-28/before-clean/run1.txt",
+    "row_ms": 6.245,
+    "pixels": 573051,
+    "ns_per_px": 10.9,
+    "interior": {
+      "pixels": 288272,
+      "nanos": 393685,
+      "ns_per_px": 1.37
+    },
+    "edge_scanned": {
+      "pixels": 284779,
+      "nanos": 4561466,
+      "ns_per_px": 16.02
+    },
+    "edge_painted_pixels": 237238,
+    "edge_zero_pixels": 47541,
+    "outside_shape_pixels": 0,
+    "clipped_pixels": 0,
+    "rows": 2168,
+    "zero_calls": 0,
+    "max_call_pixels": 301104
+  },
+  "after_buckets": {
+    "source": "evidence/bench/fill-round-rect-row-split-2026-10-28/after/run1.txt",
+    "row_ms": 1.564,
+    "pixels": 527459,
+    "ns_per_px": 2.96,
+    "interior": {
+      "pixels": 510782,
+      "nanos": 678564,
+      "ns_per_px": 1.33
+    },
+    "edge_scanned": {
+      "pixels": 16677,
+      "nanos": 477653,
+      "ns_per_px": 28.64
+    },
+    "edge_painted_pixels": 14728,
+    "edge_zero_pixels": 1949,
+    "outside_shape_pixels": 45592,
+    "clipped_pixels": 0,
+    "rows": 2168,
+    "zero_calls": 0,
+    "max_call_pixels": 295448,
+    "accounting": "510,782 interior + 16,677 edge_scanned + 45,592 outside_shape = 573,051 pixels of bounding box; the row visits the first two"
+  },
+  "before_ms": {
+    "full_frame": {
+      "median": 11.987,
+      "min": 11.813,
+      "max": 12.162
+    },
+    "lock_frame_customize": {
+      "median": 16.394,
+      "min": 16.191,
+      "max": 16.975
+    },
+    "open_window_frame": {
+      "median": 21.556,
+      "min": 21.443,
+      "max": 22.145
+    },
+    "primitive_fill_panel": {
+      "median": 0.221,
+      "min": 0.221,
+      "max": 0.224
+    },
+    "primitive_fill_panel_translucent": {
+      "median": 0.808,
+      "min": 0.806,
+      "max": 0.81
+    },
+    "primitive_fill_chip_translucent": {
+      "median": 0.011,
+      "min": 0.011,
+      "max": 0.011
+    }
+  },
+  "after_ms": {
+    "full_frame": {
+      "median": 10.47,
+      "min": 10.373,
+      "max": 10.839
+    },
+    "lock_frame_customize": {
+      "median": 12.527,
+      "min": 12.499,
+      "max": 12.884
+    },
+    "open_window_frame": {
+      "median": 20.136,
+      "min": 19.955,
+      "max": 20.709
+    },
+    "primitive_fill_panel": {
+      "median": 0.051,
+      "min": 0.05,
+      "max": 0.053
+    },
+    "primitive_fill_panel_translucent": {
+      "median": 0.327,
+      "min": 0.326,
+      "max": 0.332
+    },
+    "primitive_fill_chip_translucent": {
+      "median": 0.008,
+      "min": 0.008,
+      "max": 0.008
+    }
+  },
+  "change_pct": {
+    "full_frame": -12.7,
+    "lock_frame_customize": -23.6,
+    "open_window_frame": -6.6,
+    "primitive_fill_panel": -76.9,
+    "primitive_fill_panel_translucent": -59.5,
+    "primitive_fill_chip_translucent": -27.3
+  },
+  "verdict_by_scene": {
+    "full_frame": "kept: before 11.813-12.162 and after 10.373-10.839 do not overlap",
+    "lock_frame_customize": "kept: before 16.191-16.975 and after 12.499-12.884 do not overlap; now under 16 ms",
+    "open_window_frame": "kept: before 21.443-22.145 and after 19.955-20.709 do not overlap; still over 16 ms",
+    "primitive_fill_panel": "kept: direct measure of the changed path",
+    "primitive_fill_panel_translucent": "kept: direct measure of the changed path",
+    "primitive_fill_chip_translucent": "kept: direct measure of the changed path, 0.011 -> 0.008 ms"
+  },
+  "identical_output_proof": "the existing verbatim reference test the_filled_core_skips_the_distance_and_changes_no_pixel now covers 12 rectangles including a circle of radius 20 in a 40x40 rect, 7 colours down to alpha 0.0 and 4 clips, comparing every pixel. The new the_fill_buckets_account_for_every_pixel_it_walks proves interior + edge_painted equals the reference's coverage-above-zero set and the buckets add up to the walked area.",
+  "budget": {
+    "budget_ms": 16.0,
+    "full_frame_median_ms": 10.47,
+    "full_frame_headroom_ms": 5.53,
+    "lock_frame_customize_median_ms": 12.527,
+    "lock_frame_customize_headroom_ms": 3.473,
+    "open_window_frame_median_ms": 20.136,
+    "open_window_frame_over_budget_ms": 4.136
+  },
+  "caveats": [
+    "composition only at 1280x800 on an 8-vCPU VM with no GPU and no display; no present-to-display, GPU, VRAM or idle-RAM number was measured",
+    "profile shares are relative to the printed instrumented row sum, not the timed frame",
+    "the bucket timings wrap per-row segments with Instant, so the profiling frame carries timing overhead; the timed frames do not",
+    "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing",
+    "open_window_frame remains 20.136 ms, over the 16 ms budget, and is the next measured overage"
+  ],
+  "evidence": "evidence/bench/fill-round-rect-row-split-2026-10-28/{before,before-clean,after}/"
 }
 }

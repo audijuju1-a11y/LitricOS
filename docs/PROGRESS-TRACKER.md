@@ -70,7 +70,7 @@ evidence, not throughput.
 
 | Item | State | Blocker |
 |---|---|---|
-| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17 and §18 (11.927 ms median, under the 16 ms budget); the lock-customize scene is 16.223 ms, 0.223 ms over; display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
+| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17, §18 and §19 (10.470 ms median after the per-row full-coverage split); the lock-customize scene is 12.527 ms, inside the 16 ms budget; display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
@@ -1231,3 +1231,162 @@ precomputed cap table) and be measured the same way. `glass_backdrop`
 remains **BLOCKED** on the missing Latin font face fixture; it is not passing.
 No GPU, VRAM, display or present-to-display measurement exists on this host,
 and none is claimed.
+
+§19 changes the `fill_round_rect` conclusion in 18.4: the counter it asked
+for showed that 49.7 % of that row's pixels were on the square-root edge path,
+and a per-row split now writes every full-coverage pixel through the fast fill.
+The row falls from 6.245 to 1.564 ms and the lock scene from 16.394 to
+12.527 ms.
+
+## 19. Batch: the rounded fill writes full rows, not a radius-shaped edge (VERIFIED)
+
+### 19.1 The counter §18 asked for
+
+§18 could not say where `fill_round_rect`'s 8.43 ns/px went, so this batch
+added disjoint buckets to the existing opt-in profile: `interior` (written by
+the fast full-coverage path), `edge_scanned` (pixels the distance loop visited),
+`edge_painted` and `edge_zero` (the split of the scanned band by whether the
+coverage was above zero), `outside_shape` (inside the clipped bounding box but
+outside the rounded shape), and `clipped` (cut by the canvas or the clip), plus
+counters for rows walked, zero-pixel calls and the largest call. The buckets are
+filled by an untimed second pass that uses the same `edge_coverage` expression
+as the fill, so a bucket cannot disagree with the painted frame; a timed frame
+pays one flag read and takes no timestamps or counting pass.
+
+One instrumentation defect was found and fixed while measuring: the bench's
+`take()` empties the timer rows but the new buckets are a separate accumulator,
+so the first lock dump inherited the full-frame profile's 380,749 pixels. The
+bench now clears buckets and counters before enabling the lock profile, and the
+numbers below come from running the pre-change renderer again with that fix
+(`before-clean`). The earlier contaminated split (553,321 interior / 400,479
+edge) is not used anywhere.
+
+Measured on the pre-change renderer, lock frame only:
+
+| Bucket | Pixels | ns | ns/px |
+|---|---|---|---|
+| `interior` | 288,272 | 393,685 | **1.37** |
+| `edge_scanned` | **284,779** | **4,561,466** | **16.02** |
+| of which `edge_painted` | 237,238 | - | - |
+| of which `edge_zero` | 47,541 | - | - |
+| `outside_shape` | 0 | - | - |
+| `clipped` | 0 | - | - |
+
+The two measured slices add up exactly: 288,272 + 284,779 = 573,051, the row's
+reported pixel count. Half the row's pixels were paying 16.02 ns/px in the
+distance loop while the other half paid 1.37 ns/px, and 83.3 % of the expensive
+half was actually painted.
+
+### 19.2 Root cause
+
+The old decomposition called "core" only the rectangle inset by the corner
+radius on **all four sides**. For a rounded rectangle that is far too small: the
+straight-edge bands, and the middle of the top and bottom bands, already have
+`d <= -0.5`, so their coverage is exactly 1 and they do not need a square root
+at all. A 600x420 panel with radius 16 ran 16 pixels of each straight edge, and
+the middle of each corner band, through `sqrt` and `blend` even though the
+answer was the same `blend(..., 1.0)` the fast path writes.
+
+The distance for a pixel whose centre is `u = |x + 0.5 - cx|` from the middle
+line is `d(u) = sqrt(max(u - qx_off, 0)^2 + ay^2) - rad`, where `ay` is the
+row's distance outside the vertical core. Solving `d = -0.5` and `d = 0.5`
+gives two per-row boundaries: one square root per row instead of one per edge
+pixel.
+
+### 19.3 What changed
+
+`src/litric-shell/src/canvas.rs`:
+
+* each row is split into a full-coverage span, a partial band on each side, and
+  nothing beyond the coverage ramp;
+* the full span is written by the existing fast path (`slice::fill` for opaque,
+  the exact 256-entry table for large translucent fills, `blend(..., 1.0)`
+  otherwise);
+* only the partial band runs the distance loop;
+* the boundaries carry a quarter-pixel margin in the safe direction: the full
+  span is shrunk and the partial band grown, so a boundary pixel that is not
+  provably full still goes through the distance test, and only an exactly-full
+  pixel can be written by the fast path;
+* degenerate cases are unchanged and covered by the existing reference test:
+  zero and negative extents, radius greater than half the extent, a circle
+  (radius equal to half the extent), rectangles clipped by the canvas, a clip
+  that cuts a shape, one-pixel rows, off-canvas rectangles, alpha 0 and 255.
+
+`src/litric-shell/examples/render_bench.rs` prints the buckets and counters in
+the existing `lock_profile` dump and clears them before the lock profile.
+
+Why the pixels are identical: the fast span is only used where the coverage is
+exactly 1, and `blend(source, colour, 1.0)` returns the source unchanged. For a
+translucent colour the table's entries were built by calling `blend` with that
+same full coverage, per channel, so the result is the same integer. Pixels on
+the boundary of the fast span go through the original distance loop, in the
+same left-to-right order, written once each.
+
+### 19.4 Proof of identical output
+
+`canvas::tests::the_filled_core_skips_the_distance_and_changes_no_pixel` is the
+existing verbatim per-pixel reference test. It now covers 12 rectangles (the
+previous 11 plus a circle of radius 20 in a 40x40 rect, whose full-coverage
+span is a disc), 7 colours (opaque, alpha 0.001, 0.05, 0.37, 0.5, 0.999 and
+0.0) and 4 clips (none, fractional partial, one-pixel, empty). Every pixel
+equals the reference.
+
+`canvas::tests::the_fill_buckets_account_for_every_pixel_it_walks` checks the
+new counters against the reference: every pixel whose reference coverage is
+above zero is either in `interior` or in `edge_painted`, the buckets add up to
+the walked area, and the test rectangle exercises both paths. It passes.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font face
+fixture; it is not passing and was not worked around.
+
+### 19.5 Measured result
+
+```text
+cd src && cargo build --release --example render_bench
+cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/<phase> > run$i.txt; done
+```
+
+Release, 1280x800, 8-vCPU VM, no GPU and no display, 15 frames per scene, five
+separate processes per phase; medians of the five per-process medians, ranges
+min-max. Raw logs: `evidence/bench/fill-round-rect-row-split-2026-10-28/`
+(`before/`, `before-clean/`, `after/`).
+
+| Scene | Before | After | Change | Verdict |
+|---|---|---|---|---|
+| `full_frame` (shipped) | 11.987 ms (11.813-12.162) | **10.470 ms** (10.373-10.839) | -12.7 % | kept; ranges disjoint |
+| `lock_frame_customize` | **16.394 ms** (16.191-16.975) | **12.527 ms** (12.499-12.884) | -23.6 % | kept; ranges disjoint, now under 16 ms |
+| `open_window_frame` | 21.556 ms (21.443-22.145) | 20.136 ms (19.955-20.709) | -6.6 % | kept; ranges disjoint |
+| `primitive_fill_panel` (opaque) | 0.221 ms (0.221-0.224) | **0.051 ms** (0.050-0.053) | -76.9 % | kept; direct measure |
+| `primitive_fill_panel_translucent` | 0.808 ms (0.806-0.810) | **0.327 ms** (0.326-0.332) | -59.5 % | kept; direct measure |
+| `primitive_fill_chip_translucent` | 0.011 ms | 0.008 ms | -27 % | kept; direct measure, ranges 0.011 vs 0.008 |
+
+The attribution row moved from **6.245 ms / 573,051 px / 10.90 ns/px** to
+**1.564 ms / 527,459 px / 2.96 ns/px**. The pixel count fell because pixels
+outside the coverage ramp are no longer visited at all: after the change,
+510,782 interior + 16,677 edge_scanned + 45,592 outside_shape = 573,051, and
+the row's visited pixels are the first two terms. The after buckets are
+`interior` 510,782 at 1.33 ns/px and `edge_scanned` 16,677 at 28.64 ns/px, with
+`edge_painted` 14,728 and `edge_zero` 1,949.
+
+The share of the instrumented lock frame changes too: the row is 1.564 ms of a
+17.6 ms instrumented sum (8.9 %), down from 6.245 ms of 22.3 ms (28.0 %).
+
+Conditions: release build, 1280x800, 8-vCPU VM, no GPU, no display, same host
+and session for all phases. The profiled frame runs instrumented, so its shares
+are relative to the printed row sum, not the timed frame.
+
+### 19.6 Status and remaining distance
+
+**VERIFIED**: the counter identified the dominant slice, the change targets that
+slice, the existing reference test proves identical pixels on every case
+including degenerate and clipped shapes, and every kept number comes from
+before/after ranges that do not overlap.
+
+`full_frame` is **5.530 ms inside** the 16 ms budget (10.470 ms).
+`lock_frame_customize` is **3.473 ms inside** at 12.527 ms; it was 0.223 ms over
+before this batch. `open_window_frame` is 20.136 ms and remains over 16 ms if it
+is held to the same budget; it is the next scene with a measured overage.
+
+The golden-frame gate remains **BLOCKED** on the missing Latin font face
+fixture. No GPU, VRAM, display or present-to-display measurement exists on this
+host, and none is claimed.
