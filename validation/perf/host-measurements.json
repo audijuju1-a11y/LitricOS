@@ -1800,5 +1800,75 @@
         "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
       ],
       "evidence": "evidence/bench/soft-shadow-2026-10-28/{before,after}/"
+    },
+    "open_window_stroke_band_walk": {
+      "commit_before": "c2822ba",
+      "status": "VERIFIED: stroke_round_rect walks only the annulus its coverage can touch; every scene improved with disjoint five-process ranges and the output is pixel-identical to the pre-change implementation",
+      "finding": "One open_window_frame walked 832,335 pixels across 16 stroke_round_rect calls, of which 812,711 (97.6 %) had coverage 0, 19,616 were partial and 8 were full. The stroke walked the whole inflated rectangle, interior included, to paint a 19,616-pixel outline; the row measured 6.883 ms (6.828-7.416).",
+      "change": "A rounded rectangle grown by g is the same signed distance shifted by g, so the two edges of a stroke are rounded rectangles with every extent and the radius moved by half + 0.5. Each row now computes the grown and eroded horizontal extents with one square root each and walks only the annulus, with a one-pixel outward and a two-pixel inward margin; the distance and coverage math for every painted pixel is unchanged. Negative or non-finite inputs keep the original walk.",
+      "buckets_before": {
+        "walked": 832335,
+        "zero": 812711,
+        "partial": 19616,
+        "full": 8
+      },
+      "before": {
+        "open_window_frame_ms": {
+          "median": 15.444,
+          "min": 15.246,
+          "max": 15.914
+        },
+        "full_frame_ms": {
+          "median": 8.483,
+          "min": 8.165,
+          "max": 8.696
+        },
+        "lock_frame_customize_ms": {
+          "median": 10.381,
+          "min": 10.106,
+          "max": 11.295
+        },
+        "stroke_round_rect_row_ms": {
+          "median": 6.883,
+          "min": 6.828,
+          "max": 7.416
+        }
+      },
+      "after": {
+        "open_window_frame_ms": {
+          "median": 12.137,
+          "min": 12.074,
+          "max": 12.508
+        },
+        "full_frame_ms": {
+          "median": 7.155,
+          "min": 6.952,
+          "max": 7.507
+        },
+        "lock_frame_customize_ms": {
+          "median": 8.376,
+          "min": 8.188,
+          "max": 8.877
+        },
+        "stroke_round_rect_row_ms": {
+          "median": 3.79,
+          "min": 3.764,
+          "max": 3.823
+        }
+      },
+      "verdict": {
+        "open_window_frame": "kept: 15.246-15.914 and 12.074-12.508 are disjoint; 3.863 ms inside the 16 ms budget",
+        "full_frame": "kept: 8.165-8.696 and 6.952-7.507 are disjoint",
+        "lock_frame_customize": "kept: 10.106-11.295 and 8.188-8.877 are disjoint",
+        "stroke_round_rect_row": "kept: 6.828-7.416 and 3.764-3.823 are disjoint; the row timer still includes the profiling-only classification pass, which timed frames skip"
+      },
+      "identical_output_proof": "canvas::tests::the_stroke_band_walk_equals_the_full_distance_walk keeps the pre-change loop verbatim as stroke_round_rect_reference and compares whole canvases over 13 geometries x 4 clips (none, fractional, one-pixel, empty) x 3 colours (opaque, translucent, alpha 0) = 156 comparisons; all 54 canvas tests pass.",
+      "caveats": [
+        "composition only at 1280x800 on an 8-vCPU VM with no GPU and no display; no present-to-display, GPU, VRAM or idle-RAM number was measured",
+        "the stroke row in the dump includes the profiling-only bucket pass over the old 832,335-pixel walk; timed frames do not run it, so the timed scene numbers are the measure of the change",
+        "soft_shadow and stroke_line were not changed and remain the largest window rows",
+        "golden-frame gate still BLOCKED on the missing Latin font face fixture, not passing"
+      ],
+      "evidence": "evidence/bench/stroke-round-rect-2026-10-28/{before,after}/"
     }
 }

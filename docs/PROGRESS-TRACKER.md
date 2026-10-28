@@ -70,7 +70,7 @@ evidence, not throughput.
 
 | Item | State | Blocker |
 |---|---|---|
-| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17, §18, §19, §20 and §21 (8.262 ms median; lock-customize 10.096 ms and open-window 15.092 ms are inside the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
+| Frame time, RAM, startup time, GPU use | **PARTIAL — the shipped compose path is measured in §12, §16, §17, §18, §19, §20, §21 and §22 (7.155 ms median; lock-customize 8.376 ms and open-window 12.137 ms are inside the 16 ms budget); display, GPU and idle RAM are not** | §12 corrected the benchmark so it measures the glass path the shell actually runs. Present-to-display, GPU use and whole-machine idle RAM still need a booted image and a display; no QEMU, no image and no root in this workspace |
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
@@ -1648,4 +1648,98 @@ remaining largest rows in the window frame are `stroke_round_rect`,
 `stroke_line`, `fill_round_rect` and the now-5.8 ms `soft_shadow`; this batch
 changes none of them beyond the hoist. The golden-frame gate remains
 **BLOCKED** on the missing Latin font face fixture and is not claimed.
+
+## 22. Batch: walking only the stroke's annulus (verified)
+
+### 22.1 Attribution, measured before the change
+
+The `window_profile` dump gained a profiling-only classification pass for
+`stroke_round_rect`, using the identical distance and coverage expression as the
+painter. One open-window frame walks **832,335** pixels across its 16 stroke
+calls:
+
+| Bucket | Pixels | Share of walked | Meaning |
+|---|---|---|---|
+| `zero` | **812,711** | **97.6 %** | coverage 0; the blend does nothing |
+| `partial` | 19,616 | 2.4 % | the anti-aliased outline |
+| `full` | 8 | 0.0 % | coverage 1 |
+| `walked` | 832,335 | 100 % | the three buckets sum to it exactly |
+
+The row measured **6.883 ms** (6.828-7.416) in this session's baseline. The
+stroke walked `r.inflate(width + 1.5)` - the whole rectangle, including every
+interior pixel - to paint a 19,616-pixel outline, so 97.6 % of its distance
+tests could not change a pixel.
+
+### 22.2 Root cause and change
+
+A rounded rectangle grown by `g` is exactly the same shape's signed distance
+shifted by `g`: growing the half-extents and the radius by `g` leaves
+`q = |p - c| - (half - radius)` unchanged. That makes the two edges of a stroke
+rounded rectangles with every extent and the radius moved by `half + 0.5`.
+
+`stroke_round_rect` now computes, per row, the horizontal extent of the grown
+shape and of the eroded one with **one square root each** instead of one
+distance test per interior pixel, then walks only the annulus between them,
+with a one-pixel outward margin and a two-pixel inward one. Every pixel inside
+that annulus still runs the original distance and coverage math, with the
+geometry hoisted out of the loop. Rows whose grown shape does not reach the row
+are skipped without a test. Negative or non-finite widths, radii and extents
+take the original full walk, so degenerate inputs behave exactly as before.
+
+Files: `src/litric-shell/src/canvas.rs` (the stroke and the new
+`rounded_row_half_width` helper), this tracker, the measurement record and the
+raw logs. `soft_shadow`'s `f32::to_bits` equivalence test and the fill/glass
+reference tests are unchanged.
+
+### 22.3 Pixel-identical proof
+
+`canvas::tests::the_stroke_band_walk_equals_the_full_distance_walk` keeps the
+pre-change implementation verbatim as `stroke_round_rect_reference` and compares
+whole canvases after every draw. The matrix is 13 geometries (fractional,
+radius 0, radius equal to half the extent, radius 500, 0.5 px and 9 px pens,
+a circle, a one-pixel rectangle, zero and negative extents, off-canvas, a
+canvas-sized rectangle) x 4 clips (none, fractional, one-pixel, empty) x 3
+colours (opaque, translucent, alpha 0) = **156 full-canvas comparisons**. All 54
+canvas tests pass, including the shadow bucket and distance-equality tests.
+
+### 22.4 Measured result
+
+Identical protocol: release, 1280x800, 8-vCPU VM, no GPU and no display, 15
+frames per scene, five separate processes per phase, medians of the five
+per-process medians with min-max ranges. Raw logs:
+`evidence/bench/stroke-round-rect-2026-10-28/{before,after}/`.
+
+```text
+cd src && cargo build --release --example render_bench
+cd src && for i in 1 2 3 4 5; do ./target/release/examples/render_bench /tmp/perf/<phase> > run$i.txt; done
+```
+
+| Item | Before | After | Verdict |
+|---|---|---|---|
+| `open_window_frame` | 15.444 ms (15.246-15.914) | **12.137 ms (12.074-12.508)** | ranges disjoint; **3.863 ms inside** the 16 ms budget |
+| `full_frame` | 8.483 ms (8.165-8.696) | **7.155 ms (6.952-7.507)** | ranges disjoint |
+| `lock_frame_customize` | 10.381 ms (10.106-11.295) | **8.376 ms (8.188-8.877)** | ranges disjoint |
+| `stroke_round_rect` row | 6.883 ms (6.828-7.416) | **3.790 ms (3.764-3.823)** | ranges disjoint |
+| `primitive_fill_panel` | 0.050 ms | 0.051 ms | unchanged within spread |
+| `primitive_fill_panel_translucent` | 0.340 ms | 0.341 ms | unchanged within spread |
+
+The row timer includes the profiling-only classification pass, which still
+walks the old 832,335-pixel rectangle to produce comparable buckets; a timed
+frame does not run it. The timed scene numbers above are the honest measure of
+the change. The buckets are intentionally the pre-change classification so the
+before and after reports describe the same walk.
+
+### 22.5 Status and remaining distance
+
+**VERIFIED.** The dominant bucket was 97.6 % zero-coverage pixels; the fix
+removes them by construction, preserves every painted pixel against the
+pre-change implementation, and every kept number comes from before/after ranges
+that do not overlap. No profiled scene regressed.
+
+At 12.137 ms, `open_window_frame` is 3.863 ms inside the budget; `full_frame` is
+8.845 ms inside at 7.155 ms and `lock_frame_customize` 7.624 ms inside at
+8.376 ms. The largest window rows after this change are `soft_shadow` (about
+5.8 ms before this batch) and `stroke_line`; this batch does not change them.
+The golden-frame gate remains **BLOCKED** on the missing Latin font face
+fixture and is not claimed.
 

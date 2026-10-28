@@ -351,6 +351,29 @@ fn coverage(d: f32) -> f32 {
     (0.5 - d).clamp(0.0, 1.0)
 }
 
+/// Half-width of a rounded rectangle's cross-section at `dy` from its centre.
+///
+/// Used to walk only the annulus a stroke can touch. A rounded rectangle grown
+/// by `g` is exactly the same shape's signed distance shifted by `g`, so the
+/// outer and inner edges of a stroke are rounded rectangles with every extent
+/// and the radius moved by `half + 0.5`; one square root per row gives their
+/// horizontal extent instead of one distance test per pixel of the interior.
+/// Returns -1 when the row is outside the shape.
+fn rounded_row_half_width(dy: f32, hw: f32, hh: f32, rad: f32) -> f32 {
+    if hw.is_nan() || hh.is_nan() || hw <= 0.0 || hh <= 0.0 || dy >= hh {
+        return -1.0;
+    }
+    if rad <= 0.0 || dy <= hh - rad {
+        return hw;
+    }
+    let k = dy - (hh - rad);
+    let inside = rad.mul_add(rad, -(k * k));
+    if inside <= 0.0 {
+        return hw - rad;
+    }
+    (hw - rad) + inside.sqrt()
+}
+
 /// Coverage of one pixel from the geometry [`Canvas::fill_round_rect`] derives
 /// once per call.
 ///
@@ -1582,13 +1605,112 @@ impl Canvas {
     /// A one-pixel-wide (or thicker) rounded outline.
     pub fn stroke_round_rect(&mut self, r: Rect, radius: f32, width: f32, color: u32) {
         let _prof = profile::Timer::new("stroke_round_rect");
+        let prof = profile::is_on();
         let half = width / 2.0;
         let (x0, y0, x1, y1) = self.span(&r.inflate(width + 1.5));
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius).abs() - half;
-                self.blend_in(x, y, color, coverage(d));
+        let mut walked = 0u64;
+
+        let hw = r.w / 2.0;
+        let hh = r.h / 2.0;
+        let rad = radius.min(hw).min(hh).max(0.0);
+        let (cx, cy) = r.center();
+        let qx_off = hw - rad;
+        let qy_off = hh - rad;
+        // Coverage is non-zero only where |sd| < half + 0.5, i.e. inside the
+        // rounded rectangle grown by `band` and outside the one eroded by it.
+        let band = half + 0.5;
+        let usable = hw.is_finite()
+            && hh.is_finite()
+            && rad.is_finite()
+            && band.is_finite()
+            && half >= 0.0
+            && hw > 0.0
+            && hh > 0.0
+            && radius.is_finite();
+        if usable {
+            for y in y0..y1 {
+                let py = y as f32 + 0.5;
+                let dy = (py - cy).abs();
+                let outer = rounded_row_half_width(dy, hw + band, hh + band, rad + band);
+                if outer < 0.0 {
+                    continue;
+                }
+                // The part of the row that is provably inside the eroded shape:
+                // its signed distance is at most -band, so coverage is 0 there.
+                // Shrinking it by two pixels keeps the skip away from the
+                // boundary, where floating-point rounding lives.
+                let inner = if hw > band && hh > band {
+                    rounded_row_half_width(dy, hw - band, hh - band, (rad - band).max(0.0))
+                } else {
+                    -1.0
+                };
+                let out_lo = (((cx - outer - 0.5).floor() as i64).saturating_sub(1)).clamp(x0, x1);
+                let out_hi = (((cx + outer - 0.5).ceil() as i64).saturating_add(1)).clamp(x0, x1);
+                if out_lo >= out_hi {
+                    continue;
+                }
+                let (skip_lo, skip_hi) = if inner > 2.0 {
+                    let safe = inner - 2.0;
+                    let lo = ((cx - safe - 0.5).ceil() as i64).clamp(out_lo, out_hi);
+                    let hi = ((cx + safe - 0.5).floor() as i64)
+                        .saturating_add(1)
+                        .clamp(out_lo, out_hi);
+                    (lo, hi)
+                } else {
+                    (out_hi, out_hi)
+                };
+                let qy = dy - qy_off;
+                let ay = qy.max(0.0);
+                for (from, to) in [(out_lo, skip_lo), (skip_hi.max(out_lo), out_hi)] {
+                    for x in from..to {
+                        let qx = ((x as f32 + 0.5) - cx).abs() - qx_off;
+                        let ax = qx.max(0.0);
+                        let sd = (ax * ax + ay * ay).sqrt() + qx.max(qy).min(0.0) - rad;
+                        self.blend_in(x, y, color, coverage(sd.abs() - half));
+                    }
+                }
             }
+        } else {
+            // A negative or non-finite width or radius cannot describe a band;
+            // keep the original walk so those inputs behave exactly as before.
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius).abs() - half;
+                    self.blend_in(x, y, color, coverage(d));
+                }
+            }
+        }
+        if prof {
+            // Where the walked pixels of a stroke go. The stroke has no
+            // interior worth filling: coverage is zero anywhere the distance
+            // is further than half a pixel from the outline, yet the loop above
+            // visits every pixel of the inflated rectangle. This pass uses the
+            // identical expression so the buckets cannot disagree with the
+            // painted frame, and runs only on the profiled frame.
+            let (mut zero, mut partial, mut full, mut rows) = (0u64, 0u64, 0u64, 0u64);
+            for y in y0..y1 {
+                rows = rows.saturating_add(1);
+                for x in x0..x1 {
+                    walked = walked.saturating_add(1);
+                    let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius).abs() - half;
+                    let cov = coverage(d);
+                    if cov <= 0.0 {
+                        zero = zero.saturating_add(1);
+                    } else if cov >= 1.0 {
+                        full = full.saturating_add(1);
+                    } else {
+                        partial = partial.saturating_add(1);
+                    }
+                }
+            }
+            profile::note_bucket("stroke_round_rect.zero", zero, 0);
+            profile::note_bucket("stroke_round_rect.partial", partial, 0);
+            profile::note_bucket("stroke_round_rect.full", full, 0);
+            profile::note_bucket("stroke_round_rect.walked", walked, 0);
+            profile::note_counter("stroke_round_rect.rows", rows);
+            profile::note_counter("stroke_round_rect.calls", 1);
+            profile::note_counter("stroke_round_rect.zero_calls", u64::from(zero == walked));
+            profile::note_max("stroke_round_rect.max_call_px", walked);
         }
     }
 
@@ -3483,6 +3605,71 @@ mod tests {
                 got.pixels(),
                 "shadow differs for {r:?} radius {radius} spread {spread}"
             );
+        }
+    }
+
+    fn stroke_round_rect_reference(c: &mut Canvas, r: Rect, radius: f32, width: f32, color: u32) {
+        // The implementation at f1c174d, verbatim: every pixel of the inflated
+        // rectangle gets a distance test and a blend. Only used by the test.
+        let half = width / 2.0;
+        let (x0, y0, x1, y1) = c.span(&r.inflate(width + 1.5));
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let d = sd_round_rect(x as f32 + 0.5, y as f32 + 0.5, &r, radius).abs() - half;
+                c.blend_in(x, y, color, coverage(d));
+            }
+        }
+    }
+
+    #[test]
+    fn the_stroke_band_walk_equals_the_full_distance_walk() {
+        // Every pixel of both canvases must agree. The matrix covers fractional
+        // geometry, radius 0 / half the extent / larger than it, thin and thick
+        // pens, a circle, a one-pixel rectangle, negative and zero extents, a
+        // rectangle off the canvas, four clips (including empty) and opaque,
+        // translucent and zero-alpha colours.
+        let cases = [
+            (Rect::new(40.0, 30.0, 140.0, 100.0), 14.0, 1.0),
+            (Rect::new(40.25, 29.75, 140.5, 100.25), 9.0, 1.0),
+            (Rect::new(60.0, 50.0, 100.0, 80.0), 0.0, 1.0),
+            (Rect::new(60.0, 50.0, 100.0, 80.0), 50.0, 1.0),
+            (Rect::new(60.0, 50.0, 100.0, 80.0), 500.0, 1.0),
+            (Rect::new(60.0, 50.0, 100.0, 80.0), 20.0, 0.5),
+            (Rect::new(60.0, 50.0, 100.0, 80.0), 20.0, 9.0),
+            (Rect::new(70.0, 50.0, 80.0, 80.0), 40.0, 1.0),
+            (Rect::new(80.5, 50.0, 1.0, 70.0), 0.5, 1.0),
+            (Rect::new(30.0, 30.0, 0.0, 0.0), 4.0, 1.0),
+            (Rect::new(30.0, 30.0, -10.0, 20.0), 4.0, 1.0),
+            (Rect::new(-40.0, -30.0, 100.0, 80.0), 12.0, 2.0),
+            (Rect::new(-20.0, -20.0, 300.0, 260.0), 30.0, 1.0),
+        ];
+        let clips = [
+            None,
+            Some(Rect::new(30.5, 20.25, 100.0, 70.0)),
+            Some(Rect::new(55.0, 45.0, 1.0, 1.0)),
+            Some(Rect::new(0.0, 0.0, 0.0, 0.0)),
+        ];
+        let colors = [
+            rgb(0xFFFFFF),
+            with_alpha(rgb(0x3A7BD5), 0.35),
+            with_alpha(rgb(0xFFFFFF), 0.0),
+        ];
+        for (rect, radius, width) in cases {
+            for clip in clips {
+                for color in colors {
+                    let mut want = textured(220, 180);
+                    let mut got = textured(220, 180);
+                    let _ = want.set_clip(clip);
+                    let _ = got.set_clip(clip);
+                    stroke_round_rect_reference(&mut want, rect, radius, width, color);
+                    got.stroke_round_rect(rect, radius, width, color);
+                    assert_eq!(
+                        want.pixels(),
+                        got.pixels(),
+                        "{rect:?} radius {radius} width {width} clip {clip:?} colour {color:#010X}"
+                    );
+                }
+            }
         }
     }
 
