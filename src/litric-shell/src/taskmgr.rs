@@ -2032,12 +2032,11 @@ impl TaskManager {
             uptime_secs: facts.uptime_secs,
             tasks: facts.tasks,
         };
-        if let Some(pid) = selected_pid {
-            let vis = self.filtered();
-            if let Some(i) = vis.iter().position(|r| r.pid == pid) {
-                self.selected = Some(i);
-            }
-        }
+        // A selection is a pid, not an index: after a sample the old index may
+        // point at a different process, so it is resolved again or cleared.
+        let next =
+            selected_pid.and_then(|pid| self.filtered().iter().position(|row| row.pid == pid));
+        self.selected = next;
     }
 
     /// Record how long the last frame took to draw.
@@ -2932,6 +2931,22 @@ mod tests {
             facts.processes.first().and_then(|p| p.cpu),
             Some(1.0),
             "a share is clamped to the whole machine"
+        );
+    }
+
+    #[test]
+    fn a_selection_that_is_gone_is_cleared_instead_of_pointing_at_another_row() {
+        let mut m = manager();
+        m.selected = Some(0);
+        let gone = m.selected_pid().expect("a selected fixture row");
+        let facts = SystemFacts {
+            processes: m.rows.iter().filter(|p| p.pid != gone).cloned().collect(),
+            ..SystemFacts::default()
+        };
+        m.observe(&facts);
+        assert_eq!(
+            m.selected, None,
+            "a vanished selection must not shift to another row"
         );
     }
 

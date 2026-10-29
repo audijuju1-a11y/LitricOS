@@ -1344,6 +1344,16 @@ impl Shell {
             self.quick.bt_powered = Some(powered);
         }
     }
+
+    /// Take one fresh sample through the same reader the periodic loop uses.
+    ///
+    /// A confirmed Activity action calls this once, so the table shows the
+    /// machine's answer on the next frame instead of at the next scheduled
+    /// sample. Nothing is scheduled by it and no interval changes.
+    pub fn refresh_facts(&mut self) {
+        let fresh = crate::facts::gather(&self.sysd_socket, &self.facts_root);
+        self.sample(fresh);
+    }
 }
 
 /// Something `main` has to do that the shell cannot do itself.
@@ -3028,6 +3038,11 @@ pub struct Shell {
     /// constant so a test (or a hand-run broker) can point the shell at its own
     /// socket instead of the system one.
     pub browser_socket: std::path::PathBuf,
+    /// The daemon socket facts are read through. The runner sets it from its
+    /// arguments; a missing socket falls back to a direct `/proc` read.
+    pub sysd_socket: std::path::PathBuf,
+    /// The host root `/proc` and `/sys` are read under.
+    pub facts_root: std::path::PathBuf,
     /// Whether the diagnostic overlay is showing.
     pub diagnostics: bool,
     /// When to go idle.
@@ -3482,6 +3497,8 @@ impl Shell {
                 || std::path::PathBuf::from(BROWSER_SOCKET),
                 std::path::PathBuf::from,
             ),
+            sysd_socket: std::path::PathBuf::from(crate::facts::DEFAULT_SOCKET),
+            facts_root: std::path::PathBuf::from("/"),
             diagnostics: false,
             idle_policy: IdlePolicy::default(),
             lock: crate::lock::LockState::default(),
@@ -5960,6 +5977,9 @@ impl Shell {
             Hot::ActivityRow(pid) => {
                 self.activity.selected = self.activity.filtered().iter().position(|p| p.pid == pid);
                 self.activity_end_confirm = None;
+                // A message about the previous selection's action would sit
+                // beside a different process and be read as being about it.
+                self.activity.message = None;
                 self.request_full_redraw();
                 Vec::new()
             }
@@ -6917,10 +6937,12 @@ impl Shell {
     ///
     /// The signal is sent as this session's user, after [`crate::process`] has
     /// checked the owner and the kernel session of every node; a daemon is not
-    /// asked because no daemon owns the user's own processes. The window says
-    /// the processes were *asked* to stop, never that they exited: the next
-    /// facts sample is what decides that. Arming one control disarms the other,
-    /// and selecting a different row disarms both.
+    /// asked because no daemon owns the user's own processes. The signal is
+    /// followed by one fresh sample through the same reader the periodic loop
+    /// uses, so the table shows the machine's answer on the next frame. The
+    /// window still says the processes were *asked* to stop, never that they
+    /// exited: one that ignores the request remains in that sample. Arming one
+    /// control disarms the other, and selecting a different row disarms both.
     fn end_selected_process(&mut self, target: crate::process::EndTarget) -> Vec<Effect> {
         let Some(pid) = self.activity.selected_pid() else {
             self.activity.message = Some("Select a process first.".to_owned());
@@ -6943,13 +6965,19 @@ impl Shell {
             return Vec::new();
         }
         self.activity_end_confirm = None;
-        self.activity.message = Some(match target {
+        let message = match target {
             crate::process::EndTarget::Task => match crate::process::terminate(pid) {
-                Ok(()) => format!("Asked {name} to stop"),
+                Ok(()) => {
+                    // The action changed the table: one real sample now, so the
+                    // next frame is the machine's answer and not an older one.
+                    self.refresh_facts();
+                    format!("Asked {name} to stop")
+                }
                 Err(error) => format!("Could not end {name}: {error}"),
             },
             crate::process::EndTarget::Tree => match crate::process::terminate_tree(pid) {
                 Ok(done) => {
+                    self.refresh_facts();
                     let mut message = if done.asked == 1 {
                         "Asked 1 process to stop".to_owned()
                     } else {
@@ -6965,7 +6993,8 @@ impl Shell {
                 }
                 Err(error) => format!("Could not end {name} and what it started: {error}"),
             },
-        });
+        };
+        self.activity.message = Some(message);
         self.request_full_redraw();
         Vec::new()
     }

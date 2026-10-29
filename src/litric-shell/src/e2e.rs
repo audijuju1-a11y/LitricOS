@@ -3710,6 +3710,11 @@ fn journey_activity_ends_a_real_process_tree_after_confirmation() {
     s.activity.observe(&s.facts);
     s.open_app(App::Activity);
     let _ = draw_frame(&mut s);
+    assert_eq!(
+        s.activity.rows.len(),
+        1,
+        "the fixture starts with one known row"
+    );
 
     let row = s
         .hotspots()
@@ -3750,6 +3755,10 @@ fn journey_activity_ends_a_real_process_tree_after_confirmation() {
         .expect("the confirming control is still there");
     let _ = click(&mut s, tree.center().0, tree.center().1);
     let _ = draw_frame(&mut s);
+    assert!(
+        s.activity.rows.len() > 1 && s.activity.rows.iter().any(|p| p.pid == std::process::id()),
+        "the confirmed action must replace the one-row fixture with a real /proc sample"
+    );
     assert!(
         s.activity
             .message
@@ -3851,6 +3860,11 @@ fn journey_activity_refuses_a_process_outside_its_scope() {
         .expect("the confirming control is still there");
     let _ = click(&mut s, tree.center().0, tree.center().1);
     let _ = draw_frame(&mut s);
+    assert_eq!(
+        s.activity.rows.len(),
+        1,
+        "a refused action must not claim a new sample"
+    );
     assert!(
         s.activity
             .message

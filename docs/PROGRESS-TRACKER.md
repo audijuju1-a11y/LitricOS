@@ -3498,3 +3498,57 @@ The two failures are the unchanged absent `keys/dev/` material. No test deleted,
 no gate relaxed, no dependency added, no privileged verb introduced. A process
 that ignores `SIGTERM` remains running and the next facts sample still shows it;
 there is no forced kill and no claim of one.
+
+
+## 44. Batch: Activity shows an end request's outcome on the next frame (verified)
+
+### 44.1 What the audit found
+
+The table was owned by `Shell::sample`, but the only sampler was `gather_facts`
+in `main.rs`, called once at startup and then every `FACTS_INTERVAL_MS`
+(2,000 ms). The confirmed End task / End tree handler ran the signal, wrote its
+message and asked for a redraw, but did not sample: the rows always waited for
+the next two-second tick. A second audit found two stale-path defects in the
+same area: `TaskManager::observe` kept the old selection index when the selected
+process vanished, so a later action could target a different row, and a
+previous action's message survived a selection change.
+
+### 44.2 The wiring
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/facts.rs` | New home for the one facts reader. `gather_facts` moves here as `gather(socket, root)` with the reply parsers, GPU/root/network/battery readers and `ask`/`field`; `DEFAULT_SOCKET` names the system socket. Nothing about what is read changed. |
+| `src/litric-shell/src/shell.rs` | `Shell` owns `sysd_socket` and `facts_root` (set by the runner, defaulting to the system socket and `/`) and exposes `refresh_facts()`, which calls the same `gather` and then `sample`. The confirmed End task / End tree handler calls it once after an accepted signal, before the message and redraw. Selecting another process row clears the old message. |
+| `src/litric-shell/src/main.rs` | Sets the two fields from `--root` and the daemon socket; startup and the periodic loop call `shell.refresh_facts()` instead of the removed local sampler. The interval, the loop and its budget are unchanged. |
+| `src/litric-shell/src/taskmgr.rs` | `observe` resolves the selection by pid after replacing the rows and clears it when that pid is gone, instead of leaving an index that now points at another process. New unit test covers the vanished selection. |
+| `src/litric-shell/src/e2e.rs` | The tree journey asserts the fixture starts with exactly one known row, then, immediately after the confirming click and before any periodic tick, asserts the table is a real `/proc` sample: more than one row and the test process itself present. The refusal journey asserts the refused action did not claim a sample. |
+| `src/litric-shell/src/lib.rs` | Publishes the new module. |
+
+### 44.3 Cost and honesty
+
+One extra sample per accepted confirmed action: one daemon query or one direct
+`/proc` read, on the UI thread, through the reader the periodic loop already
+uses. Nothing is scheduled by it; the two-second interval, the idle budget and
+the absence of polling threads are unchanged. A refused action takes no sample.
+The window still says the processes were *asked* to stop, and the refreshed
+table is the machine's answer: a process that ignores `SIGTERM` remains visible.
+
+### 44.4 Gates
+
+```text
+cargo test --workspace        passed=1717 failed=0   (was 1,716; +1)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the unchanged absent `keys/dev/` material. No test deleted,
+no gate relaxed, no dependency added.
+
+### 44.5 Limits
+
+The CI host has no `litric-sysd`, so the proven immediate sample is the direct
+`/proc` fallback; the daemon reply path is the same parser code, unchanged, and
+runs when a daemon is present. No QEMU or display is available, so the proof is
+the headless frame and real `/proc`. No RAM/CPU/GPU profile was taken for this
+change, so no performance number is claimed.
