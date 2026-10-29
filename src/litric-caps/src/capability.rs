@@ -94,6 +94,13 @@ pub enum CapabilityId {
     /// Change adapter-level Bluetooth state: power, discoverability, pairing.
     /// Distinct from [`Self::DeviceBluetooth`], which is *use* a device.
     BluetoothAdmin,
+    /// Start a program on the user's behalf.
+    ///
+    /// Held by the shell, never by an application: an application that could
+    /// ask the daemon to launch another program would be borrowing a permission
+    /// it was never granted, which is the confused deputy this layer exists to
+    /// prevent.
+    ProcessSpawn,
 }
 
 impl CapabilityId {
@@ -132,6 +139,7 @@ impl CapabilityId {
             Self::PowerControl => "power.control",
             Self::AuthSession => "auth.session",
             Self::BluetoothAdmin => "device.bluetooth.admin",
+            Self::ProcessSpawn => "process.spawn",
         }
     }
 
@@ -170,6 +178,7 @@ impl CapabilityId {
             "power.control" => Self::PowerControl,
             "auth.session" => Self::AuthSession,
             "device.bluetooth.admin" => Self::BluetoothAdmin,
+            "process.spawn" => Self::ProcessSpawn,
             _ => return None,
         })
     }
@@ -209,6 +218,7 @@ impl CapabilityId {
             Self::PowerControl,
             Self::AuthSession,
             Self::BluetoothAdmin,
+            Self::ProcessSpawn,
         ]
     }
 
@@ -280,7 +290,8 @@ impl CapabilityId {
             | Self::AudioSet
             | Self::PowerControl
             | Self::AuthSession
-            | Self::BluetoothAdmin => Scoping::Optional,
+            | Self::BluetoothAdmin
+            | Self::ProcessSpawn => Scoping::Optional,
             _ => Scoping::Never,
         }
     }
@@ -323,6 +334,7 @@ impl CapabilityId {
             Self::PowerControl => "suspend, restart or power off this computer",
             Self::AuthSession => "lock the screen",
             Self::BluetoothAdmin => "pair and manage Bluetooth devices",
+            Self::ProcessSpawn => "start a program for you",
         }
     }
 
@@ -339,7 +351,8 @@ impl CapabilityId {
             | Self::FsWrite
             | Self::SecureStorage
             | Self::NetConfigure
-            | Self::AuthSession => Risk::High,
+            | Self::AuthSession
+            | Self::ProcessSpawn => Risk::High,
             Self::FsRead
             | Self::FsList
             | Self::NetServer
@@ -475,6 +488,7 @@ const RESOURCE_SCHEMES: &[&str] = &[
     "lock://",
     "switch://",
     "power://",
+    "app://",
 ];
 
 /// Storage URI schemes, from RUNTIME section 17.

@@ -22,6 +22,7 @@
 use core::fmt;
 
 use crate::action::PowerAction;
+use crate::launch::MAX_ARGV;
 use crate::providers::{self, AudioAction, AuthAction, BtAction, NetAction, SystemAction};
 
 /// The longest request line accepted, in bytes.
@@ -123,6 +124,16 @@ pub enum Request {
         uri: String,
         /// What it wants to do.
         access: AccessWord,
+    },
+    /// Start a program on the user's behalf.
+    ///
+    /// The argument vector is already split: the daemon never passes it through
+    /// a shell, so a value containing `;` or `$(…)` is one argument. Each
+    /// element is hex on the wire because the protocol splits on whitespace and
+    /// a desktop entry may hold a space in any argument.
+    LaunchApp {
+        /// The vector; the first element is the absolute program path.
+        argv: Vec<String>,
     },
     /// Close the connection.
     Quit,
@@ -483,6 +494,27 @@ impl Request {
                     value: other.to_owned(),
                 }),
             },
+            "launch" => {
+                if args.is_empty() || args.len() > MAX_ARGV {
+                    return Err(ProtoError::BadArity {
+                        verb: "LAUNCH",
+                        expected: 1,
+                        got: args.len(),
+                    });
+                }
+                let mut argv = Vec::with_capacity(args.len());
+                for raw in args.iter().copied() {
+                    let value = hex_text(raw, "argument")?;
+                    if value.contains('\0') {
+                        return Err(ProtoError::BadArgument {
+                            name: "argument",
+                            value: "<nul>".to_owned(),
+                        });
+                    }
+                    argv.push(value);
+                }
+                Ok(Self::LaunchApp { argv })
+            }
             "power" => {
                 if args.is_empty() || args.len() > 2 {
                     return Err(ProtoError::BadArity {

@@ -4734,3 +4734,131 @@ fn journey_browser_loads_a_page_from_a_local_web_server_and_reports_a_failed_fet
     assert!(!crate::reader::serves("https://127.0.0.1/"));
     stop.store(true, Ordering::Relaxed);
 }
+
+/// A real desktop entry, discovered and started through the real daemon.
+///
+/// The tree is a temporary XDG applications directory, the program is a real
+/// executable script, and the daemon is `litric-sysd` on a real socket. The
+/// marker file is written by the launched program, not by this test, so the
+/// assertion can only pass if the whole chain ran.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_lists_a_real_desktop_app_and_starts_it_through_sysd() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let root = e2e_root("desktop-launch");
+    let apps_dir = root.join("data/applications");
+    std::fs::create_dir_all(&apps_dir).expect("applications dir");
+    let marker = root.join("marker");
+    let program = root.join("marker-app");
+    std::fs::write(
+        &program,
+        format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", marker.display()),
+    )
+    .expect("the program");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    std::fs::write(
+        apps_dir.join("zeta.desktop"),
+        format!(
+            "[Desktop Entry]\nType=Application\nName=Zeta Marker\n\
+             Comment=writes a marker\nExec={} from-the-launcher\n",
+            program.display()
+        ),
+    )
+    .expect("the runnable entry");
+    std::fs::write(
+        apps_dir.join("missing.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Missing Program\nExec=/nonexistent/program\n",
+    )
+    .expect("the broken entry");
+
+    let apps = crate::desktop_entry::discover_in(&[apps_dir]);
+    assert_eq!(apps.len(), 1, "only a runnable entry is offered: {apps:?}");
+    assert_eq!(apps.first().map(|a| a.name.as_str()), Some("Zeta Marker"));
+
+    // The real daemon, on a real socket, owned by this test.
+    let socket = root.join("sysd.sock");
+    let listener = litric_sysd::server::bind(&socket).expect("bind sysd");
+    let state = litric_sysd::state::Sysd::new(2, 512, "/tmp", std::path::Path::new("/"));
+    std::thread::spawn(move || {
+        let _ = litric_sysd::server::serve(&listener, state);
+    });
+
+    let mut s = shell();
+    s.sysd_socket = socket;
+    s.load_desktop_apps(apps);
+
+    // Open the launcher with a real pointer press on the Apps menu.
+    show_dock(&mut s);
+    let _ = draw_frame(&mut s);
+    let button = s.hotspots().rect_of(Hot::MenuApps).expect("Apps menu");
+    click(&mut s, button.center().0, button.center().1);
+    for _ in 0..60 {
+        s.tick_after(FRAME_MS);
+    }
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "52-launcher-real-app");
+    let names: Vec<String> = (0..s.launcher_len())
+        .filter_map(|i| s.launcher_name(i).map(str::to_owned))
+        .collect();
+    assert!(names.iter().any(|n| n == "Zeta Marker"), "{names:?}");
+    assert!(
+        !names.iter().any(|n| n.contains("Missing")),
+        "an app whose program is absent must not be offered: {names:?}"
+    );
+    let tile = s
+        .hotspots()
+        .rect_of(Hot::LauncherItem(App::ALL.len()))
+        .expect("the discovered application has a tile");
+    assert!(tile.w > 0.0);
+
+    // The real keyboard path: type the name, press Enter.
+    type_text(&mut s, "zeta");
+    let _ = draw_frame(&mut s);
+    key_press(&mut s, Key::Enter, Modifiers::NONE);
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut written: Option<String> = None;
+    while Instant::now() < deadline {
+        if let Ok(text) = std::fs::read_to_string(&marker) {
+            written = Some(text);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        written.as_deref(),
+        Some("from-the-launcher"),
+        "the launched program wrote its argument to the marker"
+    );
+    assert!(
+        s.app_status
+            .as_deref()
+            .is_some_and(|status| status.starts_with("Started Zeta Marker")),
+        "the launcher reports the start: {:?}",
+        s.app_status
+    );
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "52-app-launched");
+
+    // A program that disappears after discovery is refused by the daemon, and
+    // the window says so rather than claiming it started.
+    std::fs::remove_file(&program).expect("remove the program");
+    show_dock(&mut s);
+    let _ = draw_frame(&mut s);
+    let button = s.hotspots().rect_of(Hot::MenuApps).expect("Apps menu");
+    click(&mut s, button.center().0, button.center().1);
+    for _ in 0..60 {
+        s.tick_after(FRAME_MS);
+    }
+    type_text(&mut s, "zeta");
+    let _ = draw_frame(&mut s);
+    key_press(&mut s, Key::Enter, Modifiers::NONE);
+    assert_eq!(
+        s.app_status.as_deref(),
+        Some("Could not start Zeta Marker"),
+        "a refused launch is reported, not hidden"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -36,6 +36,9 @@ pub enum Hit {
     /// Open a Settings page with one row focused. The row is the registry's
     /// own entry, so the result cannot name a setting the shell does not own.
     SettingRow(&'static crate::registry::Entry),
+    /// Start an application discovered on this machine, by its index in the
+    /// shell's validated list.
+    Desktop(usize),
     /// Bring a window to the user.
     Window(WindowId),
 }
@@ -146,6 +149,24 @@ pub fn search(shell: &Shell, query: &str) -> Vec<Result> {
                 .saturating_add(300),
             rank: (0, app.title().to_lowercase()),
         });
+    }
+
+    // Applications found on this machine. They rank beside the built-ins: a
+    // program a person installed is as much an application as one this image
+    // ships, and the index is a validated list, so a row can only name one the
+    // launcher already offers.
+    for (index, app) in shell.desktop_apps.iter().enumerate() {
+        if let Some(result) = scored(
+            Hit::Desktop(index),
+            &app.name,
+            "Application".to_owned(),
+            None,
+            0,
+            300,
+            query,
+        ) {
+            out.push(result);
+        }
     }
 
     for page in Page::ALL {

@@ -3085,6 +3085,14 @@ pub struct Shell {
     pub files_daemon: Option<std::sync::Arc<crate::fsclient::Daemon>>,
     /// The Litric Browser window model (Chrome-style tab strip + omnibox).
     pub browser: crate::apps::BrowserApp,
+    /// Applications discovered from this machine's freedesktop entries, already
+    /// validated. Empty until `load_desktop_apps` is called: the shell never
+    /// reads the host's application directories from `new`, so a test that
+    /// builds a shell gets no host-dependent list.
+    pub desktop_apps: Vec<crate::desktop_entry::DesktopApp>,
+    /// The last launch outcome, shown in the launcher's title row. `None`
+    /// before anything has been started.
+    pub app_status: Option<String>,
     /// A page opened from this machine, drawn by the shell itself.
     pub reader: Option<crate::reader::Reader>,
     /// The Defender application model and its scan state.
@@ -3636,6 +3644,8 @@ impl Shell {
             #[cfg(unix)]
             files_daemon: None,
             browser: crate::apps::BrowserApp::default(),
+            desktop_apps: Vec::new(),
+            app_status: None,
             reader: None,
             defender: DefenderState::default(),
             trash: crate::apps::TrashApp::default(),
@@ -5189,7 +5199,7 @@ impl Shell {
             let count = if searching {
                 crate::seek::search(self, &query).len()
             } else {
-                App::ALL.len()
+                self.launcher_len()
             };
             match key {
                 Key::Escape => {
@@ -5226,7 +5236,7 @@ impl Shell {
                             .get(selected)
                             .map(|result| result.hit)
                     } else {
-                        App::ALL.get(selected).copied().map(crate::seek::Hit::App)
+                        self.launcher_item(selected)
                     };
                     self.set_overlay(Overlay::None);
                     self.overlay_damage();
@@ -6282,7 +6292,7 @@ impl Shell {
                     _ => String::new(),
                 };
                 let hit = if query.trim().is_empty() {
-                    App::ALL.get(i).copied().map(crate::seek::Hit::App)
+                    self.launcher_item(i)
                 } else {
                     crate::seek::search(self, &query)
                         .get(i)
@@ -7218,6 +7228,106 @@ impl Shell {
         vec![Effect::Launched(app)]
     }
 
+    /// Replace the discovered application list.
+    pub fn load_desktop_apps(&mut self, apps: Vec<crate::desktop_entry::DesktopApp>) {
+        self.desktop_apps = apps;
+        self.request_full_redraw();
+    }
+
+    /// How many slots the launcher's grid has: the built-ins, then the
+    /// machine's own applications in name order.
+    #[must_use]
+    pub fn launcher_len(&self) -> usize {
+        App::ALL.len().saturating_add(self.desktop_apps.len())
+    }
+
+    /// What the launcher slot at `index` stands for.
+    #[must_use]
+    pub fn launcher_item(&self, index: usize) -> Option<crate::seek::Hit> {
+        if let Some(app) = App::ALL.get(index) {
+            return Some(crate::seek::Hit::App(*app));
+        }
+        let discovered = index.checked_sub(App::ALL.len())?;
+        (discovered < self.desktop_apps.len()).then_some(crate::seek::Hit::Desktop(discovered))
+    }
+
+    /// The label the launcher draws for a slot.
+    #[must_use]
+    pub fn launcher_name(&self, index: usize) -> Option<&str> {
+        if let Some(app) = App::ALL.get(index) {
+            return Some(app.title());
+        }
+        let discovered = index.checked_sub(App::ALL.len())?;
+        self.desktop_apps
+            .get(discovered)
+            .map(|app| app.name.as_str())
+    }
+
+    /// Ask `litric-sysd` to start a discovered application.
+    ///
+    /// The request carries the argument vector hex-encoded, because the
+    /// protocol splits on whitespace; the daemon validates and spawns it. The
+    /// shell never forks a program itself, and a failure is reported in words
+    /// a person reads while the reason goes to the journal.
+    fn launch_desktop(&mut self, index: usize) -> Vec<Effect> {
+        let Some(app) = self.desktop_apps.get(index) else {
+            return Vec::new();
+        };
+        let name = app.name.clone();
+        let mut request = String::from("LAUNCH");
+        for arg in &app.exec {
+            request.push(' ');
+            request.push_str(&litric_sysd::launch::hex_encode(arg.as_bytes()));
+        }
+        match crate::facts::ask(&self.sysd_socket, &request) {
+            Some(reply) if reply.starts_with("OK ") => {
+                let pid = reply
+                    .lines()
+                    .find_map(|line| line.strip_prefix("pid="))
+                    .unwrap_or("?");
+                self.app_status = Some(format!("Started {name} (pid {pid})"));
+                self.notify(
+                    "Applications",
+                    &format!("Started {name}"),
+                    "The program is running.",
+                    Priority::Normal,
+                    Some(4_000),
+                );
+            }
+            Some(reply) => {
+                let detail = reply
+                    .lines()
+                    .find(|line| line.starts_with("ERR "))
+                    .unwrap_or("the system service refused")
+                    .to_owned();
+                eprintln!("litric-shell: app: {name}: {detail}");
+                self.app_status = Some(format!("Could not start {name}"));
+                self.notify(
+                    "Applications",
+                    &format!("Could not start {name}"),
+                    "The reason is in the journal.",
+                    Priority::High,
+                    Some(6_000),
+                );
+            }
+            None => {
+                eprintln!(
+                    "litric-shell: app: {name}: litric-sysd did not answer at {}",
+                    self.sysd_socket.display()
+                );
+                self.app_status = Some(format!("Could not start {name}"));
+                self.notify(
+                    "Applications",
+                    &format!("Could not start {name}"),
+                    "The system service did not answer.",
+                    Priority::High,
+                    Some(6_000),
+                );
+            }
+        }
+        Vec::new()
+    }
+
     /// Run one system-wide search result.
     ///
     /// This is the only place that knows how a result becomes a consequence, so
@@ -7236,6 +7346,7 @@ impl Shell {
                 self.settings.focus = Some(entry.key);
                 self.open_app(App::Settings)
             }
+            crate::seek::Hit::Desktop(index) => self.launch_desktop(index),
             crate::seek::Hit::Window(id) => {
                 // The manager undoes a minimize and switches workspaces; the
                 // search field never has to know which of those is needed.

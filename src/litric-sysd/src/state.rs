@@ -70,12 +70,13 @@ pub type Timestamp = u64;
 /// read. `iface://` and `wifi://` are two grants of one capability: a link and a
 /// network are different resources with different consequences, and a single
 /// grant covering both would make narrowing one impossible later.
-pub const PROVIDER_GRANTS: [(CapabilityId, &str); 5] = [
+pub const PROVIDER_GRANTS: [(CapabilityId, &str); 6] = [
     (CapabilityId::AudioSet, "audio://"),
     (CapabilityId::NetConfigure, "iface://"),
     (CapabilityId::NetConfigure, "wifi://"),
     (CapabilityId::BluetoothAdmin, "bt://"),
     (CapabilityId::AuthSession, "lock://"),
+    (CapabilityId::ProcessSpawn, "app://"),
 ];
 
 /// The whole daemon, minus its transport.
@@ -232,6 +233,44 @@ impl Sysd {
             Request::Power { action, consent } => self.power(*action, *consent, now),
             Request::Action { action, consent } => self.action(action, *consent, now),
             Request::Resolve { app, uri, access } => self.resolve(app, uri, *access, now),
+            Request::LaunchApp { argv } => self.launch_app(argv),
+        }
+    }
+
+    /// Start a program the user chose, if the session client may ask.
+    ///
+    /// The capability is checked here, with the same broker as every other
+    /// action, before the vector reaches [`crate::launch`]. The daemon's own
+    /// root is deliberately not consulted: a program is named by its own
+    /// absolute path, and a request that could choose a root could choose which
+    /// binary the path meant.
+    fn launch_app(&mut self, argv: &[String]) -> Response {
+        let Some(client) = self.client.clone() else {
+            return Response::err("refused", "this build has no local client identity");
+        };
+        let Some(scope) = Scope::parse_resource("app://").ok() else {
+            return Response::err("bad-argument", "no scope for this action");
+        };
+        let Some(capability) = Capability::new(CapabilityId::ProcessSpawn, scope) else {
+            return Response::err("bad-argument", "no capability for this action");
+        };
+        let decision = self.caps.check_with_consent(&client, &capability, false, 0);
+        if !decision.is_allowed() {
+            return Response::err(
+                "refused",
+                format!("{} {capability}", decision.reason().token()),
+            );
+        }
+        match crate::launch::launch(argv) {
+            Ok(pid) => {
+                let program = argv.first().map_or("the program", String::as_str);
+                let name = Path::new(program)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| program.to_owned());
+                Response::ok(vec![format!("pid={pid}"), format!("program={name}")])
+            }
+            Err(error) => Response::err(error.kind(), error.detail()),
         }
     }
 

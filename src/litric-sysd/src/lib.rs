@@ -36,6 +36,7 @@
 
 pub mod action;
 pub mod facts;
+pub mod launch;
 pub mod platform;
 pub mod proto;
 pub mod providers;

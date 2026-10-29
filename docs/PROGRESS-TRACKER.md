@@ -4123,3 +4123,158 @@ arbitrary program launch, and this batch does not claim one. The images produced
 for this turn are headless frames of the real draw path, saved under the
 untracked `artifacts/` directory, not a photograph of a monitor: this host has no
 display and no QEMU.
+
+## 52. Batch: Linux applications are discovered from the desktop and started through litric-sysd (verified)
+
+### 52.1 Requirement and audit
+
+The requirement source is the tracked `Research-Deep-all` corpus and this
+tracker. The chosen row is `H.04`, "Launch/switch apps" (PARTIAL), whose
+checklist text is:
+
+> Recency switcher exists; no failure or progress surface for a launch (Part 21)
+
+and the gap §51.5 recorded in this same file:
+
+> **App loading remains unimplemented.** The launcher lists eight built-in
+> applications; there is no `.desktop` parser, app catalog, install path or
+> arbitrary program launch, and this batch does not claim one.
+
+The audit confirmed both statements and found the exact shape of the gap:
+
+* `shortcuts::App::ALL` is a fixed array of eight applications; the launcher
+  grid, the dock's expanded panel and `seek::search` each iterated it directly,
+  and `seek::Hit` had no variant that could name anything else.
+* `litric-sysd` had typed verbs for power, actions, resolution and the wave-1
+  providers, but no verb that starts a program, and `litric-caps` had no
+  `process.spawn` capability at all — a launch could not be authorised even in
+  principle.
+* nothing in the tree read `$XDG_DATA_HOME` or `$XDG_DATA_DIRS`; a repository
+  search for `applications`, `.desktop` and `TryExec` found no parser.
+
+This batch closes that gap end to end: discovery, validation, a capability-gated
+daemon verb, the launcher/dock/search surface and a failure line. It does not
+add an installer, a store, D-Bus activation or an icon-theme renderer.
+
+### 52.2 The connection
+
+| File | Line | What it connects |
+| --- | --- | --- |
+| `src/litric-shell/src/desktop_entry.rs` | 33, 36, 39 | the three bounds: 512 files per directory, 64 KiB per file, 128 applications |
+| `src/litric-shell/src/desktop_entry.rs` | 62 | `data_dirs`: `$XDG_DATA_HOME/applications` then each `$XDG_DATA_DIRS/applications`, defaulting to `/usr/local/share:/usr/share` |
+| `src/litric-shell/src/desktop_entry.rs` | 91 | `discover_in`: deterministic order, first directory wins an id, dangling and oversized entries skipped, no file contents retained |
+| `src/litric-shell/src/desktop_entry.rs` | 157 | `parse_entry`: `[Desktop Entry]` only, `Type=Application`, refuses `NoDisplay`/`Hidden`/`Terminal`, honours `TryExec`, `Name[locale]` then `Name` |
+| `src/litric-shell/src/desktop_entry.rs` | 307 | `parse_exec`: quoting, `%%`, field codes stripped, shell metacharacters refused |
+| `src/litric-shell/src/desktop_entry.rs` | 337 | `resolve_program`: an absolute executable only, or a bare name resolved on `PATH` |
+| `src/litric-sysd/src/launch.rs` | 24, 96 | `MAX_ARGV` and `validate`: an absolute regular executable, at most 32 arguments of at most 512 bytes |
+| `src/litric-sysd/src/launch.rs` | 128 | `launch`: `Command` with no shell, stdin/out/err null, one reaper thread per child |
+| `src/litric-sysd/src/launch.rs` | 74, 153 | `is_executable` (mode bits) and `hex_encode` for the wire |
+| `src/litric-sysd/src/proto.rs` | 134, 497 | `Request::LaunchApp` and its `LAUNCH <hex>…` parser; NUL refused |
+| `src/litric-sysd/src/state.rs` | 247 | `launch_app`: the `ProcessSpawn` capability is checked with the existing broker before `launch::launch` runs; the reply carries `pid=` or a typed `ERR` |
+| `src/litric-caps/src/capability.rs` | 103, 142, 181, 221, 294, 337, 355, 491 | the new `ProcessSpawn` capability: token, parse, `all()`, scope class, prompt, risk, and the `app://` resource scheme |
+| `src/litric-sysd/src/state.rs` | 79 | the local session client's grant of `ProcessSpawn` scoped to `app://` |
+| `src/litric-shell/src/shell.rs` | 7232 | `load_desktop_apps`: the validated list the shell owns |
+| `src/litric-shell/src/shell.rs` | 7240, 7246, 7256 | `launcher_len`, `launcher_item`, `launcher_name`: built-ins first, then the machine's applications |
+| `src/litric-shell/src/shell.rs` | 7272 | `launch_desktop`: one `LAUNCH` request to `litric-sysd`, the outcome in `app_status`, the reason in the journal |
+| `src/litric-shell/src/shell.rs` | 7349 | `seek_open` dispatches `Hit::Desktop` to that launch, so keyboard and pointer share one path |
+| `src/litric-shell/src/seek.rs` | 160 | discovered applications are ranked in the same search as the built-ins |
+| `src/litric-shell/src/views.rs` | 3800, 3907 | the dock's row count and the last launch's outcome line |
+| `src/litric-shell/src/views.rs` | 4216, 4230, 4364 | the launcher tiles: one per slot, a generated glyph for a discovered program, the same icon in the search rows |
+| `src/litric-shell/src/icons.rs` | 46, 109, 339 | the `Application` glyph: a rounded tile with a centre dot, not a borrowed application icon |
+| `src/litric-shell/src/main.rs` | 1201 | discovery runs once at startup, before the first frame |
+| `src/litric-shell/src/e2e.rs` | 4746 | the journey: a real `.desktop` tree, a real daemon on a real socket, a real marker file |
+
+### 52.3 Cost
+
+Discovery happens **once**, at startup, before the first frame: it reads at most
+512 directory entries per applications directory, refuses any file over 64 KiB
+without opening it, and keeps at most 128 applications. The only thing retained
+is the `Vec<DesktopApp>` (name, vector, icon name, source path); file contents
+are dropped as soon as one entry is parsed. There is no watcher, no polling, no
+background thread and no cache beyond that list.
+
+The draw path does no discovery. `launcher_len()` is an addition of two lengths,
+and the tile loop runs over `8 + N` slots only while the dock is expanded; the
+status line borrows `Option<&str>` from the shell and allocates nothing. A launch
+costs one socket round trip per user action and one reaper thread per launched
+program. No RSS or CPU number is claimed: none was measured for this change.
+
+### 52.4 Tests and gates
+
+* `desktop_entry` unit tests: a plain entry, quotes/`%%`/field codes, the eight
+  refusal classes, XDG precedence with a shadowed id, an oversized file, and a
+  pinned-bounds test.
+* `launch` unit tests: an empty or relative vector refused, the bounds, a
+  directory and a non-executable file refused, a real script's marker file, an
+  argument vector that never reaches a shell, a program that disappears after
+  validation, and the hex round trip.
+* `litric-sysd` suite: the `LAUNCH` parser and the capability-gated verb.
+* `src/litric-shell/src/e2e.rs:4746`
+  `journey_launcher_lists_a_real_desktop_app_and_starts_it_through_sysd`: a
+  temporary `XDG_DATA_HOME` tree with one runnable entry and one entry whose
+  program does not exist; the launcher is opened with a real pointer press, the
+  runnable app is listed, the missing one is not; the name is typed and Enter is
+  pressed; the program the daemon started writes its argument to a marker file
+  and the test reads it from disk; the status line says `Started Zeta Marker`.
+  Then the program is deleted and the same keyboard path reports
+  `Could not start Zeta Marker` instead of claiming success.
+* Frames: `artifacts/browser-shots/52-launcher-real-app.png` (the launcher with
+  `Zeta Marker` beside the eight built-ins) and
+  `artifacts/browser-shots/52-app-launched.png` (the same panel with
+  `Started Zeta Marker (pid …)`), written by the existing `save_shot` mechanism;
+  the PPM originals sit beside them. They are untracked, as `artifacts/` always
+  is.
+
+```text
+cargo test --workspace        1766 passed, 0 failed, 0 ignored   (was 1752; +14)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+python3 ci/lint-doc-refs.py   OK: 951 citations across 155 documents
+python3 ci/lint-file-safety.py   OK: 93 deletion sites, all inside reviewed functions
+bash ci/verify.sh             32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the unchanged absent local dev-key material (mkosi reports
+`secureboot`, `pcr` and `verity`; the key-pair check reports `secureboot` and
+`verity`). No key was generated or committed, no gate was weakened and no golden
+fingerprint changed: no existing desktop frame's pixels are touched by this
+batch, and no frame was re-recorded. The file-safety linter flagged the two
+deletion sites in the new journey; they were added to `ci/lint-file-safety.py`'s
+reviewed list with the fixture-scoped reason, exactly as the sibling journeys
+are, rather than by relaxing the rule.
+
+### 52.5 Sensitivity
+
+Both directions were disabled and the journey re-run, then the code restored:
+
+* With `Shell::launch_desktop` returning before it sends the request, the
+  journey fails with `assertion left == right failed: the launched program wrote
+  its argument to the marker` (`0 passed; 1 failed`). The marker is written by
+  the program the daemon starts, so this can only pass when the whole chain ran.
+* With `discover_in` returning an empty list, the journey fails earlier with
+  `assertion left == right failed: only a runnable entry is offered: []`.
+* Restored, the same journey passes (`1 passed; 0 failed`).
+
+### 52.6 Limits
+
+* **Icons are not decoded.** `Icon=` is stored, but this image has no icon-theme
+  reader and no SVG/PNG decoder for themes, so every discovered application is
+  drawn with the generated `Application` glyph. This is stated, not faked with a
+  borrowed icon.
+* **No D-Bus activation and no desktop actions.** Only the `[Desktop Entry]`
+  group is read; `Actions=`, `DBusActivatable=` and `StartupNotify=` are ignored.
+* **`Terminal=true` entries are refused.** The image hosts no terminal emulator
+  to attach them to, so offering them would be offering a window that cannot
+  exist.
+* **Field codes are dropped, not filled.** `%f`, `%F`, `%u`, `%U` and the rest
+  are removed because the launcher supplies no file or URL. An application that
+  requires a file argument will start without one.
+* **Discovery is a snapshot.** An application installed after the shell starts
+  appears after the next start; there is deliberately no watcher and no polling.
+* **Locale coverage is one language prefix** (`LANGUAGE`, `LC_ALL` or `LANG`),
+  not the full `Name[lang_COUNTRY@modifier]` fallback chain.
+* **No sandbox around the launched program.** It runs with the daemon's
+  environment and credentials; the guarantees are the validated absolute path,
+  the bounded vector and the absence of a shell, not isolation.
+* **No measured performance claim.** The bounds above are static; RSS, CPU and
+  latency were not measured for this batch.

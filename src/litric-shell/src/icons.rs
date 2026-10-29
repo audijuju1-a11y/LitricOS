@@ -42,6 +42,8 @@ pub enum Icon {
     Environment,
     /// A grid: workspaces and the launcher.
     Grid,
+    /// A program discovered on this machine: a rounded tile with a centre dot.
+    Application,
     /// A magnifier: search.
     Search,
     /// A bell: notifications.
@@ -104,6 +106,7 @@ impl Icon {
             Self::Trash => "trash",
             Self::Environment => "environment",
             Self::Grid => "grid",
+            Self::Application => "application",
             Self::Search => "search",
             Self::Notifications => "notifications",
             Self::Network => "network",
@@ -131,7 +134,7 @@ impl Icon {
     }
 
     /// Every icon, for the specimen sheet and the tests.
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 33] = [
         Self::Litric,
         Self::Files,
         Self::Browser,
@@ -164,6 +167,7 @@ impl Icon {
         Self::Memory,
         Self::Shield,
         Self::ShieldCheck,
+        Self::Application,
     ];
 }
 
@@ -331,6 +335,10 @@ pub fn draw(canvas: &mut Canvas, icon: Icon, box_: Rect, color: u32, weight: f32
             for (cx, cy) in [(0.28f32, 0.28f32), (0.72, 0.28), (0.28, 0.72), (0.72, 0.72)] {
                 rounded(canvas, cx - 0.16, cy - 0.16, 0.32, 0.32, 0.09);
             }
+        }
+        Icon::Application => {
+            rounded(canvas, 0.18, 0.18, 0.64, 0.64, 0.16);
+            dot(canvas, 0.5, 0.5, 0.07);
         }
         Icon::Search => {
             circle(canvas, 0.44, 0.44, 0.26);
@@ -634,7 +642,7 @@ mod tests {
         assert_eq!(before, names.len(), "two icons share a name");
         // The literal is deliberate: adding an icon means looking at this line
         // and deciding where it belongs in the set, not only appending it.
-        assert_eq!(before, 32);
+        assert_eq!(before, 33);
     }
 
     #[test]

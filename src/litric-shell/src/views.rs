@@ -3795,8 +3795,8 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
 
     // The expanded panel.
     let cols = 4usize;
-    let rows = apps
-        .len()
+    let rows = shell
+        .launcher_len()
         .max(1)
         .saturating_add(cols.saturating_sub(1))
         .checked_div(cols)
@@ -3900,6 +3900,21 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
                 panel.y + t.px(44.0),
                 &title,
             );
+            // The last launch's outcome, where the person who pressed the tile
+            // is already looking. The detail stays in the journal.
+            if let Some(status) = shell.app_status.as_deref() {
+                let s = Style::new(
+                    t.text_px(TypeStep::Caption),
+                    with_alpha(t.text(), 0.7 * lay),
+                );
+                font::draw(
+                    canvas,
+                    &ui::elide(status, &s, panel.w - t.px(56.0)),
+                    panel.x + t.px(28.0),
+                    panel.y + t.px(64.0),
+                    &s,
+                );
+            }
             let lock_style = Style::new(t.text_px(TypeStep::Footnote), with_alpha(t.text(), lay));
             let lock_w = font::measure("Lock screen", &lock_style) + t.px(50.0);
             let lock = Rect::new(
@@ -4208,7 +4223,11 @@ fn launcher_tiles(
     opacity: f32,
 ) {
     let x0 = body.x + (body.w - tile * cols as f32) / 2.0;
-    for (i, app) in App::ALL.iter().enumerate() {
+    // The built-in applications first, then the ones this machine has. The
+    // slot index is the launcher's index, so the pointer and the keyboard
+    // cannot disagree about which tile a slot names.
+    let total = shell.launcher_len();
+    for i in 0..total {
         let col = i.checked_rem(cols).unwrap_or(0);
         let row = i.checked_div(cols).unwrap_or(0);
         let cell = Rect::new(
@@ -4234,12 +4253,35 @@ fn launcher_tiles(
             t.px(82.0),
             t.px(82.0),
         );
-        appicons::draw(canvas, appicons::Slot::App(*app), chip, opacity);
+        let Some(item) = shell.launcher_item(i) else {
+            continue;
+        };
+        match item {
+            crate::seek::Hit::App(app) => {
+                appicons::draw(canvas, appicons::Slot::App(app), chip, opacity);
+            }
+            _ => {
+                // A discovered program has no artwork in this image. The glyph
+                // is drawn, not a borrowed application icon: nothing here
+                // pretends the program is one of the built-ins.
+                canvas.fill_round_rect(chip, t.px(18.0), with_alpha(rgb(0xFFFFFF), 0.10 * opacity));
+                icons::draw(
+                    canvas,
+                    Icon::Application,
+                    chip.inflate(-t.px(20.0)),
+                    with_alpha(t.accent(), opacity),
+                    1.0,
+                );
+            }
+        }
         let style = Style::new(
             t.text_px(TypeStep::Footnote),
             with_alpha(t.text(), 0.9 * opacity),
         );
-        let name = ui::elide(app.title(), &style, cell.w - t.px(12.0));
+        let label = shell
+            .launcher_name(i)
+            .map_or_else(|| "Application".to_owned(), str::to_owned);
+        let name = ui::elide(&label, &style, cell.w - t.px(12.0));
         font::draw(
             canvas,
             &name,
@@ -4318,6 +4360,7 @@ fn launcher_rows(
             crate::seek::Hit::App(app) => icon_for(app),
             crate::seek::Hit::Setting(page) => settings_icon(page),
             crate::seek::Hit::SettingRow(entry) => settings_icon(entry.page),
+            crate::seek::Hit::Desktop(_) => Icon::Application,
             crate::seek::Hit::Window(_) => Icon::Window,
             crate::seek::Hit::Action(_) => Icon::Search,
         };
