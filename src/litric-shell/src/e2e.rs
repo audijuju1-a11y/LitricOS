@@ -5057,6 +5057,98 @@ fn journey_reader_lays_out_a_table_of_values_in_columns() {
     stop.store(true, Ordering::Relaxed);
 }
 
+/// Two applications that share one `Icon=` name resolve it once, and both tiles
+/// show the real artwork.
+///
+/// The counter is the shell's own diagnostic: `desktop_icons_resolved` counts
+/// distinct names asked of the theme tree in the last pass, so two entries with
+/// one name must report one.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_resolves_a_shared_icon_name_once() {
+    let root = e2e_root("desktop-icon-name");
+    let apps = root.join("data/applications");
+    let icons = root.join("data/icons");
+    std::fs::create_dir_all(&apps).expect("applications");
+    std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+    std::fs::write(
+        icons.join("hicolor/scalable/apps/shared-icon.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" fill="#2080c0"/>
+  <circle cx="12" cy="12" r="6" fill="rgb(250, 190, 40)"/>
+  <path d="M 4 20 L 12 5 L 20 20 Z" fill="#f0f0f0"/>
+</svg>"##,
+    )
+    .expect("the shared icon");
+
+    let mut s = shell();
+    s.load_desktop_apps_from(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+    assert!(s.desktop_apps.is_empty());
+    open_launcher(&mut s);
+    let _ = draw_frame(&mut s);
+
+    // Two entries, one icon name, written while the shell runs.
+    for name in ["Shared One", "Shared Two"] {
+        std::fs::write(
+            apps.join(format!("{}.desktop", name.replace(' ', "-"))),
+            format!(
+                "[Desktop Entry]\nType=Application\nName={name}\nIcon=shared-icon\nExec=/bin/true\n"
+            ),
+        )
+        .expect("entry");
+    }
+    s.tick_after(1_010);
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "57-launcher-icon-name-cache");
+
+    assert_eq!(s.desktop_apps.len(), 2);
+    assert_eq!(
+        s.desktop_icons_resolved, 1,
+        "two entries share one icon name, so the theme tree should be asked once, not {0} times",
+        s.desktop_icons_resolved
+    );
+    assert!(
+        s.desktop_apps.iter().all(|app| app.icon_path.is_some()),
+        "both entries resolved the name"
+    );
+
+    // Both tiles carry the document's own colours.
+    let builtins = App::ALL.len();
+    for index in builtins..builtins + 2 {
+        let cell = s
+            .hotspots()
+            .rect_of(Hot::LauncherItem(index))
+            .expect("a tile per application");
+        let chip = Rect::new(cell.center().0 - 41.0, cell.y + 4.0, 82.0, 82.0);
+        let mut blue = 0usize;
+        let mut amber = 0usize;
+        let mut x = chip.x + 2.0;
+        while x < chip.right() - 2.0 {
+            let mut y = chip.y + 2.0;
+            while y < chip.bottom() - 2.0 {
+                if let Some(px) = canvas.get(x as i64, y as i64) {
+                    let r = (px >> 16) & 0xFF;
+                    let g = (px >> 8) & 0xFF;
+                    let b = px & 0xFF;
+                    if b > 120 && b > r.saturating_add(40) {
+                        blue = blue.saturating_add(1);
+                    }
+                    if r > 180 && g > 120 && b < 120 {
+                        amber = amber.saturating_add(1);
+                    }
+                }
+                y += 3.0;
+            }
+            x += 3.0;
+        }
+        assert!(
+            blue > 20 && amber > 10,
+            "tile {index} is not the resolved artwork: {blue} blue, {amber} amber"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A new application in one of two application directories re-reads only that
 /// directory, and the launcher still shows the entry that did not move.
 ///

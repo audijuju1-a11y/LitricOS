@@ -3099,6 +3099,12 @@ pub struct Shell {
     pub desktop_dirs_read: usize,
     /// Desktop files the last discovery or reload read.
     pub desktop_files_read: usize,
+    /// Distinct icon names the last discovery or reload asked the theme tree
+    /// for. Several entries that share an `Icon=` name count once.
+    pub desktop_icons_resolved: usize,
+    /// The name-to-file memo, kept across reloads and dropped by its own stamp
+    /// when the icon tree moves.
+    pub desktop_icon_names: crate::desktop_entry::IconNames,
     /// The last launch outcome, shown in the launcher's title row. `None`
     /// before anything has been started.
     pub app_status: Option<String>,
@@ -3657,6 +3663,8 @@ impl Shell {
             desktop_watch: None,
             desktop_dirs_read: 0,
             desktop_files_read: 0,
+            desktop_icons_resolved: 0,
+            desktop_icon_names: crate::desktop_entry::IconNames::default(),
             app_status: None,
             reader: None,
             defender: DefenderState::default(),
@@ -7264,10 +7272,13 @@ impl Shell {
         icon_dirs: &[std::path::PathBuf],
         now_ms: u64,
     ) {
-        let found = crate::desktop_entry::discover_tracked(app_dirs, icon_dirs);
+        let mut names = crate::desktop_entry::IconNames::new(icon_dirs);
+        let found = crate::desktop_entry::discover_with_cache(app_dirs, icon_dirs, &mut names);
         self.desktop_apps = found.apps;
         self.desktop_dirs_read = found.dirs_read;
         self.desktop_files_read = found.files_read;
+        self.desktop_icons_resolved = found.icons_resolved;
+        self.desktop_icon_names = names;
         self.desktop_watch = Some(crate::desktop_entry::DesktopWatch::new(
             app_dirs, icon_dirs, now_ms,
         ));
@@ -7304,19 +7315,21 @@ impl Shell {
             // now, so no decoded copy may outlive the change.
             crate::themeicons::clear_cache();
         }
-        let found = crate::desktop_entry::reload_tracked(
+        let found = crate::desktop_entry::reload_with_cache(
             &app_dirs,
             &icon_dirs,
             &self.desktop_apps,
             &reread,
             change.icons,
+            &mut self.desktop_icon_names,
         );
         self.desktop_apps = found.apps;
         self.desktop_dirs_read = found.dirs_read;
         self.desktop_files_read = found.files_read;
+        self.desktop_icons_resolved = found.icons_resolved;
         eprintln!(
-            "litric-shell: desktop: {} directories, {} entries read ({:?} renamed, icons {})",
-            found.dirs_read, found.files_read, reread, change.icons
+            "litric-shell: desktop: {} directories, {} entries, {} names resolved ({:?} reread, icons {})",
+            found.dirs_read, found.files_read, found.icons_resolved, reread, change.icons
         );
         self.desktop_watch = Some(crate::desktop_entry::DesktopWatch::new(
             &app_dirs, &icon_dirs, now_ms,

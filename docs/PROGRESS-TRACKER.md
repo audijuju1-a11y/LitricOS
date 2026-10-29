@@ -4835,3 +4835,124 @@ Restored, the same journey passes (`test result: ok. 1 passed`).
   discovery does.
 * **One second of latency** and the 1-second mtime granularity caveats from §55
   are unchanged.
+## 57. Batch: one icon name is resolved once per state of the icon tree (verified)
+
+### 57.1 Requirement and audit
+
+Source: this file's own §56.6 limit, quoted verbatim:
+
+> **A change still re-resolves every icon** when an icon directory moved: the
+> entries are not re-parsed, but each `Icon=` name is looked up again (one bounded
+> `find_in` per entry, `MAX_APPS` at most). A per-name negative cache would be the
+> next step; it is not claimed here.
+
+The audit found the cost in one place and the missing piece in another:
+
+* `reload_with_cache`'s resolve pass called `themeicons::find_in(icon_dirs, icon,
+  48)` once per entry, so a desktop suite whose entries all say `Icon=office`
+  walked the theme tree once per entry — the same handful of names, answered
+  again and again.
+* The shell already knew *whether* the icon tree moved (`Change::icons`, from
+  `DesktopWatch`), and already dropped the decoded pixel cache then, but nothing
+  remembered the name-to-file answer, so "moved" always meant "ask every name
+  again".
+
+This batch adds `IconNames`: one map of `Icon=` name to resolved path (or to a
+remembered miss), guarded by the stamps of the icon roots. A name is asked once
+per state of the tree; when a root's stamp moves the map is cleared before the
+next lookup, so a remembered miss — or another theme's file — is never trusted
+across a theme change. Distinct names resolve once no matter how many entries
+share them.
+
+### 57.2 The connection
+
+| File | Line | What it connects |
+| --- | --- | --- |
+| `src/litric-shell/src/desktop_entry.rs` | 296 | `MAX_ICON_NAMES = 512`: the map is cleared rather than grown past it |
+| `src/litric-shell/src/desktop_entry.rs` | 322 | `IconNames`: dirs, their stamps, the name map, and the counters |
+| `src/litric-shell/src/desktop_entry.rs` | 344 | `refresh`: compares the icon-root stamps and clears the map when they moved |
+| `src/litric-shell/src/desktop_entry.rs` | 355 | `resolve`: memo hit, else one `themeicons::find_in`, bounded insert |
+| `src/litric-shell/src/desktop_entry.rs` | 401 | `bytes`: what the map holds, for the measured bound |
+| `src/litric-shell/src/desktop_entry.rs` | 113 | `Discovery::icons_resolved`: distinct names asked in that pass |
+| `src/litric-shell/src/desktop_entry.rs` | 173 | `reload_with_cache`: the resolve passes go through the memo |
+| `src/litric-shell/src/shell.rs` | 3104 | `desktop_icons_resolved` and `desktop_icon_names`: the counter and the memo, kept across reloads |
+| `src/litric-shell/src/shell.rs` | 7297 | `refresh_desktop`: hands the memo to the reload and records the count |
+| `src/litric-shell/src/e2e.rs` | 5068 | journey: two entries with one icon name installed while the launcher is open, one resolve, two drawn tiles |
+| `src/litric-shell/src/desktop_entry.rs` | 1137 | unit: three entries, one name, one resolve and two memo hits; a second pass resolves nothing |
+| `src/litric-shell/src/desktop_entry.rs` | 1193 | unit: a remembered miss is not reused after the theme arrives |
+| `ci/lint-file-safety.py` | 142 | the journey's temporary-root cleanup, recorded with its reason |
+
+### 57.3 Cost
+
+Measured on this machine:
+
+* **Three entries sharing one name: 1 resolve, 2 memo hits**; a second full pass
+  over the same tree: **0 resolves** (all names already known).
+* **An installed pair in the e2e:** 2 entries, 2 files, **1 resolve** — the number
+  the assertion reads, and 2 when the memo is bypassed (§57.5).
+* **Memory for that fixture: 215 bytes** for one name (`IconNames::bytes`, printed
+  by the unit test). The asserted ceiling is `MAX_ICON_NAMES × (255 + 512 + 96)`
+  = **441 856 bytes** for a full map of 512 names, a lower bound that excludes
+  allocator bookkeeping; the map is cleared rather than grown past 512.
+* **No per-frame work:** the memo is only touched during a discovery or a reload.
+  The "30 frames, no `stat`" assertion of §55 and the "one check a second" of §56
+  still pass unchanged.
+* **No new dependency, no unsafe.** One `HashMap<String, Option<PathBuf>>`, one
+  stamp per icon root, two counters.
+
+### 57.4 Tests and gates
+
+Tests added: 2 unit tests (`entries_sharing_one_icon_name_resolve_it_once`,
+`a_theme_change_does_not_reuse_a_negative_lookup`) and 1 e2e journey
+(`journey_launcher_resolves_a_shared_icon_name_once`), 3 in total.
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test --workspace` | 1795 passed, 0 failed |
+| `python3 ci/lint-doc-refs.py` | OK, every citation resolves |
+| `python3 ci/lint-file-safety.py` | exit 0, with the new journey recorded at line 142 |
+| `bash ci/verify.sh` | `summary: 32 pass, 2 fail, 3 skipped` |
+
+The two failures are the unchanged absent local dev-key material; the three skips
+are the QEMU-only checks. No gate was weakened, no key was generated, and no
+golden frame changed: the golden dump has no discovered application in it.
+
+The frame the journey saved (`artifacts/browser-shots/57-launcher-icon-name-cache.png`)
+was opened and checked: both tiles show the document's blue field, amber disc and
+white triangle, legible at 82 px — not a placeholder square.
+
+### 57.5 Sensitivity
+
+With the memo bypassed — `resolve` returning straight from `themeicons::find_in`
+and counting every call — the same journey fails on the counter:
+
+```
+panicked at litric-shell/src/e2e.rs:5105:5:
+assertion `left == right` failed: two entries share one icon name, so the theme tree should be asked once, not 2 times
+  left: 2
+ right: 1
+```
+
+Restored, the journey passes (`test result: ok. 1 passed`) and `rg 'if true \{'`
+over the module returns nothing.
+
+### 57.6 Limits
+
+* **The whole map is dropped when the icon tree moves**, not the entries that
+  changed: one `find_in` per distinct name after a theme install, which is the
+  intended semantics rather than a per-name stamp. A page that churns themes
+  pays that once per change.
+* **A remembered miss lives only until the next stamp change.** Without a theme
+  install, a name that resolves to nothing stays remembered as nothing; that is
+  correct for a tree that did not move, and §55's watch is what moves it.
+* **No sharing between processes.** Each shell keeps its own map; the map is not
+  written to disk.
+* **Cleared, not evicted, at the cap.** Past 512 names the map empties rather
+  than tracking ages, so a session that asked 513 distinct names re-resolves the
+  ones it asks next. With `MAX_APPS` at 128 this needs deliberate churn to reach.
+* **`bytes` is a lower bound.** It counts names, paths and per-entry headers, not
+  the allocator's own overhead, so the real RSS figure is somewhat higher.
+* **One second of latency** and the mtime-granularity caveats from §55 are
+  unchanged.

@@ -108,6 +108,9 @@ pub struct Discovery {
     pub dirs_read: usize,
     /// Desktop files actually read from disk.
     pub files_read: usize,
+    /// Distinct `Icon=` names this pass asked the theme tree for. A name shared
+    /// by several entries is asked once, so this is not the entry count.
+    pub icons_resolved: usize,
 }
 
 /// Discover the applications in `dirs` and resolve their icons in `icon_dirs`.
@@ -123,7 +126,18 @@ pub fn discover_in_with(dirs: &[PathBuf], icon_dirs: &[PathBuf]) -> Vec<DesktopA
 /// Discover everything in `dirs`, reporting how much was read.
 #[must_use]
 pub fn discover_tracked(dirs: &[PathBuf], icon_dirs: &[PathBuf]) -> Discovery {
-    reload_tracked(dirs, icon_dirs, &[], dirs, true)
+    let mut names = IconNames::new(icon_dirs);
+    discover_with_cache(dirs, icon_dirs, &mut names)
+}
+
+/// Discover everything in `dirs` using `names` to memoise icon lookups.
+#[must_use]
+pub fn discover_with_cache(
+    dirs: &[PathBuf],
+    icon_dirs: &[PathBuf],
+    names: &mut IconNames,
+) -> Discovery {
+    reload_with_cache(dirs, icon_dirs, &[], dirs, true, names)
 }
 
 /// Discover `dirs`, re-reading only `reread` and reusing `keep` for the rest.
@@ -146,6 +160,26 @@ pub fn reload_tracked(
     reread: &[PathBuf],
     resolve_icons: bool,
 ) -> Discovery {
+    let mut names = IconNames::new(icon_dirs);
+    reload_with_cache(dirs, icon_dirs, keep, reread, resolve_icons, &mut names)
+}
+
+/// As [`reload_tracked`], reusing `names` for the icon lookups.
+///
+/// The cache is valid for one state of the icon tree: if a directory under it
+/// moved, every name is looked up again before it is trusted, so a name is never
+/// carried across a theme change.
+#[must_use]
+pub fn reload_with_cache(
+    dirs: &[PathBuf],
+    icon_dirs: &[PathBuf],
+    keep: &[DesktopApp],
+    reread: &[PathBuf],
+    resolve_icons: bool,
+    names: &mut IconNames,
+) -> Discovery {
+    names.refresh(icon_dirs);
+    let resolved_before = names.resolved();
     let mut claimed: Vec<String> = Vec::new();
     let mut apps: Vec<DesktopApp> = Vec::new();
     let mut dirs_read = 0usize;
@@ -225,14 +259,14 @@ pub fn reload_tracked(
     if resolve_icons {
         for app in &mut apps {
             if let Some(icon) = app.icon.as_deref() {
-                app.icon_path = crate::themeicons::find_in(icon_dirs, icon, 48);
+                app.icon_path = names.resolve(icon_dirs, icon);
             }
         }
     } else {
         for app in &mut apps {
             if app.icon_path.is_none() {
                 if let Some(icon) = app.icon.as_deref() {
-                    app.icon_path = crate::themeicons::find_in(icon_dirs, icon, 48);
+                    app.icon_path = names.resolve(icon_dirs, icon);
                 }
             }
         }
@@ -244,10 +278,141 @@ pub fn reload_tracked(
             .then_with(|| a.id.cmp(&b.id))
     });
     apps.truncate(MAX_APPS);
+    let icons_resolved =
+        usize::try_from(names.resolved().saturating_sub(resolved_before)).unwrap_or(usize::MAX);
     Discovery {
         apps,
         dirs_read,
         files_read,
+        icons_resolved,
+    }
+}
+
+/// The most icon names one cache holds.
+///
+/// A machine offers at most [`MAX_APPS`] entries, so a load holds at most 128
+/// names; 512 is headroom for a session that reloads while the list churns, and
+/// the map is cleared rather than grown past it.
+pub const MAX_ICON_NAMES: usize = 512;
+
+/// `Icon=` names resolved against one state of the icon tree.
+///
+/// # Why it exists
+///
+/// A theme install moves the icon directories, and §56 then re-resolved every
+/// entry's name — one `find_in` walk per entry, with the same handful of names
+/// asked over and over (an office suite's entries all say `Icon=office`). This
+/// memo answers each distinct name once per state of the tree.
+///
+/// # Why it is keyed by a stamp
+///
+/// The map is only valid while the icon directories look exactly as they did
+/// when the first name was resolved. [`IconNames::refresh`] compares their
+/// stamps before every pass and clears the map when they moved, so a name that
+/// resolved to nothing — or to another theme's file — is never trusted after the
+/// tree changes. That is the same guarantee as a per-entry `(name, stamp)` key,
+/// with one stamp instead of one per name.
+///
+/// # Bounds
+///
+/// At most [`MAX_ICON_NAMES`] names; past that the map is cleared, so a session
+/// cannot accumulate a name for every icon a page ever asked about. The paths
+/// and names it holds are counted by [`IconNames::bytes`].
+#[derive(Debug, Clone, Default)]
+pub struct IconNames {
+    dirs: Vec<PathBuf>,
+    stamp: Vec<Stamp>,
+    names: HashMap<String, Option<PathBuf>>,
+    resolved: u64,
+    hits: u64,
+}
+
+impl IconNames {
+    /// An empty cache armed for `icon_dirs` as they are now.
+    #[must_use]
+    pub fn new(icon_dirs: &[PathBuf]) -> Self {
+        Self {
+            dirs: icon_dirs.to_vec(),
+            stamp: icon_dirs.iter().map(|dir| stamp_of(dir)).collect(),
+            names: HashMap::new(),
+            resolved: 0,
+            hits: 0,
+        }
+    }
+
+    /// Drop everything if the icon tree moved, then re-stamp it.
+    fn refresh(&mut self, icon_dirs: &[PathBuf]) {
+        let fresh: Vec<Stamp> = icon_dirs.iter().map(|dir| stamp_of(dir)).collect();
+        if self.dirs != icon_dirs || self.stamp != fresh {
+            self.names.clear();
+            self.dirs = icon_dirs.to_vec();
+            self.stamp = fresh;
+        }
+    }
+
+    /// The file `name` resolves to under `icon_dirs`, asking the theme tree at
+    /// most once per name per state of that tree.
+    pub fn resolve(&mut self, icon_dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
+        self.refresh(icon_dirs);
+        if let Some(found) = self.names.get(name) {
+            self.hits = self.hits.saturating_add(1);
+            return found.clone();
+        }
+        if self.names.len() >= MAX_ICON_NAMES {
+            // A hard bound, not an eviction policy: the entries that follow will
+            // resolve again, which is cheaper than tracking ages for a map this
+            // small.
+            self.names.clear();
+        }
+        self.resolved = self.resolved.saturating_add(1);
+        let found = crate::themeicons::find_in(icon_dirs, name, 48);
+        self.names.insert(name.to_owned(), found.clone());
+        found
+    }
+
+    /// Names whose file was looked up, across the life of this cache.
+    #[must_use]
+    pub fn resolved(&self) -> u64 {
+        self.resolved
+    }
+
+    /// Lookups answered from the map without touching the theme tree.
+    #[must_use]
+    pub fn hits(&self) -> u64 {
+        self.hits
+    }
+
+    /// Names the map holds now. For the diagnostics line and the tests.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    /// Whether the map holds nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    /// What the map holds, in bytes: the names, the paths they resolved to, and
+    /// one header per entry. This is a lower bound — it does not count the
+    /// allocator's own bookkeeping — and it is what the tests assert against.
+    #[must_use]
+    pub fn bytes(&self) -> usize {
+        let mut total = self
+            .dirs
+            .iter()
+            .map(|dir| dir.as_os_str().len())
+            .fold(0usize, usize::saturating_add);
+        for (name, path) in &self.names {
+            total = total
+                .saturating_add(name.len())
+                .saturating_add(path.as_ref().map_or(0, |p| p.as_os_str().len()))
+                .saturating_add(std::mem::size_of::<String>())
+                .saturating_add(std::mem::size_of::<Option<PathBuf>>())
+                .saturating_add(std::mem::size_of::<usize>().saturating_mul(2));
+        }
+        total
     }
 }
 
@@ -964,6 +1129,121 @@ mod tests {
             "a removed entry"
         );
         assert!(discover_in(std::slice::from_ref(&apps)).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entries_sharing_one_icon_name_resolve_it_once() {
+        let root = scratch("icons-shared");
+        let apps = root.join("applications");
+        let icons = root.join("icons/hicolor/scalable/apps");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(&icons).expect("theme");
+        std::fs::write(
+            icons.join("shared-icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#2080c0\"/></svg>",
+        )
+        .expect("icon");
+        let prog = program(&root, "run-me");
+        for name in ["Alpha", "Beta", "Gamma"] {
+            std::fs::write(
+                apps.join(format!("{name}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName={name}\nIcon=shared-icon\nExec={}\n",
+                    prog.display()
+                ),
+            )
+            .expect("entry");
+        }
+        let icon_dirs = vec![root.join("icons")];
+        let mut names = IconNames::new(&icon_dirs);
+        let first = discover_with_cache(std::slice::from_ref(&apps), &icon_dirs, &mut names);
+        assert_eq!(first.apps.len(), 3);
+        assert_eq!(
+            first.icons_resolved, 1,
+            "three entries, one name: the theme tree is asked once"
+        );
+        assert!(first.apps.iter().all(|app| app.icon_path.is_some()));
+        assert_eq!(names.len(), 1);
+        assert_eq!(names.hits(), 2, "the other two entries were memo hits");
+        println!(
+            "icon name cache: {} names, {} bytes",
+            names.len(),
+            names.bytes()
+        );
+
+        // A second pass with the same tree resolves nothing at all.
+        let again = reload_with_cache(
+            std::slice::from_ref(&apps),
+            &icon_dirs,
+            &first.apps,
+            &[],
+            true,
+            &mut names,
+        );
+        assert_eq!(again.icons_resolved, 0, "every name was already known");
+        assert_eq!(again.apps.len(), 3);
+        assert!(names.bytes() <= MAX_ICON_NAMES * (255 + 512 + 96));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_theme_change_does_not_reuse_a_negative_lookup() {
+        let root = scratch("icons-stale");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(&icons).expect("icons");
+        let prog = program(&root, "run-me");
+        std::fs::write(
+            apps.join("late.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Late\nIcon=late-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("entry");
+        let icon_dirs = std::slice::from_ref(&icons);
+        let mut names = IconNames::new(icon_dirs);
+        let first = discover_with_cache(std::slice::from_ref(&apps), icon_dirs, &mut names);
+        assert_eq!(first.icons_resolved, 1);
+        assert!(
+            first
+                .apps
+                .first()
+                .and_then(|app| app.icon_path.as_ref())
+                .is_none(),
+            "the theme does not exist yet"
+        );
+
+        // The theme arrives: the icon tree stamp moves.
+        let theme = icons.join("hicolor/scalable/apps");
+        std::fs::create_dir_all(&theme).expect("theme");
+        std::fs::write(
+            theme.join("late-icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#2080c0\"/></svg>",
+        )
+        .expect("icon");
+        let after = reload_with_cache(
+            std::slice::from_ref(&apps),
+            icon_dirs,
+            &first.apps,
+            &[],
+            true,
+            &mut names,
+        );
+        assert_eq!(
+            after.icons_resolved, 1,
+            "the cached miss must not survive the theme change"
+        );
+        let path = after
+            .apps
+            .first()
+            .and_then(|app| app.icon_path.as_ref())
+            .expect("the new theme resolved the name");
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("svg"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
