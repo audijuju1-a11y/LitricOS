@@ -2611,6 +2611,8 @@ impl Shell {
             MA::CancelScan => {
                 self.cancel_scan();
             }
+            MA::QuarantineFinding(index) => return self.quarantine_finding(index),
+            MA::RestoreQuarantined(index) => return self.restore_quarantined(index),
             MA::BrowserStart => return self.browser_start_session(),
             MA::BrowserReload => {
                 let i = self.menu_tab();
@@ -6758,6 +6760,84 @@ impl Shell {
         }
     }
 
+    /// Re-read the contained list from its records. One directory read when
+    /// the window opens or a move finishes; never on the frame path.
+    pub fn refresh_quarantine(&mut self) {
+        let zone = self.regional.zone.clone();
+        let entries = match self.try_files_bridge(zone) {
+            Ok(bridge) => crate::quarantine::list(&bridge),
+            Err(_) => Err("the file service is not available".to_owned()),
+        };
+        match entries {
+            Ok(items) => self.defender.app.quarantined = items,
+            Err(error) => self.defender.app.message = format!("Quarantine unavailable: {error}"),
+        }
+    }
+
+    /// Contain one finding through the shared service, then show what the
+    /// filesystem actually did. A refusal keeps the row where it is and says
+    /// why; nothing is removed from the list on a promise.
+    fn quarantine_finding(&mut self, index: usize) -> Vec<Effect> {
+        let Some(row) = self.defender.app.rows.get(index) else {
+            return Vec::new();
+        };
+        if !row.detected || !crate::quarantine::in_scope(&row.path) {
+            return Vec::new();
+        }
+        let path = row.path.clone();
+        let zone = self.regional.zone.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let result = match self.try_files_bridge(zone) {
+            Ok(bridge) => crate::quarantine::quarantine(&bridge, &path, "Threat found", now),
+            Err(_) => Err("the file service is not available".to_owned()),
+        };
+        match result {
+            Ok(entry) => {
+                let name = entry
+                    .original
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&entry.original)
+                    .to_owned();
+                self.defender.app.rows.retain(|r| r.path != entry.original);
+                if let crate::apps::ScanState::Done { scanned, threats } = self.defender.app.state {
+                    self.defender.app.state = crate::apps::ScanState::Done {
+                        scanned,
+                        threats: threats.saturating_sub(1),
+                    };
+                }
+                self.defender.app.message = format!("Quarantined {name}");
+                self.refresh_quarantine();
+            }
+            Err(error) => self.defender.app.message = format!("Could not quarantine: {error}"),
+        }
+        Vec::new()
+    }
+
+    /// Put one contained file back through the shared service.
+    fn restore_quarantined(&mut self, index: usize) -> Vec<Effect> {
+        let Some(entry) = self.defender.app.quarantined.get(index) else {
+            return Vec::new();
+        };
+        let stored = entry.stored.clone();
+        let zone = self.regional.zone.clone();
+        let result = match self.try_files_bridge(zone) {
+            Ok(bridge) => crate::quarantine::restore(&bridge, &stored),
+            Err(_) => Err("the file service is not available".to_owned()),
+        };
+        match result {
+            Ok(original) => {
+                let name = original.rsplit('/').next().unwrap_or(&original).to_owned();
+                self.defender.app.message = format!("Restored {name}");
+            }
+            Err(error) => self.defender.app.message = format!("Could not restore: {error}"),
+        }
+        self.refresh_quarantine();
+        Vec::new()
+    }
+
     /// Open an application's window, or focus it if it is already open.
     ///
     /// The window manager damages the window it opens, raises or restores;
@@ -6766,6 +6846,12 @@ impl Shell {
         if self.overlay.is_open() {
             self.set_overlay(Overlay::None);
             self.overlay_damage();
+        }
+        // The contained list is on disk, so it is read when the window opens:
+        // a restart shows what is still contained, not what this session
+        // happened to remember.
+        if app == App::Defender {
+            self.refresh_quarantine();
         }
         if let Some(existing) = self
             .wm

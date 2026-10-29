@@ -3176,3 +3176,104 @@ This proves the local workflow (a real file on disk in `/Downloads` opened from
 the Browser panel, then scanned). It does not prove a network download: this
 image still has no Chromium engine and no TLS stack, so no `https://` page was
 fetched and the broker's staging path could not be exercised end to end here.
+
+## 40. Batch: Defender contains a finding and restores it (verified)
+
+### 40.1 What was missing
+
+"Quarantine" existed only as a mention in the denylist planner: there was no
+move, no record on disk, no list and no restore. The Defender window drew each
+finding as text with no hotspot (`draw_defender` in
+`src/litric-shell/src/views.rs`), so a finding could be reported but not acted
+on. Restore did not exist at all, not even in planning.
+
+### 40.2 The one service both halves use
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/quarantine.rs` | The single owner of containment: `quarantine`, `restore`, `list`, `in_scope`. It moves through `FsBridge` — the same validated backend Files uses — and writes one record per entry. |
+| `src/litric-shell/src/shell.rs` | `refresh_quarantine` reads the list when Defender opens and after every move; `quarantine_finding` / `restore_quarantined` run one service call, then refresh from what the filesystem actually contains. Wired to `MenuAction::QuarantineFinding` and `MenuAction::RestoreQuarantined`. |
+| `src/litric-shell/src/views.rs` | A real `Quarantine` button on each in-scope detection, and a `QUARANTINED` section listing the entries read from disk, each with a real `Restore` button. Both are ordinary hotspots; the hover tint comes from the shared button. |
+| `src/litric-shell/src/apps.rs` | `DefenderApp::quarantined` holds what the records say; `MenuAction` carries the two actions. |
+| `ci/lint-file-safety.py` | The fixture cleanups of the new tests are reviewed entries. |
+
+Rules the service enforces, all with a plain sentence for the window:
+
+* only paths under the Fast scan's roots (`/Documents`, `/Downloads`,
+  `/Pictures`, `/Music`, `/Videos`, `/Projects`) — Deep scan findings in system
+  folders are reported but not moved, because moving the running OS is not a
+  repair;
+* links and folders are refused; the path is checked with `symlink_metadata`
+  and canonicalised against the real root before anything moves;
+* a move never overwrites: the name is numbered until free, the bridge's
+  `write_text` is create-new and its `rename` refuses an existing name, and the
+  name the bridge actually used is verified against the one chosen;
+* a record is written before the move is reported as done. If it cannot be
+  written, the file is moved back and the window says the containment failed —
+  or says plainly that the file is in the Quarantine folder and was not
+  recorded, if even that rollback fails;
+* `restore` takes the original path only from the record, refuses a record that
+  names a path outside the protected folders, refuses an occupied original
+  path, and refuses a missing original folder. Any refusal leaves the
+  quarantined copy intact;
+* `list` reads records from disk and drops a record whose file is gone, so the
+  list is what is contained now. A folder that exists but cannot be read is an
+  error, not "nothing quarantined".
+
+The quarantine folder is `/Quarantine` at the storage root, outside every scan
+root, so a scan does not re-report what is already contained. `/Downloads` is
+still in the protected scope, so a downloaded file can be contained.
+
+### 40.3 What the journeys observed
+
+`journey_defender_quarantines_and_restores_a_real_threat` drives only the
+window: open Defender, click Fast scan on a fixture with `clean.txt` and
+`eicar.com`, click `Quarantine` on the finding row, then `Restore` on the
+contained row. It asserts, against the real filesystem and the window's own
+state:
+
+* the source is gone from `/Documents`, the file is in `/Quarantine`, and
+  `eicar.com.quarantine` exists;
+* the window's list has one entry naming `/Documents/eicar.com`, the message is
+  "Quarantined …", and the finding row is no longer listed as loose;
+* the clean file is untouched;
+* a second shell opening Defender, with no shared memory, sees the same one
+  entry — the list comes from disk;
+* after Restore the file is back at its original path with identical bytes, the
+  quarantine file and record are gone, the list is empty and the message is
+  "Restored …".
+
+`journey_defender_refuses_to_quarantine_a_file_that_is_gone` removes the file
+after the scan and clicks the same control: the window says
+"Could not quarantine: that file could not be found", no quarantine folder is
+created, the finding stays listed (the user is not told a stale finding was
+contained), and the clean file is untouched.
+
+The unit tests in `quarantine.rs` cover the cases a window cannot reach: an
+out-of-scope path (source untouched), two containments of the same name (two
+separate entries, never an overwrite), restore onto an occupied original path
+(copy kept), a record naming a system path (refused), and a link (refused, both
+link and target untouched).
+
+```text
+cargo test --workspace        passed=1704 failed=0   (was 1,697; +7)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the known absent `keys/dev/` material (the mkosi key
+layout and the dev key pairs). No test deleted, no gate relaxed, no dependency
+added.
+
+### 40.4 Resources and limits
+
+A click does one directory listing (when the window opens) or one move plus one
+listing (after a move) — no polling, no `thread::spawn`, no per-frame work, no
+unbounded buffer. The list is capped by what is in the folder and the view
+draws at most 20 entries. Containment is a rename on one filesystem; the
+existing bridge falls back to a copy only across devices.
+
+This proves the local containment path with real files. It does not prove a
+network download being contained (no Chromium engine and no TLS stack in this
+image), and it does not quarantine system files found by Deep scan: those are
+reported only, by design.

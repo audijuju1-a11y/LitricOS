@@ -1557,6 +1557,9 @@ pub struct DefenderApp {
     pub definitions: usize,
     /// Whether the last scan found anything (drives the top-bar badge).
     pub last_had_threats: bool,
+    /// What is actually contained right now, read from the records on disk
+    /// when the window opens and after every move.
+    pub quarantined: Vec<crate::quarantine::Quarantined>,
 }
 
 impl DefenderApp {
@@ -1990,6 +1993,10 @@ pub enum MenuAction {
     DeepScan,
     /// Stop the scan that is running.
     CancelScan,
+    /// Contain one detected file.
+    QuarantineFinding(usize),
+    /// Put one contained file back where it came from.
+    RestoreQuarantined(usize),
     /// Start the browser engine session.
     BrowserStart,
     /// Reload the focused browser tab.

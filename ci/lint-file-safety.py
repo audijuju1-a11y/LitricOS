@@ -108,6 +108,13 @@ ALLOWED = {
     "src/litric-shell/src/prefstore.rs": {
         "save": "removes only the store's own temporary file (settings.conf.tmp.<pid>) -- before writing, and again when the write failed -- never a preference record",
     },
+    "src/litric-shell/src/quarantine.rs": {
+        "quarantine_contains_the_file_and_restore_puts_it_back": "removes the scratch root this test created under the system temp directory, after asserting the file was contained and restored",
+        "a_second_quarantine_never_replaces_the_first": "removes the scratch root this test created under the system temp directory, after asserting both entries stayed separate",
+        "out_of_scope_and_missing_files_are_refused_without_moving_anything": "removes the scratch root this test created under the system temp directory, after asserting the refused source was untouched",
+        "restore_refuses_to_overwrite_or_to_use_a_tampered_record": "removes the scratch root this test created under the system temp directory, after asserting the contained copy was kept",
+        "a_link_is_refused_and_its_target_is_left_alone": "removes the scratch root this test created under the system temp directory, after asserting the link and its target were untouched",
+    },
     "src/litric-shell/src/e2e.rs": {
         "e2e_root": "removes the temporary fixture root it is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
         "journey_files_selects_with_mouse_and_compresses_multiple_items": "removes the fixture root this journey made with `e2e_root` -- tagged with this process's id under the system temp directory -- after asserting the archive it asked for exists in it",
@@ -123,6 +130,8 @@ ALLOWED = {
         "journey_files_context_menu_creates_its_folder_in_the_open_folder": "removes the temporary root this journey created (BUG-0025, the context-menu route: it asserts the folder exists in the open folder and not in /Documents before cleaning up)",
         "journey_right_click_trash_row_targets_that_row": "removes the temporary root this journey created (BUG-0025, the Trash rows: it asserts the clicked row was the one restored and the previously selected row was not touched before cleaning up)",
         "journey_viewer_opens_text_files_with_scrolling": "removes the temporary root this journey created",
+        "journey_defender_quarantines_and_restores_a_real_threat": "removes the temporary fixture root this Defender containment journey created, tagged with its own pid, after asserting the file was contained and restored",
+        "journey_defender_refuses_to_quarantine_a_file_that_is_gone": "removes the temporary fixture root this refusal journey created, tagged with its own pid, after asserting no quarantine entry was invented",
     },
     "src/litric-sysd/src/providers.rs": {
         "apply_file": "removes one Wi-Fi credential; the path is refused unless it is a direct child of iwd's state directory under the daemon root, and the network name was validated by `valid_ssid` before the path was built",

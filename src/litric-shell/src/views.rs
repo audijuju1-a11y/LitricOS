@@ -4436,16 +4436,92 @@ fn draw_defender(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
             row.y + t.px(15.0),
             &s,
         );
+        let can_quarantine =
+            r.detected && !shell.defender.running && crate::quarantine::in_scope(&r.path);
+        let right = if can_quarantine {
+            row.right() - t.px(96.0)
+        } else {
+            row.right()
+        };
         let vs = Style::new(t.text_px(TypeStep::Caption), t.tone(tone));
         let vw = font::measure(&r.verdict, &vs);
+        font::draw(canvas, &r.verdict, right - vw, row.y + t.px(15.0), &vs);
+        if can_quarantine {
+            let button = Rect::new(
+                row.right() - t.px(90.0),
+                row.y + t.px(1.0),
+                t.px(90.0),
+                t.px(22.0),
+            );
+            ui::button(
+                canvas,
+                &t,
+                button,
+                "Quarantine",
+                ui::State::Normal,
+                Tone::Neutral,
+            );
+            shell.hotspots_mut().push(
+                button,
+                Hot::MenuRow(crate::apps::MenuAction::QuarantineFinding(i)),
+            );
+        }
+    }
+    canvas.set_clip(saved);
+
+    // What is contained now, from the records on disk. A row is only drawn
+    // for an entry that is actually there; the list is never a memory of what
+    // was once removed.
+    ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "QUARANTINED");
+    col.space(t.px(16.0));
+    let saved = canvas.push_clip(Rect::new(
+        body.x,
+        col.cursor,
+        body.w,
+        body.bottom() - col.cursor,
+    ));
+    if d.quarantined.is_empty() {
+        let note = col.row(t.px(22.0));
+        let s_note = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
         font::draw(
             canvas,
-            &r.verdict,
-            row.right() - vw,
-            row.y + t.px(15.0),
-            &vs,
+            "Nothing is quarantined",
+            note.x,
+            note.y + t.px(14.0),
+            &s_note,
         );
-        let _ = i;
+    }
+    for (i, entry) in d.quarantined.iter().enumerate().take(20) {
+        let row = col.row(t.px(24.0));
+        if col.cursor > body.bottom() {
+            break;
+        }
+        let s = Style::new(t.text_px(TypeStep::Caption), t.text());
+        font::draw(
+            canvas,
+            &ui::elide(&entry.original, &s, row.w - t.px(104.0)),
+            row.x,
+            row.y + t.px(15.0),
+            &s,
+        );
+        let button = Rect::new(
+            row.right() - t.px(84.0),
+            row.y + t.px(1.0),
+            t.px(84.0),
+            t.px(22.0),
+        );
+        ui::button(
+            canvas,
+            &t,
+            button,
+            "Restore",
+            ui::State::Normal,
+            Tone::Neutral,
+        );
+        shell.hotspots_mut().push(
+            button,
+            Hot::MenuRow(crate::apps::MenuAction::RestoreQuarantined(i)),
+        );
     }
     canvas.set_clip(saved);
 }

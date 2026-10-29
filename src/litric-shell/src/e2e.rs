@@ -3108,3 +3108,229 @@ fn journey_a_download_opens_in_files_and_is_scanned() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// One Defender session that contains a real threat and puts it back: the
+/// window's Quarantine and Restore controls are clicked, and every assertion is
+/// about the real files under the fixture root or the state the window reads
+/// back from disk. A second shell is opened mid-journey to prove the list comes
+/// from the records, not from memory.
+#[test]
+fn journey_defender_quarantines_and_restores_a_real_threat() {
+    let root = e2e_root("defender-quarantine");
+    let docs = root.join("Documents");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("clean.txt"), b"a harmless note\n").unwrap();
+    std::fs::write(docs.join("eicar.com"), EICAR).unwrap();
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Defender);
+    let _ = draw_frame(&mut s);
+
+    let fast = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::ScanNow))
+        .expect("the Fast scan button is drawn");
+    let _ = click(&mut s, fast.center().0, fast.center().1);
+    for _ in 0..600 {
+        let _ = draw_frame(&mut s);
+        if !s.defender.running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!s.defender.running, "the scan finished");
+    let index = s
+        .defender
+        .app
+        .rows
+        .iter()
+        .position(|row| row.path.ends_with("/eicar.com"))
+        .expect("the planted threat is listed");
+    assert!(
+        s.defender
+            .app
+            .rows
+            .get(index)
+            .expect("the threat row exists")
+            .detected
+    );
+
+    let _ = draw_frame(&mut s);
+    let quarantine = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::QuarantineFinding(index)))
+        .expect("a finding row has a real Quarantine control");
+    let _ = click(&mut s, quarantine.center().0, quarantine.center().1);
+    let _ = draw_frame(&mut s);
+
+    assert!(
+        !docs.join("eicar.com").exists(),
+        "the file actually left the folder it was found in"
+    );
+    assert!(
+        root.join("Quarantine/eicar.com").exists(),
+        "the file is really in the quarantine folder"
+    );
+    assert!(
+        root.join("Quarantine/eicar.com.quarantine").exists(),
+        "the entry has a record on disk"
+    );
+    assert_eq!(s.defender.app.quarantined.len(), 1);
+    assert_eq!(
+        s.defender
+            .app
+            .quarantined
+            .first()
+            .map(|entry| entry.original.as_str()),
+        Some("/Documents/eicar.com")
+    );
+    assert!(
+        s.defender.app.message.starts_with("Quarantined"),
+        "the window says what happened: {}",
+        s.defender.app.message
+    );
+    assert!(
+        !s.defender
+            .app
+            .rows
+            .iter()
+            .any(|row| row.path.ends_with("/eicar.com")),
+        "the contained finding is no longer listed as loose"
+    );
+    assert!(
+        docs.join("clean.txt").exists(),
+        "the clean file was not touched"
+    );
+
+    // The list is on disk: a fresh shell opening Defender sees the entry.
+    let mut restarted = shell();
+    restarted.files_root = root.clone();
+    restarted.open_app(App::Defender);
+    let _ = draw_frame(&mut restarted);
+    assert_eq!(
+        restarted.defender.app.quarantined.len(),
+        1,
+        "a restart still shows what is contained"
+    );
+    assert_eq!(
+        restarted
+            .defender
+            .app
+            .quarantined
+            .first()
+            .map(|entry| entry.original.as_str()),
+        Some("/Documents/eicar.com")
+    );
+
+    let _ = draw_frame(&mut s);
+    let restore = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::RestoreQuarantined(0)))
+        .expect("the contained entry has a real Restore control");
+    let _ = click(&mut s, restore.center().0, restore.center().1);
+    let _ = draw_frame(&mut s);
+
+    assert!(
+        docs.join("eicar.com").exists(),
+        "the file is back at its original path"
+    );
+    assert_eq!(
+        std::fs::read(docs.join("eicar.com")).unwrap(),
+        EICAR,
+        "the restored bytes are the ones that were taken"
+    );
+    assert!(
+        !root.join("Quarantine/eicar.com").exists(),
+        "nothing is left contained"
+    );
+    assert!(
+        !root.join("Quarantine/eicar.com.quarantine").exists(),
+        "the record went with it"
+    );
+    assert!(s.defender.app.quarantined.is_empty());
+    assert!(
+        s.defender.app.message.starts_with("Restored"),
+        "the window says what happened: {}",
+        s.defender.app.message
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The refusal side through the window: a finding that has gone since the scan
+/// cannot be contained, the row stays where the user can see it, and no
+/// quarantine entry is invented.
+#[test]
+fn journey_defender_refuses_to_quarantine_a_file_that_is_gone() {
+    let root = e2e_root("defender-quarantine-gone");
+    let docs = root.join("Documents");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("clean.txt"), b"a harmless note\n").unwrap();
+    std::fs::write(docs.join("eicar.com"), EICAR).unwrap();
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Defender);
+    let _ = draw_frame(&mut s);
+    let fast = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::ScanNow))
+        .expect("the Fast scan button is drawn");
+    let _ = click(&mut s, fast.center().0, fast.center().1);
+    for _ in 0..600 {
+        let _ = draw_frame(&mut s);
+        if !s.defender.running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let index = s
+        .defender
+        .app
+        .rows
+        .iter()
+        .position(|row| row.path.ends_with("/eicar.com"))
+        .expect("the planted threat is listed");
+
+    // The file leaves outside the window, the way another program would.
+    std::fs::remove_file(docs.join("eicar.com")).unwrap();
+
+    let _ = draw_frame(&mut s);
+    let quarantine = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::QuarantineFinding(index)))
+        .expect("the control is still drawn for the stale row");
+    let _ = click(&mut s, quarantine.center().0, quarantine.center().1);
+    let _ = draw_frame(&mut s);
+
+    assert!(
+        s.defender.app.message.starts_with("Could not quarantine"),
+        "the refusal is shown: {}",
+        s.defender.app.message
+    );
+    assert!(
+        s.defender.app.message.contains("could not be found"),
+        "the reason is plain language: {}",
+        s.defender.app.message
+    );
+    assert!(
+        !root.join("Quarantine").exists(),
+        "nothing was created for a file that was not there"
+    );
+    assert!(s.defender.app.quarantined.is_empty());
+    assert!(
+        s.defender
+            .app
+            .rows
+            .iter()
+            .any(|row| row.path.ends_with("/eicar.com")),
+        "the finding stays listed so the user is not told it was contained"
+    );
+    assert!(
+        docs.join("clean.txt").exists(),
+        "the harmless file was not touched"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
