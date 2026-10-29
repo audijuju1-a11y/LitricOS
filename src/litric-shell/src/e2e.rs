@@ -5057,6 +5057,68 @@ fn journey_reader_lays_out_a_table_of_values_in_columns() {
     stop.store(true, Ordering::Relaxed);
 }
 
+/// A new application in one of two application directories re-reads only that
+/// directory, and the launcher still shows the entry that did not move.
+///
+/// The counts are the shell's own diagnostics, not a test hook: the same numbers
+/// it would print if asked. A full reload here reads two directories; the
+/// incremental one reads one.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_reloads_only_the_changed_applications_directory() {
+    let root = e2e_root("desktop-incremental");
+    let home = root.join("home/applications");
+    let system = root.join("system/applications");
+    std::fs::create_dir_all(&home).expect("home");
+    std::fs::create_dir_all(&system).expect("system");
+    std::fs::write(
+        home.join("one.desktop"),
+        "[Desktop Entry]\nType=Application\nName=One App\nExec=/bin/true\n",
+    )
+    .expect("one");
+
+    let mut s = shell();
+    s.load_desktop_apps_from(&[home.clone(), system.clone()], &[], 0);
+    assert_eq!(s.desktop_apps.len(), 1);
+    assert_eq!(s.desktop_dirs_read, 2, "the first discovery reads both");
+    assert_eq!(s.desktop_files_read, 1);
+
+    open_launcher(&mut s);
+    let _ = draw_frame(&mut s);
+
+    // A package lands in the second directory while the shell runs.
+    std::fs::write(
+        system.join("two.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Two App\nExec=/bin/true\n",
+    )
+    .expect("two");
+    s.tick_after(1_010);
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "56-launcher-incremental-reload");
+
+    assert_eq!(s.desktop_apps.len(), 2, "the new entry is offered");
+    assert_eq!(
+        s.desktop_dirs_read, 1,
+        "a reload read {0} directories; only the changed one should be read",
+        s.desktop_dirs_read
+    );
+    assert_eq!(
+        s.desktop_files_read, 1,
+        "a reload parsed {0} files; only the changed directory has one",
+        s.desktop_files_read
+    );
+    let builtins = App::ALL.len();
+    assert_eq!(s.launcher_name(builtins), Some("One App"));
+    assert_eq!(s.launcher_name(builtins + 1), Some("Two App"));
+    assert!(
+        s.hotspots()
+            .rect_of(Hot::LauncherItem(builtins + 1))
+            .is_some(),
+        "the new application has a tile"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// An application and its icon theme installed while the shell runs reach the
 /// launcher without a restart, and removing the entry takes it away again.
 ///

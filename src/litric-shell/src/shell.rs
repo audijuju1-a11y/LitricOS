@@ -3094,6 +3094,11 @@ pub struct Shell {
     /// last look. `None` when the list was placed by hand (`load_desktop_apps`),
     /// in which case nothing is watched and no host directory is touched.
     pub desktop_watch: Option<crate::desktop_entry::DesktopWatch>,
+    /// Application directories and desktop files the last discovery or reload
+    /// read. Diagnostics, and what the incremental reload's tests assert.
+    pub desktop_dirs_read: usize,
+    /// Desktop files the last discovery or reload read.
+    pub desktop_files_read: usize,
     /// The last launch outcome, shown in the launcher's title row. `None`
     /// before anything has been started.
     pub app_status: Option<String>,
@@ -3650,6 +3655,8 @@ impl Shell {
             browser: crate::apps::BrowserApp::default(),
             desktop_apps: Vec::new(),
             desktop_watch: None,
+            desktop_dirs_read: 0,
+            desktop_files_read: 0,
             app_status: None,
             reader: None,
             defender: DefenderState::default(),
@@ -7257,7 +7264,10 @@ impl Shell {
         icon_dirs: &[std::path::PathBuf],
         now_ms: u64,
     ) {
-        self.desktop_apps = crate::desktop_entry::discover_in_with(app_dirs, icon_dirs);
+        let found = crate::desktop_entry::discover_tracked(app_dirs, icon_dirs);
+        self.desktop_apps = found.apps;
+        self.desktop_dirs_read = found.dirs_read;
+        self.desktop_files_read = found.files_read;
         self.desktop_watch = Some(crate::desktop_entry::DesktopWatch::new(
             app_dirs, icon_dirs, now_ms,
         ));
@@ -7269,22 +7279,49 @@ impl Shell {
     ///
     /// Bounded by `desktop_entry::WATCH_INTERVAL_MS`: at most one batch of
     /// `stat` calls a second, nothing while the interval has not elapsed, and
-    /// nothing at all when the list was placed by a fixture. A change drops the
-    /// decoded icon cache, because a name that resolved a moment ago may now
-    /// resolve to a different file.
+    /// nothing at all when the list was placed by a fixture. Only the
+    /// application directories whose stamp moved are read again; the entries
+    /// from the others are reused, and the decoded icon cache is dropped only
+    /// when an icon directory moved.
     pub fn refresh_desktop(&mut self, now_ms: u64) -> bool {
         let Some(watch) = self.desktop_watch.as_mut() else {
             return false;
         };
-        if !watch.poll(now_ms) {
+        let Some(change) = watch.poll(now_ms) else {
             return false;
-        }
+        };
         let (app_dirs, icon_dirs) = {
             let (apps, icons) = watch.dirs();
             (apps.to_vec(), icons.to_vec())
         };
-        crate::themeicons::clear_cache();
-        self.load_desktop_apps_from(&app_dirs, &icon_dirs, now_ms);
+        let reread: Vec<std::path::PathBuf> = change
+            .app_dirs
+            .iter()
+            .filter_map(|index| app_dirs.get(*index).cloned())
+            .collect();
+        if change.icons {
+            // A name that resolved a moment ago may resolve to a different file
+            // now, so no decoded copy may outlive the change.
+            crate::themeicons::clear_cache();
+        }
+        let found = crate::desktop_entry::reload_tracked(
+            &app_dirs,
+            &icon_dirs,
+            &self.desktop_apps,
+            &reread,
+            change.icons,
+        );
+        self.desktop_apps = found.apps;
+        self.desktop_dirs_read = found.dirs_read;
+        self.desktop_files_read = found.files_read;
+        eprintln!(
+            "litric-shell: desktop: {} directories, {} entries read ({:?} renamed, icons {})",
+            found.dirs_read, found.files_read, reread, change.icons
+        );
+        self.desktop_watch = Some(crate::desktop_entry::DesktopWatch::new(
+            &app_dirs, &icon_dirs, now_ms,
+        ));
+        self.request_full_redraw();
         true
     }
 

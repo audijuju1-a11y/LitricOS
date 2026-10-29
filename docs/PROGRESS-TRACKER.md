@@ -4719,3 +4719,119 @@ Restored, the same journey passes (`test result: ok. 1 passed`) and
   and measured in §52, not incremental.
 * **No `inotify`, no threads.** This is a poll by design: the shell crate forbids
   `unsafe` and the workspace takes no dependencies.
+## 56. Batch: an install re-reads only the directory that changed (verified)
+
+### 56.1 Requirement and audit
+
+Source: this file's own §55.6 limit, quoted verbatim:
+
+> **A change reloads the whole list.** Discovery re-runs over every applications
+> directory when the stamp moves; it is bounded (`MAX_FILES_PER_DIR`, `MAX_APPS`)
+> and measured in §52, not incremental.
+
+and the same `G.07,G,Icons,PARTIAL` row: on a machine with several XDG
+`applications` directories, installing one package re-parsed every entry in all
+of them and re-resolved every icon.
+
+The audit found the shape of the problem in two places:
+
+* `DesktopWatch::poll` answered only *whether* something changed (a `bool`), so
+  the caller had no choice but to call `discover_in_with` again over every
+  directory.
+* `discover_in_with` walked `dirs` from scratch and resolved every icon, with no
+  way to say "these entries are already validated" or "this name already
+  resolved" — the work was a function of the machine, not of the change.
+
+This batch makes the stamp name the directories that moved (`Change` carries
+`app_dirs` and `icons`), and adds `reload_tracked`, which re-reads only those,
+reuses the previous entries for the rest, and re-resolves icons only when an icon
+directory moved. The two counts it returns (`dirs_read`, `files_read`) are kept on
+the shell as diagnostics, so "only one directory was read" is an assertion, not a
+claim.
+
+### 56.2 The connection
+
+| File | Line | What it connects |
+| --- | --- | --- |
+| `src/litric-shell/src/desktop_entry.rs` | 339 | `Change`: which application directories moved, and whether the icon tree did |
+| `src/litric-shell/src/desktop_entry.rs` | 412 | `poll` fills that answer instead of a boolean; no syscall before the interval |
+| `src/litric-shell/src/desktop_entry.rs` | 104 | `Discovery`: the list plus `dirs_read` and `files_read` |
+| `src/litric-shell/src/desktop_entry.rs` | 125 | `discover_tracked`: a full discovery that reports its work |
+| `src/litric-shell/src/desktop_entry.rs` | 142 | `reload_tracked`: reads `reread`, reuses `keep`, resolves icons only when told to |
+| `src/litric-shell/src/desktop_entry.rs` | 972 | unit test: two directories, a new entry in the second, one directory read, the first directory's entry kept with its own source |
+| `src/litric-shell/src/desktop_entry.rs` | 1027 | unit test: theme installed after the watch armed, zero directories and zero files read, the icon resolved for the entry already known |
+| `src/litric-shell/src/shell.rs` | 3099 | `desktop_dirs_read` / `desktop_files_read`: the last reload's work, for the journal and the tests |
+| `src/litric-shell/src/shell.rs` | 7286 | `refresh_desktop`: map `Change` to the reread list, clear the icon cache only when icons moved, reload, journal the counts |
+| `src/litric-shell/src/e2e.rs` | 5068 | journey: two real directories, one entry installed while the launcher is open, `dirs_read == 1`, both tiles drawn |
+| `ci/lint-file-safety.py` | 142 | the journey's temporary-root cleanup, recorded with its reason |
+
+### 56.3 Cost
+
+Measured on this machine:
+
+* **The check is unchanged:** 0.202 ms per check over 2 directories
+  (`one_check_costs_a_bounded_number_of_directory_reads`, 20 polls inside one
+  `Instant`). Nothing was added to the poll path; the only new work happens on a
+  change.
+* **A full discovery reads what it always did:** 2 directories and 2 files in the
+  two-directory unit fixture.
+* **An incremental reload after one install reads 1 directory and 1 file** in the
+  e2e journey, and 1 directory and 2 files in the unit fixture (the changed
+  directory holds two entries there). The unchanged directory's entries are
+  reused, not re-parsed.
+* **An icon-only change reads 0 directories and 0 files.** The decoded icon cache
+  is still dropped (a name may resolve elsewhere), but nothing is parsed.
+* **No per-frame cost:** `refresh_desktop` is still one `Option` test until the
+  interval elapses, and the §55 journey's "30 frames, no `stat`" assertion still
+  passes.
+
+### 56.4 Tests and gates
+
+Tests added: 2 unit tests (`an_incremental_reload_reads_only_the_changed_directory`,
+`an_icon_only_change_reads_no_desktop_file_at_all`) and 1 e2e journey
+(`journey_launcher_reloads_only_the_changed_applications_directory`), 3 in total.
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test --workspace` | 1792 passed, 0 failed |
+| `python3 ci/lint-doc-refs.py` | OK, every citation resolves |
+| `python3 ci/lint-file-safety.py` | exit 0, with the new journey recorded at line 142 |
+| `bash ci/verify.sh` | `summary: 32 pass, 2 fail, 3 skipped` |
+
+The two failures are the unchanged absent local dev-key material; the three skips
+are the QEMU-only checks. No gate was weakened, no key was generated, and no
+golden frame changed: every fixture list is unwatched, and the golden dump has no
+discovered application in it.
+
+### 56.5 Sensitivity
+
+With the incremental path disabled — the reread list forced to every application
+directory, which is exactly the behaviour §55 shipped — the journey fails on the
+count that matters:
+
+```
+panicked at litric-shell/src/e2e.rs:5100:5:
+assertion `left == right` failed: a reload read 2 directories; only the changed one should be read
+  left: 2
+ right: 1
+```
+
+Restored, the same journey passes (`test result: ok. 1 passed`).
+
+### 56.6 Limits
+
+* **A change still re-resolves every icon** when an icon directory moved: the
+  entries are not re-parsed, but each `Icon=` name is looked up again (one bounded
+  `find_in` per entry, `MAX_APPS` at most). A per-name negative cache would be the
+  next step; it is not claimed here.
+* **Kept entries are trusted.** Their files were validated when the directory was
+  last read; a file that becomes invalid *without* changing its directory's
+  stamp (a rewrite inside the same second on a coarse-mtime filesystem) is not
+  re-validated until that directory is read again.
+* **Precedence is preserved by id, not by file mtime.** A newer entry in a later
+  directory still loses to an id an earlier directory owns, exactly as a full
+  discovery does.
+* **One second of latency** and the 1-second mtime granularity caveats from §55
+  are unchanged.

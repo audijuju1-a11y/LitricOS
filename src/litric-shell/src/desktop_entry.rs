@@ -95,6 +95,21 @@ pub fn discover_in(dirs: &[PathBuf]) -> Vec<DesktopApp> {
     discover_in_with(dirs, &[])
 }
 
+/// What one discovery read: the list it produced and how much work it did.
+///
+/// The counts are what makes an incremental reload provable rather than
+/// claimed: a test can assert that a second pass read one directory instead of
+/// four, and the shell keeps the last numbers as diagnostics.
+#[derive(Debug, Clone, Default)]
+pub struct Discovery {
+    /// The applications, deduplicated by id, in display order.
+    pub apps: Vec<DesktopApp>,
+    /// Application directories actually read from disk.
+    pub dirs_read: usize,
+    /// Desktop files actually read from disk.
+    pub files_read: usize,
+}
+
 /// Discover the applications in `dirs` and resolve their icons in `icon_dirs`.
 ///
 /// Resolution is a handful of `stat` calls per entry, done once here rather
@@ -102,9 +117,62 @@ pub fn discover_in(dirs: &[PathBuf]) -> Vec<DesktopApp> {
 /// the launcher draws its generated glyph.
 #[must_use]
 pub fn discover_in_with(dirs: &[PathBuf], icon_dirs: &[PathBuf]) -> Vec<DesktopApp> {
+    discover_tracked(dirs, icon_dirs).apps
+}
+
+/// Discover everything in `dirs`, reporting how much was read.
+#[must_use]
+pub fn discover_tracked(dirs: &[PathBuf], icon_dirs: &[PathBuf]) -> Discovery {
+    reload_tracked(dirs, icon_dirs, &[], dirs, true)
+}
+
+/// Discover `dirs`, re-reading only `reread` and reusing `keep` for the rest.
+///
+/// `keep` is the previous list, whose entries remember the file they came from
+/// (`DesktopApp::source`), so a directory that did not change contributes its
+/// old entries instead of being parsed again. Precedence is the same as a full
+/// discovery: the first directory that names an id owns it, whether that entry
+/// was kept or read.
+///
+/// `resolve_icons` says whether the icon tree moved. When it did not, a kept
+/// entry keeps the path it already resolved and only a newly read entry asks
+/// the themes; when it did, every entry asks again, because a name that
+/// resolved to one file a moment ago may resolve to another now.
+#[must_use]
+pub fn reload_tracked(
+    dirs: &[PathBuf],
+    icon_dirs: &[PathBuf],
+    keep: &[DesktopApp],
+    reread: &[PathBuf],
+    resolve_icons: bool,
+) -> Discovery {
     let mut claimed: Vec<String> = Vec::new();
     let mut apps: Vec<DesktopApp> = Vec::new();
+    let mut dirs_read = 0usize;
+    let mut files_read = 0usize;
     'dirs: for dir in dirs {
+        if !reread.iter().any(|read| read == dir) {
+            // Not this directory's turn to be read: reuse what it produced last
+            // time. Its files were validated then, so nothing here is trusted
+            // that was not already checked.
+            let mut kept: Vec<&DesktopApp> = keep
+                .iter()
+                .filter(|app| app.source.parent() == Some(dir.as_path()))
+                .collect();
+            kept.sort_by(|a, b| a.source.cmp(&b.source));
+            for app in kept {
+                if apps.len() >= MAX_APPS {
+                    break 'dirs;
+                }
+                if claimed.iter().any(|seen| seen == &app.id) {
+                    continue;
+                }
+                claimed.push(app.id.clone());
+                apps.push(app.clone());
+            }
+            continue;
+        }
+        dirs_read = dirs_read.saturating_add(1);
         let Ok(entries) = std::fs::read_dir(dir) else {
             continue;
         };
@@ -145,12 +213,27 @@ pub fn discover_in_with(dirs: &[PathBuf], icon_dirs: &[PathBuf]) -> Vec<DesktopA
             let Ok(bytes) = std::fs::read(&path) else {
                 continue;
             };
+            files_read = files_read.saturating_add(1);
             let text = String::from_utf8_lossy(&bytes);
-            if let Some(mut app) = parse_entry(&text, path, id) {
+            if let Some(app) = parse_entry(&text, path, id) {
+                apps.push(app);
+            }
+        }
+    }
+    // One pass, once: a kept entry already has its path unless the icon tree
+    // moved, and a new entry has none yet.
+    if resolve_icons {
+        for app in &mut apps {
+            if let Some(icon) = app.icon.as_deref() {
+                app.icon_path = crate::themeicons::find_in(icon_dirs, icon, 48);
+            }
+        }
+    } else {
+        for app in &mut apps {
+            if app.icon_path.is_none() {
                 if let Some(icon) = app.icon.as_deref() {
                     app.icon_path = crate::themeicons::find_in(icon_dirs, icon, 48);
                 }
-                apps.push(app);
             }
         }
     }
@@ -161,7 +244,11 @@ pub fn discover_in_with(dirs: &[PathBuf], icon_dirs: &[PathBuf]) -> Vec<DesktopA
             .then_with(|| a.id.cmp(&b.id))
     });
     apps.truncate(MAX_APPS);
-    apps
+    Discovery {
+        apps,
+        dirs_read,
+        files_read,
+    }
 }
 
 /// The shortest time between two looks for installed or removed applications.
@@ -247,6 +334,16 @@ fn watch_paths(app_dirs: &[PathBuf], icon_dirs: &[PathBuf]) -> Vec<PathBuf> {
     paths
 }
 
+/// What moved between two looks.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Change {
+    /// Indices into the application directories [`DesktopWatch::dirs`] reports.
+    pub app_dirs: Vec<usize>,
+    /// Whether an icon root or a theme moved: every entry's icon must be
+    /// resolved again.
+    pub icons: bool,
+}
+
 /// A bounded watch for applications or icon themes installed or removed while
 /// the shell is running.
 ///
@@ -273,6 +370,8 @@ pub struct DesktopWatch {
     app_dirs: Vec<PathBuf>,
     icon_dirs: Vec<PathBuf>,
     paths: Vec<PathBuf>,
+    /// How many leading `paths` are application directories.
+    app_path_count: usize,
     seen: Vec<Stamp>,
     next_ms: u64,
     checks: u64,
@@ -286,11 +385,16 @@ impl DesktopWatch {
     #[must_use]
     pub fn new(app_dirs: &[PathBuf], icon_dirs: &[PathBuf], now_ms: u64) -> Self {
         let paths = watch_paths(app_dirs, icon_dirs);
+        let app_path_count = paths
+            .iter()
+            .take_while(|path| app_dirs.iter().any(|dir| dir == *path))
+            .count();
         let seen: Vec<Stamp> = paths.iter().map(|path| stamp_of(path)).collect();
         Self {
             app_dirs: app_dirs.to_vec(),
             icon_dirs: icon_dirs.to_vec(),
             paths,
+            app_path_count,
             seen,
             next_ms: now_ms.saturating_add(WATCH_INTERVAL_MS),
             checks: 0,
@@ -299,31 +403,39 @@ impl DesktopWatch {
         }
     }
 
-    /// Whether the tree changed since the last look.
+    /// What changed since the last look, or `None`.
     ///
-    /// `false` before the interval has elapsed, without touching the disk: the
-    /// frame loop may call this every frame and pay one comparison.
-    pub fn poll(&mut self, now_ms: u64) -> bool {
+    /// `None` before the interval has elapsed, without touching the disk: the
+    /// frame loop may call this every frame and pay one comparison. When
+    /// something did move, the answer says which application directories it
+    /// was, so the caller can re-read those and reuse the rest.
+    pub fn poll(&mut self, now_ms: u64) -> Option<Change> {
         if now_ms < self.next_ms {
-            return false;
+            return None;
         }
         self.next_ms = now_ms.saturating_add(WATCH_INTERVAL_MS);
         self.checks = self.checks.saturating_add(1);
-        let mut changed = false;
+        let mut change = Change::default();
         for (index, path) in self.paths.iter().enumerate() {
             self.stats = self.stats.saturating_add(1);
             let fresh = stamp_of(path);
-            if self.seen.get(index).copied() != Some(fresh) {
-                changed = true;
-                if let Some(slot) = self.seen.get_mut(index) {
-                    *slot = fresh;
-                }
+            if self.seen.get(index).copied() == Some(fresh) {
+                continue;
+            }
+            if let Some(slot) = self.seen.get_mut(index) {
+                *slot = fresh;
+            }
+            if index < self.app_path_count {
+                change.app_dirs.push(index);
+            } else {
+                change.icons = true;
             }
         }
-        if changed {
-            self.reloads = self.reloads.saturating_add(1);
+        if change.app_dirs.is_empty() && !change.icons {
+            return None;
         }
-        changed
+        self.reloads = self.reloads.saturating_add(1);
+        Some(change)
     }
 
     /// The directories this watch was armed with.
@@ -770,18 +882,21 @@ mod tests {
         );
         assert!(watch.paths() >= 2, "both directories are watched");
         assert!(
-            !watch.poll(10 + WATCH_INTERVAL_MS - 1),
+            watch.poll(10 + WATCH_INTERVAL_MS - 1).is_none(),
             "inside the interval"
         );
         assert_eq!(watch.stats(), 0, "an early poll must not touch the disk");
         assert_eq!(watch.checks(), 0);
-        assert!(!watch.poll(10 + WATCH_INTERVAL_MS), "nothing changed");
+        assert!(
+            watch.poll(10 + WATCH_INTERVAL_MS).is_none(),
+            "nothing changed"
+        );
         assert_eq!(
             watch.stats(),
             u64::try_from(watch.paths()).unwrap_or(u64::MAX)
         );
         assert!(
-            !watch.poll(10 + WATCH_INTERVAL_MS + 1),
+            watch.poll(10 + WATCH_INTERVAL_MS + 1).is_none(),
             "the interval restarts"
         );
         assert_eq!(
@@ -803,7 +918,7 @@ mod tests {
         let mut watch =
             DesktopWatch::new(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
         assert!(
-            !watch.poll(WATCH_INTERVAL_MS),
+            watch.poll(WATCH_INTERVAL_MS).is_none(),
             "the tree as armed is not a change"
         );
 
@@ -816,10 +931,11 @@ mod tests {
             ),
         )
         .expect("entry");
-        assert!(
-            watch.poll(WATCH_INTERVAL_MS * 2),
-            "a new .desktop must be noticed"
-        );
+        let change = watch
+            .poll(WATCH_INTERVAL_MS * 2)
+            .expect("a new .desktop must be noticed");
+        assert_eq!(change.app_dirs, vec![0], "the applications directory moved");
+        assert!(!change.icons, "no icon directory moved");
         assert_eq!(watch.reloads(), 1);
 
         // The reload the shell performs is the same discovery: the entry is
@@ -832,15 +948,141 @@ mod tests {
         let mut watch =
             DesktopWatch::new(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
         std::fs::create_dir_all(icons.join("brand-new-theme/scalable/apps")).expect("theme");
+        let change = watch
+            .poll(WATCH_INTERVAL_MS)
+            .expect("a new theme directory must be noticed");
+        assert!(change.icons, "an icon directory moved");
         assert!(
-            watch.poll(WATCH_INTERVAL_MS),
-            "a new theme directory must be noticed"
+            change.app_dirs.is_empty(),
+            "no applications directory moved"
         );
 
         // And removing the entry is a change too.
         std::fs::remove_file(apps.join("late.desktop")).expect("remove");
-        assert!(watch.poll(WATCH_INTERVAL_MS * 2), "a removed entry");
+        assert!(
+            watch.poll(WATCH_INTERVAL_MS * 2).is_some(),
+            "a removed entry"
+        );
         assert!(discover_in(std::slice::from_ref(&apps)).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_incremental_reload_reads_only_the_changed_directory() {
+        let root = scratch("watch-incremental");
+        let first = root.join("home/applications");
+        let second = root.join("system/applications");
+        std::fs::create_dir_all(&first).expect("home");
+        std::fs::create_dir_all(&second).expect("system");
+        let prog = program(&root, "run-me");
+        let entry = |name: &str| {
+            format!(
+                "[Desktop Entry]\nType=Application\nName={name}\nExec={}\n",
+                prog.display()
+            )
+        };
+        std::fs::write(first.join("one.desktop"), entry("One")).expect("one");
+        std::fs::write(second.join("two.desktop"), entry("Two")).expect("two");
+        let dirs = [first.clone(), second.clone()];
+        let full = discover_tracked(&dirs, &[]);
+        assert_eq!(full.apps.len(), 2);
+        assert_eq!(full.dirs_read, 2);
+        assert_eq!(full.files_read, 2);
+
+        let mut watch = DesktopWatch::new(&dirs, &[], 0);
+        assert!(watch.poll(WATCH_INTERVAL_MS).is_none(), "armed as it is");
+        // A new entry in the second directory only.
+        std::fs::write(second.join("three.desktop"), entry("Three")).expect("three");
+        let change = watch
+            .poll(WATCH_INTERVAL_MS * 2)
+            .expect("the second directory moved");
+        assert_eq!(change.app_dirs, vec![1], "only the second directory moved");
+        assert!(!change.icons);
+        let reread: Vec<PathBuf> = change
+            .app_dirs
+            .iter()
+            .filter_map(|index| dirs.get(*index).cloned())
+            .collect();
+        let increment = reload_tracked(&dirs, &[], &full.apps, &reread, false);
+        assert_eq!(increment.dirs_read, 1, "one directory, not two");
+        assert_eq!(
+            increment.files_read, 2,
+            "only the changed directory's files were parsed"
+        );
+        let names: Vec<&str> = increment.apps.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["One", "Three", "Two"]);
+        assert!(
+            increment
+                .apps
+                .iter()
+                .any(|a| a.name == "One" && a.source.parent() == Some(first.as_path())),
+            "the untouched directory kept its own entry"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_icon_only_change_reads_no_desktop_file_at_all() {
+        let root = scratch("watch-icons");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(&icons).expect("icons");
+        let prog = program(&root, "run-me");
+        std::fs::write(
+            apps.join("one.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=One\nIcon=one-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("one");
+        let full = discover_tracked(std::slice::from_ref(&apps), std::slice::from_ref(&icons));
+        assert_eq!(full.apps.len(), 1);
+        assert!(
+            full.apps
+                .first()
+                .and_then(|a| a.icon_path.as_ref())
+                .is_none(),
+            "the theme does not exist yet"
+        );
+
+        // Armed before the theme exists, exactly like a running shell.
+        let mut watch =
+            DesktopWatch::new(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+        let theme = icons.join("hicolor/scalable/apps");
+        std::fs::create_dir_all(&theme).expect("theme");
+        std::fs::write(
+            theme.join("one-icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#2080c0\"/></svg>",
+        )
+        .expect("icon");
+
+        let change = watch.poll(WATCH_INTERVAL_MS).expect("the icon tree moved");
+        assert!(change.icons);
+        assert!(
+            change.app_dirs.is_empty(),
+            "no applications directory moved"
+        );
+        let increment = reload_tracked(
+            std::slice::from_ref(&apps),
+            std::slice::from_ref(&icons),
+            &full.apps,
+            &[],
+            true,
+        );
+        assert_eq!(increment.dirs_read, 0, "no applications directory was read");
+        assert_eq!(increment.files_read, 0, "no desktop file was read");
+        assert!(
+            increment
+                .apps
+                .first()
+                .and_then(|a| a.icon_path.as_ref())
+                .is_some(),
+            "the new theme resolved for the entry that was already known"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -859,7 +1101,9 @@ mod tests {
         let runs = 20u64;
         for step in 0..runs {
             assert!(
-                !watch.poll(WATCH_INTERVAL_MS.saturating_mul(step + 1)),
+                watch
+                    .poll(WATCH_INTERVAL_MS.saturating_mul(step + 1))
+                    .is_none(),
                 "nothing changed"
             );
         }
@@ -902,8 +1146,8 @@ mod tests {
         // No icon root at all: `None` on both sides is stable, not churn.
         let mut watch =
             DesktopWatch::new(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
-        assert!(!watch.poll(WATCH_INTERVAL_MS));
-        assert!(!watch.poll(WATCH_INTERVAL_MS * 2));
+        assert!(watch.poll(WATCH_INTERVAL_MS).is_none());
+        assert!(watch.poll(WATCH_INTERVAL_MS * 2).is_none());
         assert_eq!(watch.reloads(), 0, "absence is not a change on its own");
         let _ = std::fs::remove_dir_all(&root);
     }
