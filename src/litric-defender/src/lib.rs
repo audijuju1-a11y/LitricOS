@@ -20,6 +20,15 @@
 )]
 #![deny(missing_docs)]
 
+/// The largest file the on-demand scanner holds in memory.
+///
+/// Shared by the library and the binary so the test that proves the ceiling and
+/// the code that enforces it cannot disagree. 8 MiB is a working ceiling, not a
+/// claim about malware size: executable content that matters is far smaller, and
+/// reading an arbitrary file whole because a user clicked "scan" is the failure
+/// ADR-0022 §2 names.
+pub const MAX_SCAN_BYTES: u64 = 8 * 1024 * 1024;
+
 pub mod cache;
 pub mod denylist;
 pub mod engine;

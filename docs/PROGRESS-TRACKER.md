@@ -6093,3 +6093,175 @@ was edited.
 
 Base `4c1b7d3`. The batch is committed on `main` and pushed; `HEAD ==
 origin/main` and the tracked worktree is empty at the end of the turn.
+
+## 64. Batch: the Defender crate builds the binary its unit names (verified)
+
+### 64.1 Requirement
+
+The gate matrix carried this claim, written before the crate had a binary:
+
+> no daemon, no on-access hook; the `litric-defender.service` unit points at a
+> binary that does not exist
+
+Two things were wrong in one sentence. The unit could not be installed (a
+`ExecStart` the image cannot satisfy is the defect `ci/lint-unit-binaries.py`
+exists to catch), and the only code that scanned files ran inside the desktop
+process — the one place ADR-0022 §2 says untrusted content must not be parsed,
+because a parser bug there is a bug in the process that draws the screen.
+
+This batch ships the process ADR-0022 already names: the on-demand scanner
+worker. It does **not** ship the on-access hook, and §64.9 says so.
+
+### 64.2 Audit, before the change
+
+* `src/litric-defender` was a library only: `lib.rs`, `engine.rs`, `verdict.rs`,
+  `patterns.rs`, `denylist.rs`, `cache.rs`, `sha256.rs` — no `main.rs`, no
+  `[[bin]]` in `Cargo.toml`.
+* `tools/build.sh` already had `litric-defender` in its staging loop (line
+  205), so a binary would have been staged and installed the
+  moment one existed; the loop was waiting, not broken.
+* `image/units-pending/litric-defender.service` asks for
+  `--rules /usr/lib/litric/yara --cache /var/cache/litric/defender`,
+  `Type=notify` and `CAP_SYS_ADMIN` — the fanotify transport (ADR-0022 Phase 2),
+  none of which exists.
+* The Defender application scanned in-process through
+  `litric_defender::engine::Engine` (`src/litric-shell/src/shell.rs`), reading a
+  file's bytes in the desktop's address space.
+
+So the measured “before” is exact: `src/target/release/litric-defender` did not
+exist, and the only scan path was the shell's.
+
+### 64.3 What the worker stands on
+
+* **One bounded read.** `scan_path` stats the file, refuses anything that is not
+  a regular file, and reads through `File::take(MAX_SCAN_BYTES + 1)`. A 4 GiB
+  file costs 8 MiB and one byte. The `+1` is what catches a file that grew past
+  the ceiling between `stat` and `read` instead of silently truncating it.
+* **A ceiling that answers honestly.** Past 8 MiB the verdict is
+  `unknown reason=too-large` — `AllowUnknown` in permissive mode and a denial in
+  `--enforce`, exactly the ladder `verdict::resolve` already defines. A partial
+  scan that reported `clean` would be worse than no scan.
+* **A framed worker, not an ad-hoc CLI.** `--stdio` speaks
+  `PING` / `SCAN <hex-path>` / `QUIT` with `OK <n>` or `ERR <kind>` replies. Hex
+  because a desktop file name may contain spaces and the protocol splits on
+  whitespace; the same choice the browser broker made for staged downloads.
+* **Exit codes a parent can branch on.** `--scan` exits 1 on a detection, 0 on
+  allow/unknown, 2 on usage or I/O error.
+* **No new dependency, no `unsafe`.** The feed is `Denylist::parse`, the scan is
+  the existing engine, the digest is the crate's own SHA-256.
+
+### 64.4 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `src/litric-defender/src/lib.rs` | 30 | `MAX_SCAN_BYTES = 8 MiB` — the one ceiling the binary and its test share |
+| `src/litric-defender/src/main.rs` | 71 | argument parsing, mode selection, exit codes |
+| `src/litric-defender/src/main.rs` | 129 | loads the optional SHA-256 feed; a feed with no usable line is an error, not an empty list |
+| `src/litric-defender/src/main.rs` | 175 | `PING` / `SCAN <hex-path>` / `QUIT`: a framed worker a parent can drive |
+| `src/litric-defender/src/main.rs` | 246 | metadata first, `take(MAX+1)`, one bounded read |
+| `src/litric-defender/src/main.rs` | 275 | past the ceiling the verdict is `unknown reason=too-large`, never a partial `clean` |
+| `src/litric-defender/src/main.rs` | 290 | one `key=value` verdict line, whitespace sanitised so one field stays one field |
+| `src/litric-defender/src/main.rs` | 332 | hex path decoding — no escape grammar to disagree about |
+| `src/litric-defender/tests/scanner.rs` | 118 | process test: real binary, real stdio, deny / allow / too-large / missing |
+| `image/units-pending/README.md` | 20 | the parked unit row now says what exists and what still does not |
+| `docs/master-plan/25-beta-1.0-gate-matrix.md` | 66 | the gate-matrix claim corrected in the same commit |
+| `ci/lint-file-safety.py` | 169 | the test fixture cleanup, registered with its reason |
+| `tools/build.sh` | 192 | `build.sh` already staged this binary name; the loop needed no edit |
+
+### 64.5 Tests, at two levels
+
+* Unit tests in the crate (35, unchanged) still cover the engine, the policy
+  ladder, the cache, the pattern matcher and SHA-256.
+* `src/litric-defender/tests/scanner.rs` spawns the real binary and drives it
+  over real stdio: EICAR is **denied by hash** with the feed's label, an ordinary
+  file is **allowed** with a non-empty digest, a sparse file one byte past 8 MiB
+  is **unknown `reason=too-large`** without being read, a missing path is `ERR
+  cannot-stat`, `QUIT` ends the worker, and the one-shot form returns exit 1 for
+  the detection and 0 for the clean file.
+
+### 64.6 Sensitivity proof
+
+Forcing the worker to scan no bytes (`engine.scan(..., b"")` instead of the
+buffer) makes the process test fail with the real panic:
+
+```text
+thread 'the_scanner_denies_eicar_allows_clean_and_refuses_to_read_past_the_ceiling' panicked at litric-defender/tests/scanner.rs:134:5:
+EICAR must be denied by hash: verdict=allow tier=- id=- reason=- size=68 digest=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 from_cache=0
+test result: FAILED. 0 passed; 1 failed
+```
+
+The digest in that message is SHA-256 of the empty string, which is exactly the
+bug the probe introduced. Restored, the test passes.
+
+### 64.7 Measured costs
+
+Measured on this host with the debug binary, five runs each, wall clock for one
+`--scan` (process start included; `n=5`):
+
+| Input | Median | Mean |
+| --- | ---: | ---: |
+| 1 MiB | **138.9 ms** | 138.4 ms |
+| 8 MiB (the ceiling) | **1075.0 ms** | 1079.8 ms |
+
+| Figure | Value |
+| --- | ---: |
+| resident buffer, worst case | 8 MiB + 1 byte |
+| per-frame work added | **0** (the worker runs only when asked) |
+| files read whole by the desktop for a scan | 0 in this path — the worker is the reader |
+| new dependencies | 0 |
+| binary size / RAM at idle | 0 when not running; it is not a service |
+
+The 1 MiB number is dominated by hashing and the pattern pass, not by I/O: 8 MiB
+takes 7.7× as long for 8× the bytes, which is the linear shape a byte scan should
+have. No claim is made for a release build — this is the debug number, and the
+tracker labels it as such.
+
+### 64.8 Gate
+
+```text
+$ cargo fmt --all --check
+exit 0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+exit 0
+
+$ cargo test --workspace
+1,834 passed; 0 failed   (was 1,833 before this batch; +1 process test)
+
+$ python3 ci/lint-doc-refs.py
+OK: 1,201 citation(s) across 156 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+OK: 112 deletion site(s), all inside reviewed functions
+
+$ bash ci/verify.sh
+summary: 32 pass, 2 fail, 3 skipped
+```
+
+The two failures and three skips are the recorded baseline: `keys/dev/` is absent
+and mkosi/QEMU are not installed. No gate, golden frame or key file was edited.
+
+### 64.9 Limits, stated
+
+* **No on-access hook.** The unit's `Type=notify`, `--rules`/`--cache` and
+  `CAP_SYS_ADMIN` belong to the fanotify transport (ADR-0022 Phase 2), which does
+  not exist. The unit stays in `image/units-pending/`, and the README row now
+  says exactly why.
+* **No YARA rules.** The worker loads the SHA-256 feed only; the pattern matcher
+  is available in the library and is what the engine's unit tests exercise, but
+  this binary has no `--rules` flag.
+* **The desktop still scans in-process.** Moving `litric-shell` onto this worker
+  is a separate change with its own protocol and failure policy; this batch makes
+  the worker exist and proves it, it does not rewire the application.
+* **No `sd_notify`, no watchdog.** Those belong with the daemon, not the worker.
+* **8 MiB is a working ceiling, not a measurement of malware.** Files past it are
+  `unknown` by design; the number is stated so the worst case is a figure rather
+  than “whatever the user opened”.
+* **Nothing in a booted image.** The binary is staged by `tools/build.sh`, but no
+  image was built here (mkosi is not installed), so the row stays host-level
+  `UNIT` + process evidence.
+
+### 64.10 Git
+
+Base `51cc57e`. The batch is committed on `main` and pushed; `HEAD ==
+origin/main` and the tracked worktree is empty at the end of the turn.

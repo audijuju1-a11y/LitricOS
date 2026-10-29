@@ -166,6 +166,10 @@ ALLOWED = {
         "grants_fixture": "removes the temporary fixture root this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
         "grants_cleanup": "removes the temporary fixture root this grant-restart test created under the system temp directory, after asserting the grants and audit it wrote were the ones a second daemon state loaded",
     },
+    "src/litric-defender/tests/scanner.rs": {
+        "scratch": "removes the temporary fixture root this process-level scanner test is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
+        "cleanup": "removes the temporary fixture root (feed, EICAR, clean, sparse and missing-path fixtures) this test created under the system temp directory, after stopping the worker",
+    },
     "src/litric-sysd/tests/grants_restart.rs": {
         "scratch": "removes the temporary fixture root this process-level test is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
         "a_corrupt_record_makes_a_restarted_daemon_grant_nothing": "removes this test's own stale socket before starting the first daemon, tagged with the process id under the system temp directory",

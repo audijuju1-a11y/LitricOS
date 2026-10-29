@@ -63,7 +63,7 @@ own headings). `In-tree evidence` is what exists **today** in this checkout.
 | Users, accounts, sessions | D5 (444–449) | nothing | **P0** | `NOT_IMPLEMENTED` | depends on the auth design above |
 | Capability broker, permissions | E1 (469–502) | `src/litric-caps` (43 tests), `litric-sysd` `RESOLVE` | **P0** | `PARTIAL` | grants are in-memory and do not survive reboot (ADR-0016) |
 | Code integrity, secure boot, verity | E2 (503–528), A1 11 | dm-verity in the image; `keys/` dev keys | **P0** | `PARTIAL` | Secure Boot boot never exercised (GATE 01 condition 8 `NOT RUN`) |
-| Defender | E3 (529–546) | `src/litric-defender` (35 tests), `Aho-Corasick` + verdict ladder; no binary | **P0** | `BACKEND_ONLY` | no daemon, no on-access hook; the `litric-defender.service` unit points at a binary that does not exist |
+| Defender | E3 (529–546) | `src/litric-defender` (35 lib tests), `Aho-Corasick` + verdict ladder, and an on-demand scanner binary (§64) | **P0** | `BACKEND_ONLY` | there is still no on-access hook: `litric-defender.service` stays parked until the fanotify transport (ADR-0022 Phase 2) exists, and the binary implements neither `--rules` nor `Type=notify` |
 | Updates, rollback, recovery | A1 2–10, E2, Pack §12 | ADR-0021 design; nothing executable | **P0** | `NOT_IMPLEMENTED` | must not be advertised until the generation engine exists |
 | Applications: built-ins, platform, packages | F1 (547–590), F2 (591–616) | `src/litric-manifest`, `src/litric-browser` (92 tests with `--features broker`), `src/litric-winbridge` (49) | P1 | `PARTIAL` | no app registry, no store, no installer |
 | Windows compatibility | F3 (617–646) | `src/litric-winbridge` planning only | P2 | `PARTIAL` | deliberately not a Beta claim |
