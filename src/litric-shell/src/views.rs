@@ -2072,6 +2072,21 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
             }
             for (index, download) in app.downloads.iter().take(14).enumerate() {
                 let row_y = page.y + t.px(42.0) + index as f32 * t.px(28.0);
+                // Each row is a real target: clicking it opens the file's own
+                // folder in Files with the file selected, where it can be
+                // opened, moved, scanned or sent to the Trash.
+                let row = Rect::new(
+                    page.x + t.sp(Space::Sm),
+                    row_y,
+                    page.w - t.sp(Space::Sm) * 2.0,
+                    t.px(28.0),
+                );
+                if shell.is_highlighted(Hot::BrowserDownloadItem(index)) {
+                    canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.text(), 0.06));
+                }
+                shell
+                    .hotspots_mut()
+                    .push(row, Hot::BrowserDownloadItem(index));
                 font::draw(
                     canvas,
                     &ui::elide(&download.name, &s_body, page.w * 0.62),

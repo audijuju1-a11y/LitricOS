@@ -3121,3 +3121,58 @@ unchanged and still honestly reporting that no engine is integrated. Image
 support is the decoder's subset (baseline/extended sequential JPEG; progressive,
 CMYK and arithmetic are refused by name), and there is no display or GPU here, so
 no screenshot or compositor presentation is claimed.
+
+## 39. Batch: a finished download opens in Files and is scanned (verified)
+
+### 39.1 What was disconnected
+
+The Browser's Downloads panel listed the real files the file service had
+imported into `/Downloads`, but every row was inert: the panel said a
+download "can be opened from either window" while only the Files window could
+open it. The list was drawn (`src/litric-shell/src/views.rs`, the Downloads
+branch of `draw_browser`) with no hotspot at all, so a user who clicked a
+finished download got nothing. Files and Defender were each reachable on their
+own, but the workflow the mission asks for — download, manage, scan — had no
+bridge at the point where the user starts it.
+
+### 39.2 The connection
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/shell.rs` | `Hot::BrowserDownloadItem(usize)` opens the Files window at `/Downloads` and asks it to select the clicked file by name. No second copy of the download list and no invented state: the panel already reads that folder through the Files bridge. |
+| `src/litric-shell/src/apps.rs` | `FilesApp::select_name` selects the row when it is already listed; otherwise it records `pending_selection`, which `apply_entries` spends when the next real directory read arrives. The listing always clears the selection (rows moved), so a caller in another window needs this hand-off rather than writing `selected_rows` before the refresh wipes it. |
+| `src/litric-shell/src/views.rs` | Each Downloads row is a real target with the standard hover tint, so the affordance matches the row's behaviour. |
+| `src/litric-shell/src/e2e.rs` | `journey_a_download_opens_in_files_and_is_scanned`: one session — open Browser, click Downloads, click the row for a real file on disk, see Files open that folder with the file selected, then run the Defender's Fast scan and find a planted threat beside it. |
+| `ci/lint-file-safety.py` | the journey's fixture cleanup is a reviewed entry. |
+
+The scan needs no new scope code: `/Downloads` is already one of the fast
+scan's documented roots, so the downloaded file is scanned by the existing
+worker and the existing verdict model.
+
+### 39.3 What the journey observed
+
+| Step | Observation |
+|---|---|
+| click Downloads | two real files listed (`report.txt`, `eicar.com`) from the fixture's `/Downloads` |
+| click the `report.txt` row | `files.path == "/Downloads"`, `selected_rows` contains `report.txt`, and the Files window is focused |
+| click Fast scan | the scan finishes, `eicar.com` is detected, `report.txt` is listed and not flagged |
+
+```text
+e2e::journey_a_download_opens_in_files_and_is_scanned   ok
+cargo test --workspace        passed=1697 failed=0   (was 1,696; +1)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the known absent `keys/dev/` material. No test deleted,
+no gate relaxed, no dependency added.
+
+### 39.4 Resources and limits
+
+The click does one window open, one folder navigation and one selection set —
+no polling, no thread, no per-frame work. The scan is the existing worker.
+
+This proves the local workflow (a real file on disk in `/Downloads` opened from
+the Browser panel, then scanned). It does not prove a network download: this
+image still has no Chromium engine and no TLS stack, so no `https://` page was
+fetched and the broker's staging path could not be exercised end to end here.

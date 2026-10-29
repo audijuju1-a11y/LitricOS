@@ -348,6 +348,8 @@ pub enum Hot {
     BrowserBookmarks,
     /// Show downloaded files reported by browserd.
     BrowserDownloads,
+    /// A finished download row in the Downloads panel.
+    BrowserDownloadItem(usize),
     /// Show the current page's site permission state.
     BrowserSitePermissions,
     /// Open a history entry by its current visible index.
@@ -6213,6 +6215,24 @@ impl Shell {
                     }
                 }
                 Vec::new()
+            }
+            Hot::BrowserDownloadItem(index) => {
+                // A finished download is a file in the user's own Downloads
+                // folder; the row opens the window that can manage it, with the
+                // file already selected. This is the same folder the Files
+                // window browses, not a second list with its own state.
+                let Some(name) = self
+                    .browser
+                    .downloads
+                    .get(index)
+                    .map(|download| download.name.clone())
+                else {
+                    return Vec::new();
+                };
+                let effects = self.open_app(crate::shortcuts::App::Files);
+                self.files.navigate("/Downloads");
+                self.files.select_name(&name);
+                effects
             }
             Hot::BrowserSitePermissions => {
                 self.browser.panel = crate::apps::BrowserPanel::SitePermissions;

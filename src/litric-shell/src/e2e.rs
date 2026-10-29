@@ -3013,3 +3013,98 @@ fn journey_this_litric_creates_renames_moves_and_trashes() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// One workflow across three windows: a finished file in Downloads is opened
+/// from the Browser's Downloads panel in Files, already selected, and the
+/// Defender scans the same folder and finds a planted threat beside it. Every
+/// step is a click on a drawn control; the file assertions are on the fixture's
+/// real disk.
+#[test]
+fn journey_a_download_opens_in_files_and_is_scanned() {
+    let root = e2e_root("downloads-files-defender");
+    let downloads = root.join("Downloads");
+    std::fs::create_dir_all(&downloads).unwrap();
+    std::fs::write(downloads.join("report.txt"), b"a harmless download\n").unwrap();
+    std::fs::write(downloads.join("eicar.com"), EICAR).unwrap();
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Browser);
+    let _ = draw_frame(&mut s);
+    let button = s
+        .hotspots()
+        .rect_of(Hot::BrowserDownloads)
+        .expect("the Downloads button is drawn");
+    click(&mut s, button.center().0, button.center().1);
+    let _ = draw_frame(&mut s);
+    assert_eq!(
+        s.browser.downloads.len(),
+        2,
+        "both finished files are listed: {:?}",
+        s.browser.downloads
+    );
+    let index = s
+        .browser
+        .downloads
+        .iter()
+        .position(|download| download.name == "report.txt")
+        .expect("the harmless download is listed");
+    let row = s
+        .hotspots()
+        .rect_of(Hot::BrowserDownloadItem(index))
+        .expect("a download row is a target");
+    click(&mut s, row.center().0, row.center().1);
+    let _ = draw_frame(&mut s);
+
+    assert_eq!(
+        s.files.path, "/Downloads",
+        "Files opened the download's folder"
+    );
+    assert!(
+        s.files.selected_rows.contains("report.txt"),
+        "the download is selected in Files: {:?}",
+        s.files.selected_rows
+    );
+    assert!(
+        s.wm.focused().is_some_and(|id| s
+            .wm
+            .all()
+            .iter()
+            .any(|w| w.id == id && w.app_id == App::Files.app_id())),
+        "the Files window is the one in front"
+    );
+
+    // The same folder the download landed in is inside the fast scan's scope.
+    s.open_app(App::Defender);
+    let _ = draw_frame(&mut s);
+    let fast = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::ScanNow))
+        .expect("the Fast scan button is drawn");
+    click(&mut s, fast.center().0, fast.center().1);
+    for _ in 0..600 {
+        let _ = draw_frame(&mut s);
+        if !s.defender.running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!s.defender.running, "the fast scan finished");
+    let threat = s
+        .defender
+        .app
+        .rows
+        .iter()
+        .find(|row| row.path.ends_with("/eicar.com"))
+        .expect("the scan found the planted threat in Downloads");
+    assert!(threat.detected);
+    assert!(
+        s.defender
+            .app
+            .rows
+            .iter()
+            .any(|row| row.path.ends_with("/report.txt") && !row.detected),
+        "the downloaded file was scanned and left unflagged"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

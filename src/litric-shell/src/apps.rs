@@ -314,6 +314,14 @@ pub struct FilesApp {
     pub selected_rows: std::collections::BTreeSet<String>,
     /// The primary selected row's name, stable across sorting and filtering.
     pub selected_name: Option<String>,
+    /// A row to select as soon as its listing arrives.
+    ///
+    /// Navigation clears the selection and the listing is read on the next
+    /// frame, so a caller in another window that names a file (a download
+    /// opened from the Browser) records the name here and the table selects it
+    /// when the rows exist. It is spent once, never left to surprise a later
+    /// folder.
+    pub pending_selection: Option<String>,
     /// Current sort.
     pub sort: (SortKey, bool),
     /// Search filter; empty means no filter.
@@ -361,6 +369,7 @@ impl Default for FilesApp {
             selected: None,
             selected_rows: std::collections::BTreeSet::new(),
             selected_name: None,
+            pending_selection: None,
             sort: (SortKey::Name, true),
             filter: String::new(),
             details: true,
@@ -609,6 +618,13 @@ impl FilesApp {
         self.selected_rows.clear();
         self.selected_name = None;
         self.error = None;
+        if let Some(name) = self.pending_selection.take() {
+            if let Some(index) = self.visible().iter().position(|row| row.name == name) {
+                self.selected = Some(index);
+                self.selected_name = Some(name.clone());
+                self.selected_rows.insert(name);
+            }
+        }
     }
 
     /// Record that the directory could not be read, and drop the rows.
@@ -722,6 +738,22 @@ impl FilesApp {
                     && (self.selected_name.as_deref() == Some(row.name.as_str())
                         || (self.selected_name.is_none() && self.selected == Some(index))))
         })
+    }
+
+    /// Select a row by name, remembering the name when the listing has not
+    /// arrived yet. This is the entry point for another window that knows the
+    /// file it wants (a finished download opened from the Browser), so the user
+    /// lands on that file rather than an empty selection.
+    pub fn select_name(&mut self, name: &str) {
+        if let Some(index) = self.visible().iter().position(|row| row.name == name) {
+            self.selected = Some(index);
+            self.selected_name = Some(name.to_owned());
+            self.selected_rows.clear();
+            self.selected_rows.insert(name.to_owned());
+            self.pending_selection = None;
+        } else {
+            self.pending_selection = Some(name.to_owned());
+        }
     }
 
     /// Replace the selection with one visible row.
