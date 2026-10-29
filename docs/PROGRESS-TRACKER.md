@@ -2979,3 +2979,70 @@ bash ci/verify.sh             31 pass, 2 fail, 4 skipped
 
 The two failures are the known absent `keys/dev/` material (mkosi config, dev key
 pairs). No gate relaxed, no test deleted, no dependency added.
+## 37. Batch: Defender Fast and Deep scans, proven through the window (verified)
+
+### 37.1 What was already wired at `17f7c85`, and what was not
+
+Both buttons existed and both really scanned. `MenuAction::ScanNow` and
+`MenuAction::DeepScan` (`apps.rs`) reach `Shell::start_scan_mode` (`shell.rs`),
+which walks the mode's roots and depth through `collect_for_mode`, resolves host
+paths on the bridge thread, and hands the jobs to the `litric-defender-scan`
+worker. `Shell::scan_step` drains eight finished verdicts per tick into
+`DefenderApp`, so a scan cannot lengthen a frame. What was **not** ready for a
+user:
+
+- Every verdict was an engine token. `DefenderApp::record` produced `Clean`,
+  `Unknown (hash-match-unavailable)` and `DETECTED [Hash] eicar-test` — exactly
+  the internals the brief forbids in a window.
+- A scan could not be stopped. Both mode buttons became inert `Loading`
+  controls while the worker ran and nothing replaced them, so the only exit was
+  to wait.
+- The result sentence did not say which mode produced it, and the only journeys
+  asserted the queue depth and one deep result — neither proved that a clean
+  file is left unflagged, nor that the row the window draws is the scanner's
+  real verdict for a planted threat in a real folder.
+
+### 37.2 The fix
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/apps.rs` | `record()` now writes the three human verdicts (`Safe`, `Threat found`, `Not checked`) and drops the tier, signature id and reason from the row; the scan report still carries them for the audit trail. `MenuAction::CancelScan` added. |
+| `src/litric-shell/src/shell.rs` | `ScanShared::cancelled` is checked by the worker between files, so a stop costs at most the file in hand. `Shell::cancel_scan()` raises it and says `Stopping the scan…`; the finish sentence is prefixed with the mode (`Fast scan: 1 threat found in 2 files`) and a stopped scan says `… stopped after N files`. |
+| `src/litric-shell/src/views.rs` | While a scan runs, a live `Stop` control is drawn beside the inert mode buttons and registered as `MenuAction::CancelScan`. |
+| `src/litric-shell/src/e2e.rs` | `journey_defender_scans_a_real_folder_fast_and_deep` (one session: open Defender → Fast → Deep, every step a click) and `journey_a_running_defender_scan_can_be_stopped_from_the_window` (the Stop control is drawn and its click reaches the worker). |
+| `ci/lint-file-safety.py` | the new journey's fixture-root removal is a reviewed entry with its reason. |
+
+No test-only hook, no fixture special case, no bypass: the journeys plant real
+files and click the controls the window draws.
+
+### 37.3 Tests, with the state each one observed
+
+| Test | Observed |
+|---|---|
+| `e2e::journey_defender_scans_a_real_folder_fast_and_deep` | Clicking Fast scan queued exactly the two top-level files (`Scanning { done: 0, total: 2 }`) and finished `Done { scanned: 2, threats: 1 }`; the planted `eicar.com` row read `Threat found` with `detected`, `clean.txt` read `Safe` and was not flagged, the threat nested ten folders down was absent from the fast rows, and the sentence read `Fast scan: 1 threat found in 2 files`. Clicking Deep scan queued three files and finished `Done { scanned: 3, threats: 2 }`; `eicar-nested.com` was now listed and flagged, the sentence began `Deep scan`, and every rendered verdict was one of `Safe`, `Threat found`, `Not checked` with no `Hash`, `DETECTED`, `Deny`, `Allow`, `skipped`, `stat:` or `erofs`. |
+| `e2e::journey_a_running_defender_scan_can_be_stopped_from_the_window` | With a worker attached and a scan running, the frame registered `MenuAction::CancelScan`; clicking it set the worker's `cancelled` flag and the status line read `Stopping the scan…`. |
+| `e2e::journey_defender_scans_and_reports_eicar_end_to_end`, `e2e::journey_defender_fast_and_deep_scans_cover_different_folders` | still pass unchanged. |
+
+```text
+cargo test --workspace        passed=1688 failed=0   (was 1,686; +2 journeys)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the known absent `keys/dev/` material (mkosi key layout,
+dev key pairs). No gate relaxed, no test deleted, no dependency added.
+
+### 37.4 Resources
+
+The scan worker already existed and is unchanged in kind: one thread per scan,
+bounded result rows (every detection plus at most 200 clean samples), one file
+in memory at a time under the unchanged 64 MiB cap, eight verdicts drained per
+tick. The diff adds one `AtomicBool` load per file for cancellation, one button
+while a scan runs, and no polling, no `thread::spawn`, no unbounded buffer and no
+idle per-frame work.
+
+### 37.5 Limit
+
+There is no display, GPU or QEMU here, so nothing claims a screenshot or a boot.
+Cancellation is proven at the window and worker-flag level; it was not observed
+stopping a multi-minute scan mid-file on a real machine.

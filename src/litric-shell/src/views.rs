@@ -4323,6 +4323,16 @@ fn draw_defender(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         }
         bx += bw + gap;
     }
+    // While a scan runs, both mode buttons are inert Loading controls and the
+    // only live control is Stop: a scan the user cannot call off is a scan they
+    // will not start.
+    if shell.defender.running {
+        let stop = Rect::new(bx, row.y, t.px(72.0), row.h);
+        ui::button(canvas, &t, stop, "Stop", ui::State::Normal, Tone::Neutral);
+        shell
+            .hotspots_mut()
+            .push(stop, Hot::MenuRow(crate::apps::MenuAction::CancelScan));
+    }
     // What the selected mode covers, in a sentence: a scan whose scope the
     // user has to guess at is a scan whose result they cannot judge.
     let hint = col.row(t.px(30.0));

@@ -1546,10 +1546,14 @@ impl DefenderApp {
     /// Record one scanned file. `limit_clean` bounds how many clean rows the
     /// window keeps so a big scan cannot grow the model without end.
     pub fn record(&mut self, path: &str, decision: &Decision) {
+        // The row speaks the verdict a person needs: whether the file is safe,
+        // whether it is a threat, or whether it was not looked at. The tier and
+        // the signature id stay in the scan report for the audit trail; they are
+        // not what the window is for.
         let (detected, verdict) = match decision {
-            Decision::Allow => (false, "Clean".to_owned()),
-            Decision::AllowUnknown { reason } => (false, format!("Unknown ({reason})")),
-            Decision::Deny { tier, id } => (true, format!("DETECTED [{tier:?}] {id}")),
+            Decision::Allow => (false, "Safe".to_owned()),
+            Decision::AllowUnknown { .. } => (false, "Not checked".to_owned()),
+            Decision::Deny { .. } => (true, "Threat found".to_owned()),
         };
         if detected {
             self.last_had_threats = true;
@@ -1952,6 +1956,8 @@ pub enum MenuAction {
     ScanNow,
     /// Scan every folder in the home directory.
     DeepScan,
+    /// Stop the scan that is running.
+    CancelScan,
     /// Start the browser engine session.
     BrowserStart,
     /// Reload the focused browser tab.

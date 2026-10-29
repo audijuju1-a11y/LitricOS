@@ -2482,6 +2482,168 @@ fn journey_defender_fast_and_deep_scans_cover_different_folders() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// One Defender session through the window: Fast scan over a folder that holds
+/// a harmless note and a test threat, then Deep scan over the same folder plus
+/// a threat nested deeper than Fast scan promises to walk. Every step is a
+/// click on the drawn control; every assertion reads what the window renders.
+#[test]
+fn journey_defender_scans_a_real_folder_fast_and_deep() {
+    use crate::apps::ScanMode;
+
+    let root = e2e_root("defender-journey");
+    let docs = root.join("Documents");
+    let mut nested = docs.clone();
+    for i in 0..10 {
+        nested = nested.join(format!("level{i}"));
+    }
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(docs.join("clean.txt"), b"a harmless note\n").unwrap();
+    std::fs::write(docs.join("eicar.com"), EICAR).unwrap();
+    std::fs::write(nested.join("eicar-nested.com"), EICAR).unwrap();
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Defender);
+    let _ = draw_frame(&mut s);
+
+    // Fast scan: the two files at the top of the folder, no deeper.
+    let fast_btn = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::ScanNow))
+        .expect("the Fast scan button is drawn");
+    let _ = click(&mut s, fast_btn.center().0, fast_btn.center().1);
+    assert_eq!(
+        s.defender.app.state,
+        ScanState::Scanning { done: 0, total: 2 },
+        "clicking Fast scan queues exactly the top-level files"
+    );
+    assert!(s.defender.running, "the scan worker is alive");
+    for _ in 0..600 {
+        let _ = draw_frame(&mut s);
+        if !s.defender.running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!s.defender.running, "the fast scan finished");
+    assert_eq!(
+        s.defender.app.state,
+        ScanState::Done {
+            scanned: 2,
+            threats: 1
+        },
+        "the fast scan read both files and found the planted threat"
+    );
+    let rows = &s.defender.app.rows;
+    let threat = rows
+        .iter()
+        .find(|r| r.path.ends_with("/eicar.com"))
+        .expect("the threat is listed by name");
+    assert!(threat.detected, "the planted threat is flagged: {rows:?}");
+    assert_eq!(threat.verdict, "Threat found");
+    let clean = rows
+        .iter()
+        .find(|r| r.path.ends_with("/clean.txt"))
+        .expect("the harmless file is listed too");
+    assert!(!clean.detected, "the harmless file is not flagged");
+    assert_eq!(clean.verdict, "Safe");
+    assert!(
+        !rows.iter().any(|r| r.path.contains("eicar-nested.com")),
+        "Fast scan stays inside the depth it promises: {rows:?}"
+    );
+    assert!(
+        s.defender.app.message.starts_with("Fast scan")
+            && s.defender.app.message.contains("1 threat"),
+        "the result sentence names the mode and the finding: {}",
+        s.defender.app.message
+    );
+
+    // Deep scan: the same folder, and everything under it.
+    let deep_btn = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::DeepScan))
+        .expect("the Deep scan button is drawn once the first scan ends");
+    let _ = click(&mut s, deep_btn.center().0, deep_btn.center().1);
+    assert_eq!(s.defender.app.mode, ScanMode::Deep, "the button chose deep");
+    assert_eq!(
+        s.defender.app.state,
+        ScanState::Scanning { done: 0, total: 3 },
+        "Deep scan queues the nested file Fast scan could not reach"
+    );
+    for _ in 0..600 {
+        let _ = draw_frame(&mut s);
+        if !s.defender.running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!s.defender.running, "the deep scan finished");
+    assert_eq!(
+        s.defender.app.state,
+        ScanState::Done {
+            scanned: 3,
+            threats: 2
+        },
+        "the deep scan covered the nested file as well"
+    );
+    let rows = &s.defender.app.rows;
+    let deeper = rows
+        .iter()
+        .find(|r| r.path.ends_with("/eicar-nested.com"))
+        .expect("the nested threat is now listed");
+    assert!(deeper.detected, "the nested threat is flagged");
+    assert!(
+        s.defender.app.message.starts_with("Deep scan"),
+        "the result sentence names the deeper mode: {}",
+        s.defender.app.message
+    );
+    // Every row the window shows is plain language: a person's verdict, no
+    // tier tokens, signature ids, hashes or engine internals.
+    for r in rows {
+        assert!(
+            matches!(r.verdict.as_str(), "Safe" | "Threat found" | "Not checked"),
+            "the verdict is a human word, not an engine token: {:?}",
+            r.verdict
+        );
+        for banned in [
+            "Hash", "DETECTED", "Deny", "Allow", "skipped", "stat:", "erofs",
+        ] {
+            assert!(
+                !r.verdict.contains(banned),
+                "the row leaks {banned:?} to the window: {r:?}"
+            );
+        }
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A running scan must be stoppable from the window itself: the Stop control is
+/// drawn beside the inert mode buttons, and clicking it asks the worker to stop.
+#[test]
+fn journey_a_running_defender_scan_can_be_stopped_from_the_window() {
+    let mut s = shell();
+    s.open_app(App::Defender);
+    s.defender.app.begin(crate::apps::ScanMode::Fast, 40);
+    s.defender.running = true;
+    s.defender.shared = Some(std::sync::Arc::new(crate::shell::ScanShared::default()));
+    let _ = draw_frame(&mut s);
+    let stop = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::CancelScan))
+        .expect("a running scan offers Stop");
+    let _ = click(&mut s, stop.center().0, stop.center().1);
+    let shared = s.defender.shared.expect("the worker is attached");
+    assert!(
+        shared.cancelled.load(std::sync::atomic::Ordering::Relaxed),
+        "the click asked the worker to stop"
+    );
+    assert!(
+        s.defender.app.message.contains("Stopping"),
+        "the window says what it is doing: {}",
+        s.defender.app.message
+    );
+}
+
 /// The machine's own vocabulary must not reach a surface a person reads. This
 /// journey drives the real frames -- Tasks, then the two Settings pages -- with
 /// the tokens set on the facts, and inspects every text run the canvas drew.

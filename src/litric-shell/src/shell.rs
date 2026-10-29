@@ -1435,6 +1435,8 @@ pub struct ScanShared {
     pub unread: AtomicUsize,
     /// The worker sets this when the queue is exhausted.
     pub done: AtomicBool,
+    /// Set by the window's Stop button; the worker stops before the next file.
+    pub cancelled: AtomicBool,
 }
 
 /// The largest file the on-demand scanner will read into memory.
@@ -1503,6 +1505,16 @@ impl Shell {
         Vec::new()
     }
 
+    /// Ask the running scan to stop. The worker checks this between files, so a
+    /// stop costs at most the file in hand, never a blocked frame.
+    pub fn cancel_scan(&mut self) {
+        if let Some(shared) = &self.defender.shared {
+            shared.cancelled.store(true, Ordering::Relaxed);
+            self.defender.app.message = "Stopping the scan…".to_owned();
+            self.request_full_redraw();
+        }
+    }
+
     /// The bridge the shell's file surfaces share, rooted at [`Self::files_root`].
     /// On a host with no root filesystem (Windows CI) there is no bridge;
     /// callers show the refusal in place rather than panicking in the render
@@ -1555,9 +1567,20 @@ impl Shell {
             .len();
         if remaining == 0 && shared.done.load(Ordering::Acquire) {
             let unread = shared.unread.load(Ordering::Acquire);
+            let cancelled = shared.cancelled.load(Ordering::Acquire);
+            let scanned = match self.defender.app.state {
+                crate::apps::ScanState::Scanning { done, .. } => done,
+                _ => 0,
+            };
+            let mode = self.defender.app.mode.label();
             self.defender.running = false;
             self.defender.shared = None;
             self.defender.app.finish();
+            self.defender.app.message = if cancelled {
+                format!("{mode} stopped after {scanned} files")
+            } else {
+                format!("{mode}: {}", self.defender.app.message)
+            };
             // The result says what it did not cover. A folder tree that hit the
             // walk's caps, or files too large to read, are named in the same
             // sentence as the count of files that were scanned.
@@ -2518,6 +2541,9 @@ impl Shell {
             MA::ToggleDetails => self.files.details = !self.files.details,
             MA::ScanNow => return self.start_scan(),
             MA::DeepScan => return self.start_scan_mode(crate::apps::ScanMode::Deep),
+            MA::CancelScan => {
+                self.cancel_scan();
+            }
             MA::BrowserStart => return self.browser_start_session(),
             MA::BrowserReload => {
                 let i = self.menu_tab();
@@ -7219,6 +7245,9 @@ fn scan_worker(jobs: Vec<(String, std::path::PathBuf)>, shared: Arc<ScanShared>)
     let mut engine = litric_defender::engine::Engine::new();
     engine.load_denylist(eicar_denylist());
     for (logical, host) in jobs {
+        if shared.cancelled.load(Ordering::Relaxed) {
+            break;
+        }
         let report = scan_one(&mut engine, &logical, &host);
         if scan_was_skipped(&report) {
             shared.unread.fetch_add(1, Ordering::Relaxed);
