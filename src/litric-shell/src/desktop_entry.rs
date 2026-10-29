@@ -2544,6 +2544,18 @@ mod tests {
             "the fixture must be a same-length rewrite"
         );
         std::fs::write(&icon, first_bytes).expect("icon");
+        // Keep the timestamps the launcher will read, the way an install that
+        // preserves mtimes does. Without this the two writes could straddle the
+        // filesystem's ~1 s mtime bucket and the stat pass would see the rewrite,
+        // which would make the "stat is blind" assertion flaky rather than wrong.
+        let kept_times = root.join("same-icon.timestamps");
+        let kept = std::process::Command::new("touch")
+            .arg("-r")
+            .arg(&icon)
+            .arg(&kept_times)
+            .status()
+            .expect("touch is available");
+        assert!(kept.success(), "touch -r made the timestamp reference");
         let prog = program(&root, "run-me");
         std::fs::write(
             apps.join("Same.desktop"),
@@ -2562,11 +2574,24 @@ mod tests {
         assert!(!names.scan_digests(), "the digest is the baseline it took");
         assert_eq!(names.head_digests(), 1, "one head read for one name");
 
+        let mtime_before = std::fs::metadata(&icon).expect("meta").modified().ok();
         std::fs::write(&icon, second_bytes).expect("rewrite");
+        let kept = std::process::Command::new("touch")
+            .arg("-r")
+            .arg(&kept_times)
+            .arg(&icon)
+            .status()
+            .expect("touch is available");
+        assert!(kept.success(), "touch -r restored the timestamps");
         assert_eq!(
             std::fs::metadata(&icon).expect("meta").len(),
             first_bytes.len() as u64,
             "the rewrite kept the length, so no stat can see it"
+        );
+        assert_eq!(
+            std::fs::metadata(&icon).expect("meta").modified().ok(),
+            mtime_before,
+            "the rewrite kept the mtime, so no stat can see it"
         );
         assert!(
             !names.scan_files(),

@@ -5561,7 +5561,7 @@ like the other two signals: drop the decoded copies, repaint, resolve nothing.
 | `src/litric-shell/src/desktop_entry.rs` | 473 | `stamped_file` — metadata plus the digest, taken when a name answers |
 | `src/litric-shell/src/desktop_entry.rs` | 883 | `scan_digests` — bounded round-robin digest pass |
 | `src/litric-shell/src/desktop_entry.rs` | 938 | `head_digests()` / `digests_changed()` counters |
-| `src/litric-shell/src/desktop_entry.rs` | n/a | `scan_files` re-baselines the digest only when length or mtime moved |
+| `src/litric-shell/src/desktop_entry.rs` | 853 | `scan_files` re-baselines the digest only when length or mtime moved |
 | `src/litric-shell/src/shell.rs` | 7321 | the digest pass, once per check |
 | `src/litric-shell/src/shell.rs` | 7339 | a moved digest drops the decoded copies and repaints |
 | `src/litric-shell/src/shell.rs` | 7359 | journal line carries all three counters |
