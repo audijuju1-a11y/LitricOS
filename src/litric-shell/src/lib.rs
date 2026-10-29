@@ -62,6 +62,7 @@ pub mod monitor;
 pub mod overview;
 pub mod prefstore;
 pub mod present;
+pub mod reader;
 pub mod registry;
 pub mod revert;
 pub mod seek;

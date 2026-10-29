@@ -115,6 +115,7 @@ ALLOWED = {
         "journey_defender_fast_and_deep_scans_cover_different_folders": "removes the temporary fixture root this journey created, tagged with its own pid",
         "journey_this_litric_creates_renames_moves_and_trashes": "removes the temporary fixture root this journey created, tagged with its own pid",
         "journey_defender_scans_a_real_folder_fast_and_deep": "removes the temporary fixture root this Defender journey created, tagged with its own pid",
+        "journey_browser_opens_a_real_comic_page_and_renders_it": "removes the temporary comic-page fixture this browser journey created, tagged with its own pid",
         "journey_trash_window_restores_after_files_trash": "removes the temporary root this journey created",
         "journey_right_click_desktop_menu_creates_a_folder_via_dialog": "removes the temporary root this journey created",
         "journey_new_folder_from_the_files_menu_lands_in_the_open_folder": "removes the temporary root this journey created (BUG-0025: the row used to create in /Documents; the test asserts the folder landed in the open folder and that /Documents was untouched before cleaning up)",

@@ -1946,6 +1946,14 @@ impl Shell {
     /// This is the line a search or an address commit has to produce; a
     /// navigation that stops at the model never lights a pixel of the web.
     fn send_go(&mut self, url: &str) {
+        // A page stored on this machine is read here: there is no request to
+        // send and no engine to start. The reader is the product's own path for
+        // `file://`, not a stand-in for the web engine.
+        if url.starts_with("file://") {
+            self.open_local_page(url);
+            return;
+        }
+        self.reader = None;
         let Some(tab) = self.browser.active_engine_tab() else {
             return;
         };
@@ -1963,8 +1971,65 @@ impl Shell {
         }
     }
 
+    /// Open a page stored on this machine in the reader.
+    ///
+    /// The status line says what happened in words a person reads: the page's
+    /// title when it opened, "Could not open this page" when it did not. No
+    /// path, no parser token, no error code.
+    fn open_local_page(&mut self, url: &str) {
+        self.browser_frame = None;
+        self.browser.last_frame = None;
+        self.browser.loading = false;
+        self.browser_pointer_sent = None;
+        match crate::reader::Reader::open(url) {
+            Ok(reader) => {
+                let title = reader.title().to_owned();
+                let active = self.browser.active;
+                if let Some(tab) = self.browser.tabs.get_mut(active) {
+                    tab.title = title.clone();
+                    tab.error = false;
+                }
+                self.browser.status = format!("Opened {title}");
+                self.reader = Some(reader);
+            }
+            Err(_) => {
+                self.reader = None;
+                self.browser.status = "Could not open this page".to_owned();
+                let active = self.browser.active;
+                if let Some(tab) = self.browser.tabs.get_mut(active) {
+                    tab.error = true;
+                }
+            }
+        }
+        self.request_full_redraw();
+    }
+
+    /// Scroll a local page when the wheel is over the page surface.
+    fn reader_scroll(&mut self, at: Point, dy: f32) -> bool {
+        if !self.browser_page_focused() {
+            return false;
+        }
+        let Some(area) = self.browser_engine_area else {
+            return false;
+        };
+        if !area.contains(at.x, at.y) {
+            return false;
+        }
+        let Some(reader) = self.reader.as_mut() else {
+            return false;
+        };
+        reader.scroll_by(dy * 40.0, area.h);
+        self.request_full_redraw();
+        true
+    }
+
     /// Navigate to a URL: start the engine session if needed, then GO.
     pub fn browser_navigate(&mut self, url: &str) {
+        if url.starts_with("file://") {
+            self.send_go(url);
+            self.request_full_redraw();
+            return;
+        }
         if self.browser_session.is_none() {
             self.browser_start_session();
             // A successful start already navigated the tab it found; when the
@@ -2895,6 +2960,8 @@ pub struct Shell {
     pub files_daemon: Option<std::sync::Arc<crate::fsclient::Daemon>>,
     /// The Litric Browser window model (Chrome-style tab strip + omnibox).
     pub browser: crate::apps::BrowserApp,
+    /// A page opened from this machine, drawn by the shell itself.
+    pub reader: Option<crate::reader::Reader>,
     /// The Defender application model and its scan state.
     pub defender: DefenderState,
     /// The Trash application model.
@@ -3375,6 +3442,7 @@ impl Shell {
             #[cfg(unix)]
             files_daemon: None,
             browser: crate::apps::BrowserApp::default(),
+            reader: None,
             defender: DefenderState::default(),
             trash: crate::apps::TrashApp::default(),
             terminal: crate::apps::TerminalApp::new(),
@@ -4798,6 +4866,9 @@ impl Shell {
                 mods,
             } => self.pointer_button(*button, *pressed, *at, *clicks, *mods),
             InputEvent::Scroll { dy, at, .. } => {
+                if self.reader_scroll(*at, *dy) {
+                    return Vec::new();
+                }
                 let over = self.client_under(*at);
                 let took = self
                     .clients

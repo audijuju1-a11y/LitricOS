@@ -1433,6 +1433,178 @@ fn journey_browser_search_commits_to_the_engine_url() {
     assert!(!s.browser.omnibox_focus);
 }
 
+/// Sample a grid inside `r` and count the pixels that differ from `reference`.
+/// The grid is coarse on purpose: this asks "is this region showing content of
+/// its own", not "is every pixel a particular value".
+fn differing_pixels(canvas: &Canvas, r: Rect, reference: u32) -> (usize, usize) {
+    let mut differing = 0usize;
+    let mut total = 0usize;
+    let mut x = r.x + 4.0;
+    while x < r.right() - 4.0 {
+        let mut y = r.y + 4.0;
+        while y < r.bottom() - 4.0 {
+            if let Some(px) = canvas.get(x as i64, y as i64) {
+                total = total.saturating_add(1);
+                if px != reference {
+                    differing = differing.saturating_add(1);
+                }
+            }
+            y += 12.0;
+        }
+        x += 12.0;
+    }
+    (differing, total)
+}
+
+/// One browser session through the window: open it from the shell, type the
+/// address of a real page on this machine, read the rendered text, then scroll
+/// to the second chapter and see its panel decoded and drawn. Every step is a
+/// real click, key event or wheel event; every assertion reads what the reader
+/// actually laid out and drew.
+#[test]
+fn journey_browser_opens_a_real_comic_page_and_renders_it() {
+    use crate::reader::{MAX_CACHED_IMAGES, MAX_CACHED_PIXELS};
+
+    let root = e2e_root("browser-comic");
+    // A real JPEG from the decoder's own test corpus, copied beside the page:
+    // the reader decodes these bytes, not a fixture the test pre-parsed.
+    let jpeg = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../litric-browser/testdata/jpeg/s420-q75.jpg"
+    ))
+    .expect("the decoder's test picture");
+    std::fs::write(root.join("panel1.jpg"), &jpeg).unwrap();
+    std::fs::write(root.join("panel2.jpg"), &jpeg).unwrap();
+    let page = root.join("page.html");
+    std::fs::write(
+        &page,
+        "<!doctype html><html><head><title>Comic Page</title></head><body>\
+         <h1>Chapter One</h1>\
+         <p>A page of panels, opened from this machine and drawn by the reader.</p>\
+         <img src=\"panel1.jpg\" alt=\"Panel one\" width=\"900\" height=\"600\">\
+         <h1>Chapter Two</h1>\
+         <p>The story continues below the first panel.</p>\
+         <img src=\"panel2.jpg\" alt=\"Panel two\" width=\"900\" height=\"600\">\
+         </body></html>",
+    )
+    .unwrap();
+    let url = format!("file://{}", page.display());
+
+    let mut s = shell();
+    s.open_app(App::Browser);
+    let _ = draw_frame(&mut s);
+    let field = s
+        .hotspots()
+        .rect_of(Hot::BrowserOmnibox)
+        .expect("the start page draws its search box");
+    click(&mut s, field.center().0, field.center().1);
+    type_text(&mut s, &url);
+    assert_eq!(s.browser.omnibox, url);
+    key_press(&mut s, Key::Enter, Modifiers::NONE);
+    let canvas = draw_frame(&mut s);
+
+    assert!(
+        s.reader.is_some(),
+        "the page loaded; the status line says: {}",
+        s.browser.status
+    );
+    assert_eq!(s.browser.status, "Opened Comic Page");
+    assert_eq!(
+        s.browser.tab().map(|t| t.title.clone()),
+        Some("Comic Page".to_owned()),
+        "the tab takes the page's own title"
+    );
+    let area = s
+        .browser_engine_area
+        .expect("the page surface is on screen");
+    let reference = canvas
+        .get((area.right() - 6.0) as i64, (area.bottom() - 6.0) as i64)
+        .expect("a background pixel");
+
+    let heading = Rect::new(area.x + 24.0, area.y + 16.0, 260.0, 44.0);
+    let (text_px, text_total) = differing_pixels(&canvas, heading, reference);
+    assert!(
+        text_total > 40 && text_px > 30,
+        "the heading is drawn, not just laid out: {text_px}/{text_total}"
+    );
+
+    let reader = s.reader.as_ref().expect("the reader");
+    assert!(
+        reader
+            .visible_text(area.h)
+            .iter()
+            .any(|line| line.contains("Chapter One")),
+        "the first chapter's text is on screen"
+    );
+    assert!(
+        !reader
+            .visible_text(area.h)
+            .iter()
+            .any(|line| line.contains("Chapter Two")),
+        "the second chapter is still below the fold"
+    );
+    assert_eq!(
+        reader.cached_images(),
+        1,
+        "only the visible panel was decoded"
+    );
+    let panel = reader.image_area(0).expect("the first panel is laid out");
+    let panel = Rect::new(area.x + panel.x, area.y + panel.y, panel.w, panel.h);
+    let (pixels, total) = differing_pixels(&canvas, panel, reference);
+    assert!(
+        total > 100 && pixels * 10 >= total,
+        "the first panel's decoded pixels reached the frame: {pixels}/{total}"
+    );
+
+    // Wheel down: the second chapter comes into view, and only now is its
+    // panel decoded.
+    let at = Point::new(area.center().0, area.center().1);
+    let _ = s.handle(
+        &InputEvent::Scroll {
+            dx: 0.0,
+            dy: 10.0,
+            at,
+            mods: Modifiers::NONE,
+        },
+        2_000,
+    );
+    let canvas = draw_frame(&mut s);
+    let reader = s.reader.as_ref().expect("the reader");
+    assert!(reader.scroll() > 0.0, "the wheel scrolled the page");
+    let visible = reader.visible_text(area.h);
+    assert!(
+        visible.iter().any(|line| line.contains("Chapter Two")),
+        "the second chapter is now on screen: scroll={} content={} viewport={} visible={visible:?}",
+        reader.scroll(),
+        reader.content_height(),
+        area.h
+    );
+    assert_eq!(
+        reader.cached_images(),
+        2,
+        "the second panel was decoded for the viewport"
+    );
+    assert!(reader.cached_images() <= MAX_CACHED_IMAGES);
+    assert!(reader.cached_pixels() <= MAX_CACHED_PIXELS);
+    let second = reader.image_area(1).expect("the second panel is laid out");
+    let second = Rect::new(area.x + second.x, area.y + second.y, second.w, second.h);
+    let (pixels, total) = differing_pixels(&canvas, second, reference);
+    assert!(
+        total > 50 && pixels * 10 >= total,
+        "the second panel's decoded pixels reached the frame after scrolling: {pixels}/{total}"
+    );
+
+    // The window speaks in words, never in addresses, formats or codes.
+    for banned in ["file://", "jpeg", "JPEG", "html", "HTML", "erofs", "error"] {
+        assert!(
+            !s.browser.status.contains(banned),
+            "the status line leaks {banned:?}: {}",
+            s.browser.status
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn journey_engine_chip_and_quick_link_navigate() {
     let mut s = shell();

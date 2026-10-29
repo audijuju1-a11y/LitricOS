@@ -1138,6 +1138,46 @@ impl Canvas {
         }
     }
 
+    /// Paint decoded pixels into `dst`, scaling them to fit.
+    ///
+    /// `pixels` is one `0xFFRRGGBB` word per source pixel, the form the JPEG
+    /// decoder produces. The mapping is nearest-neighbour for the same reason
+    /// as [`Self::blit_bgra`]: the cost of a frame is bounded by the area on
+    /// screen, never by the decoded picture's own size.
+    pub fn blit_argb(&mut self, dst: Rect, pixels: &[u32], src_w: u32, src_h: u32) {
+        if src_w == 0 || src_h == 0 || dst.w <= 0.0 || dst.h <= 0.0 {
+            return;
+        }
+        let (x0, y0, x1, y1) = self.span(&dst);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let sw = i64::from(src_w);
+        let dw = f64::from(dst.w);
+        let dh = f64::from(dst.h);
+        let mut drawn: u64 = 0;
+        for y in y0..y1 {
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            let sy = (((y as f64 + 0.5 - f64::from(dst.y)) / dh) * f64::from(src_h))
+                .max(0.0)
+                .min(f64::from(src_h.saturating_sub(1))) as i64;
+            let row = sy.saturating_mul(sw);
+            for x in x0..x1 {
+                #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+                let sx = (((x as f64 + 0.5 - f64::from(dst.x)) / dw) * f64::from(src_w))
+                    .max(0.0)
+                    .min(f64::from(src_w.saturating_sub(1))) as i64;
+                let at = usize::try_from(row.saturating_add(sx)).unwrap_or(usize::MAX);
+                let Some(&px) = pixels.get(at) else {
+                    continue;
+                };
+                self.put_in(x, y, px | 0xFF00_0000);
+                drawn = drawn.saturating_add(1);
+            }
+        }
+        self.count_px(Site::Draw, drawn);
+    }
+
     /// Paint a client's buffer into `dst`, scaling it to fit.
     ///
     /// `pixels` is what a Wayland client committed: rows tightly packed, four

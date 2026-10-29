@@ -2120,6 +2120,18 @@ fn draw_browser(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         crate::apps::BrowserPanel::Page => {}
     }
 
+    // A page opened from this machine is drawn here: real text and real
+    // decoded panels, scrolled by the wheel. The engine frame path below is
+    // untouched.
+    let tokens_now = shell.tokens.clone();
+    if let Some(reader) = shell.reader.as_mut() {
+        if crate::apps::BrowserApp::canonical_address(reader.url()) == tab.url {
+            reader.draw(canvas, &tokens_now, page);
+            shell.set_browser_engine_area(Some(page));
+            return;
+        }
+    }
+
     // A frame from the engine session replaces the placeholder entirely. Where
     // it was drawn is published to the shell: pointer positions are mapped
     // through that rectangle, so a click lands on the pixel aimed at.

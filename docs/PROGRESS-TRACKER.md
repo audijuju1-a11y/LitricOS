@@ -3046,3 +3046,78 @@ idle per-frame work.
 There is no display, GPU or QEMU here, so nothing claims a screenshot or a boot.
 Cancellation is proven at the window and worker-flag level; it was not observed
 stopping a multi-minute scan mid-file on a real machine.
+## 38. Batch: a real local page opens, renders and scrolls in the Browser (verified)
+
+### 38.1 What the Browser could actually do at `93117b7`
+
+Nothing rendered a page. `litric-browser/src/engine.rs` has exactly one engine,
+`NoEngine`, whose `load` returns a sentence naming the missing engine; the shell's
+real engine path is Chromium over `litric-browserd`, and this image has no
+Chromium binary, so `views.rs` drew the honest placeholder ("No engine session
+yet…"). What *was* real: URL parsing and policy, the tab/history model, and a
+complete baseline JPEG decoder (`litric-browser/src/jpeg.rs`) with no caller that
+put its pixels on screen.
+
+That meant the mission's comic-page claim had no evidence behind it: no text was
+laid out, no picture was decoded into a frame, and no wheel moved a page.
+
+### 38.2 What changed
+
+| File | Change |
+|---|---|
+| `src/litric-browser/src/html.rs` | New bounded parser: headings, paragraphs, `<br>`, `<img src alt width height>`, `<hr>`, `<title>`; entities decoded; script/style/head contents removed; unknown tags keep their text. Limits: 4 MiB input, 600 blocks, 8,000 characters per block. |
+| `src/litric-shell/src/reader.rs` | New `Reader`: reads a `file://` page with `std::fs`, lays it out at the page width (heading/body styles from the design tokens), decodes pictures with the existing JPEG decoder **only when a picture's block is inside the viewport**, clamps scrolling, and draws text, rules and pixels. Picture cache: at most 4 decoded pictures and 8,000,000 decoded pixels (32 MiB), at most 2 new decodes per frame, 16 MiB per picture file. |
+| `src/litric-shell/src/canvas.rs` | `blit_argb`: nearest-neighbour blit of `0xFFRRGGBB` pixels, so a decoded picture costs the area it covers on screen, not its own size. |
+| `src/litric-shell/src/shell.rs` | `send_go` routes `file://` to the reader instead of the broker (`open_local_page`), all other addresses still go to the engine; the wheel over the page surface scrolls the reader (`reader_scroll`), clamped. Status line reads `Opened <title>` or `Could not open this page` — no path, format or code. |
+| `src/litric-shell/src/views.rs` | The page area draws the reader when its address is the focused tab's; engine frames are untouched. |
+| `src/litric-shell/src/e2e.rs` | `journey_browser_opens_a_real_comic_page_and_renders_it`: one session — open Browser, click the omnibox, type the address, Enter, assert drawn text pixels, panel pixels and cache state, wheel down, assert the second chapter and second panel. |
+| `ci/lint-file-safety.py` | the journey's fixture-root removal is a reviewed entry. |
+
+No test-only hook, no fixture special case: the journey writes a real HTML file
+and copies a real JPEG from the decoder's corpus beside it, then drives the real
+input path.
+
+### 38.3 What the journey observed
+
+| Step | Observation |
+|---|---|
+| type `file:///tmp/…/page.html`, Enter | `reader` is present, status is exactly `Opened Comic Page`, tab title is `Comic Page` |
+| first frame | heading pixels differ from the page background in the drawn band; `visible_text` contains `Chapter One` and not `Chapter Two`; exactly **1** picture decoded (the visible one) |
+| first panel | sampled pixels differ from the background, so decoded panel bytes reached the frame |
+| wheel down 10 lines (400 px) | scroll = 400; `visible_text` now contains `Chapter Two`; **2** pictures cached, still ≤ 4 and ≤ 8,000,000 pixels; the second panel's pixels are in the frame |
+| status text | contains no `file://`, `jpeg`, `html`, `erofs` or `error` |
+
+```text
+e2e::journey_browser_opens_a_real_comic_page_and_renders_it   ok
+litric-browser::html tests (4)                                 ok
+litric-shell::reader tests (3)                                 ok
+cargo test --workspace        passed=1696 failed=0   (was 1,688; +8)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the known absent `keys/dev/` material (mkosi key layout, dev
+key pairs). No gate relaxed, no test deleted, no dependency added.
+
+### 38.4 Resources, stated exactly
+
+* One picture file at a time in memory, capped at 16 MiB.
+* Cache: `MAX_CACHED_IMAGES = 4`, `MAX_CACHED_PIXELS = 8_000_000` (32 MiB),
+  `MAX_DECODES_PER_FRAME = 2`; eviction is oldest-first.
+* No polling, no `thread::spawn`, no unbounded buffer. The decode pass allocates
+  nothing when no new picture becomes visible; the draw pass borrows the layout
+  instead of cloning it.
+* A frame's picture cost is the area on screen (nearest-neighbour blit), never
+  the decoded picture's size.
+
+### 38.5 The limit, plainly
+
+This is the **local document path**, not a web engine. A real `https://` fetch
+needs Chromium through `browserd` (absent in this image) or a TLS stack this
+project does not ship; no dependency was added to fake either. The proven claim
+is: a real file on disk is read, parsed, laid out, its baseline JPEGs decoded
+and drawn, and scrolled by the wheel, through the window — with the web path
+unchanged and still honestly reporting that no engine is integrated. Image
+support is the decoder's subset (baseline/extended sequential JPEG; progressive,
+CMYK and arithmetic are refused by name), and there is no display or GPU here, so
+no screenshot or compositor presentation is claimed.
