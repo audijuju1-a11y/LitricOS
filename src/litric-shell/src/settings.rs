@@ -180,6 +180,13 @@ pub struct Preferences {
     /// Whether glass surfaces are drawn opaque instead of sampling the
     /// wallpaper. A readability preference, applied by the theme itself.
     pub reduce_transparency: bool,
+    /// Whether notifications may raise a banner.
+    ///
+    /// Do Not Disturb is a display-time decision, not a queue filter: a note
+    /// raised while the desktop is quiet is still recorded in the centre. Only
+    /// critical alerts keep their banner, because a switch that also hides
+    /// "your disk is full" is a switch that loses data.
+    pub do_not_disturb: bool,
     /// Whether the Files table lists dot-prefixed entries.
     ///
     /// The file service has always been able to return them (`LIST path
@@ -215,6 +222,7 @@ impl Preferences {
             language,
             reduce_motion: false,
             reduce_transparency: false,
+            do_not_disturb: false,
             show_hidden: false,
             ui_scale: UiScale::Normal,
             onboarded: true,
@@ -247,6 +255,8 @@ pub enum Page {
     Environments,
     /// Motion and contrast preferences.
     Accessibility,
+    /// Notification banners and Do Not Disturb.
+    Notifications,
     /// Audio devices and actual service state.
     Sound,
     /// Privacy and browser permission policy.
@@ -259,7 +269,7 @@ pub enum Page {
 
 impl Page {
     /// Pages shown by Settings in sidebar order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Appearance,
         Self::Display,
         Self::Input,
@@ -269,6 +279,7 @@ impl Page {
         Self::Region,
         Self::Environments,
         Self::Accessibility,
+        Self::Notifications,
         Self::Sound,
         Self::Privacy,
         Self::Accounts,
@@ -288,6 +299,7 @@ impl Page {
             Self::Region => "Region",
             Self::Environments => "Environments",
             Self::Accessibility => "Accessibility",
+            Self::Notifications => "Notifications",
             Self::Sound => "Sound",
             Self::Privacy => "Privacy",
             Self::Accounts => "Accounts",
@@ -318,6 +330,7 @@ impl Page {
             Self::Region => "region",
             Self::Environments => "environments",
             Self::Accessibility => "accessibility",
+            Self::Notifications => "notifications",
             Self::Sound => "sound",
             Self::Privacy => "privacy",
             Self::Accounts => "accounts",

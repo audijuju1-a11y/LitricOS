@@ -435,6 +435,8 @@ pub enum Hot {
     SettingsMotion,
     /// Toggle opaque glass in the shell.
     SettingsTransparency,
+    /// Toggle notification banners.
+    SettingsDoNotDisturb,
     /// Toggle whether Files lists dot-prefixed entries.
     SettingsShowHidden,
     /// The UI-scale control on the Display page: cycles the scale and arms the
@@ -3244,6 +3246,8 @@ impl Shell {
         self.tokens.theme = resolved_theme(preferences, self.local_hour());
         self.quick.reduce_motion = preferences.reduce_motion;
         self.quick.reduce_transparency = preferences.reduce_transparency;
+        self.quick.do_not_disturb = preferences.do_not_disturb;
+        self.notifications.do_not_disturb = preferences.do_not_disturb;
         self.browser.engine = preferences.search_engine;
         // The stored step is a multiplier on the display's own scale, so one
         // record is right on a 1x panel and on a 2x one. Nothing is provisional
@@ -3294,6 +3298,8 @@ impl Shell {
         self.tokens.theme = resolved_theme(next, self.local_hour());
         self.quick.reduce_motion = next.reduce_motion;
         self.quick.reduce_transparency = next.reduce_transparency;
+        self.quick.do_not_disturb = next.do_not_disturb;
+        self.notifications.do_not_disturb = next.do_not_disturb;
         self.browser.engine = next.search_engine;
         self.request_full_redraw();
         vec![Effect::PersistPreferences(next)]
@@ -3326,6 +3332,8 @@ impl Shell {
         self.tokens.theme = resolved_theme(preferences, self.local_hour());
         self.quick.reduce_motion = preferences.reduce_motion;
         self.quick.reduce_transparency = preferences.reduce_transparency;
+        self.quick.do_not_disturb = preferences.do_not_disturb;
+        self.notifications.do_not_disturb = preferences.do_not_disturb;
         // The record is the authority on the step, so a failed write leaves the
         // screen at the size that is actually stored rather than at the one the
         // disk refused.
@@ -3444,6 +3452,19 @@ impl Shell {
     fn toggle_reduced_motion(&mut self) -> Vec<Effect> {
         let mut next = self.settings.preferences;
         next.reduce_motion = !next.reduce_motion;
+        self.save_preferences(next)
+    }
+
+    /// Flip whether notifications may interrupt, through the preference record.
+    ///
+    /// The notification queue is updated by [`Self::save_preferences`], so the
+    /// switch, the queue and the stored value cannot disagree; a failed write
+    /// restores all three in [`Self::finish_preferences_save`]. The notes already
+    /// in the centre are untouched: Do Not Disturb changes what interrupts, not
+    /// what is recorded.
+    fn toggle_do_not_disturb(&mut self) -> Vec<Effect> {
+        let mut next = self.settings.preferences;
+        next.do_not_disturb = !next.do_not_disturb;
         self.save_preferences(next)
     }
 
@@ -6238,6 +6259,7 @@ impl Shell {
             Hot::SettingsSchedule => self.cycle_theme_schedule(),
             Hot::SettingsMotion => self.toggle_reduced_motion(),
             Hot::SettingsTransparency => self.toggle_reduced_transparency(),
+            Hot::SettingsDoNotDisturb => self.toggle_do_not_disturb(),
             Hot::SettingsShowHidden => self.toggle_show_hidden(),
             Hot::DisplayScale => self.cycle_ui_scale(),
             Hot::ScaleKeep => self.keep_pending_change(),
@@ -6287,12 +6309,12 @@ impl Shell {
             }
             Hot::QuickToggle(2) => self.toggle_reduced_transparency(),
             Hot::QuickToggle(3) => self.toggle_reduced_motion(),
-            Hot::QuickToggle(n) => {
-                match n {
-                    0 => self.quick.do_not_disturb = !self.quick.do_not_disturb,
-                    _ => self.quick.adaptive_idle = !self.quick.adaptive_idle,
-                }
-                self.notifications.do_not_disturb = self.quick.do_not_disturb;
+            // Do Not Disturb is a stored choice, so it takes the same path
+            // as every other toggle: apply, ask the event loop to write, and
+            // roll back together if the write fails.
+            Hot::QuickToggle(0) => self.toggle_do_not_disturb(),
+            Hot::QuickToggle(_) => {
+                self.quick.adaptive_idle = !self.quick.adaptive_idle;
                 Vec::new()
             }
             Hot::QuickVolumeUp => vec![Effect::Volume(1)],
@@ -9370,16 +9392,81 @@ mod tests {
     }
 
     #[test]
+    fn do_not_disturb_is_stored_applied_to_the_queue_and_rolled_back() {
+        let mut s = shell();
+        assert!(!s.settings.preferences.do_not_disturb);
+        let effects = s.activate(Hot::SettingsDoNotDisturb);
+        assert!(s.settings.preferences.do_not_disturb);
+        assert!(
+            s.quick.do_not_disturb,
+            "the quick-settings switch did not follow the stored choice"
+        );
+        assert!(
+            s.notifications.do_not_disturb,
+            "Do Not Disturb did not reach the notification queue"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::PersistPreferences(p) if p.do_not_disturb)),
+            "the choice must be stored: {effects:?}"
+        );
+
+        // The event loop can refuse the write; the record, the switch and the
+        // queue all return to the state that is actually on disk.
+        s.finish_preferences_save(Err("read-only".to_owned()));
+        assert!(!s.settings.preferences.do_not_disturb);
+        assert!(!s.quick.do_not_disturb);
+        assert!(
+            !s.notifications.do_not_disturb,
+            "a failed write left notifications silenced"
+        );
+    }
+
+    #[test]
+    fn a_stored_do_not_disturb_is_applied_at_load_and_only_silences_banners() {
+        let mut s = shell();
+        s.load_preferences(crate::settings::Preferences {
+            do_not_disturb: true,
+            ..crate::settings::Preferences::default()
+        });
+        assert!(s.quick.do_not_disturb);
+        assert!(s.notifications.do_not_disturb);
+
+        // The note is still recorded: the centre is not a banner.
+        s.notify(
+            "Test",
+            "A quiet note",
+            "body",
+            Priority::Normal,
+            Some(6_000),
+        );
+        assert_eq!(s.notifications.len(), 1);
+        assert!(!s.notifications.should_banner(Priority::Normal));
+        assert!(!s.notifications.should_banner(Priority::High));
+        assert!(
+            s.notifications.should_banner(Priority::Critical),
+            "a stored quiet mode hid a critical alert"
+        );
+    }
+
+    #[test]
     fn a_quick_settings_toggle_changes_real_state() {
         let mut s = shell();
         s.hotspots_mut()
             .push(Rect::new(10.0, 10.0, 100.0, 30.0), Hot::QuickToggle(0));
         assert!(!s.quick.do_not_disturb);
-        s.activate(Hot::QuickToggle(0));
+        let effects = s.activate(Hot::QuickToggle(0));
         assert!(s.quick.do_not_disturb);
         assert!(
             s.notifications.do_not_disturb,
             "Do Not Disturb did not reach the notification queue"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::PersistPreferences(p) if p.do_not_disturb)),
+            "the quick-settings switch must store the choice: {effects:?}"
         );
     }
 

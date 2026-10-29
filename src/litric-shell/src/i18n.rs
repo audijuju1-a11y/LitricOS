@@ -171,6 +171,7 @@ pub fn text<'a>(english: &'a str) -> Cow<'a, str> {
         "Power" => "พลังงาน",
         "Region" => "ภูมิภาคและภาษา",
         "Accessibility" => "การช่วยการเข้าถึง",
+        "Notifications" => "การแจ้งเตือน",
         "Sound" => "เสียง",
         "Privacy" => "ความเป็นส่วนตัว",
         "Accounts" => "บัญชีผู้ใช้",

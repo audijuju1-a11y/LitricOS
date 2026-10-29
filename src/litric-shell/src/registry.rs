@@ -119,7 +119,7 @@ impl Entry {
 pub const INTERNAL_KEYS: [&str; 2] = ["version", "onboarded"];
 
 /// Every setting the shell owns, in the order the pages present them.
-pub const ENTRIES: [Entry; 10] = [
+pub const ENTRIES: [Entry; 11] = [
     Entry {
         key: "theme",
         page: Page::Appearance,
@@ -175,6 +175,21 @@ pub const ENTRIES: [Entry; 10] = [
         synonyms: &["transparency", "blur", "glass", "readability", "opaque"],
         kind: Kind::Toggle,
         value: |p| yes_no(p.reduce_transparency).to_owned(),
+    },
+    Entry {
+        key: "do_not_disturb",
+        page: Page::Notifications,
+        title: "Do not disturb",
+        synonyms: &[
+            "focus",
+            "quiet",
+            "silence",
+            "notifications",
+            "dnd",
+            "banners",
+        ],
+        kind: Kind::Toggle,
+        value: |p| yes_no(p.do_not_disturb).to_owned(),
     },
     Entry {
         key: "ui_scale",
@@ -478,6 +493,8 @@ mod tests {
             ("transparency", "reduce_transparency"),
             ("duckduckgo", "search_engine"),
             ("hidden files", "show_hidden"),
+            ("do not disturb", "do_not_disturb"),
+            ("quiet", "do_not_disturb"),
             ("ไทย", "language"),
         ] {
             let hits = search(query);

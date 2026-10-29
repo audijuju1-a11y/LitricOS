@@ -114,6 +114,11 @@ pub fn parse(text: &str, defaults: Preferences) -> Preferences {
                     preferences.reduce_transparency = enabled;
                 }
             }
+            "do_not_disturb" => {
+                if let Some(enabled) = parse_bool(value) {
+                    preferences.do_not_disturb = enabled;
+                }
+            }
             "show_hidden" => {
                 if let Some(enabled) = parse_bool(value) {
                     preferences.show_hidden = enabled;
@@ -183,6 +188,9 @@ pub fn encode(preferences: Preferences) -> String {
     } else {
         "0"
     });
+    out.push('\n');
+    out.push_str("do_not_disturb=");
+    out.push_str(if preferences.do_not_disturb { "1" } else { "0" });
     out.push('\n');
     out.push_str("show_hidden=");
     out.push_str(if preferences.show_hidden { "1" } else { "0" });
@@ -428,6 +436,31 @@ mod tests {
     }
 
     #[test]
+    fn do_not_disturb_round_trips_through_the_file_and_defaults_off() {
+        let path = fixture("dnd");
+        let store = Store::new(&path);
+        // A record written before the key existed means banners are allowed;
+        // the default preserves the behaviour of every existing profile.
+        assert!(!parse("theme=dark\n", Preferences::default()).do_not_disturb);
+        let preferences = Preferences {
+            do_not_disturb: true,
+            ..Preferences::default()
+        };
+        store.save(preferences).expect("the record is written");
+        let text = fs::read_to_string(&path).expect("the record is readable");
+        assert!(text.contains("do_not_disturb=1"), "{text}");
+        let loaded = store
+            .load()
+            .expect("the record is read")
+            .expect("it exists");
+        assert!(
+            loaded.do_not_disturb,
+            "the quiet choice survived the record"
+        );
+        cleanup(&path);
+    }
+
+    #[test]
     fn unknown_keys_and_values_keep_the_defaults() {
         let defaults = Preferences {
             accent: Accent::Rose,
@@ -487,6 +520,7 @@ mod tests {
             "language=",
             "reduce_motion=",
             "reduce_transparency=",
+            "do_not_disturb=",
             "ui_scale=",
             "onboarded=",
             "theme_schedule=",

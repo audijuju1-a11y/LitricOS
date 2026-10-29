@@ -3909,3 +3909,102 @@ and the choice is global to Files rather than per-folder. The corpus count is
 37, not the 15 stated in the request. No performance metric is claimed. This
 batch used the Research-Deep-all corpus and its gates; no separate executable
 research-deep-all runner exists in this repository.
+
+## 50. Batch: Do Not Disturb is a persisted, queue-backed setting (verified)
+
+### 50.1 Requirement and audit
+
+The requirement source is the `Research-Deep-all` corpus tracked on `main`
+(30 Markdown parts and 7 CSV registers; the "15 files" count in the request is
+the mismatch recorded in §49.1). The chosen row is `WB.01.03.01`,
+"System > Notifications > Do not disturb", whose quoted control text is
+"Turn on do not disturb automatically", with the parent row `WA.07.03`,
+"Do not disturb / Focus". The implemented slice is the global switch and its
+real effect; the automatic schedule and per-app priority list are not claimed.
+
+The audit found that Do Not Disturb existed only in memory. `QuickSettings` and
+`Notifications` each held a `do_not_disturb` bool; the quick-settings arm
+previously flipped the two fields in place and emitted no
+`Effect::PersistPreferences` (the new handler is at
+`src/litric-shell/src/shell.rs:6315`). There was no store key, no
+registry row, no Settings page and no saved value to reload, so a restart always
+came back with banners enabled. The daemon boundary was already correct and was
+not changed: `src/litric-notifyd/src/lib.rs` deliberately has no DND flag
+because the shell owns the display-time decision. The queue still records every
+note; DND only decides whether a banner interrupts.
+
+### 50.2 The connection
+
+| File | What it does |
+|---|---|
+| `src/litric-shell/src/settings.rs:189` | `Preferences::do_not_disturb` defaults to `false` at line 225, preserving banners for every existing record. The new `Page::Notifications` variant is at line 259, in `Page::ALL` at lines 272/282, with title line 302 and slug line 333. |
+| `src/litric-shell/src/prefstore.rs:117` | Parses `do_not_disturb=0/1` (and the file's existing `true/false/yes/no` forms). Line 192 writes it through the same atomic temporary-file/rename path as every other key. |
+| `src/litric-shell/src/registry.rs:180` | An eleventh row, `do_not_disturb`, on Notifications, with the synonyms `focus`, `quiet`, `silence`, `notifications`, `dnd` and `banners`. Search and `litric://settings/notifications/do_not_disturb` reach it. |
+| `src/litric-shell/src/views.rs:3376` | The Notifications page draws the real Do Not Disturb button and three factual rows: banners silenced except critical, critical always interrupts, and the centre still records notes. The sidebar icon is line 2898; save/rollback status includes the page at line 3542. |
+| `src/litric-shell/src/shell.rs:3465` | `toggle_do_not_disturb` flips the preference and goes through `save_preferences`, which applies the value to both the quick switch and the notification queue (lines 3301-3302). `load_preferences` applies a stored value at startup (3249-3250) and `finish_preferences_save` restores the queue after a failed write (3335-3336). |
+| `src/litric-shell/src/shell.rs:6262` | `Hot::SettingsDoNotDisturb` is the Settings button's real handler. `Hot::QuickToggle(0)` at line 6315 is the quick-settings control and now takes the same persisted path instead of mutating two fields directly. |
+| `src/litric-shell/src/i18n.rs:174` | The new Notifications page title has its Thai translation, so the sidebar does not fall back to English. |
+| `src/litric-shell/src/e2e.rs:4408` | One headless journey drives the real quick-settings hotspot with a real pointer click, measures the before/after frame difference, reads the exact `PersistPreferences` record back through a real store file, and starts a fresh shell from it. |
+
+The display rule is unchanged and single-sourced:
+`Notifications::should_banner` at `src/litric-shell/src/shell.rs:680` returns
+true for critical alerts even while quiet, and the queue itself is untouched.
+No daemon verb, second backend, thread, polling interval, dependency or
+privilege was added.
+
+### 50.3 Cost
+
+One existing preference write per confirmed toggle, through the atomic store.
+Nothing is added to the frame loop: the banner pass already asks
+`should_banner` for each queued notification, and that is one boolean test. When
+the feature is off the rendering and queue work are identical to before. The
+queue remains capped at 64 notes and is unchanged. No speed or RAM number is
+claimed because none was measured.
+
+### 50.4 Tests and gates
+
+New tests:
+`prefstore::tests::do_not_disturb_round_trips_through_the_file_and_defaults_off`,
+`shell::tests::do_not_disturb_is_stored_applied_to_the_queue_and_rolled_back`,
+`shell::tests::a_stored_do_not_disturb_is_applied_at_load_and_only_silences_banners`,
+and the journey
+`e2e::journey_do_not_disturb_persists_silences_the_banner_and_survives_a_restart`.
+The registry search and round-trip tests exercise the new row and deep link.
+
+```text
+cargo test --workspace        1738 passed, 0 failed, 0 ignored   (was 1734; +4)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+bash ci/verify.sh             32 pass, 2 fail, 3 skipped
+```
+
+`docs/evidence/golden/fingerprints.json` re-baselines only `15-search`
+(old `0x1f5a70ea6ad1bfde`, new `0x1328a77eeba088f2`). The reviewed frames show
+the intended extra results: the new Notifications page and the Do not disturb
+row match the scene's `fi` query through the registry's existing page/detail
+matching. The other 23 fingerprints are byte-identical to the committed ones;
+`--update` was not accepted wholesale because it rewrote exact hashes for frames
+that were still within threshold. The two `keys/dev/` failures remain the
+unchanged absent secureboot and verity material.
+
+The journey first draws a real normal notification and asserts banner ink,
+clicks the real quick-settings control, asserts the queue still holds the note
+while the banner is suppressed, and requires more than 200 differing pixels
+between the before and after frames. It then writes the exact record the shell
+asked to persist, reloads it into a fresh shell, and asserts the stored quiet
+mode survives and still suppresses a normal banner while leaving critical
+alerts alone. The OS boundary is not mocked.
+
+### 50.5 Limits
+
+There is no display and no QEMU on this host, so the proof is headless frames
+over the real draw path and a real preference file. This batch implements the
+global switch and its persisted effect, not the Windows row's automatic
+schedule, per-app priority list or calls/reminders exceptions; those remain
+unimplemented and are not presented as working. Do Not Disturb is a single
+session-wide choice, not a per-app or per-notification policy. The daemon still
+does not own DND by design, so a notification posted while the shell is down is
+not retroactively suppressed as a banner (adoption never banners). No
+performance metric is claimed. This batch used the Research-Deep-all corpus and
+the repository's named gates; no separate executable `research-deep-all` runner
+exists in this repository.

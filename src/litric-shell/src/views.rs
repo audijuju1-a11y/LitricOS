@@ -2895,6 +2895,7 @@ fn settings_icon(page: crate::settings::Page) -> Icon {
         Page::Region => Icon::Info,
         Page::Environments => Icon::Environment,
         Page::Accessibility => Icon::User,
+        Page::Notifications => Icon::Notifications,
         Page::Sound => Icon::Audio,
         Page::Privacy => Icon::Shield,
         Page::Accounts => Icon::User,
@@ -3372,6 +3373,45 @@ fn draw_settings_page(
                 &note,
             );
         }
+        Page::Notifications => {
+            let label = format!(
+                "{} · {}",
+                "Do not disturb",
+                if shell.settings.preferences.do_not_disturb {
+                    "On"
+                } else {
+                    "Off"
+                }
+            );
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SettingRow {
+                    key: "do_not_disturb",
+                    label: &label,
+                    hot: Hot::SettingsDoNotDisturb,
+                },
+            );
+            let rows = [
+                (
+                    "Banners".to_owned(),
+                    if shell.settings.preferences.do_not_disturb {
+                        "Silenced · critical alerts still interrupt".to_owned()
+                    } else {
+                        "Shown for new notifications".to_owned()
+                    },
+                ),
+                ("Critical alerts".to_owned(), "Always interrupt".to_owned()),
+                (
+                    "Notification centre".to_owned(),
+                    "Still records every note while quiet".to_owned(),
+                ),
+            ];
+            settings_rows_from(canvas, t, pane, pane.y + t.px(98.0), &rows);
+        }
         Page::Sound => {
             // Cards from the kernel, and the server the platform saw. An empty
             // list is a finding — this machine has no sound device — and the
@@ -3497,7 +3537,10 @@ fn draw_settings_page(
             ],
         ),
     }
-    if matches!(page, Page::Appearance | Page::Accessibility) {
+    if matches!(
+        page,
+        Page::Appearance | Page::Accessibility | Page::Notifications
+    ) {
         let note = match &shell.settings.save {
             SaveState::Idle => None,
             SaveState::Saving => Some(("Saving…", Tone::Neutral)),

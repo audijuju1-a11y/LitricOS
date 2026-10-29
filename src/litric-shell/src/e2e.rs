@@ -4398,3 +4398,104 @@ fn journey_hidden_files_toggle_is_a_real_read_and_survives_a_restart() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Do Not Disturb is a persisted display-time decision, not a queue filter and
+/// not a label. A normal note banners while the switch is off; the real quick
+/// settings control silences that banner, the next composed frame reflects it,
+/// the note is still in the centre, and a fresh shell reads the choice back from
+/// the exact record the shell asked to store.
+#[test]
+fn journey_do_not_disturb_persists_silences_the_banner_and_survives_a_restart() {
+    let root = e2e_root("do-not-disturb");
+    let mut s = shell();
+    s.load_preferences(crate::settings::Preferences::new(
+        ThemeKind::Dark,
+        crate::i18n::Language::English,
+    ));
+    s.perform(Action::ToggleQuickSettings);
+    // Let the panel's reveal spring settle: the switch position is the variable
+    // under test, not the panel's motion.
+    for _ in 0..40 {
+        let _ = draw_frame(&mut s);
+    }
+    let toggle = s
+        .hotspots()
+        .rect_of(Hot::QuickToggle(0))
+        .expect("quick settings draws the Do Not Disturb switch");
+
+    s.notify("Test", "A visible note", "body", Priority::Normal, None);
+    for _ in 0..30 {
+        let _ = draw_frame(&mut s);
+    }
+    let before = draw_frame(&mut s);
+    let banner_zone = Rect::new(900.0, 40.0, 360.0, 80.0);
+    assert!(
+        ink(&before, banner_zone) > 50,
+        "the normal note did not banner before the switch"
+    );
+
+    let effects = click(&mut s, toggle.center().0, toggle.center().1);
+    assert!(
+        s.settings.preferences.do_not_disturb,
+        "the quick control did not reach the stored preference"
+    );
+    assert!(s.quick.do_not_disturb);
+    assert!(s.notifications.do_not_disturb);
+    let saved = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::PersistPreferences(preferences) if preferences.do_not_disturb => {
+                Some(*preferences)
+            }
+            _ => None,
+        })
+        .expect("the switch asks for a persisted record");
+
+    let after = draw_frame(&mut s);
+    assert_eq!(
+        s.notifications.len(),
+        1,
+        "Do Not Disturb must not drop the note from the centre"
+    );
+    assert!(!s.notifications.should_banner(Priority::Normal));
+    assert!(
+        s.notifications.should_banner(Priority::Critical),
+        "Do Not Disturb hid a critical alert"
+    );
+    let differing = before
+        .pixels()
+        .iter()
+        .zip(after.pixels())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing > 200,
+        "the banner and switch changed but the frame did not: {differing} pixels differ"
+    );
+
+    // Store the exact record the shell asked to persist, read it back, and start
+    // a fresh shell from it. The note posted there must not banner.
+    let store = crate::prefstore::Store::new(root.join("state/settings.conf"));
+    store.save(saved).expect("the record is written");
+    let loaded = store
+        .load()
+        .expect("the record is read")
+        .expect("the record exists");
+    assert!(loaded.do_not_disturb, "the store lost the choice");
+    s.finish_preferences_save(Ok(()));
+
+    let mut restarted = shell();
+    restarted.load_preferences(loaded);
+    assert!(restarted.settings.preferences.do_not_disturb);
+    assert!(restarted.quick.do_not_disturb);
+    assert!(restarted.notifications.do_not_disturb);
+    restarted.notify("Test", "Still quiet", "body", Priority::Normal, None);
+    assert_eq!(restarted.notifications.len(), 1);
+    assert!(!restarted.notifications.should_banner(Priority::Normal));
+    let quiet = draw_frame(&mut restarted);
+    assert!(
+        ink(&quiet, banner_zone) < 20,
+        "a restarted shell still bannered under a stored quiet mode"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
