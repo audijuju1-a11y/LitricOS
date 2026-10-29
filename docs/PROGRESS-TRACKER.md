@@ -3654,3 +3654,61 @@ user asks. A failed read clears the table and shows the reason rather than
 keeping rows that are no longer true. No QEMU or display is available, so the
 proof is the headless frame over real files, and no performance number is
 claimed.
+
+## 47. Batch: Files watches its open folder for outside changes (verified)
+
+### 47.1 Audit
+
+There was no watcher of any kind. The only automatic read was the staleness
+check in `views::refresh_files`, which runs during the draw and reads only when
+`files.listed` differs from `files.path`; `docs/PROGRESS-TRACKER.md` §46 and the
+journey it added both said so explicitly. Files has no refresh timer, no
+inotify subscription and no notify dependency, and it cannot have the last two:
+`src/litric-shell/src/lib.rs` and `src/main.rs` are `#![forbid(unsafe_code)]`,
+so there is no safe `inotify_init1` call here, and the workspace has no watcher
+crate. The honest option is a bounded check through the bridge that already
+owns the directory, not a second filesystem backend and not an unsafe syscall
+wrapper.
+
+### 47.2 The connection
+
+| File | What it does |
+|---|---|
+| `src/litric-shell/src/filewatch.rs` (new) | `Watch` keeps the path and a 64-bit FNV-1a digest of the listing the last real read produced, the earliest time the next check may run, and a read counter for diagnostics. `INTERVAL_MS = 1_000`. A different digest, or a readable folder that stopped being readable, reports one change; repeats of the same failure are not new changes. Four unit tests cover digest sensitivity, the interval, deferral and loss/recovery. |
+| `src/litric-shell/src/shell.rs` | `watch_open_folder(now_ms)` is called from `tick`, so it runs on the wake-up the loop already performs. It returns unless the watcher is armed for the listed path and the interval has elapsed; it defers without reading while the session is locked, no Files window is visible, the listing is waiting for its own read, or the bridge is unavailable. Otherwise it calls the existing `FilesBridge::list_dir`, compares the listing, and on a change calls `files_changed()` — which marks the listing stale, so the next frame's existing read draws real rows. The diagnostics add `files.watch=<path> reads=<n>`. |
+| `src/litric-shell/src/views.rs` | `refresh_files` seeds the watcher after every real read (success or failure) with `note_read`/`note_failure`, so the first check compares against what the table is actually showing and does not duplicate the frame's read. |
+| `src/litric-shell/src/e2e.rs` | One new headless journey over real files: an outside create and delete are absent from the open table two frames before the interval; `tick_after(1_000)` plus one frame shows both without any click; removing the folder and advancing the clock shows the plain-language error with no stale rows. The diagnostics counter proves zero reads inside the interval and exactly one per interval. The existing Refresh journey is unchanged apart from its now-inaccurate "no watcher" comment. |
+| `ci/lint-file-safety.py` | The new journey's fixture cleanup is in the reviewed allowlist with its reason, like its siblings. No rule was weakened. |
+
+### 47.3 Cost
+
+One directory read per second at most, only while a Files window is visible and
+the session is unlocked, through the same bridge every listing and file
+operation already uses. No new thread, timer, dependency, privilege or polling
+interval: the shell's idle wake cap is already one second, so the check rides
+the wake-up the clock causes. A digest is computed from the entries of that one
+read; nothing else is read and nothing is drawn from the digest.
+
+### 47.4 Gates
+
+```text
+cargo test --workspace        passed=1725 failed=0   (was 1,720; +4 unit, +1 journey)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped   (baseline unchanged)
+```
+
+The two failures are the unchanged absent `keys/dev/` material; the four skips
+are the documented missing host tools (fonts, mkosi, QEMU). No test deleted, no
+gate relaxed, no dependency added.
+
+### 47.5 Limits
+
+This is not inotify. A change made and reverted between two checks is not
+observed, and an entry whose bytes change without its size or modification
+second changing produces the same digest — the table would not draw that
+difference either. Only the currently listed folder is watched (the shell has
+one Files model), and a minimized window is not read until it is visible again.
+No performance number is claimed: the only measured cost is the read count in
+the journey. No QEMU or display is available, so the proof is headless frames
+over real files.

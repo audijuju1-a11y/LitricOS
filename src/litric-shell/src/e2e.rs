@@ -4064,9 +4064,9 @@ fn journey_files_refresh_shows_a_change_made_outside_the_shell() {
     std::fs::write(docs.join("after.txt"), b"new\n").unwrap();
     std::fs::remove_file(docs.join("before.txt")).unwrap();
     let _ = draw_frame(&mut s);
-    // No watcher and no polling: before the click the table is the old read.
-    // If a refresh ever became automatic this assertion would fail, which is
-    // what makes the journey sensitive to the wiring rather than trivial.
+    // These frames are inside the watcher's one-second interval, so before
+    // the click the table is still the last real read. The automatic path is
+    // the separate journey below; this one stays sensitive to the control.
     assert!(
         names(&s).iter().any(|n| n == "before.txt"),
         "the table must still show the old listing before Refresh: {:?}",
@@ -4130,6 +4130,96 @@ fn journey_files_refresh_shows_a_change_made_outside_the_shell() {
     assert!(
         s.files.rows.is_empty(),
         "no stale rows survive a failed read"
+    );
+    let error = s.files.error.as_deref().unwrap_or_default();
+    assert!(
+        error.contains("no longer exists"),
+        "the window explains the missing folder: {error:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A folder open in Files notices a change made outside the shell without any
+/// click: one bounded directory read on the shell's own clock marks the
+/// listing stale and the frame that follows draws what is on disk. The check
+/// is not a per-frame poll — inside the interval the table is still the last
+/// real read, and the diagnostics count proves exactly one read per interval.
+#[test]
+fn journey_files_watch_shows_an_outside_change_without_a_click() {
+    let root = e2e_root("files-watch");
+    let docs = root.join("Documents");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("before.txt"), b"old\n").unwrap();
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Files);
+    let _ = draw_frame(&mut s);
+    let names = |shell: &Shell| {
+        shell
+            .files
+            .visible()
+            .iter()
+            .map(|row| row.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(names(&s).iter().any(|n| n == "before.txt"));
+    assert!(!names(&s).iter().any(|n| n == "after.txt"));
+
+    // Outside the shell: one file appears and another goes.
+    std::fs::write(docs.join("after.txt"), b"new\n").unwrap();
+    std::fs::remove_file(docs.join("before.txt")).unwrap();
+
+    // Inside the interval nothing is read. A watcher that read on every frame
+    // would be a poll, and these two frames would already show the change.
+    let reads = s.files_watch.reads();
+    let _ = draw_frame(&mut s);
+    let _ = draw_frame(&mut s);
+    assert_eq!(
+        s.files_watch.reads(),
+        reads,
+        "the watcher must not read on every frame"
+    );
+    assert!(
+        names(&s).iter().any(|n| n == "before.txt"),
+        "before the interval the table is the last real read: {:?}",
+        names(&s)
+    );
+    assert!(
+        !names(&s).iter().any(|n| n == "after.txt"),
+        "the outside file must not appear before the check: {:?}",
+        names(&s)
+    );
+
+    // One second on the shell's clock reaches the next permitted check. The
+    // watcher reads the directory, sees a different listing, and the frame
+    // that follows is drawn from a fresh read. No click and no input.
+    s.tick_after(1_000);
+    let _ = draw_frame(&mut s);
+    assert_eq!(s.files_watch.reads(), reads + 1, "one interval is one read");
+    assert!(
+        names(&s).iter().any(|n| n == "after.txt"),
+        "the open table shows the file created outside: {:?}",
+        names(&s)
+    );
+    assert!(
+        !names(&s).iter().any(|n| n == "before.txt"),
+        "the open table drops the file deleted outside: {:?}",
+        names(&s)
+    );
+    assert!(s.files.error.is_none(), "a good read clears the error");
+
+    // A folder that disappears is reported by the same path: the watcher
+    // marks it stale, the read fails, and the window says so in plain words
+    // instead of keeping rows that are no longer there.
+    std::fs::remove_dir_all(&docs).unwrap();
+    s.tick_after(1_000);
+    let _ = draw_frame(&mut s);
+    assert_eq!(s.files_watch.reads(), reads + 2);
+    assert!(
+        s.files.rows.is_empty(),
+        "no stale rows survive a failed automatic read"
     );
     let error = s.files.error.as_deref().unwrap_or_default();
     assert!(

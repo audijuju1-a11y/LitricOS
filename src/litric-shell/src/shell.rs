@@ -2917,6 +2917,46 @@ impl Shell {
         self.request_full_redraw();
     }
 
+    /// Check the open folder for a change made outside the shell.
+    ///
+    /// Bounded on purpose: at most one directory read per
+    /// [`crate::filewatch::INTERVAL_MS`], and none at all while the Files
+    /// window cannot be seen, the session is locked, or a read of this path is
+    /// already due in the frame that follows. The read goes through the same
+    /// bridge every other Files operation uses, so the daemon's policy still
+    /// owns the directory. A different listing marks the table stale and the
+    /// next frame's existing read draws it; nothing is drawn from the digest.
+    fn watch_open_folder(&mut self, now_ms: u64) {
+        if !self.files_watch.check_due(&self.files.path, now_ms) {
+            return;
+        }
+        let files_visible = self
+            .wm
+            .visible()
+            .iter()
+            .any(|w| w.app_id == crate::shortcuts::App::Files.app_id());
+        if self.lock.locked
+            || !files_visible
+            || self.files.listed.as_deref() != Some(self.files.path.as_str())
+        {
+            self.files_watch.defer(now_ms);
+            return;
+        }
+        let zone = self.regional.zone.clone();
+        let Ok(bridge) = self.try_files_bridge(zone) else {
+            self.files_watch.defer(now_ms);
+            return;
+        };
+        let path = self.files.path.clone();
+        let changed = match bridge.list_dir(&path) {
+            Ok(entries) => self.files_watch.observe(&path, &entries, now_ms),
+            Err(_) => self.files_watch.observe_failure(&path, now_ms),
+        };
+        if changed {
+            self.files_changed();
+        }
+    }
+
     /// Submit the desktop's own dialog.
     ///
     /// Returns the effects the submission produced, which is what makes the
@@ -3011,6 +3051,10 @@ pub struct Shell {
     pub activity_end_confirm: Option<(u32, crate::process::EndTarget)>,
     /// The Files application model (Explorer-style places, history, table).
     pub files: crate::apps::FilesApp,
+    /// The bounded check for changes made to the open folder outside the
+    /// shell. It reads at most once a second and never in the draw path; see
+    /// [`crate::filewatch`].
+    pub files_watch: crate::filewatch::Watch,
     /// The host root every file surface reads and writes through.
     ///
     /// `/` on a booted machine, and what `--root` moves: the shell already
@@ -3512,6 +3556,7 @@ impl Shell {
             activity: crate::taskmgr::TaskManager::new(),
             activity_end_confirm: None,
             files: crate::apps::FilesApp::default(),
+            files_watch: crate::filewatch::Watch::default(),
             files_root: std::path::PathBuf::from("/"),
             #[cfg(unix)]
             files_daemon: None,
@@ -4565,6 +4610,10 @@ impl Shell {
         // Client surfaces: mapping, titles, frames, a dead application and a
         // window the user closed all arrive here, not through input.
         self.pump_clients();
+        // An outside change reaches the open folder without a click. This is
+        // the only periodic filesystem read in the shell, and it is bounded to
+        // one a second by `filewatch`.
+        self.watch_open_folder(now_ms);
         // The overlay springs follow the overlay state and advance one step.
         // sync() is idempotent, so doing it here means no call site that
         // opens or closes an overlay has to remember the animation exists.
@@ -7192,6 +7241,11 @@ impl Shell {
             format!("notifications={}", self.notifications.len()),
             format!("pointer={:.0},{:.0}", self.pointer.x, self.pointer.y),
             format!("facts.source={}", self.facts.source),
+            format!(
+                "files.watch={} reads={}",
+                self.files_watch.watched().unwrap_or("none"),
+                self.files_watch.reads(),
+            ),
         ];
         // Browser + reachability: the engine's own words about its session,
         // and the one-shot network probe result. A page that fails to render

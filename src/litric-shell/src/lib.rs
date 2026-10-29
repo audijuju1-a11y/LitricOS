@@ -51,6 +51,7 @@ pub mod drm;
 #[cfg(unix)]
 pub mod facts;
 pub mod fb;
+pub mod filewatch;
 pub mod font;
 pub mod fsbridge;
 pub mod fsclient;

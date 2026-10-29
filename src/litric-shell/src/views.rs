@@ -891,6 +891,11 @@ fn refresh_files(shell: &mut Shell) {
     };
     match bridge.list_dir(&shell.files.path) {
         Ok(entries) => {
+            // Arm the bounded watcher from this real read, so its next check
+            // compares against what the table is actually showing and the
+            // first check does not repeat the read the frame already did.
+            let path = shell.files.path.clone();
+            shell.files_watch.note_read(&path, &entries, shell.now_ms);
             let rows = entries
                 .into_iter()
                 .map(|e| crate::apps::FileRow {
@@ -903,6 +908,8 @@ fn refresh_files(shell: &mut Shell) {
             shell.files.apply_entries(rows);
         }
         Err(e) => {
+            let path = shell.files.path.clone();
+            shell.files_watch.note_failure(&path, shell.now_ms);
             let message = shell.read_error(&e);
             shell.files.apply_error(message);
         }
