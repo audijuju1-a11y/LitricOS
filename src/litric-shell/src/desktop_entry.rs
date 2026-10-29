@@ -111,6 +111,10 @@ pub struct Discovery {
     /// Distinct `Icon=` names this pass asked the theme tree for. A name shared
     /// by several entries is asked once, so this is not the entry count.
     pub icons_resolved: usize,
+    /// Memo entries a change made this pass decide about: each was either kept
+    /// (its providing directory had not moved) or re-resolved. Zero when the
+    /// icon tree did not move, which is the common case.
+    pub icons_validated: usize,
 }
 
 /// Discover the applications in `dirs` and resolve their icons in `icon_dirs`.
@@ -178,8 +182,9 @@ pub fn reload_with_cache(
     resolve_icons: bool,
     names: &mut IconNames,
 ) -> Discovery {
-    names.refresh(icon_dirs);
     let resolved_before = names.resolved();
+    let validated_before = names.validated();
+    names.refresh(icon_dirs);
     let mut claimed: Vec<String> = Vec::new();
     let mut apps: Vec<DesktopApp> = Vec::new();
     let mut dirs_read = 0usize;
@@ -280,11 +285,14 @@ pub fn reload_with_cache(
     apps.truncate(MAX_APPS);
     let icons_resolved =
         usize::try_from(names.resolved().saturating_sub(resolved_before)).unwrap_or(usize::MAX);
+    let icons_validated =
+        usize::try_from(names.validated().saturating_sub(validated_before)).unwrap_or(usize::MAX);
     Discovery {
         apps,
         dirs_read,
         files_read,
         icons_resolved,
+        icons_validated,
     }
 }
 
@@ -295,36 +303,116 @@ pub fn reload_with_cache(
 /// the map is cleared rather than grown past it.
 pub const MAX_ICON_NAMES: usize = 512;
 
-/// `Icon=` names resolved against one state of the icon tree.
+/// One memoised `Icon=` answer.
+#[derive(Debug, Clone)]
+struct Cached {
+    /// The file the name resolved to, or `None` for a remembered miss.
+    path: Option<PathBuf>,
+    /// Index in [`IconNames::order`] of the directory that answered, or `None`
+    /// for a miss (a miss is witnessed by the whole tree, not one directory).
+    witness: Option<usize>,
+    /// That directory's stamp when it answered.
+    stamp: Option<Stamp>,
+}
+
+/// `Icon=` names resolved against the icon tree, validated per name.
 ///
 /// # Why it exists
 ///
-/// A theme install moves the icon directories, and §56 then re-resolved every
-/// entry's name — one `find_in` walk per entry, with the same handful of names
-/// asked over and over (an office suite's entries all say `Icon=office`). This
-/// memo answers each distinct name once per state of the tree.
+/// §56 re-resolved every entry's name whenever the icon tree moved, and §57
+/// memoised names but dropped the whole map on any move, so installing one new
+/// theme re-resolved every name it already knew. This keeps, per name, *which
+/// directory answered* and that directory's stamp, and invalidates only the
+/// names a change can actually affect.
 ///
-/// # Why it is keyed by a stamp
+/// # The invariant a cached hit stands on
 ///
-/// The map is only valid while the icon directories look exactly as they did
-/// when the first name was resolved. [`IconNames::refresh`] compares their
-/// stamps before every pass and clears the map when they moved, so a name that
-/// resolved to nothing — or to another theme's file — is never trusted after the
-/// tree changes. That is the same guarantee as a per-entry `(name, stamp)` key,
-/// with one stamp instead of one per name.
+/// [`IconNames::order`] is the search order the lookup uses, conservatively:
+/// every icon root's flat directory first (in `dirs` order), then each root's
+/// theme directories, `hicolor` first and then by name. For a tree whose themes
+/// do not inherit, that is exactly the order `themeicons::find_in` walks, so:
+///
+/// * a hit witnessed at index `k` is still the answer iff no directory at index
+///   `<= k` changed and its file still exists — an earlier or equal directory is
+///   the only thing that can shadow it, and a later one loses to it;
+/// * a miss is still a miss iff nothing in the order changed at all;
+/// * a directory appended at the end of the order shadows nothing, so a new
+///   theme at the tail costs only the names it actually supplies.
+///
+/// `Inherits=` breaks that flat order (a parent theme is searched after every
+/// direct theme, not where its name sorts), so a change in a directory that
+/// declares inheritance clears the whole map instead. That is the conservative
+/// direction: it re-resolves more than necessary, never less.
 ///
 /// # Bounds
 ///
-/// At most [`MAX_ICON_NAMES`] names; past that the map is cleared, so a session
-/// cannot accumulate a name for every icon a page ever asked about. The paths
-/// and names it holds are counted by [`IconNames::bytes`].
+/// At most [`MAX_ICON_NAMES`] names and at most [`MAX_WATCH_DIRS`] directories
+/// in the order; past either, the map is cleared rather than grown. Memory is
+/// counted by [`IconNames::bytes`].
 #[derive(Debug, Clone, Default)]
 pub struct IconNames {
     dirs: Vec<PathBuf>,
-    stamp: Vec<Stamp>,
-    names: HashMap<String, Option<PathBuf>>,
+    order: Vec<(PathBuf, Stamp)>,
+    names: HashMap<String, Cached>,
     resolved: u64,
     hits: u64,
+    validated: u64,
+}
+
+/// The directories a lookup consults, in the order it consults them, with their
+/// stamps: each root's flat directory, then each root's themes.
+fn icon_order(dirs: &[PathBuf]) -> Vec<(PathBuf, Stamp)> {
+    let mut order: Vec<(PathBuf, Stamp)> = Vec::new();
+    for dir in dirs {
+        if order.len() >= MAX_WATCH_DIRS {
+            break;
+        }
+        order.push((dir.clone(), stamp_of(dir)));
+    }
+    for dir in dirs {
+        if order.len() >= MAX_WATCH_DIRS {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        let mut themes: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|entry| entry.path())
+            .collect();
+        // The order `find_in` uses: `hicolor` first, then by name.
+        themes.sort_by_key(|path| {
+            usize::from(path.file_name().and_then(|name| name.to_str()) != Some("hicolor"))
+        });
+        for theme in themes {
+            if order.len() >= MAX_WATCH_DIRS {
+                break;
+            }
+            let stamp = stamp_of(&theme);
+            order.push((theme, stamp));
+        }
+    }
+    order
+}
+
+/// Whether a theme declares `Inherits=`, which the flat order cannot model.
+fn declares_inherits(theme: &Path) -> bool {
+    let path = theme.join("index.theme");
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return false;
+    };
+    if !meta.is_file() || meta.len() > 64 * 1024 {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        line.trim()
+            .strip_prefix("Inherits=")
+            .is_some_and(|names| !names.trim().is_empty())
+    })
 }
 
 impl IconNames {
@@ -333,30 +421,86 @@ impl IconNames {
     pub fn new(icon_dirs: &[PathBuf]) -> Self {
         Self {
             dirs: icon_dirs.to_vec(),
-            stamp: icon_dirs.iter().map(|dir| stamp_of(dir)).collect(),
+            order: icon_order(icon_dirs),
             names: HashMap::new(),
             resolved: 0,
             hits: 0,
+            validated: 0,
         }
     }
 
-    /// Drop everything if the icon tree moved, then re-stamp it.
+    /// Re-stamp the tree and drop the names a change can affect.
     fn refresh(&mut self, icon_dirs: &[PathBuf]) {
-        let fresh: Vec<Stamp> = icon_dirs.iter().map(|dir| stamp_of(dir)).collect();
-        if self.dirs != icon_dirs || self.stamp != fresh {
+        let fresh = icon_order(icon_dirs);
+        // The order the old witnesses refer to is still intact up to the first
+        // position whose directory changed: renamed, replaced, or simply no
+        // longer the same directory. Everything from there on is treated as
+        // changed, which is what makes an appended directory cheap (it shadows
+        // nothing) and a removed one safe (the entries that pointed into it go).
+        let common = self
+            .order
+            .iter()
+            .zip(fresh.iter())
+            .take_while(|(old, new)| old.0 == new.0)
+            .count();
+        let first_changed = if common == self.order.len() && common == fresh.len() {
+            // Same directories in the same places: only a stamp can have moved.
+            self.order
+                .iter()
+                .zip(fresh.iter())
+                .position(|(old, new)| old.1 != new.1)
+                .unwrap_or(usize::MAX)
+        } else {
+            common
+        };
+        if first_changed == usize::MAX {
+            return;
+        }
+        if fresh
+            .iter()
+            .skip(first_changed)
+            .any(|(dir, _)| declares_inherits(dir))
+        {
+            // An inherited theme can be searched before a theme whose name sorts
+            // later, which this flat order cannot express. Dropping everything is
+            // the safe direction.
             self.names.clear();
             self.dirs = icon_dirs.to_vec();
-            self.stamp = fresh;
+            self.order = fresh;
+            return;
         }
+        let mut kept: HashMap<String, Cached> = HashMap::with_capacity(self.names.len());
+        for (name, entry) in self.names.drain() {
+            self.validated = self.validated.saturating_add(1);
+            let still_good = match entry.witness {
+                // A hit: only an earlier or equal directory can shadow it.
+                Some(index) => {
+                    index < first_changed
+                        && entry.stamp == self.order.get(index).map(|(_, stamp)| *stamp)
+                        && entry.path.as_deref().is_some_and(Path::is_file)
+                }
+                // A miss: any change anywhere could have supplied the name.
+                None => false,
+            };
+            if still_good {
+                kept.insert(name, entry);
+            }
+        }
+        self.names = kept;
+        self.dirs = icon_dirs.to_vec();
+        self.order = fresh;
     }
 
-    /// The file `name` resolves to under `icon_dirs`, asking the theme tree at
-    /// most once per name per state of that tree.
-    pub fn resolve(&mut self, icon_dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
-        self.refresh(icon_dirs);
+    /// The file `name` resolves to under `icon_dirs`.
+    ///
+    /// Private on purpose: [`Self::refresh`] must have run for the current state
+    /// of the tree first, and [`reload_with_cache`] is the one place that does
+    /// both in that order. A public entry point here would be an API that is easy
+    /// to call stale.
+    fn resolve(&mut self, icon_dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
         if let Some(found) = self.names.get(name) {
             self.hits = self.hits.saturating_add(1);
-            return found.clone();
+            return found.path.clone();
         }
         if self.names.len() >= MAX_ICON_NAMES {
             // A hard bound, not an eviction policy: the entries that follow will
@@ -365,9 +509,27 @@ impl IconNames {
             self.names.clear();
         }
         self.resolved = self.resolved.saturating_add(1);
-        let found = crate::themeicons::find_in(icon_dirs, name, 48);
-        self.names.insert(name.to_owned(), found.clone());
-        found
+        let path = crate::themeicons::find_in(icon_dirs, name, 48);
+        // The witness is the deepest directory in the order that contains the
+        // file: a theme directory for a themed icon, the root for a flat one.
+        let witness = path.as_deref().and_then(|found| {
+            self.order
+                .iter()
+                .enumerate()
+                .filter(|(_, (dir, _))| found.starts_with(dir))
+                .max_by_key(|(_, (dir, _))| dir.as_os_str().len())
+                .map(|(index, _)| index)
+        });
+        let stamp = witness.and_then(|index| self.order.get(index).map(|(_, stamp)| *stamp));
+        self.names.insert(
+            name.to_owned(),
+            Cached {
+                path: path.clone(),
+                witness,
+                stamp,
+            },
+        );
+        path
     }
 
     /// Names whose file was looked up, across the life of this cache.
@@ -380,6 +542,13 @@ impl IconNames {
     #[must_use]
     pub fn hits(&self) -> u64 {
         self.hits
+    }
+
+    /// Memo entries examined during a validation pass: the ones a change made
+    /// decide about, whether they survived or not.
+    #[must_use]
+    pub fn validated(&self) -> u64 {
+        self.validated
     }
 
     /// Names the map holds now. For the diagnostics line and the tests.
@@ -402,14 +571,15 @@ impl IconNames {
         let mut total = self
             .dirs
             .iter()
+            .chain(self.order.iter().map(|(dir, _)| dir))
             .map(|dir| dir.as_os_str().len())
             .fold(0usize, usize::saturating_add);
-        for (name, path) in &self.names {
+        for (name, entry) in &self.names {
             total = total
                 .saturating_add(name.len())
-                .saturating_add(path.as_ref().map_or(0, |p| p.as_os_str().len()))
+                .saturating_add(entry.path.as_ref().map_or(0, |p| p.as_os_str().len()))
                 .saturating_add(std::mem::size_of::<String>())
-                .saturating_add(std::mem::size_of::<Option<PathBuf>>())
+                .saturating_add(std::mem::size_of::<Cached>())
                 .saturating_add(std::mem::size_of::<usize>().saturating_mul(2));
         }
         total
@@ -1023,6 +1193,309 @@ mod tests {
         let big = root.join("big.desktop");
         std::fs::write(&big, vec![b'a'; (MAX_FILE_BYTES as usize) + 1]).expect("write");
         assert!(discover_in(std::slice::from_ref(&root)).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A theme directory added at the tail of the search order supplies one new
+    /// name; the names already answered are validated, not resolved again.
+    ///
+    /// This is the §58 property: §57 dropped the whole map on any move, so this
+    /// pass would report three names resolved for three entries instead of one.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_theme_directory_re_resolves_only_the_name_it_supplies() {
+        let root = scratch("icons-per-name");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        std::fs::write(
+            icons.join("hicolor/scalable/apps/blue-icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#2080c0\"/></svg>",
+        )
+        .expect("icon");
+        let prog = program(&root, "run-me");
+        for name in ["Alpha", "Beta", "Gamma"] {
+            std::fs::write(
+                apps.join(format!("{name}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName={name}\nIcon=blue-icon\nExec={}\n",
+                    prog.display()
+                ),
+            )
+            .expect("entry");
+        }
+        let icon_dirs = vec![icons.clone()];
+        let app_dirs = vec![apps.clone()];
+        let mut names = IconNames::new(&icon_dirs);
+        let first = discover_with_cache(&app_dirs, &icon_dirs, &mut names);
+        assert_eq!(first.apps.len(), 3);
+        assert_eq!(first.icons_resolved, 1);
+        assert_eq!(
+            first.icons_validated, 0,
+            "nothing moves on the first pass, so nothing is validated"
+        );
+
+        // One new theme directory and one new name, written while the map is warm.
+        let extra = icons.join("zzz-extra/scalable/apps");
+        std::fs::create_dir_all(&extra).expect("extra theme");
+        std::fs::write(
+            extra.join("late-icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><circle cx=\"4\" cy=\"4\" r=\"3\" fill=\"#fa be 28\"/></svg>",
+        )
+        .expect("late icon");
+        std::fs::write(
+            apps.join("Late.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Late\nIcon=late-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("late entry");
+
+        let after = reload_with_cache(
+            &app_dirs,
+            &icon_dirs,
+            &first.apps,
+            &app_dirs,
+            true,
+            &mut names,
+        );
+        assert_eq!(after.apps.len(), 4);
+        assert_eq!(
+            after.icons_resolved, 1,
+            "only the new name is new work: {} names resolved",
+            after.icons_resolved
+        );
+        assert_eq!(
+            after.icons_validated, 1,
+            "the one name already answered is decided about once, not re-resolved"
+        );
+        assert_eq!(names.len(), 2);
+        assert!(after.apps.iter().all(|app| app.icon_path.is_some()));
+        println!(
+            "per-name cache: {} names, {} bytes, entry {} bytes",
+            names.len(),
+            names.bytes(),
+            std::mem::size_of::<Cached>()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A name whose file appears in a directory consulted earlier resolves to the
+    /// new file; the cached hit is not served.
+    #[cfg(unix)]
+    #[test]
+    fn a_name_that_moves_to_an_earlier_directory_is_re_resolved() {
+        let root = scratch("icons-moved");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        let old = icons.join("hicolor/scalable/apps/move-icon.svg");
+        std::fs::write(
+            &old,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#c02020\"/></svg>",
+        )
+        .expect("old icon");
+        let prog = program(&root, "run-me");
+        std::fs::write(
+            apps.join("mover.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Mover\nIcon=move-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("entry");
+        let icon_dirs = vec![icons.clone()];
+        let app_dirs = vec![apps.clone()];
+        let mut names = IconNames::new(&icon_dirs);
+        let first = discover_with_cache(&app_dirs, &icon_dirs, &mut names);
+        assert_eq!(
+            first.apps.first().and_then(|app| app.icon_path.as_deref()),
+            Some(old.as_path()),
+            "the theme answers first"
+        );
+
+        // A flat file at the icon root, which the lookup consults before any theme.
+        let flat = icons.join("move-icon.svg");
+        std::fs::write(
+            &flat,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#20a020\"/></svg>",
+        )
+        .expect("flat icon");
+        let after = reload_with_cache(&app_dirs, &icon_dirs, &first.apps, &[], true, &mut names);
+        assert_eq!(
+            after.apps.first().and_then(|app| app.icon_path.as_deref()),
+            Some(flat.as_path()),
+            "the earlier directory now shadows the theme"
+        );
+        assert_eq!(after.icons_resolved, 1, "the cached hit was not trusted");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Removing the theme directory that answered a name drops the name rather
+    /// than leaving a path to a file that is gone.
+    #[cfg(unix)]
+    #[test]
+    fn removing_a_theme_directory_drops_the_names_it_answered() {
+        let root = scratch("icons-removed");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("zzz-extra/scalable/apps")).expect("theme");
+        std::fs::write(
+            icons.join("zzz-extra/scalable/apps/only-icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#2080c0\"/></svg>",
+        )
+        .expect("icon");
+        let prog = program(&root, "run-me");
+        std::fs::write(
+            apps.join("only.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Only\nIcon=only-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("entry");
+        let icon_dirs = vec![icons.clone()];
+        let app_dirs = vec![apps.clone()];
+        let mut names = IconNames::new(&icon_dirs);
+        let first = discover_with_cache(&app_dirs, &icon_dirs, &mut names);
+        assert!(first
+            .apps
+            .first()
+            .is_some_and(|app| app.icon_path.is_some()));
+
+        std::fs::remove_dir_all(icons.join("zzz-extra")).expect("uninstall");
+        let after = reload_with_cache(&app_dirs, &icon_dirs, &first.apps, &[], true, &mut names);
+        let gone = after.apps.first().map(|app| app.icon_path.clone());
+        assert!(
+            gone.as_ref().is_some_and(Option::is_none),
+            "a cached hit into a removed directory must not survive: {gone:?}"
+        );
+        assert_eq!(after.icons_resolved, 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A theme that declares `Inherits=` cannot be modelled by the flat order, so
+    /// a change in it clears the map instead of keeping names that might now be
+    /// shadowed by a parent.
+    #[cfg(unix)]
+    #[test]
+    fn a_change_in_an_inheriting_theme_re_resolves_everything() {
+        let root = scratch("icons-inherits");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        let theme = icons.join("hicolor/scalable/apps");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(&theme).expect("theme");
+        std::fs::write(
+            icons.join("hicolor/index.theme"),
+            "[Icon Theme]\nName=Hicolor\nInherits=Adwaita,gnome\n",
+        )
+        .expect("index.theme");
+        std::fs::write(
+            theme.join("blue-icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#2080c0\"/></svg>",
+        )
+        .expect("icon");
+        let prog = program(&root, "run-me");
+        for (name, icon) in [("One", "blue-icon"), ("Two", "red-icon")] {
+            if icon == "red-icon" {
+                std::fs::write(
+                    theme.join("red-icon.svg"),
+                    "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#c02020\"/></svg>",
+                )
+                .expect("red icon");
+            }
+            std::fs::write(
+                apps.join(format!("{name}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName={name}\nIcon={icon}\nExec={}\n",
+                    prog.display()
+                ),
+            )
+            .expect("entry");
+        }
+        let icon_dirs = vec![icons.clone()];
+        let app_dirs = vec![apps.clone()];
+        let mut names = IconNames::new(&icon_dirs);
+        let first = discover_with_cache(&app_dirs, &icon_dirs, &mut names);
+        assert_eq!(first.icons_resolved, 2, "two entries, two names");
+
+        // The theme directory itself moves: a file arrives next to `index.theme`.
+        std::fs::write(
+            icons.join("hicolor/extra.txt"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#c02020\"/></svg>",
+        )
+        .expect("second icon");
+        let after = reload_with_cache(&app_dirs, &icon_dirs, &first.apps, &[], true, &mut names);
+        assert_eq!(
+            after.icons_resolved, 2,
+            "an inheriting theme's change falls back to resolving every name"
+        );
+        assert_eq!(
+            after.icons_validated, 0,
+            "the fallback does not pretend to validate anything"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// What a pass costs when nothing moved: the common case, every frame that
+    /// is not after an install.
+    ///
+    /// The number is printed rather than asserted, so a slow machine does not
+    /// fail the suite; `§58` in the tracker records what it reported here.
+    #[cfg(unix)]
+    #[test]
+    fn a_pass_over_an_unchanged_tree_is_cheap() {
+        let root = scratch("icons-cost");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        let prog = program(&root, "run-me");
+        for index in 0..16 {
+            std::fs::write(
+                apps.join(format!("app-{index}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName=App {index}\nIcon=icon-{}\nExec={}\n",
+                    index % 4,
+                    prog.display()
+                ),
+            )
+            .expect("entry");
+        }
+        for index in 0..4 {
+            std::fs::write(
+                icons.join(format!("hicolor/scalable/apps/icon-{index}.svg")),
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#2080c0\"/></svg>",
+            )
+            .expect("icon");
+        }
+        let icon_dirs = vec![icons.clone()];
+        let app_dirs = vec![apps.clone()];
+        let mut names = IconNames::new(&icon_dirs);
+        let first = discover_with_cache(&app_dirs, &icon_dirs, &mut names);
+        assert_eq!(first.apps.len(), 16);
+        assert_eq!(first.icons_resolved, 4, "four names, sixteen entries");
+
+        let passes = 2_000u32;
+        let started = std::time::Instant::now();
+        for _ in 0..passes {
+            let again =
+                reload_with_cache(&app_dirs, &icon_dirs, &first.apps, &[], false, &mut names);
+            assert_eq!(again.icons_resolved, 0);
+            assert_eq!(again.icons_validated, 0);
+        }
+        let each = started.elapsed() / passes;
+        println!(
+            "unchanged pass: {each:?} each over {} passes, {} names, {} bytes",
+            passes,
+            names.len(),
+            names.bytes()
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

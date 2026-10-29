@@ -4956,3 +4956,177 @@ over the module returns nothing.
   the allocator's own overhead, so the real RSS figure is somewhat higher.
 * **One second of latency** and the mtime-granularity caveats from §55 are
   unchanged.
+
+## 58. Batch: one installed theme directory re-resolves only the names it supplies (verified)
+
+### 58.1 Requirement
+
+§57 closed with the cost it could not remove, in its own words:
+
+> **The whole map is dropped when the icon tree moves**, not the entries that
+> changed: one `find_in` per distinct name after a theme install, which is the
+> intended semantics rather than a per-name stamp. A page that churns themes
+> pays that once per change.
+
+This batch replaces that whole-map drop with per-name validation, and proves the
+difference with a counter taken from a running launcher.
+
+### 58.2 Audit, before the change
+
+* `IconNames` held `order: Vec<(PathBuf, Stamp)>` — every icon root's flat
+  directory, then each root's themes, `hicolor` first — plus `names: HashMap<String, Option<PathBuf>>`.
+* `IconNames::refresh` rebuilt the order and compared it to the previous one. If
+  the *path list* differed at all, it cleared the map. So appending one theme
+  directory at the very tail — a directory that cannot shadow anything already
+  answered — re-resolved every name.
+* A cached entry recorded only its answer, never *which directory* answered, so
+  there was nothing to validate a name against on its own.
+* `themeicons::find_in` searches: each root's flat `name.png`/`name.svg` first,
+  then the roots' themes (`hicolor` first, then by name), then inherited parents
+  breadth-first.
+
+### 58.3 What a cached hit now stands on
+
+Each entry keeps `path`, the index of the directory that answered it
+(`witness`), and that directory's stamp. `refresh` computes the longest common
+prefix between the old and the new order:
+
+* a hit at index `k` survives iff `k < first_changed`, its witness' stamp is
+  unchanged, and the file still exists — only an earlier or equal directory can
+  shadow it, and a later one loses to it;
+* a directory appended at the tail is beyond every existing witness, so it costs
+  only the names it actually supplies;
+* a removed or renamed directory ends the common prefix there, so every entry
+  that pointed into it — or past it — is dropped;
+* a miss carries no witness, so any change drops it;
+* `Inherits=` in a changed theme is the one case the flat order cannot model (a
+  parent is searched after every direct theme, not where its name sorts), so
+  that change clears the map. Conservative: more work than needed, never less.
+
+### 58.4 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `src/litric-shell/src/desktop_entry.rs` | 304 | `MAX_ICON_NAMES = 512` |
+| `src/litric-shell/src/desktop_entry.rs` | 308 | `struct Cached { path, witness, stamp }` |
+| `src/litric-shell/src/desktop_entry.rs` | 353 | `pub struct IconNames` with `resolved`/`hits`/`validated` |
+| `src/litric-shell/src/desktop_entry.rs` | 364 | `icon_order` — the conservative search order |
+| `src/litric-shell/src/desktop_entry.rs` | 400 | `declares_inherits` — the fallback trigger |
+| `src/litric-shell/src/desktop_entry.rs` | 433 | `refresh` — common-prefix invalidation, per-name prune |
+| `src/litric-shell/src/desktop_entry.rs` | 500 | `resolve` — witness recorded with the answer |
+| `src/litric-shell/src/desktop_entry.rs` | 550 | `validated()` — the new counter |
+| `src/litric-shell/src/desktop_entry.rs` | 570 | `bytes()` — the memory figure |
+| `src/litric-shell/src/desktop_entry.rs` | 117 | `Discovery::icons_validated`, reported per pass |
+| `src/litric-shell/src/shell.rs` | 3107 | `desktop_icons_validated` diagnostic |
+| `src/litric-shell/src/shell.rs` | 7285, 7335 | set on load and on each reload |
+| `src/litric-shell/src/shell.rs` | 7337 | the journal line now carries both numbers |
+
+### 58.5 Tests that fail without it
+
+| Test | Asserts |
+| --- | --- |
+| `desktop_entry::tests::a_new_theme_directory_re_resolves_only_the_name_it_supplies` (1206) | three entries on one name: 1 resolve, 0 validated; after a new theme dir with one new name: **1 resolve, 1 validate**, 2 names |
+| `desktop_entry::tests::a_name_that_moves_to_an_earlier_directory_is_re_resolved` (1289) | a flat file appearing at the root (index 0) shadows the theme's answer: the new path is returned |
+| `desktop_entry::tests::removing_a_theme_directory_drops_the_names_it_answered` (1341) | uninstall: the answer becomes `None`, not a path to a deleted file |
+| `desktop_entry::tests::a_change_in_an_inheriting_theme_re_resolves_everything` (1386) | `Inherits=` change falls back: 2 resolves, 0 validated |
+| `e2e::journey_launcher_re_resolves_only_the_name_a_new_theme_supplies` (5161) | real temp XDG tree, launcher running: 2 entries share `blue-icon`, a `zzz-extra` theme plus `Late App` arrive, `tick_after(1_010)` → **`desktop_icons_resolved == 1`, `desktop_icons_validated == 1`**; the journal reports `1 directories, 3 entries, 1 names resolved, 1 names validated (... icons true)` |
+
+The §57 tests (`entries_sharing_one_icon_name_resolve_it_once`,
+`a_theme_change_does_not_reuse_a_negative_lookup`, and the
+`journey_launcher_resolves_a_shared_icon_name_once` journey) pass unchanged.
+
+### 58.6 Sensitivity
+
+With `refresh` forced back to whole-map invalidation (`index < first_changed`
+replaced by `false`), both the unit test and the journey fail on the counter:
+
+```
+thread 'desktop_entry::tests::a_new_theme_directory_re_resolves_only_the_name_it_supplies' panicked at litric-shell/src/desktop_entry.rs:1266:9:
+assertion `left == right` failed: only the new name is new work: 2 names resolved
+  left: 2
+ right: 1
+```
+
+```
+thread 'e2e::journey_launcher_re_resolves_only_the_name_a_new_theme_supplies' panicked at litric-shell/src/e2e.rs:5217:5:
+assertion `left == right` failed: only the new name is new work; a whole-map drop would report 2, this reports 2
+  left: 2
+ right: 1
+```
+
+Restored, `cargo test -p litric-shell --lib -- desktop_entry::tests::a_new_theme
+e2e::journey_launcher_re_resolves` reports `5 passed; 0 failed`.
+
+### 58.7 Cost, measured on this machine
+
+| Figure | Value | How |
+| --- | --- | --- |
+| bytes for the 4-name / 3-entry fixture | **636 B** (16-entry fixture: 923 B) | `IconNames::bytes()` printed by the test |
+| per-entry header | **64 B** | `size_of::<Cached>()` |
+| unchanged pass (16 entries, 4 names) | **53.8 µs** each over 2000 passes | `a_pass_over_an_unchanged_tree_is_cheap` |
+| names resolved when one theme dir + one name is installed | **1** (was 2 with the whole map dropped) | the e2e counter |
+| names validated in that pass | **1** | `desktop_icons_validated` |
+| work during frames | **none** | `refresh` is only called from the reload path, which the watch gates at `WATCH_INTERVAL_MS`; §55's "30 frames, no stat" and §56's "poll only at period" tests still pass |
+| ceiling | 512 names; by the header and path sizes above ≈ 0.42 MiB worst case | `MAX_ICON_NAMES` and the `bytes()` bound assertion |
+
+### 58.8 Gates
+
+```
+$ cargo fmt --all --check
+FMT_EXIT=0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.59s
+CLIPPY_EXIT=0
+
+$ cargo test --workspace
+PASSED=1800 FAILED=0          (55 suites)
+
+$ python3 ci/lint-doc-refs.py
+OK: 1031 citation(s) across 155 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+FILESAFETY_EXIT=0
+  (the new journey's fixture cleanup is registered with its reason)
+
+$ bash ci/verify.sh
+summary: 32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the pre-existing `keys/dev/` key material and the mkosi
+image check; the three skips are QEMU-only checks. No gate, golden frame or key
+was added, weakened or generated — the golden dump has no discovered
+application in it, so it could not move.
+
+The frame the journey saved
+(`artifacts/browser-shots/58-launcher-per-name-icon-cache.png`) was opened: three
+discovered tiles — `Blue One` and `Blue Two` on the blue field with an amber
+disc, `Late App` on a red field with a white triangle — legible at 82 px, none a
+placeholder square.
+
+### 58.9 Limits
+
+* **The watch is one directory deep.** A new icon file written *inside* an
+  existing theme's `scalable/apps/` changes no watched stamp, so it is only
+  noticed when something else moves that theme's own listing. Measured while
+  writing the `Inherits=` test: adding a second icon inside the theme's scalable
+  directory left the pass at 0 validated, while adding a plain file directly in
+  the theme directory moved it. The fix is a deeper stamp (per size directory)
+  or an inotify watch; neither is in this batch.
+* **`Inherits=` changes clear the whole map.** Correct, but not per-name: a
+  theme that inherits cannot be placed in a flat order, so its install costs one
+  `find_in` per distinct name.
+* **A remembered miss is dropped on any change**, because a change anywhere can
+  supply a missing name. Hits are validated per name; misses are not.
+* **The common prefix is conservative across roots.** Adding a new icon *root*
+  ahead of existing ones shifts every theme's index and therefore re-resolves
+  everything; only appends at the tail are cheap.
+* **Cleared, not evicted, at the cap.** Past 512 names the map empties.
+* **`bytes` is a lower bound** — it counts names, paths and headers, not the
+  allocator's own overhead.
+* **One second of latency** and the mtime-granularity caveats from §55 stand.
+
+### 58.10 Git
+
+Commit `HEAD` and `origin/main` are the same commit; `git status
+--porcelain --untracked-files=no` is empty.

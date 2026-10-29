@@ -3102,6 +3102,9 @@ pub struct Shell {
     /// Distinct icon names the last discovery or reload asked the theme tree
     /// for. Several entries that share an `Icon=` name count once.
     pub desktop_icons_resolved: usize,
+    /// Memo entries the last pass had to decide about because the icon tree
+    /// moved. Zero when it did not.
+    pub desktop_icons_validated: usize,
     /// The name-to-file memo, kept across reloads and dropped by its own stamp
     /// when the icon tree moves.
     pub desktop_icon_names: crate::desktop_entry::IconNames,
@@ -3664,6 +3667,7 @@ impl Shell {
             desktop_dirs_read: 0,
             desktop_files_read: 0,
             desktop_icons_resolved: 0,
+            desktop_icons_validated: 0,
             desktop_icon_names: crate::desktop_entry::IconNames::default(),
             app_status: None,
             reader: None,
@@ -7278,6 +7282,7 @@ impl Shell {
         self.desktop_dirs_read = found.dirs_read;
         self.desktop_files_read = found.files_read;
         self.desktop_icons_resolved = found.icons_resolved;
+        self.desktop_icons_validated = found.icons_validated;
         self.desktop_icon_names = names;
         self.desktop_watch = Some(crate::desktop_entry::DesktopWatch::new(
             app_dirs, icon_dirs, now_ms,
@@ -7327,9 +7332,15 @@ impl Shell {
         self.desktop_dirs_read = found.dirs_read;
         self.desktop_files_read = found.files_read;
         self.desktop_icons_resolved = found.icons_resolved;
+        self.desktop_icons_validated = found.icons_validated;
         eprintln!(
-            "litric-shell: desktop: {} directories, {} entries, {} names resolved ({:?} reread, icons {})",
-            found.dirs_read, found.files_read, found.icons_resolved, reread, change.icons
+            "litric-shell: desktop: {} directories, {} entries, {} names resolved, {} names validated ({:?} reread, icons {})",
+            found.dirs_read,
+            found.files_read,
+            found.icons_resolved,
+            found.icons_validated,
+            reread,
+            change.icons
         );
         self.desktop_watch = Some(crate::desktop_entry::DesktopWatch::new(
             &app_dirs, &icon_dirs, now_ms,

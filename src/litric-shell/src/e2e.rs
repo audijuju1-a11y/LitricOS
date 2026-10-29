@@ -5149,6 +5149,134 @@ fn journey_launcher_resolves_a_shared_icon_name_once() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Installing one theme directory while the launcher runs resolves only the name
+/// that directory supplies.
+///
+/// Three entries share one icon name and a fourth arrives with a theme directory
+/// appended at the tail of the search order. A whole-map invalidation (§57)
+/// reports two names resolved; per-name validation reports one, and the tiles
+/// still show the real artwork.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_re_resolves_only_the_name_a_new_theme_supplies() {
+    let root = e2e_root("desktop-icon-per-name");
+    let apps = root.join("data/applications");
+    let icons = root.join("data/icons");
+    std::fs::create_dir_all(&apps).expect("applications");
+    std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+    std::fs::write(
+        icons.join("hicolor/scalable/apps/blue-icon.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" fill="#2080c0"/>
+  <circle cx="12" cy="12" r="7" fill="#fabe28"/>
+</svg>"##,
+    )
+    .expect("the shared icon");
+    for name in ["Blue One", "Blue Two"] {
+        std::fs::write(
+            apps.join(format!("{}.desktop", name.replace(' ', "-"))),
+            format!(
+                "[Desktop Entry]\nType=Application\nName={name}\nIcon=blue-icon\nExec=/bin/true\n"
+            ),
+        )
+        .expect("entry");
+    }
+
+    let mut s = shell();
+    s.load_desktop_apps_from(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+    assert_eq!(s.desktop_apps.len(), 2);
+    assert_eq!(
+        s.desktop_icons_resolved, 1,
+        "the two entries share one name, so one lookup"
+    );
+    assert_eq!(s.desktop_icons_validated, 0, "no change yet");
+    open_launcher(&mut s);
+    let _ = draw_frame(&mut s);
+
+    // One new theme directory at the tail, one new name, one new entry.
+    let extra = icons.join("zzz-extra/scalable/apps");
+    std::fs::create_dir_all(&extra).expect("extra theme");
+    std::fs::write(
+        extra.join("late-icon.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" fill="#c02020"/>
+  <path d="M 5 19 L 12 5 L 19 19 Z" fill="#f0f0f0"/>
+</svg>"##,
+    )
+    .expect("late icon");
+    std::fs::write(
+        apps.join("Late-App.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Late App\nIcon=late-icon\nExec=/bin/true\n",
+    )
+    .expect("late entry");
+    s.tick_after(1_010);
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "58-launcher-per-name-icon-cache");
+
+    assert_eq!(s.desktop_apps.len(), 3);
+    assert_eq!(
+        s.desktop_icons_resolved, 1,
+        "only the new name is new work; a whole-map drop would report 2, this reports {}",
+        s.desktop_icons_resolved
+    );
+    assert_eq!(
+        s.desktop_icons_validated, 1,
+        "the shared name is validated once, not resolved again: {}",
+        s.desktop_icons_validated
+    );
+    assert!(
+        s.desktop_apps.iter().all(|app| app.icon_path.is_some()),
+        "every tile has a real file behind it"
+    );
+
+    // Each tile carries its own document's colours, so none is a placeholder.
+    let builtins = App::ALL.len();
+    for (offset, want) in [(0usize, "blue"), (1, "blue"), (2, "red")] {
+        let cell = s
+            .hotspots()
+            .rect_of(Hot::LauncherItem(builtins + offset))
+            .expect("a tile per application");
+        let chip = Rect::new(cell.center().0 - 41.0, cell.y + 4.0, 82.0, 82.0);
+        let (mut blue, mut amber, mut red, mut light) = (0usize, 0usize, 0usize, 0usize);
+        let mut x = chip.x + 2.0;
+        while x < chip.right() - 2.0 {
+            let mut y = chip.y + 2.0;
+            while y < chip.bottom() - 2.0 {
+                if let Some(px) = canvas.get(x as i64, y as i64) {
+                    let r = (px >> 16) & 0xFF;
+                    let g = (px >> 8) & 0xFF;
+                    let b = px & 0xFF;
+                    if b > 120 && b > r.saturating_add(40) {
+                        blue = blue.saturating_add(1);
+                    }
+                    if r > 180 && g > 120 && b < 120 {
+                        amber = amber.saturating_add(1);
+                    }
+                    if r > 150 && r > g.saturating_add(60) {
+                        red = red.saturating_add(1);
+                    }
+                    if r > 200 && g > 200 && b > 200 {
+                        light = light.saturating_add(1);
+                    }
+                }
+                y += 3.0;
+            }
+            x += 3.0;
+        }
+        let drawn = match want {
+            // The blue document: a blue field with an amber disc on it.
+            _ if want == "blue" => blue > 20 && amber > 5,
+            // The red document: a red field with a white triangle on it.
+            _ => red > 20 && light > 5,
+        };
+        assert!(
+            drawn,
+            "tile {offset} is not its own artwork ({want}): blue {blue}, amber {amber}, red {red}, light {light}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A new application in one of two application directories re-reads only that
 /// directory, and the launcher still shows the entry that did not move.
 ///
