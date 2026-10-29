@@ -4008,3 +4008,118 @@ not retroactively suppressed as a banner (adoption never banners). No
 performance metric is claimed. This batch used the Research-Deep-all corpus and
 the repository's named gates; no separate executable `research-deep-all` runner
 exists in this repository.
+
+## 51. Batch: the Browser opens a page served on this machine over real HTTP (verified)
+
+### 51.1 Requirement and audit
+
+The requirement source is the `Research-Deep-all` corpus tracked on `main` (30
+Markdown parts and 7 CSV registers; the "15 files" count in the request is the
+mismatch recorded in §49.1). The chosen row is `LR.13`, "Integration points
+(portals, D-Bus, APIs)" (PARTIAL), whose checklist text is:
+
+> Web apps install, pin to the shelf, appear in the launcher and handle files;
+> Chrome extensions are integral (S3882); Android and Linux app support was not
+> on any opened page; LitricOS: no extension or store model
+
+The implemented slice is the first step of that chain and nothing more: a page
+served by a web server on this machine can be opened by the Browser through a
+real HTTP request, laid out and drawn by the window's own reader, with its
+pictures fetched over the same socket. Installation, shelf pinning, launcher
+entries and file handlers are not implemented and are not claimed.
+
+The audit found that the window had exactly one page path: `reader::open`
+accepted `file://` and refused everything else with "this page is not a local
+file". `browserd` is a real Chromium-over-CDP broker, but this image has no
+Chromium (no `chromium`, `chromium-browser`, `google-chrome` or `chrome` on
+`PATH`, and no Playwright browser cache), and `Policy::check_navigation` refused
+every plain-HTTP address with an upgrade offer. There was therefore no way to
+load a page from a server even when that server was on loopback — the one web
+path that needs neither Chromium nor a TLS stack.
+
+App loading, the other half of the request, was audited and is **not**
+implemented: `shortcuts::App::ALL` has exactly eight built-in applications,
+nothing parses freedesktop `.desktop` entries, and there is no app catalog or
+install path. `litric-sysd` spawns specific programs for specific verbs, not
+arbitrary user applications. This batch did not invent a launcher that would
+list applications it cannot run; the gap is recorded under limits.
+
+### 51.2 The connection
+
+| File | What it does |
+|---|---|
+| `src/litric-browser/src/lib.rs:45` | `pub mod http;` |
+| `src/litric-browser/src/http.rs:58` | `is_loopback_host` accepts exactly `localhost`, `::1` and `127.0.0.0/8`; a name that merely contains `localhost`, or a private address, is another machine. |
+| `src/litric-browser/src/http.rs:104` | `get_with_limit` builds one `GET`, connects with a 2 s timeout, bounds the head to 16 KiB and the body to the caller's cap, refuses a chunked response by name, and reports a short body as an error rather than a smaller page. |
+| `src/litric-browser/src/url.rs:299` | `Url::join` resolves a page's relative or root-relative picture reference against the page address; `normalize_path` at 377 collapses `.` and `..`. |
+| `src/litric-browser/src/policy.rs:302` | Plain HTTP is allowed for loopback only. Every other `http:` address is still refused with the same upgrade offer, and `https` remains the only way off the machine. |
+| `src/litric-shell/src/reader.rs:127` | Module-level `serves` (mirrored as `Reader::serves` at 159) is the one predicate the window uses to choose reader versus engine: `file://`, or loopback `http://`. |
+| `src/litric-shell/src/reader.rs:199` | `Reader::open` fetches a loopback page with `litric_browser::http::get`, refuses a non-2xx answer, parses the body with the existing HTML reader and uses the page's own `<title>`. |
+| `src/litric-shell/src/reader.rs:88` | `Base::image` resolves `<img src>`: a file beside a file page, or a URL against a served page, and `Unavailable` for anything that would leave this machine. `ImageSource` is at 115; `decode` at 499 fetches a JPEG with the existing 16 MiB picture cap. |
+| `src/litric-shell/src/shell.rs:1977` | `send_go` routes a served page to the reader instead of the engine; `browser_navigate` does the same at 2056, so an omnibox commit, a bookmark and history take one path. |
+| `src/litric-shell/src/shell.rs:2025` | A failed read keeps the user-facing status "Could not open this page" and writes the reason to the journal (`litric-shell: browser: …`), not to the page. |
+| `src/litric-shell/src/e2e.rs:4508` | `save_shot` writes a frame as a real PPM when `LITRIC_E2E_SHOTS` names a directory, so a reviewer can see the frame; it is inert otherwise. |
+| `src/litric-shell/src/e2e.rs:4542` | The journey: a real `TcpListener` serves one HTML page and one JPEG, the omnibox types the address, Enter loads it, pixels are asserted, the wheel scrolls to the second heading, then a closed port is loaded and must report the failure with no page left on screen. |
+
+### 51.3 Cost
+
+One socket per page fetch and one per picture that becomes visible, each closed
+immediately. A page is capped at 4 MiB (the HTML reader's own limit), a picture
+at the existing 16 MiB, and a response head at 16 KiB; a declared length over
+the cap is refused before any body is read. Picture decoding keeps the §38
+bounds (4 pictures, 8,000,000 pixels, 2 new decodes per frame). The reader path
+is entered only for `file://` and loopback `http://`; every other address takes
+the unchanged engine path. Nothing polls, nothing spawns a thread in product
+code, and no per-frame allocation was added: the pending-decode vector existed
+and is reused. No speed or RAM number is claimed because none was measured.
+
+### 51.4 Tests and gates
+
+New tests: ten `litric-browser::http` tests over real loopback sockets (status,
+content type, close-delimited body, 404, chunked refusal, oversized length,
+short body, refused connection, non-local and TLS refusal, the loopback
+predicate, target encoding);
+`policy::tests::a_server_on_this_machine_may_use_plain_http_and_nothing_else_may`;
+`reader::tests::the_reader_serves_this_machines_files_and_web_server_only`;
+`reader::tests::a_page_reference_resolves_only_to_this_machines_server`; and the
+journey
+`e2e::journey_browser_loads_a_page_from_a_local_web_server_and_reports_a_failed_fetch`.
+
+```text
+cargo test --workspace        1752 passed, 0 failed, 0 ignored   (was 1738; +14)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+bash ci/verify.sh             32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the unchanged absent local dev-key material (mkosi reports
+`secureboot`, `pcr` and `verity`; the key-pair check reports `secureboot` and
+`verity`). No keys were generated or committed, no gate was weakened and no
+golden fingerprint changed: no desktop frame's pixels are touched by this batch.
+
+**Sensitivity, stated as evidence.** With `reader::serves` temporarily forced to
+return `false`, the new journey fails at its first assertion — "the served page
+loaded; the status line says: browser engine not reachable at
+/run/litric/browser.sock" — and passes again once the wiring is restored. The
+test is therefore sensitive to this connection, not passing for an unrelated
+reason. The journey also asserts the two request lines the server actually
+received (`GET / HTTP/1.1`, `GET /panel.jpg HTTP/1.1`), so the picture in the
+frame is proven to have arrived over the same socket as the page.
+
+### 51.5 Limits
+
+This is a **local-server path, not a web engine**. There is no Chromium binary in
+this image, so `https://` pages still fail honestly at the broker, and no TLS
+stack was added to fake one. Only loopback HTTP is fetchable; a private or public
+address is still refused by policy. Redirects are not followed (a 3xx is reported
+as "the server answered 3xx"), and chunked or compressed responses are refused by
+name rather than half-read. There are no cookies, no scripts and no forms. A
+served page's pictures are decoded only when they are baseline JPEG, which is the
+decoder the product ships.
+
+**App loading remains unimplemented.** The launcher lists eight built-in
+applications; there is no `.desktop` parser, app catalog, install path or
+arbitrary program launch, and this batch does not claim one. The images produced
+for this turn are headless frames of the real draw path, saved under the
+untracked `artifacts/` directory, not a photograph of a monitor: this host has no
+display and no QEMU.

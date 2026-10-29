@@ -24,6 +24,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use litric_browser::html::{self, Block};
+use litric_browser::url::{Scheme, Url};
 use litric_design::TypeStep;
 
 use crate::font::Style;
@@ -65,7 +66,7 @@ enum LaidKind {
         heading: bool,
     },
     Image {
-        path: PathBuf,
+        source: ImageSource,
         alt: String,
         w: f32,
         h: f32,
@@ -73,12 +74,74 @@ enum LaidKind {
     Rule,
 }
 
+/// Where a page's pictures live.
+#[derive(Debug, Clone)]
+enum Base {
+    /// A page read from a file: pictures are files beside it.
+    Directory(PathBuf),
+    /// A page served over HTTP: pictures are fetched from the same server.
+    Page(Url),
+}
+
+impl Base {
+    /// Resolve one `<img src>` from the page into something decodable.
+    fn image(&self, source: &str) -> ImageSource {
+        let source = source.trim();
+        if source.is_empty() {
+            return ImageSource::Unavailable;
+        }
+        match self {
+            Self::Directory(dir) => {
+                ImageSource::File(dir.join(source.trim_start_matches('/').replace("//", "/")))
+            }
+            Self::Page(page) => match page.join(source) {
+                Some(url)
+                    if url.scheme == Scheme::Http
+                        && litric_browser::http::is_loopback_host(&url.host) =>
+                {
+                    ImageSource::Url(url)
+                }
+                // A picture on another machine, or over TLS, needs the engine
+                // this image does not have: the placeholder says so, and no
+                // request leaves this machine.
+                _ => ImageSource::Unavailable,
+            },
+        }
+    }
+}
+
+/// Where one picture in a page comes from.
+#[derive(Debug, Clone)]
+enum ImageSource {
+    File(PathBuf),
+    Url(Url),
+    Unavailable,
+}
+
+/// Whether the reader, not the engine, opens `url`.
+///
+/// Two kinds of address are its own: a file on this machine, and a page served
+/// by a web server on this machine. Everything else is the engine's business,
+/// and the engine says honestly when it is not there.
+#[must_use]
+pub fn serves(url: &str) -> bool {
+    if url.starts_with("file://") {
+        return true;
+    }
+    match Url::parse(url) {
+        Ok(parsed) => {
+            parsed.scheme == Scheme::Http && litric_browser::http::is_loopback_host(&parsed.host)
+        }
+        Err(_) => false,
+    }
+}
+
 /// A page open in the window.
 #[derive(Debug)]
 pub struct Reader {
     url: String,
     title: String,
-    directory: PathBuf,
+    base: Base,
     source: Vec<Block>,
     laid: Vec<Laid>,
     layout_width: f32,
@@ -91,40 +154,65 @@ pub struct Reader {
 }
 
 impl Reader {
-    /// Open the page at `url`. Only `file://` addresses are read here; anything
-    /// else is the engine's business and is refused with a plain sentence.
+    /// Whether the reader, not the engine, opens `url`.
+    #[must_use]
+    pub fn serves(url: &str) -> bool {
+        serves(url)
+    }
+
+    /// Open the page at `url`.
+    ///
+    /// A `file://` page is read from disk. A page served by a web server on
+    /// this machine is fetched over a real loopback socket, bounded by the HTTP
+    /// reader. Anything else is the engine's business and is refused here.
     ///
     /// # Errors
-    /// A sentence for the window when the file is missing, unreadable or over
-    /// the document limit.
+    /// A sentence for the window when the page is missing, unreadable, over the
+    /// document limit or not served correctly.
     pub fn open(url: &str) -> Result<Self, String> {
-        let Some(rest) = url.strip_prefix("file://") else {
-            return Err("this page is not a local file".to_owned());
+        let (bytes, base, fallback_title) = if let Some(rest) = url.strip_prefix("file://") {
+            let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+            let decoded = percent_decode(rest);
+            let path = PathBuf::from(decoded);
+            let meta =
+                std::fs::metadata(&path).map_err(|_| "the file could not be read".to_owned())?;
+            if !meta.is_file() || meta.len() > html::MAX_DOCUMENT_BYTES as u64 {
+                return Err("the page is too large to open".to_owned());
+            }
+            let bytes =
+                std::fs::read(&path).map_err(|_| "the file could not be read".to_owned())?;
+            let directory = path
+                .parent()
+                .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
+            let fallback = path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned());
+            (bytes, Base::Directory(directory), fallback)
+        } else {
+            let parsed =
+                Url::parse(url).map_err(|_| "this page is not on this machine".to_owned())?;
+            if parsed.scheme != Scheme::Http
+                || !litric_browser::http::is_loopback_host(&parsed.host)
+            {
+                return Err("this page is not on this machine".to_owned());
+            }
+            let response = litric_browser::http::get(&parsed)?;
+            if !(200..300).contains(&response.status) {
+                return Err(format!("the server answered {}", response.status));
+            }
+            let fallback = path_title(&parsed);
+            (response.body, Base::Page(parsed), Some(fallback))
         };
-        let rest = rest.split(['?', '#']).next().unwrap_or(rest);
-        let decoded = percent_decode(rest);
-        let path = PathBuf::from(decoded);
-        let meta = std::fs::metadata(&path).map_err(|_| "the file could not be read".to_owned())?;
-        if !meta.is_file() || meta.len() > html::MAX_DOCUMENT_BYTES as u64 {
-            return Err("the page is too large to open".to_owned());
-        }
-        let bytes = std::fs::read(&path).map_err(|_| "the file could not be read".to_owned())?;
         let document = html::parse(&bytes);
-        let directory = path
-            .parent()
-            .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
         let title = document
             .title
-            .or_else(|| {
-                path.file_stem()
-                    .map(|stem| stem.to_string_lossy().into_owned())
-            })
+            .or(fallback_title)
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| "Page".to_owned());
         Ok(Self {
             url: url.to_owned(),
             title,
-            directory,
+            base,
             source: document.blocks,
             laid: Vec::new(),
             layout_width: 0.0,
@@ -278,14 +366,12 @@ impl Reader {
                         _ => 0.66,
                     };
                     let h = (width * aspect).clamp(0.1, 2_000.0);
-                    let path = self
-                        .directory
-                        .join(source.trim_start_matches('/').replace("//", "/"));
+                    let source = self.base.image(source);
                     laid.push(Laid {
                         y,
                         h,
                         kind: LaidKind::Image {
-                            path,
+                            source,
                             alt: alt.clone(),
                             w: width,
                             h,
@@ -328,20 +414,20 @@ impl Reader {
         // Decode at most the frame's budget, and only pictures that are on
         // screen. This vector stays empty on every frame where nothing new
         // appears, so the steady path allocates nothing.
-        let mut pending: Vec<(usize, PathBuf)> = Vec::new();
+        let mut pending: Vec<(usize, ImageSource)> = Vec::new();
         for (index, laid) in self.laid.iter().enumerate() {
             let top = page.y + laid.y - self.scroll;
             if top + laid.h < page.y || top > page.bottom() {
                 continue;
             }
-            if let LaidKind::Image { path, .. } = &laid.kind {
+            if let LaidKind::Image { source, .. } = &laid.kind {
                 if !self.images.contains_key(&index) && pending.len() < MAX_DECODES_PER_FRAME {
-                    pending.push((index, path.clone()));
+                    pending.push((index, source.clone()));
                 }
             }
         }
-        for (index, path) in pending {
-            self.decode(index, &path);
+        for (index, source) in pending {
+            self.decode(index, &source);
         }
 
         for (index, laid) in self.laid.iter().enumerate() {
@@ -410,15 +496,37 @@ impl Reader {
     }
 
     /// Decode one picture into the bounded cache, evicting the oldest.
-    fn decode(&mut self, index: usize, path: &Path) {
-        let Ok(meta) = std::fs::metadata(path) else {
-            return;
-        };
-        if !meta.is_file() || meta.len() > MAX_IMAGE_BYTES {
-            return;
-        }
-        let Ok(bytes) = std::fs::read(path) else {
-            return;
+    fn decode(&mut self, index: usize, source: &ImageSource) {
+        let bytes = match source {
+            ImageSource::File(path) => {
+                let Ok(meta) = std::fs::metadata(path) else {
+                    return;
+                };
+                if !meta.is_file() || meta.len() > MAX_IMAGE_BYTES {
+                    return;
+                }
+                let Ok(bytes) = std::fs::read(path) else {
+                    return;
+                };
+                bytes
+            }
+            ImageSource::Url(url) => {
+                match litric_browser::http::get_with_limit(url, MAX_IMAGE_BYTES as usize) {
+                    Ok(response)
+                        if response.status == 200
+                            && response
+                                .content_type
+                                .as_deref()
+                                .is_some_and(|kind| kind.starts_with("image/jpeg")) =>
+                    {
+                        response.body
+                    }
+                    // Not a JPEG, not a success, or not reachable: the
+                    // placeholder stays, and the page keeps its layout.
+                    _ => return,
+                }
+            }
+            ImageSource::Unavailable => return,
         };
         let Ok(image) = litric_browser::jpeg::decode(&bytes) else {
             return;
@@ -448,6 +556,16 @@ impl Reader {
 /// Wrap `text` in `style` to `width`, returning at most `max_lines` lines.
 fn wrap_at(text: &str, style: &Style, width: f32, max_lines: usize) -> Vec<String> {
     crate::ui::wrap(text, style, width, max_lines)
+}
+
+/// A page served without a `<title>` takes the name of its last path segment.
+fn path_title(url: &Url) -> String {
+    let path = url.path.trim_end_matches('/');
+    let last = path
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(&url.host);
+    percent_decode(last)
 }
 
 /// Decode `%20`-style escapes in a file URL's path.
@@ -492,7 +610,45 @@ mod tests {
         let err = Reader::open("file:///nonexistent/litric-page.html").expect_err("missing");
         assert_eq!(err, "the file could not be read");
         let err = Reader::open("https://example.com/").expect_err("remote");
-        assert_eq!(err, "this page is not a local file");
+        assert_eq!(err, "this page is not on this machine");
+        let err = Reader::open("http://example.com/").expect_err("remote http");
+        assert_eq!(err, "this page is not on this machine");
+    }
+
+    #[test]
+    fn the_reader_serves_this_machines_files_and_web_server_only() {
+        assert!(Reader::serves("file:///tmp/page.html"));
+        assert!(Reader::serves("http://127.0.0.1:8080/"));
+        assert!(Reader::serves("http://localhost:3000/app"));
+        assert!(Reader::serves("http://[::1]:9000/"));
+        assert!(!Reader::serves("http://example.com/"));
+        assert!(!Reader::serves("https://127.0.0.1/"));
+        assert!(!Reader::serves("http://localhost.example.com/"));
+        assert!(!Reader::serves("litric://about"));
+    }
+
+    #[test]
+    fn a_page_reference_resolves_only_to_this_machines_server() {
+        let page = Url::parse("http://127.0.0.1:8080/apps/reader/index.html").expect("a page");
+        let base = Base::Page(page);
+        match base.image("panel.jpg") {
+            ImageSource::Url(url) => {
+                assert_eq!(url.to_url(), "http://127.0.0.1:8080/apps/reader/panel.jpg");
+            }
+            other => panic!("expected a fetched picture, got {other:?}"),
+        }
+        match base.image("/art/two.jpg") {
+            ImageSource::Url(url) => {
+                assert_eq!(url.to_url(), "http://127.0.0.1:8080/art/two.jpg");
+            }
+            other => panic!("expected a root-relative picture, got {other:?}"),
+        }
+        assert!(matches!(
+            base.image("https://example.com/x.jpg"),
+            ImageSource::Unavailable
+        ));
+        let file = Base::Directory(PathBuf::from("/tmp/page"));
+        assert!(matches!(file.image("a.jpg"), ImageSource::File(_)));
     }
 
     #[test]

@@ -4499,3 +4499,238 @@ fn journey_do_not_disturb_persists_silences_the_banner_and_survives_a_restart() 
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Write a frame as a binary PPM when `LITRIC_E2E_SHOTS` names a directory.
+///
+/// A reviewer can then look at the frame the journey actually produced. With
+/// the variable unset this does nothing, so the journey's result never depends
+/// on it.
+fn save_shot(canvas: &Canvas, name: &str) {
+    let Some(dir) = std::env::var_os("LITRIC_E2E_SHOTS") else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let (w, h) = (canvas.width(), canvas.height());
+    let capacity = (w as usize)
+        .saturating_mul(h as usize)
+        .saturating_mul(3)
+        .saturating_add(16);
+    let mut out = Vec::with_capacity(capacity);
+    out.extend_from_slice(format!("P6\n{w} {h}\n255\n").as_bytes());
+    for y in 0..h as i64 {
+        for x in 0..w as i64 {
+            let px = canvas.get(x, y).unwrap_or(0);
+            out.push((px >> 16) as u8);
+            out.push((px >> 8) as u8);
+            out.push(px as u8);
+        }
+    }
+    let _ = std::fs::write(dir.join(format!("{name}.ppm")), out);
+}
+
+/// One page served by a real web server on this machine, loaded through the
+/// window, then a server that is not there.
+///
+/// The server is a real `TcpListener` on loopback: the reader connects, sends
+/// `GET`, and gets its bytes back. The picture arrives over the same socket as
+/// the page, so a passing journey proves the fetch, the parse, the decode and
+/// the draw, not a fixture the test pre-parsed.
+#[test]
+fn journey_browser_loads_a_page_from_a_local_web_server_and_reports_a_failed_fetch() {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    let jpeg = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../litric-browser/testdata/jpeg/s420-q75.jpg"
+    ))
+    .expect("the decoder's test picture");
+    let html = b"<!doctype html><html><head><title>Local Web App</title></head><body>\
+                 <h1>Served over HTTP</h1>\
+                 <p>A page fetched from a real server on this machine, not read from a file.</p>\
+                 <img src=\"panel.jpg\" alt=\"Panel\" width=\"900\" height=\"600\">\
+                 <h1>Below the fold</h1>\
+                 <p>The second heading arrives when the page is scrolled.</p>\
+                 </body></html>"
+        .to_vec();
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a loopback server");
+    let port = listener.local_addr().expect("an address").port();
+    listener.set_nonblocking(true).expect("nonblocking");
+    let stop = Arc::new(AtomicBool::new(false));
+    let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+    let stop_flag = Arc::clone(&stop);
+    let seen = Arc::clone(&requests);
+    let page = html;
+    let picture = jpeg;
+    std::thread::spawn(move || {
+        while !stop_flag.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buf = [0u8; 4096];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let line = String::from_utf8_lossy(buf.get(..n).unwrap_or(&[]))
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
+                    if let Ok(mut list) = seen.lock() {
+                        list.push(line.clone());
+                    }
+                    let (status, kind, body): (&str, &str, &[u8]) =
+                        if line.starts_with("GET /panel.jpg ") {
+                            ("200 OK", "image/jpeg", picture.as_slice())
+                        } else if line.starts_with("GET / ") {
+                            ("200 OK", "text/html; charset=utf-8", page.as_slice())
+                        } else {
+                            ("404 Not Found", "text/plain", b"not found".as_slice())
+                        };
+                    let head = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(body);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let url = format!("http://127.0.0.1:{port}/");
+    let mut s = shell();
+    s.open_app(App::Browser);
+    let _ = draw_frame(&mut s);
+    let field = s
+        .hotspots()
+        .rect_of(Hot::BrowserOmnibox)
+        .expect("the start page draws its search box");
+    click(&mut s, field.center().0, field.center().1);
+    type_text(&mut s, &url);
+    key_press(&mut s, Key::Enter, Modifiers::NONE);
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "51-local-web-page");
+
+    assert!(
+        s.reader.is_some(),
+        "the served page loaded; the status line says: {}",
+        s.browser.status
+    );
+    assert_eq!(s.browser.status, "Opened Local Web App");
+    assert_eq!(
+        s.browser.tab().map(|t| t.title.clone()),
+        Some("Local Web App".to_owned()),
+        "the tab takes the served page's own title"
+    );
+    let area = s
+        .browser_engine_area
+        .expect("the page surface is on screen");
+    let reference = canvas
+        .get((area.right() - 6.0) as i64, (area.bottom() - 6.0) as i64)
+        .expect("a background pixel");
+    let heading = Rect::new(area.x + 24.0, area.y + 16.0, 300.0, 44.0);
+    let (text_px, text_total) = differing_pixels(&canvas, heading, reference);
+    assert!(
+        text_total > 40 && text_px > 30,
+        "the fetched heading is drawn: {text_px}/{text_total}"
+    );
+
+    let reader = s.reader.as_ref().expect("the reader");
+    assert!(
+        reader
+            .visible_text(area.h)
+            .iter()
+            .any(|line| line.contains("Served over HTTP")),
+        "the served page's text is on screen"
+    );
+    assert_eq!(
+        reader.cached_images(),
+        1,
+        "the picture was fetched over the socket and decoded"
+    );
+    let panel = reader.image_area(0).expect("the panel is laid out");
+    let panel = Rect::new(area.x + panel.x, area.y + panel.y, panel.w, panel.h);
+    let (pixels, total) = differing_pixels(&canvas, panel, reference);
+    assert!(
+        total > 100 && pixels * 10 >= total,
+        "the fetched picture reached the frame: {pixels}/{total}"
+    );
+    let seen = requests.lock().map(|list| list.clone()).unwrap_or_default();
+    assert!(
+        seen.iter().any(|line| line == "GET / HTTP/1.1"),
+        "the page was requested: {seen:?}"
+    );
+    assert!(
+        seen.iter().any(|line| line == "GET /panel.jpg HTTP/1.1"),
+        "the picture was requested: {seen:?}"
+    );
+
+    // The wheel scrolls the fetched page exactly like a file page.
+    let at = Point::new(area.center().0, area.center().1);
+    let _ = s.handle(
+        &InputEvent::Scroll {
+            dx: 0.0,
+            dy: 10.0,
+            at,
+            mods: Modifiers::NONE,
+        },
+        2_000,
+    );
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "51-local-web-page-scrolled");
+    let reader = s.reader.as_ref().expect("the reader");
+    assert!(
+        reader
+            .visible_text(area.h)
+            .iter()
+            .any(|line| line.contains("Below the fold")),
+        "the second heading is on screen after the wheel: scroll={} content={}",
+        reader.scroll(),
+        reader.content_height()
+    );
+
+    // A server that is not there: the window says so and keeps no page.
+    let dead_port = {
+        let probe = TcpListener::bind(("127.0.0.1", 0)).expect("a port");
+        probe.local_addr().expect("an address").port()
+    };
+    let mut failed = shell();
+    failed.open_app(App::Browser);
+    let _ = draw_frame(&mut failed);
+    let field = failed
+        .hotspots()
+        .rect_of(Hot::BrowserOmnibox)
+        .expect("the start page draws its search box");
+    click(&mut failed, field.center().0, field.center().1);
+    type_text(&mut failed, &format!("http://127.0.0.1:{dead_port}/"));
+    key_press(&mut failed, Key::Enter, Modifiers::NONE);
+    let canvas = draw_frame(&mut failed);
+    save_shot(&canvas, "51-local-web-page-unreachable");
+    assert!(
+        failed.reader.is_none(),
+        "a failed fetch must not leave a page on screen"
+    );
+    assert_eq!(failed.browser.status, "Could not open this page");
+    assert!(
+        failed.browser.tab().is_some_and(|tab| tab.error),
+        "the tab reports the failure rather than looking loaded"
+    );
+    assert!(
+        ink(&canvas, Rect::new(0.0, 0.0, 1280.0, 28.0)) > 0,
+        "the shell still drew"
+    );
+
+    // Leaving this machine still needs the engine; the reader must not become
+    // a second, unchecked network path.
+    assert!(!crate::reader::serves("http://example.com/"));
+    assert!(!crate::reader::serves("https://127.0.0.1/"));
+    stop.store(true, Ordering::Relaxed);
+}

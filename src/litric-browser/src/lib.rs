@@ -42,6 +42,7 @@
 pub mod base64;
 pub mod engine;
 pub mod html;
+pub mod http;
 pub mod jpeg;
 pub mod json;
 pub mod policy;

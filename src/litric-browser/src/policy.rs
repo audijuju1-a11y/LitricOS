@@ -299,7 +299,14 @@ impl Policy {
                 host: url.host.clone(),
             });
         }
-        if self.privacy.https_only && url.scheme == Scheme::Http {
+        // Plain HTTP to a server on this machine is allowed: the traffic never
+        // reaches a network, and the W3C's secure-contexts rule treats loopback
+        // as trustworthy for the same reason. Every other plain-HTTP address is
+        // still refused, and https is still the only way off this machine.
+        if self.privacy.https_only
+            && url.scheme == Scheme::Http
+            && !crate::http::is_loopback_host(&url.host)
+        {
             let mut upgraded = url.clone();
             upgraded.scheme = Scheme::Https;
             // The default port for the old scheme must not be carried over, or
@@ -626,5 +633,36 @@ mod tests {
             lines.contains(&"browser.tracker_hosts=2".to_owned()),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn a_server_on_this_machine_may_use_plain_http_and_nothing_else_may() {
+        let p = policy();
+        for local in [
+            "http://127.0.0.1:8080/",
+            "http://localhost:3000/app",
+            "http://[::1]:9000/",
+        ] {
+            assert!(
+                p.check_navigation(&url(local)).is_ok(),
+                "{local} should be allowed"
+            );
+        }
+        for remote in ["http://example.com/", "http://10.0.0.5/"] {
+            assert!(
+                matches!(
+                    p.check_navigation(&url(remote)),
+                    Err(Refusal::InsecureBlocked { .. })
+                ),
+                "{remote} must stay refused"
+            );
+        }
+        // The upgrade offer is unchanged for the addresses that are refused.
+        let Err(Refusal::InsecureBlocked { upgrade_to }) =
+            p.check_navigation(&url("http://example.com/a"))
+        else {
+            panic!("expected an upgrade offer");
+        };
+        assert_eq!(upgrade_to, "https://example.com/a");
     }
 }

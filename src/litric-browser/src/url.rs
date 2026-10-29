@@ -289,6 +289,51 @@ impl Url {
         s
     }
 
+    /// Resolve a reference written by a page against this address.
+    ///
+    /// Handles the four forms a page actually uses for a picture: an absolute
+    /// address, a scheme-relative one, a path from the root, and a path
+    /// relative to the page. A reference that cannot be resolved is `None`, and
+    /// the reader draws its placeholder instead of guessing at a file path.
+    #[must_use]
+    pub fn join(&self, reference: &str) -> Option<Self> {
+        let reference = reference.trim();
+        if reference.is_empty() {
+            return None;
+        }
+        if reference.starts_with("//") {
+            return Self::parse(&format!("{}:{reference}", self.scheme.name())).ok();
+        }
+        if reference.contains("://") {
+            return Self::parse(reference).ok();
+        }
+        let (rest, fragment) = match reference.split_once('#') {
+            Some((head, tail)) => (head, Some(tail.to_owned())),
+            None => (reference, None),
+        };
+        let (path_text, query) = match rest.split_once('?') {
+            Some((head, tail)) => (head, Some(tail.to_owned())),
+            None => (rest, None),
+        };
+        let mut joined = self.clone();
+        if path_text.is_empty() {
+            if query.is_some() {
+                joined.query = query;
+            }
+        } else {
+            let path = if path_text.starts_with('/') {
+                path_text.to_owned()
+            } else {
+                let dir = self.path.rsplit_once('/').map_or("/", |(head, _)| head);
+                format!("{dir}/{path_text}")
+            };
+            joined.path = normalize_path(&path);
+            joined.query = query;
+        }
+        joined.fragment = fragment;
+        Some(joined)
+    }
+
     /// What the address bar should show.
     ///
     /// The host, emphasised, with the scheme dropped when it is `https` —
@@ -326,6 +371,26 @@ impl fmt::Display for Url {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.to_url())
     }
+}
+
+/// Collapse `.` and `..` segments in a path, keeping a leading and trailing `/`.
+fn normalize_path(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    let mut out = String::from("/");
+    out.push_str(&parts.join("/"));
+    if path.ends_with('/') && !out.ends_with('/') {
+        out.push('/');
+    }
+    out
 }
 
 fn validate_host(host: &str) -> Result<(), UrlError> {

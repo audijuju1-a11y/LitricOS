@@ -1974,7 +1974,7 @@ impl Shell {
         // A page stored on this machine is read here: there is no request to
         // send and no engine to start. The reader is the product's own path for
         // `file://`, not a stand-in for the web engine.
-        if url.starts_with("file://") {
+        if crate::reader::serves(url) {
             self.open_local_page(url);
             return;
         }
@@ -2017,9 +2017,12 @@ impl Shell {
                 self.browser.status = format!("Opened {title}");
                 self.reader = Some(reader);
             }
-            Err(_) => {
+            Err(error) => {
                 self.reader = None;
                 self.browser.status = "Could not open this page".to_owned();
+                // The reason belongs in the journal, not in the page: a person
+                // needs to know it did not open, an engineer needs the why.
+                eprintln!("litric-shell: browser: {url}: {error}");
                 let active = self.browser.active;
                 if let Some(tab) = self.browser.tabs.get_mut(active) {
                     tab.error = true;
@@ -2050,7 +2053,7 @@ impl Shell {
 
     /// Navigate to a URL: start the engine session if needed, then GO.
     pub fn browser_navigate(&mut self, url: &str) {
-        if url.starts_with("file://") {
+        if crate::reader::serves(url) {
             self.send_go(url);
             self.request_full_redraw();
             return;
