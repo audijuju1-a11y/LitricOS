@@ -777,6 +777,44 @@ mod tests {
     }
 
     #[test]
+    fn a_parsed_request_never_renders_the_credential_it_carries() {
+        // The line a client sends, with "Home" and "correct horse" in hex. A
+        // `{:?}` of the request is how a log line is added by reflex; it must
+        // not be the way a passphrase ends up in the journal.
+        let request =
+            Request::parse("NET WIFI JOIN 486f6d65 636f727265637420686f727365").expect("a join");
+        let rendered = format!("{request:?}");
+        assert!(
+            !rendered.contains("correct horse"),
+            "Debug leaked the passphrase: {rendered}"
+        );
+        assert!(
+            !rendered.contains("636f727265637420686f727365"),
+            "Debug leaked the hex encoding: {rendered}"
+        );
+        assert!(
+            rendered.contains("Home"),
+            "the network name is not a secret and stays readable: {rendered}"
+        );
+
+        let verify =
+            Request::parse("AUTH VERIFY alice 77726f6e67 CONFIRM").expect("a verification");
+        let rendered = format!("{verify:?}");
+        assert!(
+            !rendered.contains("wrong"),
+            "Debug leaked the password: {rendered}"
+        );
+        assert!(
+            !rendered.contains("77726f6e67"),
+            "Debug leaked the hex encoding: {rendered}"
+        );
+        assert!(
+            rendered.contains("alice"),
+            "the user name is not a secret and stays readable: {rendered}"
+        );
+    }
+
+    #[test]
     fn a_verification_carries_its_confirmation_or_it_does_not_carry_one() {
         match Request::parse("AUTH VERIFY alice 77726f6e67 CONFIRM") {
             Ok(Request::Action {

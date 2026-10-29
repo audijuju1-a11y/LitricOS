@@ -287,7 +287,7 @@ impl AudioAction {
 }
 
 /// A network change.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum NetAction {
     /// Bring an interface administratively up or down.
     SetLink {
@@ -406,7 +406,7 @@ impl BtAction {
 }
 
 /// An authentication action.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum AuthAction {
     /// Verify a password for an account, through the distribution's helper.
     Verify {
@@ -507,12 +507,96 @@ impl SystemAction {
 // the plan
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// redaction
+// ---------------------------------------------------------------------------
+
+/// The text a secret is replaced with. One spelling, so a test can search for it.
+const REDACTED: &str = "<redacted>";
+
+impl fmt::Debug for NetAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SetLink { iface, up } => f
+                .debug_struct("SetLink")
+                .field("iface", iface)
+                .field("up", up)
+                .finish(),
+            Self::Reconfigure(iface) => f.debug_tuple("Reconfigure").field(iface).finish(),
+            // A passphrase is never rendered, not even by a `{:?}` somebody adds
+            // later for a diagnosis. The field stays visible so a reader can see
+            // that one exists and was removed.
+            Self::JoinWifi { ssid, .. } => f
+                .debug_struct("JoinWifi")
+                .field("ssid", ssid)
+                .field("passphrase", &REDACTED)
+                .finish(),
+            Self::ForgetWifi(ssid) => f.debug_tuple("ForgetWifi").field(ssid).finish(),
+        }
+    }
+}
+
+impl fmt::Debug for AuthAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Verify { user, .. } => f
+                .debug_struct("Verify")
+                .field("user", user)
+                .field("password", &REDACTED)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Debug for FileChange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Write {
+                path,
+                contents,
+                private,
+            } => {
+                // Only a file the plan itself marked private is redacted: a
+                // networkd drop-in is not a secret, and hiding it would make the
+                // Debug output less useful than the write it describes.
+                let shown = if *private {
+                    REDACTED
+                } else {
+                    contents.as_str()
+                };
+                f.debug_struct("Write")
+                    .field("path", path)
+                    .field("contents", &shown)
+                    .field("private", private)
+                    .finish()
+            }
+            Self::Remove { path } => f.debug_struct("Remove").field("path", path).finish(),
+        }
+    }
+}
+
+impl fmt::Debug for Plan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `stdin` carries a password and the files may carry a passphrase; both
+        // are reported as present, never as content.
+        let stdin = self.stdin.as_ref().map(|_| REDACTED);
+        f.debug_struct("Plan")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("stdin", &stdin)
+            .field("files", &self.files)
+            .field("notes", &self.notes)
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
+}
+
 /// A file an action changes.
 ///
 /// Described rather than done, so that a test can assert the exact contents and
 /// the exact mode without a filesystem, and so that the whole set can be applied
 /// in one place with one error path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum FileChange {
     /// Create or replace a file.
     Write {
@@ -535,7 +619,7 @@ pub enum FileChange {
 }
 
 /// What an action will do, decided before it does anything.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Plan {
     /// The absolute path of the program to run.
     pub program: &'static str,
@@ -1241,6 +1325,70 @@ mod tests {
         assert_eq!(parse_bt_powered("Powered: maybe\n"), None);
         assert_eq!(parse_bt_powered("Powered:\n"), None);
         assert_eq!(parse_bt_powered("Discoverable: no\n"), None);
+    }
+
+    const SENTINEL: &str = "S3NT1NEL-passphrase-not-in-logs";
+
+    #[test]
+    fn a_secret_never_appears_in_a_debug_rendering() {
+        let action = NetAction::JoinWifi {
+            ssid: "litric-test".to_owned(),
+            passphrase: SENTINEL.to_owned(),
+        };
+        let rendered = format!("{action:?}");
+        assert!(
+            !rendered.contains(SENTINEL),
+            "network Debug leaked the passphrase: {rendered}"
+        );
+
+        let auth = AuthAction::Verify {
+            user: "alice".to_owned(),
+            password: SENTINEL.to_owned(),
+        };
+        let rendered = format!("{auth:?}");
+        assert!(
+            !rendered.contains(SENTINEL),
+            "auth Debug leaked the password: {rendered}"
+        );
+
+        let root = Path::new("/tmp/litric-provider-redaction");
+        let plan = SystemAction::Net(action.clone())
+            .plan(root)
+            .expect("a valid plan");
+        for rendered in [
+            format!("{plan:?}"),
+            format!("{:?}", SystemAction::Net(action)),
+            plan.command_line(),
+        ] {
+            assert!(
+                !rendered.contains(SENTINEL),
+                "a rendering leaked the passphrase: {rendered}"
+            );
+        }
+
+        // Redaction must not mean refusal: the credential is still written, and
+        // the private flag is still set. Hiding the secret from a log is the bug
+        // fix; hiding it from the file would be a different, worse bug.
+        let mut wrote = false;
+        for change in &plan.files {
+            if let FileChange::Write {
+                contents, private, ..
+            } = change
+            {
+                assert!(*private, "a credential file must be private");
+                assert!(
+                    contents.contains(SENTINEL),
+                    "the credential must still reach the file"
+                );
+                let rendered = format!("{change:?}");
+                assert!(
+                    !rendered.contains(SENTINEL),
+                    "FileChange Debug leaked the passphrase: {rendered}"
+                );
+                wrote = true;
+            }
+        }
+        assert!(wrote, "the join plan must write a credential file");
     }
 
     #[test]

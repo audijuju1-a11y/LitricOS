@@ -6265,3 +6265,194 @@ and mkosi/QEMU are not installed. No gate, golden frame or key file was edited.
 
 Base `51cc57e`. The batch is committed on `main` and pushed; `HEAD ==
 origin/main` and the tracked worktree is empty at the end of the turn.
+
+## 65. Batch: a sentinel password never reaches a log rendering (verified)
+
+### 65.1 Requirement
+
+The improvement plan names this batch and what proves it
+(`docs/master-plan/28-whole-system-improvement-plan.md`, batch 65):
+
+> Provider contract layer with a fake; sentinel password never logged |
+> contract tests, redaction test
+
+The execution plan says why it comes before the integration
+(`docs/master-plan/26-execution-plan.md`, W7):
+
+> Writing provider code before it is [designed] is how an unredacted passphrase
+> ends up in a log.
+
+and the gate matrix asks the same of the network slice
+(`docs/master-plan/25-beta-1.0-gate-matrix.md`):
+
+> credential redaction proven with a sentinel password
+
+### 65.2 Audit, before the change
+
+Four types in `src/litric-sysd/src/providers.rs` carried a **derived** `Debug`:
+
+| Type | The field the derive printed |
+| --- | --- |
+| `NetAction::JoinWifi` | `passphrase` — the Wi-Fi passphrase, in cleartext |
+| `AuthAction::Verify` | `password` — the account password, in cleartext |
+| `FileChange::Write` | `contents` — which for a join is `[Security]\nPassphrase=…` |
+| `Plan` | `stdin` — the account password, and the same file list |
+
+`Request` derives `Debug` too and holds a `SystemAction`, so one `{:?}` of any
+request printed all of it. That is one format string away from a journal line, a
+panic message, or a bug report somebody attaches.
+
+Measured on this host before the fix — `grep -rn '{:?}' src/litric-sysd/src/*.rs`
+matched only assertion messages in `#[cfg(test)]` code, so **no shipping line
+rendered an action today**. The defect was latent, not active, and this entry
+does not claim a leak that happened. What was true is that the type system
+offered the secret to every future log line, and nothing said no.
+
+The reply path was already secret-free and stays so: `describe` builds
+`command=` from `Plan::command_line`, the passphrase goes to a credential file,
+the password to standard input, and `proto.rs` refuses a field that is not hex
+with `<not hex>` instead of echoing it.
+
+### 65.3 What changed
+
+* A hand-written `Debug` for `NetAction`, `AuthAction`, `FileChange` and `Plan`.
+  The secret **key** stays in the rendering and the **value** becomes
+  `<redacted>`, so a reader can see that a secret existed and was removed rather
+  than that the field was forgotten.
+* `FileChange::Write` redacts only when the plan itself marked the file
+  `private`. A networkd drop-in is not a secret, and hiding it would make the
+  rendering less useful than the write it describes.
+* `Plan` renders `stdin` as present/absent, never as content.
+* No dependency, no `unsafe`, no new field, no allocation at rest.
+
+### 65.4 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `src/litric-sysd/src/providers.rs` | 515 | `REDACTED` — one spelling, so a test can search for it |
+| `src/litric-sysd/src/providers.rs` | 517 | `Debug for NetAction`: `ssid` visible, `passphrase` redacted |
+| `src/litric-sysd/src/providers.rs` | 539 | `Debug for AuthAction`: `user` visible, `password` redacted |
+| `src/litric-sysd/src/providers.rs` | 551 | `Debug for FileChange`: contents redacted only when `private` |
+| `src/litric-sysd/src/providers.rs` | 578 | `Debug for Plan`: `stdin` reported as present/absent |
+| `src/litric-sysd/src/providers.rs` | 657 | `command_line` — still the only builder of a reply's `command=` |
+| `src/litric-sysd/src/providers.rs` | 1333 | unit test: sentinel in every rendering, credential still written |
+| `src/litric-sysd/src/proto.rs` | 279 | a field that is not hex is refused, never echoed |
+| `src/litric-sysd/src/proto.rs` | 780 | unit test: `Debug` of a parsed `Request` carries no secret |
+| `src/litric-sysd/tests/wifi_secret.rs` | 149 | process test: real daemon, real socket, real credential file |
+| `src/litric-sysd/tests/wifi_secret.rs` | 205 | the daemon journal is searched, in text and in hex |
+| `src/litric-sysd/tests/wifi_secret.rs` | 217 | `CAPS AUDIT` over the same socket is searched the same way |
+| `ci/lint-file-safety.py` | 169 | the fixture's three deletion sites, registered with their reasons |
+
+### 65.5 Tests, at two levels
+
+* **Contract, with the fake.** `RecordingRunner` (the fake provider) plus
+  `a_secret_never_appears_in_a_debug_rendering`: a sentinel passphrase and a
+  sentinel password are put through `NetAction`, `AuthAction`, `SystemAction`,
+  `Plan`, `FileChange` and `command_line`, and every rendering is searched. The
+  same test asserts the *opposite* direction — the credential file still
+  contains the passphrase and is still marked `private` — because redaction is
+  about renderings, and a fix that also stopped storing the secret would be a
+  worse bug wearing the same name.
+* **Process, over the socket.** `wifi_secret.rs` spawns the real
+  `litric-sysd --serve`, sends `NET WIFI JOIN <hex ssid> <hex passphrase>`
+  through the real client, and asserts: the reply holds neither the passphrase
+  nor its hex; the credential file exists, contains the passphrase, and is mode
+  `0600`; the daemon's journal holds neither encoding; and `CAPS AUDIT` over the
+  same socket holds neither while still reporting `count=`.
+* The host has no `iwctl`, so the action fails after the file is written. That is
+  deliberate: the error path is where a secret usually escapes, and it is the
+  path a fake would have skipped.
+
+### 65.6 Sensitivity proof
+
+Restoring the old behaviour (`field("passphrase", passphrase)` instead of the
+redacted value) makes two tests fail with their real panic messages:
+
+```text
+thread 'providers::tests::a_secret_never_appears_in_a_debug_rendering' panicked at litric-sysd/src/providers.rs:1339:9:
+network Debug leaked the passphrase: JoinWifi { ssid: "litric-test", passphrase: "S3NT1NEL-passphrase-not-in-logs" }
+```
+
+```text
+thread 'proto::tests::a_parsed_request_never_renders_the_credential_it_carries' panicked at litric-sysd/src/proto.rs:787:9:
+Debug leaked the passphrase: Action { action: Net(JoinWifi { ssid: "Home", passphrase: "correct horse" }), consent: false }
+```
+
+The same forced bug left the **process test green** (1 passed), because the reply
+never renders a `Debug` — measured, not assumed. That is worth writing down: the
+socket test proves the wire and the file, and cannot catch this class on its own.
+The unit tests are the guard, and they are the ones that failed.
+
+Restored, all of them pass.
+
+### 65.7 Measured costs
+
+| Figure | Value |
+| --- | --- |
+| work added per frame | **0** — the paint path is untouched |
+| heap added at rest | **0 bytes** — one `&'static str`, no new field, no cache |
+| reply bytes changed | **0** — `command=` was already built from `command_line` |
+| one socket round trip, join (debug build, process start included) | **2,226 µs** |
+| one socket round trip, `CAPS AUDIT` | **3,893 µs** |
+| new dependencies | 0 |
+| `unsafe` | none; `forbid(unsafe_code)` untouched |
+
+The two numbers are wall clock for a whole `--query` process, printed by the test
+itself (`one query took N us`). They measure the path the test drives, not the
+redaction, which the shipping path never executes: a `Debug` that is not called
+costs nothing, and that is the point of putting the fix there.
+
+### 65.8 Gate
+
+```text
+$ cargo fmt --all --check
+exit 0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+exit 0
+
+$ cargo test --workspace
+1,837 passed; 0 failed   (was 1,834 before this batch; +3 tests)
+
+$ python3 ci/lint-doc-refs.py
+OK: 1,218 citation(s) across 156 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+OK: 116 deletion site(s), all inside reviewed functions
+
+$ bash ci/verify.sh
+summary: 32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the recorded baseline — `mkosi config uses only real
+sections and key placements` and `dev key pairs exist, parse, and match` — and
+the three skips are the image build, the boot smoke test and the idle
+measurement, all of which need mkosi/QEMU. No gate, golden frame or key file was
+edited.
+
+### 65.9 Limits, stated
+
+* **The secret is still stored in the clear.** `var/lib/iwd/<ssid>.psk` holds the
+  passphrase in iwd's own format, mode `0600`, because that is the file iwd reads.
+  This batch makes the secret harder to *print*, not harder to *read* by root or
+  by a same-uid process.
+* **The client still passes it in `argv`.** `litric-sysd --query "NET WIFI JOIN
+  …"` puts the hex passphrase on the command line of a short-lived process, where
+  `/proc` can see it. Moving the request to the socket the way the daemon's
+  protocol already allows is a separate change.
+* **Nothing zeroises memory.** The passphrase lives in `String`s until they are
+  dropped; zeroing would need `unsafe` or a crate, both excluded here.
+* **No real iwd/BlueZ integration.** The process test proves the failure path on a
+  host without `iwctl`; a join that actually connects is `INTEGRATION` evidence
+  and belongs to the builder, not to this entry.
+* **Wave 3 is still `PARTIAL`.** The gate-matrix row now says what is proven
+  (redaction with a sentinel over the real socket) and what is not (a real
+  provider, and the secret-agent design the wave is gated on).
+* **The journal check is a guard, not a demonstration.** This path prints nothing
+  today, so the assertion passes on an empty file; its value is that the first
+  future log line that renders an action fails the test.
+
+### 65.10 Git
+
+Base `369d78a`. The batch is committed on `main` and pushed; `HEAD ==
+origin/main` and the tracked worktree is empty at the end of the turn.
