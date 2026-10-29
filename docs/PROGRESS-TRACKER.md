@@ -5667,3 +5667,204 @@ The two frames the journey saved were opened:
 
 Commit `HEAD` and `origin/main` are the same commit; `git status
 --porcelain --untracked-files=no` is empty.
+
+## 62. Batch: a rewrite past the head window is caught by a bounded whole-file digest (verified)
+
+### 62.1 Requirement
+
+§61 closed with this blind spot, in its own words:
+
+> **Only the first 512 bytes are digested.** A rewrite that keeps the length and
+> the mtime and changes only bytes past that window is still invisible. Closing
+> that means hashing the whole file per check, which is the cost this budget
+> exists to avoid.
+
+This batch closes it for the files where hashing the whole file is affordable,
+bounds that cost with its own budget and ceiling, and proves the tile repaints.
+
+### 62.2 Audit, before the change
+
+Reproduced on this machine before any code was touched, with the fixture the new
+journey uses:
+
+| Property | Value |
+| --- | --- |
+| document length, before and after | **729 B → 729 B** (identical) |
+| first differing byte | **668** — past the 512-byte head window |
+| file mtime, before and after | identical (`touch -r` restored it, as `cp -p` does) |
+| directory mtime and entry count | unchanged |
+| head digest of the first 512 bytes | **identical** — the payload that differs is entirely outside it |
+| what the shell reported before this batch | nothing: `scan_files()` false, `scan_digests()` false, no repaint |
+
+Audited before designing:
+
+* `digests_of` did not exist; `head_digest` opened the file, read exactly
+  `DIGEST_BYTES` into a stack buffer and stopped, so no code path ever saw byte
+  512 of an icon.
+* `FileStamp` was `len`, `mtime` and `head`; `scan_files` compares the first two,
+  `scan_digests` the third, both round-robin over `IconNames::slots`.
+* Measured icon sizes on this host: 12 files under `/usr/share/icons` and
+  `/usr/share/pixmaps`, **all 12 at or under 64 KiB** (median 4 642 B, largest
+  18 168 B). So the ceiling chosen below covers the entire icon footprint of this
+  machine, which is what makes the exact path useful rather than theoretical.
+
+### 62.3 What the whole-file digest stands on
+
+The same FNV-1a, the same stack buffer, the same single open. `digests_of` reads
+in 4 KiB chunks and computes two hashes in that one pass:
+
+* the **head** digest over bytes `0..512`, exactly as §61 defined it, so the head
+  pass keeps its meaning and its cost;
+* the **whole-file** digest over every byte, but only when the length is at or
+  under `DIGEST_FULL_MAX = 64 KiB`. Above the ceiling the read stops at the head
+  window and `FileStamp::full` stays `None` — the honest "not covered" state.
+
+Two rules keep it from double-reporting, both inherited from §61's shape:
+
+* `full: None` is **recorded, never reported**. A name whose whole-file digest has
+  not been taken yet cannot invent a change, and `stamped_file` records the
+  baseline at resolve time, not on the first check.
+* `scan_files` (length, mtime) runs first; when it sees a move it sets **both**
+  digests to `None`, which hands the bytes to the digest passes and guarantees one
+  change is reported once.
+
+`scan_full_digests` walks `slots` with its **own cursor** and takes
+`FULL_DIGESTS_PER_SCAN = 4` per check — smaller than the head pass's 8, because
+each of these reads a whole file where a head digest reads 512 bytes. The shell
+treats its report exactly like the other three signals: drop the decoded copies,
+repaint, resolve nothing.
+
+### 62.4 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `src/litric-shell/src/desktop_entry.rs` | 369 | `DIGEST_FULL_MAX = 64 KiB` — the size at or under which the whole file is digested |
+| `src/litric-shell/src/desktop_entry.rs` | 376 | `FULL_DIGESTS_PER_SCAN = 4` — its own, smaller budget |
+| `src/litric-shell/src/desktop_entry.rs` | 450 | `FileStamp::full` — `None` means "not covered", never "changed" |
+| `src/litric-shell/src/desktop_entry.rs` | 462 | one open, one bounded read, head and whole-file digests together |
+| `src/litric-shell/src/desktop_entry.rs` | 513 | `DIGEST_READ = 4096` — the stack buffer, no allocation |
+| `src/litric-shell/src/desktop_entry.rs` | 520 | `head_digest` — the head-only view, reused through `digests_of` |
+| `src/litric-shell/src/desktop_entry.rs` | 526 | `file_stamp` — one `metadata`, both digests `None` |
+| `src/litric-shell/src/desktop_entry.rs` | 540 | `stamped_file` — the baseline is taken when the name answers |
+| `src/litric-shell/src/desktop_entry.rs` | 1029 | `scan_full_digests` — bounded round-robin whole-file pass |
+| `src/litric-shell/src/desktop_entry.rs` | 1086 | `full_digests()` — how much the pass actually did |
+| `src/litric-shell/src/desktop_entry.rs` | 1092 | `fulls_changed()` — how many checks it reported a covered rewrite |
+| `src/litric-shell/src/shell.rs` | 7324 | the whole-file pass, once per check |
+| `src/litric-shell/src/shell.rs` | 7364 | journal line carries the head **and** whole-file counts |
+| `src/litric-shell/src/e2e.rs` | 5998 | the e2e journey |
+| `src/litric-shell/src/e2e.rs` | 5983 | the two documents that differ only past byte 512 |
+| `src/litric-shell/src/desktop_entry.rs` | 3049 | unit: tail-only rewrite caught, stat and head blind |
+| `src/litric-shell/src/desktop_entry.rs` | 3154 | unit: over the ceiling stays head-only |
+| `src/litric-shell/src/desktop_entry.rs` | 3227 | unit: the budget bites, and the cost is measured |
+| `ci/lint-file-safety.py` | 125 | the new journey's fixture cleanup, registered with its reason |
+
+### 62.5 Tests that fail without it
+
+| Test | Asserts |
+| --- | --- |
+| `desktop_entry::tests::a_tail_only_rewrite_is_noticed_by_the_full_digest` | same length, mtime restored, first difference at byte 668 and the first 512 bytes equal; `scan_files()` **false**, `scan_digests()` **false**, `scan_full_digests()` **true**, `fulls_changed() == 1`, then false again |
+| `desktop_entry::tests::a_file_over_the_ceiling_stays_on_the_head_digest` | a 65 537-byte file: `head` is present, `full` is **absent**, and the whole-file budget is never spent on it |
+| `desktop_entry::tests::a_full_digest_pass_is_bounded_and_measured` | 24 names: one check takes exactly 4 whole-file digests, and both the pass and a 64 KiB read are timed |
+| `e2e::journey_launcher_picks_up_a_tail_only_rewrite` | real temp XDG tree, launcher running: `len_before == len_after`, `mtime_before == mtime_after`, `digests_changed() == 0`, `files_changed() == 0`, `fulls_changed() > 0`, `icons_resolved == 0`, and the tile's pixels become the new artwork |
+
+The §53/§54, §57/§58, §59, §60 and §61 tests pass unchanged.
+
+### 62.6 Sensitivity
+
+With the whole-file comparison forced to report "unchanged"
+(`if false && fresh != file.full`, the §61 behaviour), the new journey fails on
+its own assertion and says which path was blind:
+
+```
+thread 'e2e::journey_launcher_picks_up_a_tail_only_rewrite' (80180) panicked at litric-shell/src/e2e.rs:6098:5:
+a rewrite past the head window was not noticed in 8 watched checks (8 whole-file digests over 1 slots, first difference at byte 668)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 724 filtered out
+```
+
+Restored, the journey passes and the journal prints
+`icons true after 5 leaf scans of 5, 1 file re-stats of 1 and 1 head digests and 1 full digests`
+— the whole-file pass is what saw it.
+
+### 62.7 Cost, measured on this machine
+
+| Figure | Value | How |
+| --- | --- | --- |
+| one whole-file pass, 4 exact reads of 729 B | **95.3 µs per check** | printed by `a_full_digest_pass_is_bounded_and_measured` (debug test build, 200 passes averaged) |
+| one whole-file read at the 64 KiB ceiling | **930.7 µs** | same test, 50 reads averaged — the worst single read the exact path can take, in a debug build |
+| one head pass, 8 × 512 B reads | 74.3 µs | §61, same test shape |
+| one stat pass, 32 `metadata` calls | 94.4 µs | §61, same run |
+| a whole watched check now (stat + head + full) | **≈ 264 µs** | the three rows above, at those budgets |
+| memory | `FileStamp` **40 B**, up from 32 B → **+8 B per name**; 24 names hold **7 689 B**; `Cached` 104 B | `std::mem::size_of`, `IconNames::bytes()` |
+| work per frame | **none** | reached only from `refresh_desktop`, behind `DesktopWatch::due`; §55's "30 frames, no stat" and §56's "poll only at period" tests still pass |
+| ceilings | 64 KiB per file, 4 whole-file reads per check, 512 slots → a full exact cycle in 128 checks | `DIGEST_FULL_MAX`, `FULL_DIGESTS_PER_SCAN`, `MAX_ICON_NAMES` |
+
+The ceiling is 64 KiB because every icon on this machine is under it (largest
+18 168 B, median 4 642 B), so the exact path covers 100 percent of the real icon
+set here rather than a fraction of it. A multi-hundred-kilobyte raster would cost
+about 1 ms per read in a debug build, which is why it stays out.
+
+### 62.8 Gates
+
+```
+$ cargo fmt --all --check
+FMT_EXIT=0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.40s
+CLIPPY_EXIT=0
+
+$ cargo test --workspace
+run 1: 1814 passed, 0 failed
+run 2: 1814 passed, 0 failed
+run 3: 1814 passed, 0 failed
+
+$ python3 ci/lint-doc-refs.py
+OK: 1092 citation(s) across 155 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+FILESAFETY_EXIT=0
+
+$ bash ci/verify.sh
+summary: 32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the pre-existing `keys/dev/` key material and the mkosi
+image check; the skips are QEMU-only checks. No gate, golden frame or key was
+added, weakened or generated. Four tests were added this turn (1810 → 1814), and
+the §61 and §62 journeys were each run 5 times plus three full suites without a
+failure, because §61 had hit two intermittent failures from mtime-bucket
+assumptions.
+
+The two frames the journey saved were opened:
+
+* `artifacts/browser-shots/62-before-the-tail-only-rewrite.png` — the `Tail App`
+  tile on a blue field with an amber disc.
+* `artifacts/browser-shots/62-launcher-tail-only-rewrite.png` — the same tile
+  after a rewrite of bytes past offset 512 with the length **and** mtime
+  unchanged, now a red field with a white disc, legible at 82 px, no restart.
+
+### 62.9 Limits
+
+* **Files above 64 KiB still have only the head digest.** A rewrite past byte 512
+  of a larger icon with the length and mtime preserved stays invisible; the
+  journal makes this visible as a whole-file count that does not grow with the
+  name count.
+* **The digest is FNV-1a, 32-bit, not cryptographic.** It detects rewrites and
+  accidental collisions; a deliberate collision is not modelled.
+* **The pass re-reads the same small files every cycle** even when nothing
+  changed — bounded to 4 reads per check, so a full cycle at 512 names takes
+  about 128 s, but it is repeated I/O rather than a change-triggered read.
+* **Still a poll.** No inotify, the one-second floor from §55,
+  `#![forbid(unsafe_code)]`, no new dependency.
+* **A rename in the same directory** is still the gap §59 left: `refresh` drops
+  the name on its next validation when `Path::is_file` fails.
+* **`Inherits=` still clears the whole name map** on an order change (§58).
+* **The stamp is per name, not per file**: two names resolving to one file are
+  digested twice.
+* **The measured microseconds are a debug build.** `cargo test` is unoptimized,
+  so the 930.7 µs ceiling read is an upper bound, not the shipped cost.
+
+### 62.10 Git
+
+Commit `HEAD` and `origin/main` are the same commit; `git status
+--porcelain --untracked-files=no` is empty.

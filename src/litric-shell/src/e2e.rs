@@ -5978,3 +5978,143 @@ fn journey_launcher_draws_an_svg_only_theme_icon() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Two documents that differ only past the head window, with the same length.
+fn tail_document(field: &str, disc: &str) -> String {
+    let pad = " ".repeat(560);
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">{pad}<rect x=\"1\" y=\"1\" width=\"22\" height=\"22\" fill=\"{field}\"/><circle cx=\"12\" cy=\"12\" r=\"7\" fill=\"{disc}\"/></svg>"
+    )
+}
+
+/// A rewrite past the head window shows its new artwork without a restart.
+///
+/// This is the case §61 could not see. The replacement has the same byte count and
+/// the original's mtime (`touch -r`), and the two files agree on every one of their
+/// first 512 bytes, so the `stat` pass and the head digest are both blind. Only the
+/// whole-file digest reads the bytes that changed, and the tile must show them.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_picks_up_a_tail_only_rewrite() {
+    let root = e2e_root("desktop-icon-tail-only");
+    let apps = root.join("data/applications");
+    let icons = root.join("data/icons");
+    let theme = icons.join("hicolor/scalable/apps");
+    std::fs::create_dir_all(&apps).expect("applications");
+    std::fs::create_dir_all(&theme).expect("theme");
+    let icon = theme.join("tail-icon.svg");
+    let kept_times = root.join("tail-icon.timestamps");
+    let before_svg = tail_document("#2080c0", "#fabe28");
+    let after_svg = tail_document("#c02020", "#f0f0f0");
+    assert_eq!(
+        before_svg.len(),
+        after_svg.len(),
+        "the fixture must be a same-length rewrite"
+    );
+    let differing = before_svg
+        .bytes()
+        .zip(after_svg.bytes())
+        .position(|(a, b)| a != b)
+        .expect("the two documents differ");
+    assert!(
+        differing > 512,
+        "the first difference must be past the head window, not at {differing}"
+    );
+    assert_eq!(
+        before_svg.as_bytes().get(..512),
+        after_svg.as_bytes().get(..512),
+        "the first 512 bytes must be identical"
+    );
+    std::fs::write(&icon, &before_svg).expect("the first artwork");
+
+    let kept = std::process::Command::new("touch")
+        .arg("-r")
+        .arg(&icon)
+        .arg(&kept_times)
+        .status()
+        .expect("touch is available");
+    assert!(kept.success(), "touch -r made the timestamp reference");
+
+    std::fs::write(
+        apps.join("Tail-App.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Tail App\nIcon=tail-icon\nExec=/bin/true\n",
+    )
+    .expect("entry");
+
+    let mut s = shell();
+    s.load_desktop_apps_from(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+    assert_eq!(s.desktop_apps.len(), 1);
+    assert_eq!(s.desktop_icon_names.slot_count(), 1);
+    open_launcher(&mut s);
+    let before = draw_frame(&mut s);
+    save_shot(&before, "62-before-the-tail-only-rewrite");
+    let (before_blue, before_amber, before_red) = icon_chip_counts(&before, &s, 0);
+    assert!(
+        before_blue > 20 && before_amber > 5 && before_red < 5,
+        "the first artwork is on the tile: {before_blue} blue, {before_amber} amber, {before_red} red"
+    );
+
+    let len_before = std::fs::metadata(&icon).expect("before").len();
+    let mtime_before = std::fs::metadata(&icon).expect("before").modified().ok();
+    std::fs::write(&icon, &after_svg).expect("the replacement artwork");
+    let replaced = std::process::Command::new("touch")
+        .arg("-r")
+        .arg(&kept_times)
+        .arg(&icon)
+        .status()
+        .expect("touch is available");
+    assert!(replaced.success(), "touch -r restored the timestamps");
+    let len_after = std::fs::metadata(&icon).expect("after").len();
+    let mtime_after = std::fs::metadata(&icon).expect("after").modified().ok();
+    assert_eq!(
+        len_before, len_after,
+        "the replacement must keep the byte count, or a stat could see it"
+    );
+    assert_eq!(
+        mtime_before, mtime_after,
+        "the replacement must keep the mtime, or a stat could see it"
+    );
+
+    let mut repainted = false;
+    for _ in 0..8 {
+        s.tick_after(1_010);
+        if s.desktop_icon_names.fulls_changed() > 0 {
+            repainted = true;
+            break;
+        }
+    }
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "62-launcher-tail-only-rewrite");
+    assert_eq!(
+        s.desktop_icon_names.files_changed(),
+        0,
+        "the stat pass must stay blind: length and mtime are both unchanged"
+    );
+    assert_eq!(
+        s.desktop_icon_names.digests_changed(),
+        0,
+        "the head digest must stay blind too: the first 512 bytes are identical"
+    );
+    assert!(
+        repainted,
+        "a rewrite past the head window was not noticed in 8 watched checks ({} whole-file digests over {} slots, first difference at byte {differing})",
+        s.desktop_icon_names.full_digests(),
+        s.desktop_icon_names.slot_count()
+    );
+    assert_eq!(
+        s.desktop_icons_resolved, 0,
+        "the path did not move, so nothing is resolved again: {}",
+        s.desktop_icons_resolved
+    );
+
+    let (blue, amber, red) = icon_chip_counts(&canvas, &s, 0);
+    assert!(
+        red > 20 && blue < before_blue,
+        "the tile is not the replacement artwork: {red} red now, {before_red} before; {blue} blue now, {before_blue} before"
+    );
+    assert!(
+        amber < before_amber,
+        "the old artwork is still on the tile: {amber} amber now, {before_amber} before"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

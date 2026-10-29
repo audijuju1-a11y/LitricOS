@@ -344,8 +344,10 @@ pub const FILES_PER_SCAN: usize = 32;
 /// `stat`; the bytes are the only signal left. Half a kilobyte covers an SVG's
 /// header and its first shapes, and a PNG's signature and header chunks, without
 /// reading artwork that the image cache is about to decode anyway. The digest is
-/// not a substitute for a full hash: a change that starts past this window and
-/// keeps the length is not seen, and that is a stated limit.
+/// past this window is exact only for a file at or under [`DIGEST_FULL_MAX`],
+/// which is read whole; above that ceiling this window is all a check takes, so a
+/// rewrite that starts past it and keeps the length is still invisible, and that
+/// remains a stated limit.
 pub const DIGEST_BYTES: usize = 512;
 
 /// The most head digests one check takes.
@@ -354,6 +356,24 @@ pub const DIGEST_BYTES: usize = 512;
 /// reads each file while a re-stat only looks at its metadata. Measured in §61:
 /// eight digests cost about what thirty-two `metadata` calls do.
 pub const DIGESTS_PER_SCAN: usize = 8;
+
+/// The largest icon the whole-file digest covers.
+///
+/// The head digest sees the first [`DIGEST_BYTES`] only, so a rewrite that
+/// changes bytes past that window is invisible to it. At or below this ceiling
+/// the whole file is digested instead, which is exact at any offset; above it the
+/// head digest stays, because reading a whole multi-hundred-kilobyte raster on a
+/// watch check is the cost this bound exists to avoid. Measured on this machine
+/// (§62): all 10 icon-theme files under `/usr/share/icons` and
+/// `/usr/share/pixmaps` are at or under this ceiling, the largest 18 168 B.
+pub const DIGEST_FULL_MAX: u64 = 64 * 1024;
+
+/// The most whole-file digests one check takes.
+///
+/// Smaller than [`DIGESTS_PER_SCAN`] because each reads the entire file rather
+/// than its first [`DIGEST_BYTES`], and separate from it so a machine full of
+/// small icons cannot spend the head budget twice.
+pub const FULL_DIGESTS_PER_SCAN: usize = 4;
 
 /// The directories `find_in_theme` reads inside one theme, deepest first.
 ///
@@ -424,36 +444,82 @@ struct FileStamp {
     /// not been taken. `stat` cannot tell two same-length files apart on a
     /// filesystem that does not move mtimes, and this is what does.
     head: Option<u32>,
+    /// A digest of the whole file, taken only at or under [`DIGEST_FULL_MAX`].
+    /// `None` means the exact path does not cover this name: either the file is
+    /// too big, or its bytes have not been digested since the last change.
+    full: Option<u32>,
 }
 
-/// A digest of the first [`DIGEST_BYTES`] of `path`.
+/// The head digest of `path`, and the whole-file digest when it is small enough.
 ///
-/// FNV-1a over a stack buffer, folded with the byte count, so the digest needs no
-/// dependency, allocates nothing, and cannot be confused with the same prefix in
-/// a shorter file. `None` when the file cannot be opened: a name whose file
-/// vanished has no content to compare.
-fn head_digest(path: &Path) -> Option<u32> {
+/// One open and one bounded read produce both: FNV-1a over the first
+/// [`DIGEST_BYTES`], and over every byte when the file is at or under
+/// [`DIGEST_FULL_MAX`]. The buffer is [`DIGEST_READ`] bytes on the stack and
+/// nothing is allocated. A file above the ceiling is never read past its head
+/// window. Folding the byte count into each digest keeps a short file from
+/// colliding with a prefix of a longer one. `None` when the file cannot be
+/// opened: a name whose file vanished has no content to compare.
+fn digests_of(path: &Path, len: u64) -> Option<(Option<u32>, Option<u32>)> {
     use std::io::Read as _;
     let mut file = std::fs::File::open(path).ok()?;
-    let mut buffer = [0u8; DIGEST_BYTES];
-    let mut filled = 0usize;
-    while filled < DIGEST_BYTES {
-        let Some(rest) = buffer.get_mut(filled..) else {
+    let exact = len <= DIGEST_FULL_MAX;
+    let limit = if exact {
+        usize::try_from(len).unwrap_or(usize::MAX)
+    } else {
+        DIGEST_BYTES
+    };
+    let mut buffer = [0u8; DIGEST_READ];
+    let mut head_hash: u32 = 0x811c_9dc5;
+    let mut full_hash: u32 = 0x811c_9dc5;
+    let mut head_bytes = 0usize;
+    let mut total = 0usize;
+    while total < limit {
+        let room = limit.saturating_sub(total).min(DIGEST_READ);
+        let Some(slot) = buffer.get_mut(..room) else {
             break;
         };
-        match file.read(rest) {
+        let read = match file.read(slot) {
             Ok(0) => break,
-            Ok(read) => filled = filled.saturating_add(read),
+            Ok(read) => read,
             Err(_) => return None,
+        };
+        for (offset, byte) in buffer.get(..read).unwrap_or(&[]).iter().enumerate() {
+            if total.saturating_add(offset) < DIGEST_BYTES {
+                head_hash = (head_hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193);
+                head_bytes = head_bytes.saturating_add(1);
+            }
+            full_hash = (full_hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193);
         }
+        total = total.saturating_add(read);
     }
-    let mut hash: u32 = 0x811c_9dc5;
-    for byte in buffer.get(..filled).unwrap_or(&[]) {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    let count = u32::try_from(filled).unwrap_or(u32::MAX);
-    Some(hash ^ count.wrapping_mul(0x9e37_79b9))
+    let head = head_hash
+        ^ u32::try_from(head_bytes)
+            .unwrap_or(u32::MAX)
+            .wrapping_mul(0x9e37_79b9);
+    let full = if exact {
+        Some(
+            full_hash
+                ^ u32::try_from(total)
+                    .unwrap_or(u32::MAX)
+                    .wrapping_mul(0x9e37_79b9),
+        )
+    } else {
+        None
+    };
+    Some((Some(head), full))
+}
+
+/// The bytes one digest read asks the filesystem for at a time.
+const DIGEST_READ: usize = 4096;
+
+/// The head digest of `path` alone, when only the window is wanted.
+///
+/// The whole-file pass reuses [`digests_of`] instead, so a small file is read once
+/// for both digests rather than twice.
+#[must_use]
+fn head_digest(path: &Path) -> Option<u32> {
+    let len = std::fs::metadata(path).ok()?.len();
+    digests_of(path, len).and_then(|(head, _)| head)
 }
 
 /// The stamp of the file `path`, or `None` when it is not a regular file.
@@ -466,13 +532,17 @@ fn file_stamp(path: &Path) -> Option<FileStamp> {
         len: meta.len(),
         mtime: meta.modified().ok(),
         head: None,
+        full: None,
     })
 }
 
-/// The stamp of `path` including its head digest, taken once when a name answers.
+/// The stamp of `path` including its digest, taken once when a name answers.
 fn stamped_file(path: &Path) -> Option<FileStamp> {
     let mut stamp = file_stamp(path)?;
-    stamp.head = head_digest(path);
+    if let Some((head, full)) = digests_of(path, stamp.len) {
+        stamp.head = head;
+        stamp.full = full;
+    }
     Some(stamp)
 }
 
@@ -549,6 +619,9 @@ pub struct IconNames {
     digest_cursor: usize,
     head_digests: u64,
     digests_changed: u64,
+    full_cursor: usize,
+    full_digests: u64,
+    fulls_changed: u64,
     resolved: u64,
     hits: u64,
     validated: u64,
@@ -629,6 +702,9 @@ impl IconNames {
             digest_cursor: 0,
             head_digests: 0,
             digests_changed: 0,
+            full_cursor: 0,
+            full_digests: 0,
+            fulls_changed: 0,
             resolved: 0,
             hits: 0,
             validated: 0,
@@ -676,6 +752,7 @@ impl IconNames {
             self.slots.clear();
             self.file_cursor = 0;
             self.digest_cursor = 0;
+            self.full_cursor = 0;
             self.dirs = icon_dirs.to_vec();
             self.order = fresh;
             self.capture_leaves();
@@ -859,6 +936,7 @@ impl IconNames {
                 // reporting a second change for the same rewrite.
                 entry.file = fresh.map(|stamp| FileStamp {
                     head: None,
+                    full: None,
                     ..stamp
                 });
                 changed = true;
@@ -896,6 +974,7 @@ impl IconNames {
             self.digest_cursor = index.saturating_add(1);
             if self.digest_cursor >= total {
                 self.digest_cursor = 0;
+                self.full_cursor = 0;
             }
             let Some(name) = self.slots.get(index).map(String::as_str) else {
                 continue;
@@ -915,6 +994,7 @@ impl IconNames {
                 // The first look at these bytes: record, never report.
                 entry.file = Some(FileStamp {
                     head: fresh,
+                    full: None,
                     ..file
                 });
                 continue;
@@ -922,6 +1002,7 @@ impl IconNames {
             if fresh != file.head {
                 entry.file = Some(FileStamp {
                     head: fresh,
+                    full: None,
                     ..file
                 });
                 changed = true;
@@ -931,6 +1012,85 @@ impl IconNames {
             self.digests_changed = self.digests_changed.saturating_add(1);
         }
         changed
+    }
+
+    /// Digest the next slice of small resolved files end to end.
+    ///
+    /// This closes §61's first limit. The head digest stops at [`DIGEST_BYTES`],
+    /// so a rewrite that changes only bytes past that window looks identical; a
+    /// file at or under [`DIGEST_FULL_MAX`] is digested in full here, which is
+    /// exact at any offset. A larger file is skipped and stays covered by the head
+    /// digest alone, which remains the stated limit and is visible in the journal
+    /// as a whole-file count that does not grow with the name count.
+    ///
+    /// Bounded to [`FULL_DIGESTS_PER_SCAN`] reads with its own cursor, and any
+    /// file whose length or mtime moved has already handed its bytes back
+    /// (`full: None`), so one change is reported once rather than twice.
+    pub fn scan_full_digests(&mut self) -> bool {
+        if self.slots.is_empty() {
+            return false;
+        }
+        let total = self.slots.len();
+        let count = total.min(FULL_DIGESTS_PER_SCAN);
+        let mut changed = false;
+        for _ in 0..count {
+            let index = if self.full_cursor < total {
+                self.full_cursor
+            } else {
+                0
+            };
+            self.full_cursor = index.saturating_add(1);
+            if self.full_cursor >= total {
+                self.full_cursor = 0;
+            }
+            let Some(name) = self.slots.get(index).map(String::as_str) else {
+                continue;
+            };
+            let Some(entry) = self.names.get_mut(name) else {
+                continue;
+            };
+            let Some(path) = entry.path.clone() else {
+                continue;
+            };
+            let Some(file) = entry.file else {
+                continue;
+            };
+            if file.len > DIGEST_FULL_MAX {
+                continue;
+            }
+            self.full_digests = self.full_digests.saturating_add(1);
+            let fresh = digests_of(&path, file.len).and_then(|(_, full)| full);
+            if file.full.is_none() {
+                entry.file = Some(FileStamp {
+                    full: fresh,
+                    ..file
+                });
+                continue;
+            }
+            if fresh != file.full {
+                entry.file = Some(FileStamp {
+                    full: fresh,
+                    ..file
+                });
+                changed = true;
+            }
+        }
+        if changed {
+            self.fulls_changed = self.fulls_changed.saturating_add(1);
+        }
+        changed
+    }
+
+    /// Whole-file digests taken, across the life of this cache.
+    #[must_use]
+    pub fn full_digests(&self) -> u64 {
+        self.full_digests
+    }
+
+    /// Checks whose whole-file digest found a rewrite inside the ceiling.
+    #[must_use]
+    pub fn fulls_changed(&self) -> u64 {
+        self.fulls_changed
     }
 
     /// Head digests taken, across the life of this cache.
@@ -982,6 +1142,7 @@ impl IconNames {
             self.slots.clear();
             self.file_cursor = 0;
             self.digest_cursor = 0;
+            self.full_cursor = 0;
         }
         self.resolved = self.resolved.saturating_add(1);
         let path = crate::themeicons::find_in(icon_dirs, name, 48);
@@ -2863,6 +3024,267 @@ mod tests {
         assert!(watch.poll(WATCH_INTERVAL_MS).is_none());
         assert!(watch.poll(WATCH_INTERVAL_MS * 2).is_none());
         assert_eq!(watch.reloads(), 0, "absence is not a change on its own");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    /// Two documents that differ only past the head window, with the same byte
+    /// count. Whitespace padding is used because it is legal SVG and every
+    /// parser accepts it, so the fixture stays a real icon.
+    fn tail_document(field: &str, disc: &str) -> String {
+        let pad = " ".repeat(560);
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\">{pad}<rect x=\"1\" y=\"1\" width=\"22\" height=\"22\" fill=\"{field}\"/><circle cx=\"12\" cy=\"12\" r=\"7\" fill=\"{disc}\"/></svg>"
+        )
+    }
+
+    /// A rewrite that changes only bytes past the head window is noticed by the
+    /// whole-file digest: the case §61 could not see.
+    ///
+    /// The replacement has the same length and the original's mtime (restored with
+    /// `touch -r`, which is what an install preserving timestamps does), and the
+    /// two files share every one of their first [`DIGEST_BYTES`] bytes. So the
+    /// `stat` pass and the head digest are both byte-identical, and only the bytes
+    /// past the window differ.
+    #[cfg(unix)]
+    #[test]
+    fn a_tail_only_rewrite_is_noticed_by_the_full_digest() {
+        let root = scratch("icons-tail-only");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        let icon = icons.join("hicolor/scalable/apps/tail-icon.svg");
+        let kept = root.join("tail-icon.timestamps");
+        let before = tail_document("#2080c0", "#fabe28");
+        let after = tail_document("#c02020", "#f0f0f0");
+        assert_eq!(
+            before.len(),
+            after.len(),
+            "the fixture is a same-length rewrite"
+        );
+        let differing = before
+            .bytes()
+            .zip(after.bytes())
+            .position(|(a, b)| a != b)
+            .expect("the two documents differ");
+        assert!(
+            differing > DIGEST_BYTES,
+            "the first difference must be past the head window, not at {differing}"
+        );
+        assert_eq!(
+            before.as_bytes().get(..DIGEST_BYTES),
+            after.as_bytes().get(..DIGEST_BYTES),
+            "the head window must be identical, or the head digest would see it"
+        );
+        std::fs::write(&icon, &before).expect("first artwork");
+        let kept_ok = std::process::Command::new("touch")
+            .arg("-r")
+            .arg(&icon)
+            .arg(&kept)
+            .status()
+            .expect("touch is available");
+        assert!(kept_ok.success(), "touch -r recorded the timestamps");
+
+        let prog = program(&root, "run-me");
+        std::fs::write(
+            apps.join("Tail.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Tail\nIcon=tail-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("entry");
+
+        let app_dirs = vec![apps.clone()];
+        let icon_dirs = vec![icons.clone()];
+        let mut names = IconNames::new(&icon_dirs);
+        let found = discover_with_cache(&app_dirs, &icon_dirs, &mut names);
+        assert_eq!(found.apps.len(), 1);
+        assert_eq!(names.slot_count(), 1);
+        let stamped = names
+            .names
+            .get("tail-icon")
+            .and_then(|entry| entry.file)
+            .expect("the name resolved to a file");
+        assert!(
+            stamped.full.is_some(),
+            "a file under the ceiling is digested whole when it resolves"
+        );
+        assert!(!names.scan_full_digests(), "nothing has changed yet");
+
+        let len_before = std::fs::metadata(&icon).expect("before").len();
+        let mtime_before = std::fs::metadata(&icon).expect("before").modified().ok();
+        std::fs::write(&icon, &after).expect("the replacement artwork");
+        let replaced = std::process::Command::new("touch")
+            .arg("-r")
+            .arg(&kept)
+            .arg(&icon)
+            .status()
+            .expect("touch is available");
+        assert!(replaced.success(), "touch -r restored the timestamps");
+        assert_eq!(len_before, std::fs::metadata(&icon).expect("after").len());
+        assert_eq!(
+            mtime_before,
+            std::fs::metadata(&icon).expect("after").modified().ok(),
+            "the stat pass must have nothing to see"
+        );
+
+        assert!(!names.scan_files(), "a stat cannot see this change");
+        assert!(!names.scan_digests(), "the head window is byte-identical");
+        assert_eq!(names.head_digests(), 1, "one head read was taken");
+        assert!(
+            names.scan_full_digests(),
+            "a rewrite past the head window must be noticed by the whole-file digest"
+        );
+        assert_eq!(names.fulls_changed(), 1);
+        assert!(
+            !names.scan_full_digests(),
+            "the new bytes are the baseline now"
+        );
+        println!(
+            "tail-only rewrite: first difference at byte {differing} (window {DIGEST_BYTES}), caught by the whole-file digest, FileStamp {} bytes",
+            std::mem::size_of::<FileStamp>()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file above the ceiling is read only to its head window, and the journal
+    /// can tell: its name never reaches the whole-file counter.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_over_the_ceiling_stays_on_the_head_digest() {
+        let root = scratch("icons-over-ceiling");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        let icon = icons.join("hicolor/scalable/apps/big-icon.png");
+        // A real, large raster: over the ceiling, so the exact path does not apply.
+        let over = usize::try_from(DIGEST_FULL_MAX)
+            .unwrap_or(usize::MAX)
+            .saturating_add(1);
+        let mut bytes = vec![0x89u8; over];
+        if let Some(tail) = bytes.last_mut() {
+            *tail = 0x11;
+        }
+        std::fs::write(&icon, &bytes).expect("big icon");
+        let kept = root.join("big-icon.timestamps");
+        let prog = program(&root, "run-me");
+        std::fs::write(
+            apps.join("Big.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Big\nIcon=big-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("entry");
+
+        let app_dirs = vec![apps];
+        let icon_dirs = vec![icons];
+        let mut names = IconNames::new(&icon_dirs);
+        let found = discover_with_cache(&app_dirs, &icon_dirs, &mut names);
+        assert_eq!(found.apps.len(), 1);
+        let stamped = names
+            .names
+            .get("big-icon")
+            .and_then(|entry| entry.file)
+            .expect("the name resolved");
+        assert!(stamped.head.is_some(), "the head window is digested");
+        assert!(
+            stamped.full.is_none(),
+            "a file over the ceiling is not digested whole, so its whole-file stamp must stay absent"
+        );
+        let kept_ok = std::process::Command::new("touch")
+            .arg("-r")
+            .arg(&icon)
+            .arg(&kept)
+            .status()
+            .expect("touch is available");
+        assert!(kept_ok.success());
+        assert!(!names.scan_full_digests(), "nothing changed");
+        assert_eq!(
+            names.full_digests(),
+            0,
+            "a name over the ceiling must not spend the whole-file budget"
+        );
+        // Rewriting its tail is invisible, and this is the stated limit, not a bug.
+        std::fs::write(&icon, &bytes).expect("same bytes again");
+        let _ = std::process::Command::new("touch")
+            .arg("-r")
+            .arg(&kept)
+            .arg(&icon)
+            .status();
+        assert!(!names.scan_full_digests());
+        println!(
+            "over the ceiling: {over} bytes, head digest only, {} whole-file digests taken",
+            names.full_digests()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The whole-file pass takes a fixed slice per check and is measured.
+    #[cfg(unix)]
+    #[test]
+    fn a_full_digest_pass_is_bounded_and_measured() {
+        let root = scratch("icons-full-bound");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        let prog = program(&root, "run-me");
+        let wanted = 24usize;
+        let body = tail_document("#2080c0", "#fabe28");
+        for index in 0..wanted {
+            std::fs::write(
+                icons.join(format!("hicolor/scalable/apps/full-{index}.svg")),
+                &body,
+            )
+            .expect("icon");
+            std::fs::write(
+                apps.join(format!("full-{index}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName=Full {index:02}\nIcon=full-{index}\nExec={}\n",
+                    prog.display()
+                ),
+            )
+            .expect("entry");
+        }
+        let icon_dirs = vec![icons];
+        let mut names = IconNames::new(&icon_dirs);
+        let found = discover_with_cache(std::slice::from_ref(&apps), &icon_dirs, &mut names);
+        assert_eq!(found.apps.len(), wanted);
+        assert!(FULL_DIGESTS_PER_SCAN < wanted, "the budget must bite");
+        assert_eq!(names.full_digests(), 0, "resolving is not a check");
+        let _ = names.scan_full_digests();
+        assert_eq!(
+            names.full_digests(),
+            FULL_DIGESTS_PER_SCAN as u64,
+            "one check takes one slice"
+        );
+
+        let rounds = 200u32;
+        let started = std::time::Instant::now();
+        for _ in 0..rounds {
+            let _ = names.scan_full_digests();
+        }
+        let per_pass = started.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
+
+        // One read at the ceiling, which is the most the exact path ever reads.
+        let ceiling = root.join("ceiling.bin");
+        let biggest = usize::try_from(DIGEST_FULL_MAX).unwrap_or(usize::MAX);
+        std::fs::write(&ceiling, vec![0x5au8; biggest]).expect("ceiling file");
+        let rounds_ceiling = 50u32;
+        let started = std::time::Instant::now();
+        for _ in 0..rounds_ceiling {
+            let _ = digests_of(&ceiling, DIGEST_FULL_MAX);
+        }
+        let per_ceiling = started.elapsed().as_secs_f64() * 1e6 / f64::from(rounds_ceiling);
+        println!(
+            "whole-file pass: {per_pass:.1} us/check for {FULL_DIGESTS_PER_SCAN} exact reads of {} B, one read at the {DIGEST_FULL_MAX} B ceiling {per_ceiling:.1} us, cache {} bytes, FileStamp {} bytes, Cached {} bytes",
+            body.len(),
+            names.bytes(),
+            std::mem::size_of::<FileStamp>(),
+            std::mem::size_of::<Cached>()
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
