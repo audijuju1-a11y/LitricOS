@@ -36,6 +36,21 @@ interfaces, invariants, ownership boundaries, and release gates.
 25. [24 Feature parity](24-feature-parity.md) — 144 features vs Windows,
     macOS, Linux; every row mapped to a crate, a ledger row, or a non-goal
 
+## Programme and sequencing
+
+These come after the design documents: they say what blocks Beta, in what
+order the remaining work runs, and what proof each batch owes.
+
+26. [25 Beta 1.0 gate matrix](25-beta-1.0-gate-matrix.md) — priority, blocker
+    and required evidence level per area; never a second row matrix
+27. [26 Execution plan](26-execution-plan.md) — work streams W0–W10 and the
+    order of work
+28. [27 The plan the UI/UX research implies](27-research-driven-plan.md) —
+    parity ledger, work packages WP-01–WP-12, milestones M1–M6, Track R
+29. [28 Whole-system improvement plan](28-whole-system-improvement-plan.md) —
+    the measured baseline, the ordering rule, the batch contract and the next
+    twelve batches
+
 ## Rules
 
 - `VERIFIED` means a command, test, measurement, or hardware observation is
