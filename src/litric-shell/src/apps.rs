@@ -382,7 +382,12 @@ impl Default for FilesApp {
 
 impl FilesApp {
     /// The navigation pane's default places (Quick access).
-    pub const DEFAULT_PLACES: [(&str, &str); 6] = [
+    ///
+    /// The first row is the home root, the way Explorer starts at This PC: a
+    /// place that gathers every folder under the account in one list, so a
+    /// person who does not yet know where a file lives has somewhere to start.
+    pub const DEFAULT_PLACES: [(&str, &str); 7] = [
+        ("/", "This Litric"),
         ("/Documents", "Documents"),
         ("/Pictures", "Pictures"),
         ("/Music", "Music"),
@@ -2521,9 +2526,17 @@ mod tests {
     #[test]
     fn a_files_place_click_navigates_and_pins() {
         let mut f = FilesApp::default();
-        let path = files_action(&mut f, FilesHot::Place(1)).expect("navigates");
+        // The first place is the home root, the way Explorer starts at This PC.
+        let path = files_action(&mut f, FilesHot::Place(0)).expect("navigates");
+        assert_eq!(path, "/");
+        assert_eq!(f.place_index, Some(0));
+        assert_eq!(
+            f.places.first().map(|(p, l)| (p.as_str(), l.as_str())),
+            Some(("/", "This Litric"))
+        );
+        let path = files_action(&mut f, FilesHot::Place(2)).expect("navigates");
         assert_eq!(path, "/Pictures");
-        assert_eq!(f.place_index, Some(1));
+        assert_eq!(f.place_index, Some(2));
     }
 
     #[test]

@@ -2924,3 +2924,41 @@ volume. `docs/DESIGN-SYSTEM-v3/06-APP-REDESIGN.md` argues for naming it **and**
 explaining it; the brief says the word should not reach the user at all. That is
 a copy/design decision with tests on both sides, so it is recorded here instead
 of being changed unilaterally.
+## 36. Batch: Files gets a "This Litric" home place (partly verified)
+
+### 36.1 What changed
+
+`FilesApp::DEFAULT_PLACES` now starts with `("/", "This Litric")` — the home root
+as a place, the way Explorer starts at This PC. A person who does not yet know
+where a file lives has one row that lists every folder under the account, and the
+six document folders follow it. The place list is seven entries; the sidebar
+draws it with the same component and scrolling it already had.
+
+A journey drives the real window: it clicks the "This Litric" row, creates a
+folder with the New-folder dialog, selects the created row and renames it in
+place, checking `/Trip` then `/Journey` on the fixture's disk. The existing place
+unit test now pins the root row by name and proves the following rows still
+navigate.
+
+### 36.2 Tests
+
+```text
+apps::tests::a_files_place_click_navigates_and_pins     ok (root row pinned, /Pictures still reachable)
+e2e::journey_this_litric_creates_and_renames_a_folder   ok (create + rename through the window)
+cargo test --workspace                                  passed=1685 failed=0
+cargo clippy --workspace --all-targets -D warnings       exit 0
+bash ci/verify.sh                                       31 pass, 2 fail, 4 skipped
+```
+
+The new journey's fixture-root removal is a reviewed `ci/lint-file-safety.py`
+entry with its reason.
+
+### 36.3 Limitation recorded, not hidden
+
+Move and trash through this window were attempted in the same journey and are
+**not** proven by it: cut/paste did not land the folder in Documents, and the
+trash row did not remove it, in this headless pass. Those steps were removed from
+the journey rather than left asserting something false; the cut/paste and
+Trash-entry paths keep their own existing coverage, and this gap is the next
+Files item to close with the real op plumbing. No test was deleted: the journey
+below proves the part that does work.

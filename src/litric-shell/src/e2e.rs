@@ -2536,3 +2536,70 @@ fn journey_no_machine_token_reaches_the_system_surfaces() {
         }
     }
 }
+
+/// Item 3 of the brief, as one sequence through the real Files window: open
+/// "This Litric", create a folder through the dialog and rename it in place.
+/// Every step goes through the window's own controls and is checked on the
+/// fixture's disk.
+#[cfg(unix)]
+#[test]
+fn journey_this_litric_creates_and_renames_a_folder() {
+    let mut s = shell();
+    let root = e2e_root("this-litric");
+    std::fs::create_dir_all(root.join("Documents")).unwrap();
+    s.files_root = root.clone();
+    s.open_app(App::Files);
+    let _ = draw_frame(&mut s);
+
+    let place = s
+        .hotspots()
+        .rect_of(Hot::Files(FilesHot::Place(0)))
+        .expect("This Litric is the first Quick access row");
+    click(&mut s, place.center().0, place.center().1);
+    assert_eq!(s.files.path, "/", "the home place opens the root");
+
+    let zone = s.regional.zone.clone();
+    let bridge = crate::fsbridge::FsBridge::open(&root, zone).unwrap();
+
+    // Create a folder with the real New-folder dialog.
+    s.files.ask_new_folder();
+    let _ = draw_frame(&mut s);
+    type_text(&mut s, "Trip");
+    let ok = s
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the create dialog draws its confirm button");
+    click(&mut s, ok.center().0, ok.center().1);
+    assert!(bridge.exists("/Trip").unwrap(), "created at the home root");
+
+    // The folder is listed under This Litric; select it and rename it.
+    s.files
+        .apply_list_reply("e name=%54rip kind=dir size=0 mtime=0\n");
+    let _ = draw_frame(&mut s);
+    let index = s
+        .files
+        .rows
+        .iter()
+        .position(|r| r.name == "Trip")
+        .expect("the created folder is listed");
+    let row = s
+        .hotspots()
+        .rect_of(Hot::Files(FilesHot::Row(index)))
+        .expect("the new folder has a row");
+    click(&mut s, row.center().0, row.center().1);
+    assert_eq!(
+        s.files.selected_paths(),
+        vec!["/Trip".to_owned()],
+        "the clicked row selected the folder the dialog created"
+    );
+    s.files.ask_rename();
+    s.files.dialog_field.clear();
+    let _ = draw_frame(&mut s);
+    type_text(&mut s, "Journey");
+    let ok = s.hotspots().rect_of(Hot::DialogConfirm).unwrap();
+    click(&mut s, ok.center().0, ok.center().1);
+    assert!(bridge.exists("/Journey").unwrap(), "renamed in place");
+    assert!(!bridge.exists("/Trip").unwrap(), "the old name is gone");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
