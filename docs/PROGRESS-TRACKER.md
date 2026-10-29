@@ -3552,3 +3552,55 @@ The CI host has no `litric-sysd`, so the proven immediate sample is the direct
 runs when a daemon is present. No QEMU or display is available, so the proof is
 the headless frame and real `/proc`. No RAM/CPU/GPU profile was taken for this
 change, so no performance number is claimed.
+
+
+## 45. Batch: a move in Defender or Trash refreshes the open Files table (verified)
+
+### 45.1 What the audit found
+
+`refresh_files` re-reads a folder only when `files.listed` differs from
+`files.path`. The filesystem-changing actions that live outside the Files
+window did not tell it: Defender's `quarantine_finding` and
+`restore_quarantined` moved a real file and refreshed only the contained list,
+and Trash's `MenuAction::Restore` put a file back and refreshed only the Trash
+list. A Files window open on that folder kept drawing a file that had moved, or
+stayed empty after a restore, until the user navigated away. Two journeys were
+written before the fix and both failed on exactly that: Files still showed
+`["clean.txt", "eicar.com"]` after the quarantine had removed the file from
+disk, and `[]` after the restore had put it back.
+
+### 45.2 The wiring
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/shell.rs` | `files_changed()` marks the open listing stale (`files.listed = None`) and asks for a redraw. It reads nothing; the next frame's view pass does the single directory read. Called on the successful branch of Defender Quarantine, Defender Restore and Trash Restore. A refusal does not call it because nothing moved. |
+| `src/litric-shell/src/e2e.rs` | Two click-driven journeys over real files: open Files on the folder, scan, quarantine, assert the file is gone from disk and from the still-open table, restore, assert it is back in both; and trash a real file, open Files on its folder, select the Trash row, click Restore, assert the file is on disk and in the open table. |
+| `ci/lint-file-safety.py` | The two new journeys' fixture cleanups are recorded in the review allowlist with their reason, like the existing journey beside them. |
+
+### 45.3 Cost
+
+One directory read on the next frame after a successful move, through the same
+FilesBridge every other listing uses. Nothing is read in the click handler,
+nothing is scheduled, and the frame loop, its budget and Activity's samples are
+untouched.
+
+### 45.4 Gates
+
+```text
+cargo test --workspace        passed=1719 failed=0   (was 1,717; +2)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the unchanged absent `keys/dev/` material: the mkosi
+configuration check and the dev key-pair check. Every skip is the documented
+missing host tool (fonts, mkosi, qemu). No test deleted, no gate relaxed, no
+dependency added.
+
+### 45.5 Limits
+
+No QEMU or display is available, so the proof is the headless frame driven by
+the same input path a person drives, over real files. The Trash journey is
+Unix-only where it needs a real freedesktop trash move; the Defender journey
+runs on every host the tests build for. No performance number is claimed.

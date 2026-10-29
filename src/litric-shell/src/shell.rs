@@ -2718,6 +2718,7 @@ impl Shell {
                         match bridge.trash_restore(&name) {
                             Ok(dir) => {
                                 self.trash.listed = false;
+                                self.files_changed();
                                 self.notify(
                                     "Trash",
                                     "Restored",
@@ -2872,6 +2873,15 @@ impl Shell {
         }
         self.trash.selected = None;
         self.trash.listed = true;
+    }
+
+    /// Mark an open Files table stale because the tree changed under it.
+    ///
+    /// The move already happened; nothing is read here. The next frame's view
+    /// pass reads the directory once and shows what is actually on disk.
+    fn files_changed(&mut self) {
+        self.files.listed = None;
+        self.request_full_redraw();
     }
 
     /// Submit the desktop's own dialog.
@@ -6850,6 +6860,8 @@ impl Shell {
                 }
                 self.defender.app.message = format!("Quarantined {name}");
                 self.refresh_quarantine();
+                // The file left the folder Files may be showing.
+                self.files_changed();
             }
             Err(error) => self.defender.app.message = format!("Could not quarantine: {error}"),
         }
@@ -6882,6 +6894,8 @@ impl Shell {
                     }
                     _ => format!("Put {name} back, but its contents could not be confirmed"),
                 };
+                // The file is back in the folder Files may be showing.
+                self.files_changed();
             }
             Err(error) => self.defender.app.message = format!("Could not restore: {error}"),
         }

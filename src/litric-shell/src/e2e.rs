@@ -3293,6 +3293,161 @@ fn journey_defender_quarantines_and_restores_a_real_threat() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A quarantine move made in Defender changes the tree the Files window is
+/// showing. The open table must read the folder again on the next frame, not
+/// keep drawing a file that is no longer there — and the restored file must
+/// reappear the same way.
+#[test]
+fn journey_defender_quarantine_refreshes_an_open_files_window() {
+    let root = e2e_root("defender-files-refresh");
+    let docs = root.join("Documents");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("clean.txt"), b"a harmless note\n").unwrap();
+    std::fs::write(docs.join("eicar.com"), EICAR).unwrap();
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Files);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.files.visible().iter().any(|row| row.name == "eicar.com"),
+        "the Files window starts on the real folder: {:?}",
+        s.files
+            .visible()
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        s.files.visible().iter().any(|row| row.name == "clean.txt"),
+        "the clean file is in the same folder"
+    );
+
+    s.open_app(App::Defender);
+    let _ = draw_frame(&mut s);
+    let fast = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::ScanNow))
+        .expect("the Fast scan button is drawn");
+    let _ = click(&mut s, fast.center().0, fast.center().1);
+    for _ in 0..600 {
+        let _ = draw_frame(&mut s);
+        if !s.defender.running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(!s.defender.running, "the scan finished");
+    let index = s
+        .defender
+        .app
+        .rows
+        .iter()
+        .position(|row| row.path.ends_with("/eicar.com"))
+        .expect("the planted threat is listed");
+
+    let _ = draw_frame(&mut s);
+    let quarantine = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::QuarantineFinding(index)))
+        .expect("a finding row has a real Quarantine control");
+    let _ = click(&mut s, quarantine.center().0, quarantine.center().1);
+    let _ = draw_frame(&mut s);
+
+    assert!(!docs.join("eicar.com").exists(), "the file really moved");
+    assert!(
+        !s.files.visible().iter().any(|row| row.name == "eicar.com"),
+        "the open Files window dropped the contained file: {:?}",
+        s.files
+            .visible()
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        s.files.visible().iter().any(|row| row.name == "clean.txt"),
+        "the rest of the listing is unchanged"
+    );
+
+    let restore = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::RestoreQuarantined(0)))
+        .expect("the contained entry has a real Restore control");
+    let _ = click(&mut s, restore.center().0, restore.center().1);
+    let _ = draw_frame(&mut s);
+    assert!(docs.join("eicar.com").exists(), "the file came back");
+    assert!(
+        s.files.visible().iter().any(|row| row.name == "eicar.com"),
+        "the open Files window shows the restored file: {:?}",
+        s.files
+            .visible()
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A restore in Trash puts a real file back into a folder the Files window is
+/// showing. The filesystem changed underneath that table, so it must be read
+/// again on the next frame instead of keeping the empty listing it drew while
+/// the file was away.
+#[test]
+#[cfg(unix)]
+fn journey_trash_restore_refreshes_an_open_files_window() {
+    let root = e2e_root("trash-files-refresh");
+    let docs = root.join("Documents");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("note.txt"), b"restore me\n").unwrap();
+    let zone = litric_locale::TimeZone::utc("test");
+    let bridge = crate::fsbridge::FsBridge::open(&root, zone).unwrap();
+    bridge.trash("/Documents/note.txt", 1_900_000_000).unwrap();
+    assert!(!docs.join("note.txt").exists(), "the file is in the trash");
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Files);
+    let _ = draw_frame(&mut s);
+    assert!(
+        !s.files.visible().iter().any(|row| row.name == "note.txt"),
+        "the open folder is empty while the file is in the trash"
+    );
+
+    s.open_app(App::Trash);
+    let _ = draw_frame(&mut s);
+    assert_eq!(s.trash.entries.len(), 1, "the trash lists the real entry");
+    let row = s
+        .hotspots()
+        .rect_of(Hot::TrashRow(0))
+        .expect("the trash row is drawn");
+    let _ = click(&mut s, row.center().0, row.center().1);
+    assert_eq!(s.trash.selected, Some(0), "the row is selected");
+    // The Restore button only exists once a row is selected, so it is drawn by
+    // the frame after the click that selects it.
+    let _ = draw_frame(&mut s);
+
+    let restore = s
+        .hotspots()
+        .rect_of(Hot::TrashRestore)
+        .expect("the Restore button is drawn for a selection");
+    let _ = click(&mut s, restore.center().0, restore.center().1);
+    let _ = draw_frame(&mut s);
+
+    assert!(docs.join("note.txt").exists(), "the file is back on disk");
+    assert!(
+        s.files.visible().iter().any(|row| row.name == "note.txt"),
+        "the open Files window shows the restored file: {:?}",
+        s.files
+            .visible()
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The refusal side through the window: a finding that has gone since the scan
 /// cannot be contained, the row stays where the user can see it, and no
 /// quarantine entry is invented.
