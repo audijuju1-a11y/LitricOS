@@ -20,6 +20,15 @@ pub const MAX_BLOCKS: usize = 600;
 /// The most characters one text block may keep.
 pub const MAX_BLOCK_CHARS: usize = 8_000;
 
+/// The most table rows one document may keep.
+pub const MAX_TABLE_ROWS: usize = 60;
+
+/// The most table columns one document may keep.
+pub const MAX_TABLE_COLS: usize = 6;
+
+/// The most characters one table cell may keep.
+pub const MAX_CELL_CHARS: usize = 120;
+
 /// One block of a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
@@ -42,6 +51,17 @@ pub enum Block {
         width: Option<u32>,
         /// The declared height, when the page gave one.
         height: Option<u32>,
+    },
+    /// A table of values: a header row and the rows under it.
+    ///
+    /// A table is kept as a table, not flattened into prose, because a page of
+    /// metrics is read by its columns: "CPU 42%" run together with the next
+    /// value is exactly the text a person cannot use.
+    Table {
+        /// The header cells, empty when the page had no header row.
+        headers: Vec<String>,
+        /// The body rows, each padded to the same number of columns.
+        rows: Vec<Vec<String>>,
     },
     /// A horizontal rule.
     Rule,
@@ -69,9 +89,85 @@ pub fn parse(input: &[u8]) -> Document {
         blocks: Vec::new(),
     };
     let stripped = strip_hidden(&text);
+    for segment in segments(&stripped) {
+        if doc.blocks.len() >= MAX_BLOCKS {
+            break;
+        }
+        match segment {
+            Segment::Text(text) => parse_text(text, &mut doc),
+            Segment::Table(raw) => {
+                if let Some(block) = table(raw) {
+                    doc.blocks.push(block);
+                }
+            }
+        }
+    }
+    doc
+}
+
+/// One run of the document: prose, or a table kept out of the prose pass.
+enum Segment<'a> {
+    Text(&'a str),
+    Table(&'a str),
+}
+
+/// Split a document into prose and `<table>` runs, so a table body's tags are
+/// never read as paragraphs.
+fn segments(text: &str) -> Vec<Segment<'_>> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(at) = open_tag(rest, "table") {
+        let Some(after) = rest.get(at..) else {
+            break;
+        };
+        let end = close_tag(after, "table").unwrap_or(after.len());
+        out.push(Segment::Text(rest.get(..at).unwrap_or_default()));
+        out.push(Segment::Table(after.get(..end).unwrap_or_default()));
+        let next = after.get(end..).unwrap_or_default();
+        if next.is_empty() {
+            return out;
+        }
+        rest = next;
+    }
+    if !rest.is_empty() {
+        out.push(Segment::Text(rest));
+    }
+    out
+}
+
+/// The byte offset of `<name` (opening tag, any case), when it is a tag and not
+/// a longer name.
+fn open_tag(text: &str, name: &str) -> Option<usize> {
+    let lower = text.to_ascii_lowercase();
+    let needle = format!("<{name}");
+    let mut from = 0usize;
+    while let Some(found) = lower.get(from..)?.find(&needle) {
+        let at = from.saturating_add(found);
+        let after = at.saturating_add(needle.len());
+        let next = lower.get(after..).and_then(|s| s.chars().next());
+        if next.is_some_and(|c| c == '>' || c == '/' || c.is_ascii_whitespace()) {
+            return Some(at);
+        }
+        from = after;
+    }
+    None
+}
+
+/// The byte offset just past `</name>`, when the closing tag exists.
+fn close_tag(text: &str, name: &str) -> Option<usize> {
+    let lower = text.to_ascii_lowercase();
+    let needle = format!("</{name}");
+    let at = lower.find(&needle)?;
+    let after = lower.get(at..)?.find('>')?;
+    Some(at.saturating_add(after).saturating_add(1))
+}
+
+/// Parse one run of prose into blocks. This is the original pass: a tag it does
+/// not know is skipped and its text kept.
+fn parse_text(stripped: &str, doc: &mut Document) {
     let mut para = String::new();
     let mut heading: Option<u8> = None;
-    let mut rest = stripped.as_str();
+    let mut rest = stripped;
 
     while let Some(open) = rest.find('<') {
         push_text(&mut para, rest.get(..open).unwrap_or_default());
@@ -88,7 +184,7 @@ pub fn parse(input: &[u8]) -> Document {
         match name.as_str() {
             "title" | "head" | "html" | "body" | "meta" | "link" | "!doctype" => {}
             "img" => {
-                flush(&mut doc, &mut para, heading);
+                flush(doc, &mut para, heading);
                 if let Some(block) = image(raw) {
                     if doc.blocks.len() < MAX_BLOCKS {
                         doc.blocks.push(block);
@@ -96,14 +192,14 @@ pub fn parse(input: &[u8]) -> Document {
                 }
             }
             "hr" => {
-                flush(&mut doc, &mut para, heading);
+                flush(doc, &mut para, heading);
                 if doc.blocks.len() < MAX_BLOCKS {
                     doc.blocks.push(Block::Rule);
                 }
             }
-            "br" => flush(&mut doc, &mut para, heading),
+            "br" => flush(doc, &mut para, heading),
             "h1" | "h2" | "h3" => {
-                flush(&mut doc, &mut para, heading);
+                flush(doc, &mut para, heading);
                 if closing {
                     heading = None;
                 } else if name.len() == 2 {
@@ -111,13 +207,116 @@ pub fn parse(input: &[u8]) -> Document {
                 }
             }
             "p" | "div" | "li" | "tr" | "ul" | "ol" | "table" | "section" | "article"
-            | "blockquote" => flush(&mut doc, &mut para, heading),
+            | "blockquote" => flush(doc, &mut para, heading),
             _ => {}
         }
     }
     push_text(&mut para, rest);
-    flush(&mut doc, &mut para, heading);
-    doc
+    flush(doc, &mut para, heading);
+}
+
+/// Parse one `<table>` run into a [`Block::Table`].
+///
+/// Only `<tr>`, `<td>` and `<th>` structure the result; any other tag inside a
+/// cell is skipped and its text kept. A row of `<th>` becomes the header when
+/// there is a body under it.
+fn table(raw: &str) -> Option<Block> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut header_rows: Vec<bool> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut cell = String::new();
+    let mut in_cell = false;
+    let mut row_is_header = true;
+    let mut saw_header_cell = false;
+    let mut rest = raw;
+    while let Some(open) = rest.find('<') {
+        let text = rest.get(..open).unwrap_or_default();
+        if in_cell {
+            push_cell(&mut cell, text);
+        }
+        let after = rest.get(open..).unwrap_or_default();
+        let Some(close) = after.find('>') else {
+            break;
+        };
+        let tag_raw = after.get(1..close).unwrap_or_default();
+        rest = after.get(close + 1..).unwrap_or_default();
+        let name = tag_name(tag_raw);
+        let closing = tag_raw.trim_start().starts_with('/');
+        match name.as_str() {
+            "td" | "th" => {
+                if closing {
+                    if in_cell {
+                        row.push(collapse(&decode_entities(&cell)));
+                        cell.clear();
+                        in_cell = false;
+                    }
+                } else if !in_cell {
+                    in_cell = true;
+                    cell.clear();
+                    if name == "th" {
+                        saw_header_cell = true;
+                    } else {
+                        row_is_header = false;
+                    }
+                }
+            }
+            "tr" => {
+                if closing && !row.is_empty() {
+                    rows.push(std::mem::take(&mut row));
+                    header_rows.push(row_is_header && saw_header_cell);
+                    row_is_header = true;
+                    saw_header_cell = false;
+                }
+            }
+            "table" if closing => break,
+            _ => {}
+        }
+    }
+    if !row.is_empty() {
+        rows.push(row);
+        header_rows.push(row_is_header && saw_header_cell);
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    let mut headers = Vec::new();
+    if header_rows.first().copied().unwrap_or(false) && rows.len() > 1 {
+        headers = rows.remove(0);
+    }
+    rows.truncate(MAX_TABLE_ROWS);
+    let cols = headers
+        .len()
+        .max(rows.iter().map(Vec::len).max().unwrap_or(0))
+        .min(MAX_TABLE_COLS);
+    if cols == 0 {
+        return None;
+    }
+    if !headers.is_empty() {
+        headers.truncate(cols);
+        while headers.len() < cols {
+            headers.push(String::new());
+        }
+    }
+    for row in &mut rows {
+        row.truncate(cols);
+        while row.len() < cols {
+            row.push(String::new());
+        }
+    }
+    Some(Block::Table { headers, rows })
+}
+
+/// Append cell text, bounded so one cell cannot grow without a limit.
+fn push_cell(cell: &mut String, text: &str) {
+    if cell.len() >= MAX_CELL_CHARS {
+        return;
+    }
+    let room = MAX_CELL_CHARS.saturating_sub(cell.len());
+    let mut cut = text.len().min(room);
+    while cut > 0 && !text.is_char_boundary(cut) {
+        cut = cut.saturating_sub(1);
+    }
+    cell.push_str(text.get(..cut).unwrap_or_default());
 }
 
 /// The `<title>`'s text, collapsed to one line.
@@ -384,6 +583,9 @@ mod tests {
         assert_eq!(MAX_DOCUMENT_BYTES, 4 * 1024 * 1024);
         assert_eq!(MAX_BLOCKS, 600);
         assert_eq!(MAX_BLOCK_CHARS, 8_000);
+        assert_eq!(MAX_TABLE_ROWS, 60);
+        assert_eq!(MAX_TABLE_COLS, 6);
+        assert_eq!(MAX_CELL_CHARS, 120);
         let mut page = String::from("<p>");
         page.push_str(&"a".repeat(MAX_BLOCK_CHARS * 2));
         page.push_str("</p>");
@@ -394,5 +596,49 @@ mod tests {
         }
         let many = "<p>one</p>".repeat(MAX_BLOCKS + 50);
         assert_eq!(parse(many.as_bytes()).blocks.len(), MAX_BLOCKS);
+    }
+
+    #[test]
+    fn a_table_keeps_its_columns_and_values() {
+        let doc = parse(
+            b"<h2>Values</h2><table><tr><th>Metric</th><th>Value</th></tr>\
+              <tr><td>CPU</td><td>42%</td></tr>\
+              <tr><td>Memory</td><td>1.2 GB</td></tr></table><p>after</p>",
+        );
+        assert_eq!(
+            doc.blocks,
+            vec![
+                Block::Heading {
+                    level: 2,
+                    text: "Values".to_owned()
+                },
+                Block::Table {
+                    headers: vec!["Metric".to_owned(), "Value".to_owned()],
+                    rows: vec![
+                        vec!["CPU".to_owned(), "42%".to_owned()],
+                        vec!["Memory".to_owned(), "1.2 GB".to_owned()],
+                    ]
+                },
+                Block::Paragraph("after".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_table_without_a_header_row_is_all_body_and_is_bounded() {
+        let doc = parse(b"<table><tr><td>a</td><td>b</td></tr></table>");
+        match doc.blocks.first() {
+            Some(Block::Table { headers, rows }) => {
+                assert!(headers.is_empty(), "{headers:?}");
+                assert_eq!(rows, &vec![vec!["a".to_owned(), "b".to_owned()]]);
+            }
+            other => panic!("expected a table, got {other:?}"),
+        }
+        let many = "<tr><td>x</td></tr>".repeat(MAX_TABLE_ROWS + 10);
+        let doc = parse(format!("<table>{many}</table>").as_bytes());
+        match doc.blocks.first() {
+            Some(Block::Table { rows, .. }) => assert_eq!(rows.len(), MAX_TABLE_ROWS),
+            other => panic!("expected a bounded table, got {other:?}"),
+        }
     }
 }

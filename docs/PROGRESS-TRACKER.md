@@ -4278,3 +4278,150 @@ Both directions were disabled and the journey re-run, then the code restored:
   the bounded vector and the absence of a shell, not isolation.
 * **No measured performance claim.** The bounds above are static; RSS, CPU and
   latency were not measured for this batch.
+
+## 53. Batch: real theme icons, and a page whose values can be read (verified)
+
+### 53.1 Requirement and audit
+
+Two sources, both already recorded: §52.6's own limit,
+
+> **Icons are not decoded.** `Icon=` is stored, but this image has no icon-theme
+> reader and no SVG/PNG decoder for themes, so every discovered application is
+> drawn with the generated `Application` glyph.
+
+and the reported page defect: a served page could not be read. The audit found
+the exact causes:
+
+* `reader.rs` laid body text out at `TypeStep::Footnote` (13 px), scaled headings
+  by hand (`1.12`/`1.0`/`0.9`), and drew on the window's bare panel with no page
+  sheet — a wall of small text on chrome.
+* `html.rs` had no table block at all. `table`, `tr` and `td` were only block
+  boundaries, so a row of metrics collapsed into one paragraph —
+  `Metric Value CPU 42% Memory 1.2 GB` — which is precisely a value nobody can
+  read because the columns are gone.
+* `appicons.rs` already decoded PNG through the `png` crate (the dock artwork),
+  but nothing looked an `Icon=` name up in a theme: `desktop_entry.rs` kept the
+  string and never used it.
+
+This batch fixes all three: a real icon-theme lookup with a bounded decode
+cache, structural table parsing with a column layout, body typography at the
+Body step, and a page surface. It does not add an SVG renderer, CSS or a
+scripting engine.
+
+### 53.2 The connection
+
+| File | Line | What it connects |
+| --- | --- | --- |
+| `src/litric-browser/src/html.rs` | 24, 27, 30 | the table bounds: 60 rows, 6 columns, 120 characters per cell |
+| `src/litric-browser/src/html.rs` | 60 | `Block::Table`: a table is kept as a table |
+| `src/litric-browser/src/html.rs` | 116 | `segments`: `<table>` runs are cut out of the prose pass |
+| `src/litric-browser/src/html.rs` | 223 | `table`: `<tr>`/`<td>`/`<th>` become header and body cells; any other tag keeps its text |
+| `src/litric-browser/src/html.rs` | 310 | `push_cell`: one cell cannot grow past its bound |
+| `src/litric-shell/src/reader.rs` | 69 | `LaidKind::Table`: the laid-out columns |
+| `src/litric-shell/src/reader.rs` | 295 | `visible_text` reports header and rows, so the text a person reads is the text the reader exposes |
+| `src/litric-shell/src/reader.rs` | 399 | layout: Table arm (equal columns, 1.9× body row height) |
+| `src/litric-shell/src/reader.rs` | 455 | the page surface: a sheet a shade above the panel, with its own edge |
+| `src/litric-shell/src/reader.rs` | 503 | draw: header rule, zebra rows, each value in its own column |
+| `src/litric-shell/src/reader.rs` | 760 | unit test: a page with a table lays out `Metric  Value` and `CPU  42%` |
+| `src/litric-shell/src/themeicons.rs` | 25, 31 | bounds: 512 KiB per icon, 48 cached scaled copies |
+| `src/litric-shell/src/themeicons.rs` | 38 | `theme_dirs`: `$XDG_DATA_HOME/icons`, `~/.icons`, each `$XDG_DATA_DIRS/icons`, `/usr/share/pixmaps` |
+| `src/litric-shell/src/themeicons.rs` | 73 | `find_in`: flat PNG, then each theme (`hicolor` first), nearest size directory, five standard categories |
+| `src/litric-shell/src/themeicons.rs` | 125, 134 | `usable` (regular file, size bound) and `size_dirs` (nearest edge first) |
+| `src/litric-shell/src/themeicons.rs` | 165 | `draw`: decode once, scale once, blit |
+| `src/litric-shell/src/themeicons.rs` | 183, 205, 254 | `scaled` (bounded cache), `decode` (RGBA/RGB, edge bound), `scale` (nearest neighbour) |
+| `src/litric-shell/src/desktop_entry.rs` | 53 | `DesktopApp::icon_path`: the resolved PNG |
+| `src/litric-shell/src/desktop_entry.rs` | 89, 95, 104, 151 | `discover` resolves against the machine's themes; `discover_in` stays hermetic; `discover_in_with` takes explicit icon dirs and resolves each name once |
+| `src/litric-shell/src/views.rs` | 4273 | the launcher tile draws the resolved icon; the generated glyph is the fallback |
+| `src/litric-shell/src/views.rs` | 4389 | the search row draws the same icon |
+| `src/litric-shell/src/lib.rs` | 80 | the module is part of the shell |
+| `src/litric-shell/src/e2e.rs` | 4874 | icon journey: a real theme PNG, discovery, launcher frame, icon removed, frame compared |
+| `src/litric-shell/src/e2e.rs` | 4961 | table journey: a real loopback server, the real omnibox, column assertions and pixel ink |
+
+### 53.3 Cost
+
+Discovery resolves each entry's icon once, at startup: a handful of `stat` calls
+per application, at most 64 theme directories inspected per lookup. Pixels are
+decoded only when a tile is drawn, once per (path, size), into a cache bounded at
+48 scaled copies; a file over 512 KiB or an edge over 512 px is refused before it
+is read. Scaling is nearest-neighbour, not a filter: icons are drawn at 16–82 px
+and the cost of a filter is not repaid there.
+
+The reader's table cells are cloned once per layout, not per frame. The draw loop
+allocates only the elided strings the visible cells need, exactly as it already
+did for paragraphs. There is no polling, no watcher and no new thread anywhere in
+this batch. No RSS, CPU or frame-time number is claimed: none was measured.
+
+### 53.4 Tests and gates
+
+* `html` unit tests: a table keeps its header and rows; a table without `<th>` is
+  all body and is truncated at the row bound; the three new bounds are pinned.
+* `themeicons` unit tests: a real PNG is found, decoded and drawn; a name that
+  could escape the theme is refused; an oversized file is not an icon; the same
+  icon is decoded once and the cache bound is pinned.
+* `reader` unit test: a file page with a table lays out `Metric  Value` and
+  `CPU  42%` and draws it.
+* `journey_launcher_draws_the_icon_the_desktop_entry_names`:
+  `src/litric-shell/src/e2e.rs:4874` — a temporary XDG tree with a real
+  `hicolor/48x48/apps` PNG and a real `.desktop` entry; the launcher is opened by
+  clicking Apps; the icon tile is compared with the same frame after the icon is
+  removed, and at least a third of the sampled pixels must change.
+* `journey_reader_lays_out_a_table_of_values_in_columns`:
+  `src/litric-shell/src/e2e.rs:4961` — a real `TcpListener` on loopback serves a
+  page with a three-row table, opened by typing the address into the real
+  omnibox; the reader reports `Metric  Value`, `CPU  42%`, `Memory  1.2 GB` as
+  separate lines, and both the label and value columns must carry ink in the
+  rendered frame.
+* Frames: `artifacts/browser-shots/53-launcher-real-icon.png` (the launcher with
+  the theme's own folder artwork in the discovered app's tile) and
+  `artifacts/browser-shots/53-web-table-values.png` (the served page with its
+  table drawn in columns). PPM originals sit beside them; `artifacts/` stays
+  untracked.
+
+```text
+cargo test --workspace        1775 passed, 0 failed, 0 ignored   (was 1752; +23)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+python3 ci/lint-doc-refs.py   OK: 976 citations across 155 documents
+python3 ci/lint-file-safety.py   OK: 94 deletion sites, all inside reviewed functions
+bash ci/verify.sh             32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the unchanged absent local dev-key material (mkosi reports
+`secureboot`, `pcr` and `verity`; the key-pair check reports `secureboot` and
+`verity`). No key was generated or committed, no gate was weakened, and no golden
+fingerprint changed: this batch touches no desktop frame that the golden set
+records (its frames are the launcher and a browser page rendered inside a
+journey, saved by `save_shot` under `artifacts/`, not the golden dump). The
+file-safety linter flagged the new journey's temporary-root cleanup; it was added
+to `ci/lint-file-safety.py`'s reviewed list with the fixture-scoped reason, the
+same way the sibling journeys are, rather than by relaxing the rule.
+
+### 53.5 Sensitivity
+
+Each direction was disabled, the journey re-run, then the code restored:
+
+* With `html::table` returning `None` (tables dropped, the behaviour before this
+  batch), the table journey fails:
+  `the header keeps its cells: ["System values", "Read from a real page served on this machine."]`
+  — the rows are gone. Restored, it passes.
+* With `themeicons::draw` returning `false`, the icon journey fails:
+  `the themed icon replaced the glyph: 0/361 pixels differ`. Restored, it passes.
+
+The icon journey also fails if the path is not resolved: it asserts
+`apps.first().and_then(|a| a.icon_path.as_deref()).is_some()` before it draws.
+
+### 53.6 Limits
+
+* **SVG icons are still not decoded.** A theme that ships only `scalable/*.svg`
+  falls back to the generated glyph. There is no SVG renderer in this image and
+  none was invented.
+* **No `Inherits=` theme chain.** Lookup tries the flat directory, then each
+  theme directory with `hicolor` first, at the nearest size; it does not follow a
+  theme's declared parents.
+* **Nearest-neighbour scaling.** A 16 px icon drawn at 82 px is blocky; the tile
+  is still the real artwork, not a fabricated one.
+* **Table support is structural.** No `colspan`, `rowspan`, `caption`, footers,
+  alignment or per-cell styling; at most 6 columns and 60 rows.
+* **Still no CSS, scripts, forms or links.** The reader lays out headings,
+  paragraphs, tables, pictures and rules. A page that is mostly a script-driven
+  application still reads as its static text.

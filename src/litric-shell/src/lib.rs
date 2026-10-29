@@ -77,6 +77,7 @@ pub mod shortcuts;
 pub mod taskmgr;
 pub mod textaudit;
 pub mod textedit;
+pub mod themeicons;
 pub mod ui;
 pub mod views;
 pub mod wordmark;

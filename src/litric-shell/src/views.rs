@@ -4260,11 +4260,34 @@ fn launcher_tiles(
             crate::seek::Hit::App(app) => {
                 appicons::draw(canvas, appicons::Slot::App(app), chip, opacity);
             }
+            crate::seek::Hit::Desktop(index) => {
+                // The icon the desktop entry named, resolved against this
+                // machine's themes at startup and decoded once. A name that did
+                // not resolve leaves the generated glyph, never a borrowed
+                // application's artwork.
+                let drew = shell
+                    .desktop_apps
+                    .get(index)
+                    .and_then(|app| app.icon_path.as_deref())
+                    .is_some_and(|path| {
+                        crate::themeicons::draw(canvas, path, chip.inflate(-t.px(8.0)), opacity)
+                    });
+                if !drew {
+                    canvas.fill_round_rect(
+                        chip,
+                        t.px(18.0),
+                        with_alpha(rgb(0xFFFFFF), 0.10 * opacity),
+                    );
+                    icons::draw(
+                        canvas,
+                        Icon::Application,
+                        chip.inflate(-t.px(20.0)),
+                        with_alpha(t.accent(), opacity),
+                        1.0,
+                    );
+                }
+            }
             _ => {
-                // A discovered program has no artwork in this image. The glyph
-                // is drawn, not a borrowed application icon: nothing here
-                // pretends the program is one of the built-ins.
-                canvas.fill_round_rect(chip, t.px(18.0), with_alpha(rgb(0xFFFFFF), 0.10 * opacity));
                 icons::draw(
                     canvas,
                     Icon::Application,
@@ -4356,15 +4379,27 @@ fn launcher_rows(
         canvas.fill_round_rect(tile, t.px(12.0), with_alpha(rgb(0xFFFFFF), 0.09));
         // One icon per kind of result, so a row says what it will do before it
         // is read: an application, a settings page, a window, or an action.
-        let icon = match result.hit {
-            crate::seek::Hit::App(app) => icon_for(app),
-            crate::seek::Hit::Setting(page) => settings_icon(page),
-            crate::seek::Hit::SettingRow(entry) => settings_icon(entry.page),
-            crate::seek::Hit::Desktop(_) => Icon::Application,
-            crate::seek::Hit::Window(_) => Icon::Window,
-            crate::seek::Hit::Action(_) => Icon::Search,
-        };
-        icons::draw(canvas, icon, tile.inflate(-t.px(11.0)), t.accent(), 1.0);
+        let mut drew = false;
+        if let crate::seek::Hit::Desktop(index) = result.hit {
+            drew = shell
+                .desktop_apps
+                .get(index)
+                .and_then(|app| app.icon_path.as_deref())
+                .is_some_and(|path| {
+                    crate::themeicons::draw(canvas, path, tile.inflate(-t.px(6.0)), 1.0)
+                });
+        }
+        if !drew {
+            let icon = match result.hit {
+                crate::seek::Hit::App(app) => icon_for(app),
+                crate::seek::Hit::Setting(page) => settings_icon(page),
+                crate::seek::Hit::SettingRow(entry) => settings_icon(entry.page),
+                crate::seek::Hit::Desktop(_) => Icon::Application,
+                crate::seek::Hit::Window(_) => Icon::Window,
+                crate::seek::Hit::Action(_) => Icon::Search,
+            };
+            icons::draw(canvas, icon, tile.inflate(-t.px(11.0)), t.accent(), 1.0);
+        }
         let name_style = Style::new(t.text_px(TypeStep::Body), t.text());
         let name_x = tile.right() + t.px(14.0);
         font::draw(

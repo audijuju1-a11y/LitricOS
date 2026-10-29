@@ -3,7 +3,7 @@
 //! Litric Browser's web engine is Chromium over the broker, and this image has
 //! no Chromium. What the window can do by itself, with no engine and no network,
 //! is open a page stored on the machine: read its bytes, parse its headings,
-//! paragraphs and pictures, lay them out, decode the pictures with
+//! paragraphs, tables and pictures, lay them out, decode the pictures with
 //! [`litric_browser::jpeg`] and draw them. That is a real path — a real file,
 //! real bytes, a real parse, real pixels — and it is what this module wires.
 //!
@@ -29,7 +29,7 @@ use litric_design::TypeStep;
 
 use crate::font::Style;
 
-use crate::canvas::{Canvas, Rect};
+use crate::canvas::{rgb, with_alpha, Canvas, Rect};
 use crate::font;
 use crate::ui::Tokens;
 use litric_design::Radius;
@@ -63,7 +63,14 @@ enum LaidKind {
     Text {
         lines: Vec<String>,
         line_h: f32,
-        heading: bool,
+        /// 0 for body text, 1–3 for a heading of that level.
+        level: u8,
+    },
+    Table {
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+        col_w: f32,
+        row_h: f32,
     },
     Image {
         source: ImageSource,
@@ -283,8 +290,22 @@ impl Reader {
             if laid.y + laid.h <= top || laid.y >= bottom {
                 continue;
             }
-            if let LaidKind::Text { lines, .. } = &laid.kind {
-                out.extend(lines.iter().cloned());
+            match &laid.kind {
+                LaidKind::Text { lines, .. } => out.extend(lines.iter().cloned()),
+                LaidKind::Table { headers, rows, .. } => {
+                    if !headers.is_empty() {
+                        out.push(headers.join("  "));
+                    }
+                    for row in rows {
+                        out.push(row.join("  "));
+                    }
+                }
+                LaidKind::Image { alt, .. } => {
+                    if !alt.is_empty() {
+                        out.push(alt.clone());
+                    }
+                }
+                LaidKind::Rule => {}
             }
         }
         out
@@ -308,26 +329,22 @@ impl Reader {
 
     /// Lay the page out for `width`, when the width changed.
     fn layout(&mut self, width: f32, tokens: &Tokens) {
-        let body = Style::new(tokens.text_px(TypeStep::Footnote), tokens.text());
-        let heading = Style::bold(tokens.text_px(TypeStep::Title3), tokens.text());
+        let body = Style::new(tokens.text_px(TypeStep::Body), tokens.text());
+        let heading1 = Style::bold(tokens.text_px(TypeStep::Title2), tokens.text());
+        let heading2 = Style::bold(tokens.text_px(TypeStep::Title3), tokens.text());
+        let heading3 = Style::bold(tokens.text_px(TypeStep::Headline), tokens.text());
         let mut y = MARGIN;
         let mut laid = Vec::with_capacity(self.source.len());
         for block in &self.source {
             match block {
                 Block::Heading { text, level } => {
-                    let scale = match level {
-                        1 => 1.12,
-                        2 => 1.0,
-                        _ => 0.9,
+                    let style = match level {
+                        1 => &heading1,
+                        2 => &heading2,
+                        _ => &heading3,
                     };
-                    let style = if (*level) == 1 {
-                        heading
-                    } else {
-                        Style::bold(tokens.text_px(TypeStep::Body), tokens.text())
-                    };
-                    let size = style.size * scale;
-                    let lines = wrap_at(text, &style, width, 40);
-                    let line_h = size * 1.35;
+                    let lines = wrap_at(text, style, width, 40);
+                    let line_h = style.size * 1.3;
                     let h = (lines.len() as f32).max(1.0) * line_h + 14.0;
                     laid.push(Laid {
                         y,
@@ -335,7 +352,7 @@ impl Reader {
                         kind: LaidKind::Text {
                             lines,
                             line_h,
-                            heading: true,
+                            level: (*level).clamp(1, 3),
                         },
                     });
                     y += h;
@@ -350,7 +367,7 @@ impl Reader {
                         kind: LaidKind::Text {
                             lines,
                             line_h,
-                            heading: false,
+                            level: 0,
                         },
                     });
                     y += h;
@@ -375,6 +392,27 @@ impl Reader {
                             alt: alt.clone(),
                             w: width,
                             h,
+                        },
+                    });
+                    y += h;
+                }
+                Block::Table { headers, rows } => {
+                    let cols = headers
+                        .len()
+                        .max(rows.iter().map(Vec::len).max().unwrap_or(0))
+                        .max(1);
+                    let col_w = (width / cols as f32).max(40.0);
+                    let row_h = body.size * 1.9;
+                    let lines = rows.len().saturating_add(usize::from(!headers.is_empty()));
+                    let h = lines as f32 * row_h + 14.0;
+                    laid.push(Laid {
+                        y,
+                        h,
+                        kind: LaidKind::Table {
+                            headers: headers.clone(),
+                            rows: rows.clone(),
+                            col_w,
+                            row_h,
                         },
                     });
                     y += h;
@@ -408,8 +446,18 @@ impl Reader {
         let max = (self.content_h - page.h).max(0.0);
         self.scroll = self.scroll.clamp(0.0, max);
 
-        let body = Style::new(tokens.text_px(TypeStep::Footnote), tokens.text());
-        let heading = Style::bold(tokens.text_px(TypeStep::Title3), tokens.text());
+        let body = Style::new(tokens.text_px(TypeStep::Body), tokens.text());
+        let heading1 = Style::bold(tokens.text_px(TypeStep::Title2), tokens.text());
+        let heading2 = Style::bold(tokens.text_px(TypeStep::Title3), tokens.text());
+        let heading3 = Style::bold(tokens.text_px(TypeStep::Headline), tokens.text());
+        // A page reads on its own surface, not on the window's chrome: a sheet
+        // a shade lighter than the panel, with its own edge.
+        canvas.fill_round_rect(
+            page,
+            tokens.radius(Radius::Md),
+            with_alpha(rgb(0xFFFFFF), 0.035),
+        );
+        canvas.stroke_round_rect(page, tokens.radius(Radius::Md), 1.0, tokens.border());
         let clip = canvas.push_clip(page);
         // Decode at most the frame's budget, and only pictures that are on
         // screen. This vector stays empty on every frame where nothing new
@@ -439,16 +487,73 @@ impl Reader {
                 LaidKind::Text {
                     lines,
                     line_h,
-                    heading: is_heading,
+                    level,
                 } => {
-                    let style = if *is_heading && !lines.is_empty() {
-                        &heading
-                    } else {
-                        &body
+                    let style = match level {
+                        0 => &body,
+                        1 => &heading1,
+                        2 => &heading2,
+                        _ => &heading3,
                     };
                     for (i, line) in lines.iter().enumerate() {
-                        let baseline = top + style.size * 0.9 + i as f32 * line_h;
+                        let baseline = top + style.size * 0.95 + i as f32 * line_h;
                         font::draw(canvas, line, page.x + MARGIN, baseline, style);
+                    }
+                }
+                LaidKind::Table {
+                    headers,
+                    rows,
+                    col_w,
+                    row_h,
+                } => {
+                    let head_style = Style::bold(body.size, tokens.text());
+                    let mut row_top = top;
+                    if !headers.is_empty() {
+                        for (column, cell) in headers.iter().enumerate() {
+                            let x = page.x + MARGIN + column as f32 * col_w;
+                            font::draw(
+                                canvas,
+                                &crate::ui::elide(cell, &head_style, col_w - 12.0),
+                                x,
+                                row_top + body.size * 1.05,
+                                &head_style,
+                            );
+                        }
+                        row_top += row_h;
+                        canvas.fill_round_rect(
+                            Rect::new(page.x + MARGIN, row_top - 8.0, width, 1.0),
+                            0.0,
+                            tokens.border(),
+                        );
+                    }
+                    for (index, row) in rows.iter().enumerate() {
+                        // Zebra striping: a row of values is followed across,
+                        // and a rule between every row is heavier than the
+                        // data. Alternating tone is the cheapest way to keep
+                        // the eye on one row.
+                        if index % 2 == 1 {
+                            canvas.fill_round_rect(
+                                Rect::new(
+                                    page.x + MARGIN,
+                                    row_top - body.size * 0.95,
+                                    width,
+                                    *row_h,
+                                ),
+                                tokens.radius(Radius::Sm),
+                                with_alpha(tokens.text(), 0.045),
+                            );
+                        }
+                        for (column, cell) in row.iter().enumerate() {
+                            let x = page.x + MARGIN + column as f32 * *col_w;
+                            font::draw(
+                                canvas,
+                                &crate::ui::elide(cell, &body, *col_w - 12.0),
+                                x,
+                                row_top + body.size * 1.05,
+                                &body,
+                            );
+                        }
+                        row_top += *row_h;
                     }
                 }
                 LaidKind::Image { alt, w, h, .. } => {
@@ -649,6 +754,37 @@ mod tests {
         ));
         let file = Base::Directory(PathBuf::from("/tmp/page"));
         assert!(matches!(file.image("a.jpg"), ImageSource::File(_)));
+    }
+
+    #[test]
+    fn a_table_is_laid_out_as_columns_of_values() {
+        let _ = crate::font::initialize();
+        let dir = std::env::temp_dir().join(format!("litric-reader-table-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let page = dir.join("values.html");
+        std::fs::write(
+            &page,
+            b"<h2>Values</h2><table><tr><th>Metric</th><th>Value</th></tr>\
+              <tr><td>CPU</td><td>42%</td></tr></table>",
+        )
+        .expect("the page");
+        let mut reader =
+            Reader::open(&format!("file://{}", page.display())).expect("the page opens");
+        let tokens = crate::ui::Tokens::new(
+            litric_design::Theme::of(litric_design::ThemeKind::Dark),
+            1.0,
+        );
+        let mut canvas = Canvas::new(420, 320, rgb(0));
+        reader.draw(&mut canvas, &tokens, Rect::new(0.0, 0.0, 420.0, 320.0));
+        let lines = reader.visible_text(320.0);
+        assert!(
+            lines.iter().any(|line| line == "Metric  Value"),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|line| line == "CPU  42%"), "{lines:?}");
+        assert!(reader.content_height() > 40.0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

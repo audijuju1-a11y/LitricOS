@@ -4862,3 +4862,197 @@ fn journey_launcher_lists_a_real_desktop_app_and_starts_it_through_sysd() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The launcher draws the icon its desktop entry names, from a real theme PNG.
+///
+/// The theme is a temporary directory, the PNG is the product's own artwork
+/// copied into it, and the entry is parsed by the real discovery pass. The frame
+/// is compared against the same frame with the icon removed, so the assertion
+/// can only pass when the themed pixels reached the canvas.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_draws_the_icon_the_desktop_entry_names() {
+    let root = e2e_root("desktop-icon");
+    let apps_dir = root.join("data/applications");
+    let icon_dir = root.join("data/icons/hicolor/48x48/apps");
+    std::fs::create_dir_all(&apps_dir).expect("applications");
+    std::fs::create_dir_all(&icon_dir).expect("icons");
+    std::fs::write(
+        icon_dir.join("marker-icon.png"),
+        include_bytes!("../../../assets/icons/dock/files.png"),
+    )
+    .expect("the theme icon");
+    std::fs::write(
+        apps_dir.join("icon-app.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Icon App\nIcon=marker-icon\nExec=/bin/true\n",
+    )
+    .expect("the entry");
+
+    let themes = root.join("data/icons");
+    let apps = crate::desktop_entry::discover_in_with(
+        std::slice::from_ref(&apps_dir),
+        std::slice::from_ref(&themes),
+    );
+    assert_eq!(apps.len(), 1, "one real entry: {apps:?}");
+    assert!(
+        apps.first().and_then(|a| a.icon_path.as_deref()).is_some(),
+        "the entry's icon resolved against the theme: {apps:?}"
+    );
+
+    let mut s = shell();
+    s.load_desktop_apps(apps);
+    // Open the launcher the way the earlier journey does: a real pointer press
+    // on the Apps button, then the spring's frames.
+    show_dock(&mut s);
+    let _ = draw_frame(&mut s);
+    let button = s.hotspots().rect_of(Hot::MenuApps).expect("Apps menu");
+    click(&mut s, button.center().0, button.center().1);
+    for _ in 0..60 {
+        s.tick_after(FRAME_MS);
+    }
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "53-launcher-real-icon");
+    let cell = s
+        .hotspots()
+        .rect_of(Hot::LauncherItem(App::ALL.len()))
+        .expect("the discovered application's tile");
+    let chip = Rect::new(cell.center().0 - 41.0, cell.y + 4.0, 82.0, 82.0);
+    let reference = canvas.get(4, 4).expect("a desktop pixel");
+    let (with_icon, total) = differing_pixels(&canvas, chip, reference);
+    assert!(
+        with_icon * 3 > total,
+        "the themed icon fills its tile: {with_icon}/{total}"
+    );
+
+    if let Some(app) = s.desktop_apps.first_mut() {
+        app.icon_path = None;
+    }
+    let plain = draw_frame(&mut s);
+    // Compare the two frames at the same points: both states fill the tile, so
+    // counting each against the desktop would not tell them apart. What proves
+    // the theme pixels are on screen is that the pixels changed.
+    let mut changed = 0usize;
+    let mut sampled = 0usize;
+    let mut x = chip.x + 4.0;
+    while x < chip.right() - 4.0 {
+        let mut y = chip.y + 4.0;
+        while y < chip.bottom() - 4.0 {
+            sampled = sampled.saturating_add(1);
+            if canvas.get(x as i64, y as i64) != plain.get(x as i64, y as i64) {
+                changed = changed.saturating_add(1);
+            }
+            y += 4.0;
+        }
+        x += 4.0;
+    }
+    assert!(
+        changed * 3 > sampled,
+        "the themed icon replaced the glyph: {changed}/{sampled} pixels differ"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A page's table arrives as columns of values, not as run-together prose.
+///
+/// The page is served by a real loopback socket and opened through the real
+/// omnibox; the reader reports the rows it laid out and the frame proves the
+/// values were drawn in their own column.
+#[test]
+fn journey_reader_lays_out_a_table_of_values_in_columns() {
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let html = b"<!doctype html><html><head><title>Values</title></head><body>\
+                 <h2>System values</h2>\
+                 <p>Read from a real page served on this machine.</p>\
+                 <table><tr><th>Metric</th><th>Value</th></tr>\
+                 <tr><td>CPU</td><td>42%</td></tr>\
+                 <tr><td>Memory</td><td>1.2 GB</td></tr>\
+                 <tr><td>Disk</td><td>18 GB free</td></tr></table>\
+                 </body></html>"
+        .to_vec();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a loopback server");
+    let port = listener.local_addr().expect("an address").port();
+    listener.set_nonblocking(true).expect("nonblocking");
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stop);
+    let page = html;
+    std::thread::spawn(move || {
+        while !flag.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buf = [0u8; 4096];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let line = String::from_utf8_lossy(buf.get(..n).unwrap_or(&[]))
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
+                    let (status, kind, body): (&str, &str, &[u8]) = if line.starts_with("GET / ") {
+                        ("200 OK", "text/html; charset=utf-8", page.as_slice())
+                    } else {
+                        ("404 Not Found", "text/plain", b"not found".as_slice())
+                    };
+                    let head = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(body);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let url = format!("http://127.0.0.1:{port}/");
+    let mut s = shell();
+    s.open_app(App::Browser);
+    let _ = draw_frame(&mut s);
+    let field = s
+        .hotspots()
+        .rect_of(Hot::BrowserOmnibox)
+        .expect("the start page draws its search box");
+    click(&mut s, field.center().0, field.center().1);
+    type_text(&mut s, &url);
+    key_press(&mut s, Key::Enter, Modifiers::NONE);
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "53-web-table-values");
+
+    assert!(
+        s.reader.is_some(),
+        "the page loaded; status: {}",
+        s.browser.status
+    );
+    assert_eq!(s.browser.status, "Opened Values");
+    let area = s
+        .browser_engine_area
+        .expect("the page surface is on screen");
+    let lines = s.reader.as_ref().expect("the reader").visible_text(area.h);
+    assert!(
+        lines.iter().any(|line| line == "Metric  Value"),
+        "the header keeps its cells: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "CPU  42%"),
+        "the values stay in their own columns: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "Memory  1.2 GB"),
+        "a second row is readable: {lines:?}"
+    );
+
+    let col_w = (area.w - 48.0) / 2.0;
+    let labels = Rect::new(area.x + 24.0, area.y + 70.0, col_w, 120.0);
+    let values = Rect::new(area.x + 24.0 + col_w, area.y + 70.0, col_w, 120.0);
+    let label_ink = ink(&canvas, labels);
+    let value_ink = ink(&canvas, values);
+    assert!(label_ink > 60, "the label column is drawn: {label_ink} px");
+    assert!(value_ink > 60, "the value column is drawn: {value_ink} px");
+    stop.store(true, Ordering::Relaxed);
+}

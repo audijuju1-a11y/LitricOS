@@ -47,8 +47,10 @@ pub struct DesktopApp {
     pub name: String,
     /// The argument vector, already split and validated.
     pub exec: Vec<String>,
-    /// The entry's `Icon=` name, kept for a future icon-theme reader.
+    /// The entry's `Icon=` name.
     pub icon: Option<String>,
+    /// The PNG the icon name resolved to on this machine, when it resolved.
+    pub icon_path: Option<PathBuf>,
     /// The file this came from.
     pub source: PathBuf,
 }
@@ -80,15 +82,26 @@ pub fn data_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Discover the applications in the machine's XDG directories.
+/// Discover the applications in the machine's XDG directories, resolving each
+/// entry's icon against the machine's icon themes.
 #[must_use]
 pub fn discover() -> Vec<DesktopApp> {
-    discover_in(&data_dirs())
+    discover_in_with(&data_dirs(), &crate::themeicons::theme_dirs())
 }
 
 /// Discover the applications in `dirs`, earlier directories taking precedence.
 #[must_use]
 pub fn discover_in(dirs: &[PathBuf]) -> Vec<DesktopApp> {
+    discover_in_with(dirs, &[])
+}
+
+/// Discover the applications in `dirs` and resolve their icons in `icon_dirs`.
+///
+/// Resolution is a handful of `stat` calls per entry, done once here rather
+/// than in a frame; a name that does not resolve leaves `icon_path` empty and
+/// the launcher draws its generated glyph.
+#[must_use]
+pub fn discover_in_with(dirs: &[PathBuf], icon_dirs: &[PathBuf]) -> Vec<DesktopApp> {
     let mut claimed: Vec<String> = Vec::new();
     let mut apps: Vec<DesktopApp> = Vec::new();
     'dirs: for dir in dirs {
@@ -133,7 +146,10 @@ pub fn discover_in(dirs: &[PathBuf]) -> Vec<DesktopApp> {
                 continue;
             };
             let text = String::from_utf8_lossy(&bytes);
-            if let Some(app) = parse_entry(&text, path, id) {
+            if let Some(mut app) = parse_entry(&text, path, id) {
+                if let Some(icon) = app.icon.as_deref() {
+                    app.icon_path = crate::themeicons::find_in(icon_dirs, icon, 48);
+                }
                 apps.push(app);
             }
         }
@@ -207,6 +223,7 @@ pub fn parse_entry(text: &str, source: PathBuf, id: String) -> Option<DesktopApp
         name,
         exec,
         icon: values.get("Icon").cloned(),
+        icon_path: None,
         source,
     })
 }
