@@ -334,6 +334,61 @@ pub fn table(canvas: &mut Canvas, t: &Tokens, m: &TaskManager, body: Rect) -> Re
     report
 }
 
+/// The rectangle of every process row the table draws, in draw order.
+///
+/// The table's geometry is repeated here on purpose rather than published as
+/// mutable state: this is the hit-testing half of the same layout, and the
+/// journey that clicks a row proves the two agree. Group rows are skipped;
+/// a group heading is not a process and cannot be ended.
+#[must_use]
+pub fn row_bands(t: &Tokens, m: &TaskManager, body: Rect) -> Vec<(Rect, u32)> {
+    let pad = t.sp(Space::Sm);
+    if body.w <= pad * 2.0 || body.h <= 0.0 {
+        return Vec::new();
+    }
+    let rect = Rect::new(
+        body.x + pad,
+        body.y + t.sp(Space::Xs),
+        body.w - pad * 2.0,
+        (body.h - t.sp(Space::Xs) * 2.0).max(0.0),
+    );
+    let heading_style = Style::bold(t.text_px(TypeStep::Footnote), t.text_dim());
+    let footer_style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    let row_h = row_height(t, m);
+    let heading_h = heading_style.size + t.sp(Space::Sm);
+    let footer_h = footer_style.size + t.sp(Space::Sm);
+    if rect.h < heading_h + footer_h + row_h {
+        return Vec::new();
+    }
+    let room = (rect.h - heading_h - footer_h).max(0.0);
+    let per_page = (room / row_h).floor().max(0.0) as usize;
+    let head_bottom = rect.y + heading_h;
+    let filtered = m.filtered();
+    let mut out = Vec::new();
+    for (i, row) in m
+        .rows_to_draw()
+        .iter()
+        .skip(m.scroll)
+        .take(per_page)
+        .enumerate()
+    {
+        if let Row::Process { index } = row {
+            if let Some(p) = filtered.get(*index) {
+                out.push((
+                    Rect::new(
+                        rect.x,
+                        head_bottom + i as f32 * row_h,
+                        rect.w,
+                        row_h - t.sp(Space::Xxs).min(row_h / 4.0),
+                    ),
+                    p.pid,
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// One cell: elided to its own column and aligned inside it.
 #[allow(clippy::too_many_arguments)]
 fn cell(

@@ -390,6 +390,10 @@ pub enum Hot {
     ActivityFilter,
     /// Sort the Activity table by a visible column.
     ActivitySort(crate::taskmgr::Column),
+    /// Select one process row in Activity, by pid.
+    ActivityRow(u32),
+    /// End the selected process, after one confirmation click.
+    ActivityEndTask,
     /// The lock screen's full-surface catcher: a click wakes the password
     /// field.
     LockWake,
@@ -2946,6 +2950,8 @@ pub struct Shell {
     /// The Activity window's model: machine meters, the process table, and what
     /// a person has changed about both.
     pub activity: crate::taskmgr::TaskManager,
+    /// The pid whose End task button is waiting for its confirmation click.
+    pub activity_end_confirm: Option<u32>,
     /// The Files application model (Explorer-style places, history, table).
     pub files: crate::apps::FilesApp,
     /// The host root every file surface reads and writes through.
@@ -3442,6 +3448,7 @@ impl Shell {
             base_scale,
             facts: SystemFacts::default(),
             activity: crate::taskmgr::TaskManager::new(),
+            activity_end_confirm: None,
             files: crate::apps::FilesApp::default(),
             files_root: std::path::PathBuf::from("/"),
             #[cfg(unix)]
@@ -5946,6 +5953,13 @@ impl Shell {
                 self.activity.prefs.sort_by(key, ascending);
                 Vec::new()
             }
+            Hot::ActivityRow(pid) => {
+                self.activity.selected = self.activity.filtered().iter().position(|p| p.pid == pid);
+                self.activity_end_confirm = None;
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::ActivityEndTask => self.end_selected_process(),
             Hot::TrashFilter => Vec::new(),
             Hot::MenuWorkspace | Hot::StatusMetrics => self.perform(Action::Open(App::Activity)),
             Hot::MenuEnvironment => self.perform(Action::ToggleQuickSettings),
@@ -6890,6 +6904,39 @@ impl Shell {
                 self.defender.app.message = format!("Could not check {name}: {error}");
             }
         }
+        Vec::new()
+    }
+
+    /// End the process selected in Activity after one confirming click.
+    ///
+    /// The signal is sent as this session's user, after [`crate::process`] has
+    /// checked the owner and the kernel session; a daemon is not asked because
+    /// no daemon owns the user's own processes. The window says the process was
+    /// *asked* to stop, never that it exited: the next facts sample is what
+    /// decides that.
+    fn end_selected_process(&mut self) -> Vec<Effect> {
+        let Some(pid) = self.activity.selected_pid() else {
+            self.activity.message = Some("Select a process first.".to_owned());
+            return Vec::new();
+        };
+        let name = self
+            .activity
+            .filtered()
+            .iter()
+            .find(|p| p.pid == pid)
+            .map_or_else(|| format!("process {pid}"), |p| p.name.clone());
+        if self.activity_end_confirm != Some(pid) {
+            self.activity_end_confirm = Some(pid);
+            self.activity.message = Some(format!("End {name}? Click End task again to confirm."));
+            self.request_full_redraw();
+            return Vec::new();
+        }
+        self.activity_end_confirm = None;
+        self.activity.message = Some(match crate::process::terminate(pid) {
+            Ok(()) => format!("Asked {name} to stop"),
+            Err(error) => format!("Could not end {name}: {error}"),
+        });
+        self.request_full_redraw();
         Vec::new()
     }
 

@@ -2447,10 +2447,13 @@ fn draw_activity(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
 
     // Search stays above the clipped process table so it remains visible when
     // the window is short. Typing filters the actual TaskManager rows.
+    let end_w = t.px(112.0);
+    let toolbar_gap = t.sp(Space::Xs);
     let search = Rect::new(
         table_rect.x + t.sp(Space::Sm),
         table_rect.y + t.sp(Space::Xs),
-        (table_rect.w - t.sp(Space::Sm) * 2.0).min(t.px(300.0)),
+        (table_rect.w - t.sp(Space::Sm) * 2.0 - end_w - toolbar_gap)
+            .clamp(t.px(110.0), t.px(300.0)),
         t.px(28.0),
     );
     let search_hot = Hot::ActivityFilter;
@@ -2464,6 +2467,46 @@ fn draw_activity(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     );
     shell.hotspots_mut().push(search, search_hot);
 
+    // The one action the process table has. Disabled until a row is selected,
+    // and armed for a second click before anything is signalled.
+    let end_task = Rect::new(search.right() + toolbar_gap, search.y, end_w, search.h);
+    let selected_pid = shell.activity.selected_pid();
+    let confirming = selected_pid.is_some_and(|pid| shell.activity_end_confirm == Some(pid));
+    let end_label = if confirming {
+        "Confirm end"
+    } else {
+        "End task"
+    };
+    ui::button(
+        canvas,
+        &t,
+        end_task,
+        end_label,
+        if selected_pid.is_some() {
+            ui::State::Normal
+        } else {
+            ui::State::Disabled
+        },
+        if confirming { Tone::Bad } else { Tone::Neutral },
+    );
+    if selected_pid.is_some() {
+        shell.hotspots_mut().push(end_task, Hot::ActivityEndTask);
+    }
+    if let Some(message) = &shell.activity.message {
+        let s_message = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        let message_x = end_task.right() + toolbar_gap;
+        let message_w = table_rect.right() - message_x - t.sp(Space::Sm);
+        if message_w > t.px(60.0) {
+            font::draw(
+                canvas,
+                &ui::elide(message, &s_message, message_w),
+                message_x,
+                search.y + t.px(18.0),
+                &s_message,
+            );
+        }
+    }
+
     let table_body = Rect::new(
         table_rect.x,
         search.bottom() + t.sp(Space::Xxs),
@@ -2473,6 +2516,12 @@ fn draw_activity(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let saved = canvas.push_clip(table_body);
     crate::activity::table(canvas, &t, &shell.activity, table_body);
     canvas.set_clip(saved);
+
+    // Every process row is a target; the model's selection paints it.
+    let bands = crate::activity::row_bands(&t, &shell.activity, table_body);
+    for (band, pid) in bands {
+        shell.hotspots_mut().push(band, Hot::ActivityRow(pid));
+    }
 
     // Register exactly the visible heading widths used by the table renderer.
     // Clicking a heading toggles its sort; the keyboard focus ring uses the

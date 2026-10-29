@@ -3375,3 +3375,61 @@ download still cannot be exercised here; no QEMU/display, so the proof is the
 headless frame and the real filesystem; Deep-scan findings in system folders
 remain report-only. A v1 record cannot be retroactively verified; it is reported
 as unverified rather than upgraded with a digest.
+
+## 42. Batch: Activity can select and end a real process (verified)
+
+### 42.1 What the audit found
+
+The Activity window drew a process table with no row targets and no action. The
+Task Manager model had `Change::EndTask`, `EndTree` and `EndGroup`, and an
+`act()` that said "Ending process <pid>" — but nothing outside `taskmgr.rs`
+called it, nothing sent a signal, and `litric-sysd` has no process-signal
+request. The model advertised a capability the product did not have.
+
+No TODO/FIXME/unimplemented markers were found in `src`. The cross-app paths
+already verified in §§36-41 (Files, Defender, downloads, Browser, quarantine)
+are unchanged by this batch.
+
+### 42.2 The wiring
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/process.rs` | New same-user, same-session termination service. Reads `/proc/<pid>/status` for the owner and `/proc/<pid>/stat` for the kernel session, refuses pid 0, pid 1, this desktop and anything in another user or session, then runs the absolute `/bin/kill` (or `/usr/bin/kill`) with `-TERM` and the validated numeric pid. No shell, no `PATH` lookup. |
+| `src/litric-shell/src/activity.rs` | `row_bands` publishes the hit rectangle of every process row the table draws, using the same geometry as the drawing code. Group headings are skipped. |
+| `src/litric-shell/src/shell.rs` | `Hot::ActivityRow(pid)` selects by pid (keeping the model's selection), `Hot::ActivityEndTask` runs one confirmation then the service, and `activity_end_confirm` holds the armed pid. Clicking another row disarms it. |
+| `src/litric-shell/src/views.rs` | An **End task** button beside the process search, disabled with no selection and labelled **Confirm end** while armed. The model's live message is drawn beside it, and every process row is a real target. |
+| `src/litric-shell/src/e2e.rs` | `journey_activity_ends_a_real_process_after_confirmation`: spawns a real `sleep 30`, inserts its real `/proc` identity, clicks its row, clicks End task once (asserts the child is still alive), clicks again, then waits for the real child to exit. |
+
+### 42.3 The rule, stated precisely
+
+The kernel already decides who may signal whom. This batch adds only what makes
+the button's promise honest: the target must have the same effective uid **and**
+the same kernel session id as the desktop. That refuses the machine's services
+even when the shell itself runs as root, and refuses another logged-in user.
+`SIGTERM` is asked for, not `SIGKILL`; the window says "Asked <name> to stop",
+never that it exited. If the process ignores the request, the next facts sample
+still shows it and the table is the truth.
+
+Ending a whole tree or a group is **not** exposed: the model still has
+`EndTree`/`EndGroup` variants, but no UI caller and no implementation, and this
+batch does not claim them. Privileged process control (another user, another
+session) remains unsupported.
+
+### 42.4 Resources
+
+No polling, no thread, no background work: one confirmed click reads two small
+`/proc` files and runs one `kill`. The row hit bands are one bounded vector of
+the rows already on screen, built only while an Activity window draws. Nothing
+is computed when Activity is closed.
+
+### 42.5 Gates
+
+```text
+cargo test --workspace        passed=1712 failed=0   (was 1,708; +4)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the unchanged absent `keys/dev/` material. No test deleted,
+no gate relaxed, no dependency added.

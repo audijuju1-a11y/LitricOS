@@ -62,6 +62,7 @@ pub mod monitor;
 pub mod overview;
 pub mod prefstore;
 pub mod present;
+pub mod process;
 pub mod quarantine;
 pub mod reader;
 pub mod registry;

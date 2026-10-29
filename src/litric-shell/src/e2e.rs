@@ -3530,3 +3530,104 @@ fn journey_defender_restores_a_legacy_quarantine_entry_unverified() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// One Activity session against a real child process: select its real row,
+/// click End task once (a question, not a signal), click again, and watch the
+/// OS process actually exit. The row is built from the child's real `/proc`
+/// identity, so the ownership and session checks are exercised, not bypassed.
+#[test]
+fn journey_activity_ends_a_real_process_after_confirmation() {
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("a real child process");
+    let pid = child.id();
+    let started = std::time::Instant::now();
+    while started.elapsed() < std::time::Duration::from_secs(2)
+        && !std::path::Path::new(&format!("/proc/{pid}/stat")).is_file()
+    {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let status =
+        std::fs::read_to_string(format!("/proc/{pid}/status")).expect("the child's status");
+    let uid = litric_sysd::facts::parse_uid(&status);
+
+    let mut s = shell();
+    s.facts.mem_total_mb = Some(1024);
+    s.facts.processes.push(crate::shell::ProcRow {
+        pid,
+        name: "sleep".to_owned(),
+        cmdline: "sleep 30".to_owned(),
+        state: "sleeping".to_owned(),
+        ppid: 0,
+        threads: 1,
+        ticks: 0,
+        rss_mb: Some(1),
+        uid,
+        cpu: None,
+    });
+    s.activity.prefs.show_system_users = true;
+    s.activity.observe(&s.facts);
+    s.open_app(App::Activity);
+    let _ = draw_frame(&mut s);
+
+    let row = s
+        .hotspots()
+        .rect_of(Hot::ActivityRow(pid))
+        .expect("the real process row is a click target");
+    let _ = click(&mut s, row.center().0, row.center().1);
+    assert_eq!(s.activity.selected_pid(), Some(pid), "the row is selected");
+
+    let _ = draw_frame(&mut s);
+    let end = s
+        .hotspots()
+        .rect_of(Hot::ActivityEndTask)
+        .expect("End task is drawn once a row is selected");
+    let _ = click(&mut s, end.center().0, end.center().1);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.activity
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("Click End task again")),
+        "the first click is a question: {:?}",
+        s.activity.message
+    );
+    assert!(
+        child.try_wait().expect("try_wait").is_none(),
+        "the first click must not signal anything"
+    );
+
+    let end = s
+        .hotspots()
+        .rect_of(Hot::ActivityEndTask)
+        .expect("the confirming control is still there");
+    let _ = click(&mut s, end.center().0, end.center().1);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.activity
+            .message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Asked ")),
+        "the window says the process was asked to stop: {:?}",
+        s.activity.message
+    );
+
+    let started = std::time::Instant::now();
+    let mut ended = false;
+    while started.elapsed() < std::time::Duration::from_secs(3) {
+        if child.try_wait().expect("try_wait").is_some() {
+            ended = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    if !ended {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    assert!(
+        ended,
+        "the real child process survived the confirmed End task"
+    );
+}
