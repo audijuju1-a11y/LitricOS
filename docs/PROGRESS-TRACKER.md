@@ -5486,3 +5486,184 @@ The two frames the journey saved were opened:
 
 Commit `HEAD` and `origin/main` are the same commit; `git status
 --porcelain --untracked-files=no` is empty.
+
+## 61. Batch: a same-length, same-mtime icon rewrite repaints without a restart (verified)
+
+### 61.1 Requirement
+
+§60 closed with this blind spot, in its own words:
+
+> **A same-length rewrite is invisible.** The fingerprint is length plus mtime,
+> and measured on this filesystem a rewrite moves neither mtime, so length is
+> the only signal. Rewriting a file with different bytes *of the same size*
+> would need a content digest, which costs a read per icon per check and is not
+> in this batch.
+
+This batch adds that digest, bounds what it costs, and proves the tile repaints.
+
+### 61.2 Audit, before the change
+
+Two probes, both run before any code was touched:
+
+| Probe | Result |
+| --- | --- |
+| write 15 bytes, rewrite the same path with 15 different bytes, back to back | len 15 → 15, file mtime **identical**, directory mtime identical, entry count 1 → 1 |
+| the same, with the ~1 s gap a real journey has between the two writes | file mtime `…158.000920068` → `…158.962203231` — different, so a `stat` **can** see it |
+
+That second row corrects a claim §59 and §60 made from the first row. A file's
+mtime on this filesystem is **bucketed to about a second**: two writes inside
+one bucket produce a byte-identical value, two writes in different buckets do
+not. So "the mtime never moves" was too strong — it does not move *inside a
+bucket*, and it never moves at all when the writer preserves timestamps, which
+is what `cp -p`, `install -p` and `rsync -t` do. Both cases are invisible to
+every `stat` the shell makes, and both are what this batch has to catch. The
+journey §61 adds therefore restores the timestamps with a real `touch -r` and
+asserts that both the length and the mtime are unchanged, so the test cannot
+silently degrade into measuring the `stat` path.
+
+Audited before designing:
+
+* `FileStamp { len, mtime }` is compared by `scan_files`; `themeicons::scaled`
+  caches decoded pixels by `(PathBuf, usize)`, so a same-path rewrite keeps both
+  the answer and the stale pixels unless something compares bytes.
+* `scan_files` already visits 32 names per check, round-robin, over
+  `IconNames::slots`. A digest pass wants the same walk with a much smaller
+  budget, because it opens and reads a file where a re-stat only looks at it.
+* Measured for scale, from §59's `rustc -O` probe: `metadata` 1.83 µs.
+
+### 61.3 What the digest pass stands on
+
+`DIGEST_BYTES = 512` of the file, FNV-1a over a stack buffer, folded with the
+byte count so a short file cannot collide with a prefix of a longer one. It
+allocates nothing, needs no dependency, and never reads the whole file.
+
+Two rules make it honest rather than noisy:
+
+* `FileStamp::head` is `None` until a digest is taken. A `None` head is
+  **recorded, never reported**, so a name whose digest has not been taken yet
+  cannot invent a change, and a file whose length moved in the same pass
+  re-baselines instead of reporting the same rewrite twice.
+* `scan_files` (length and mtime) runs first every check; when it sees a move it
+  sets `head: None`, which is what hands the bytes to the digest pass next.
+
+`scan_digests` walks the same `slots` vector with its own cursor, takes
+`DIGESTS_PER_SCAN = 8` per check, and reports a change the shell treats exactly
+like the other two signals: drop the decoded copies, repaint, resolve nothing.
+
+### 61.4 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `src/litric-shell/src/desktop_entry.rs` | 349 | `DIGEST_BYTES = 512` — how much of the file the digest reads |
+| `src/litric-shell/src/desktop_entry.rs` | 356 | `DIGESTS_PER_SCAN = 8` — its own, smaller budget |
+| `src/litric-shell/src/desktop_entry.rs` | 435 | `head_digest` — FNV-1a over a stack buffer, one read, no allocation |
+| `src/litric-shell/src/desktop_entry.rs` | 426 | `FileStamp::head` — `None` until measured, so a first look never reports |
+| `src/litric-shell/src/desktop_entry.rs` | 473 | `stamped_file` — metadata plus the digest, taken when a name answers |
+| `src/litric-shell/src/desktop_entry.rs` | 883 | `scan_digests` — bounded round-robin digest pass |
+| `src/litric-shell/src/desktop_entry.rs` | 938 | `head_digests()` / `digests_changed()` counters |
+| `src/litric-shell/src/desktop_entry.rs` | n/a | `scan_files` re-baselines the digest only when length or mtime moved |
+| `src/litric-shell/src/shell.rs` | 7321 | the digest pass, once per check |
+| `src/litric-shell/src/shell.rs` | 7339 | a moved digest drops the decoded copies and repaints |
+| `src/litric-shell/src/shell.rs` | 7359 | journal line carries all three counters |
+| `src/litric-shell/src/e2e.rs` | 5532 | the e2e journey |
+| `src/litric-shell/src/e2e.rs` | 5601 | the journey asserts the rewrite is stat-blind |
+| `src/litric-shell/src/desktop_entry.rs` | 2532 | unit: stat blind, digest sees it |
+| `src/litric-shell/src/desktop_entry.rs` | 2606 | unit: the digest budget, measured |
+
+### 61.5 Tests that fail without it
+
+| Test | Asserts |
+| --- | --- |
+| `desktop_entry::tests::a_same_length_rewrite_is_noticed_by_the_head_digest` | the rewrite keeps the length; `scan_files()` is **false** (§60 blind); `scan_digests()` is **true**; the reload resolves **0** names |
+| `desktop_entry::tests::a_head_digest_pass_is_bounded_and_measured` | 40 names: one check reads exactly 8, and both passes are timed and printed |
+| `e2e::journey_launcher_picks_up_a_same_length_rewrite` | real XDG tree, launcher running: the replacement has the same byte count **and** the original mtime restored by `touch -r`, the journey asserts both, `digests_changed()` reports it, `files_changed() == 0`, `icons_resolved == 0`, and the tile's pixels become the new artwork |
+
+The §53/§54, §57/§58, §59 and §60 tests pass unchanged.
+
+### 61.6 Sensitivity
+
+With `scan_digests` forced to return `false` on entry (the §60 behaviour), the
+new journey fails on its own assertion:
+
+```
+thread 'e2e::journey_launcher_picks_up_a_same_length_rewrite' panicked at litric-shell/src/e2e.rs:5621:5:
+a same-length, same-mtime rewrite was not noticed in 8 watched checks (0 head digests over 1 slots)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 720 filtered out
+```
+
+Restored, the journey passes and the journal prints
+`icons true after 5 leaf scans of 5, 1 file re-stats of 1 and 1 head digests`.
+
+### 61.7 Cost, measured on this machine
+
+| Figure | Value | How |
+| --- | --- | --- |
+| one digest pass, 8 head reads | **74.3 µs** | printed by `a_head_digest_pass_is_bounded_and_measured` (debug test build, 100 passes averaged) |
+| one stat pass, 32 `metadata` calls | **94.4 µs** | same test, same run — §60 recorded 113.9 µs for the same pass, so expect ±20 % between runs |
+| a whole watched check (both passes) | **≈ 169 µs** | the two rows above |
+| memory for 40 names | **11 675 B**, up from 11 369 B in §60 → **+306 B, ≈ 7.6 B per name** | `IconNames::bytes()` |
+| work per frame | **none** | reached only from `refresh_desktop`, behind `DesktopWatch::due`; §55's "30 frames, no stat" and §56's "poll only at period" tests still pass |
+| ceiling | 8 digests and 32 re-stats per check, 512 slots → a full digest cycle in 64 checks | `DIGESTS_PER_SCAN`, `FILES_PER_SCAN`, `MAX_ICON_NAMES` |
+
+The digest reads 512 bytes; the whole file is never read on a check, and the
+decode that follows (when something did change) is the existing bounded one.
+
+### 61.8 Gates
+
+```
+$ cargo fmt --all --check
+FMT_EXIT=0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.03s
+CLIPPY_EXIT=0
+
+$ cargo test --workspace
+PASSED=1810 FAILED=0
+
+$ python3 ci/lint-doc-refs.py
+OK: 1092 citation(s) across 155 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+FILESAFETY_EXIT=0
+  (the new journey's fixture cleanup is registered with its reason)
+
+$ bash ci/verify.sh
+summary: 32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the pre-existing `keys/dev/` key material and the mkosi
+image check; the skips are QEMU-only checks. No gate, golden frame or key was
+added, weakened or generated. Three tests were added this turn (1807 → 1810).
+
+The two frames the journey saved were opened:
+
+* `artifacts/browser-shots/61-before-the-same-length-rewrite.png` — the `Same App`
+  tile on a blue field with an amber disc.
+* `artifacts/browser-shots/61-launcher-same-length-rewrite.png` — the same tile
+  after a rewrite that kept both the byte count and the mtime, now a red field
+  with a white disc. Legible at 82 px, and no restart between the frames.
+
+### 61.9 Limits
+
+* **Only the first 512 bytes are digested.** A rewrite that keeps the length and
+  the mtime and changes only bytes past that window is still invisible. Closing
+  that means hashing the whole file per check, which is the cost this budget
+  exists to avoid.
+* **A rewrite whose mtime moves is caught earlier, by §60's stat pass**, not by
+  the digest — that is the intended order and why the digest re-baselines
+  instead of double-reporting.
+* **The digest cycle is the slowest of the three signals.** At 512 names a full
+  pass takes 64 checks (~64 s), because it is deliberately the smallest budget.
+* **Still a poll.** No inotify, the one-second floor from §55,
+  `#![forbid(unsafe_code)]`, no new dependency.
+* **A rename in the same directory** is still the gap §59 left: `refresh` drops
+  the name on its next validation when `Path::is_file` fails.
+* **`Inherits=` still clears the whole name map** on an order change (§58).
+* **The stamp is per name, not per file**: two names resolving to one file are
+  digested twice.
+
+### 61.10 Git
+
+Commit `HEAD` and `origin/main` are the same commit; `git status
+--porcelain --untracked-files=no` is empty.

@@ -5517,6 +5517,129 @@ fn journey_launcher_picks_up_a_rewritten_icon_file() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A same-length rewrite of an icon shows its new artwork without a restart.
+///
+/// This is the case §60 could not see. The replacement has exactly the same
+/// number of bytes, and its modification time is restored from the file the
+/// launcher already read — which is what a package manager does when it installs
+/// with `cp -p`, `install -p` or `rsync -t`. Measured on this machine, a file's
+/// mtime is reported in ~1 s buckets and two writes inside one bucket produce a
+/// byte-identical value, so no `stat` can tell these two files apart at all: only
+/// the head digest can, and the tile has to repaint rather than keep the pixels
+/// the image cache holds against the unchanged path.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_picks_up_a_same_length_rewrite() {
+    let root = e2e_root("desktop-icon-same-length");
+    let apps = root.join("data/applications");
+    let icons = root.join("data/icons");
+    let theme = icons.join("hicolor/scalable/apps");
+    std::fs::create_dir_all(&apps).expect("applications");
+    std::fs::create_dir_all(&theme).expect("theme");
+    let icon = theme.join("same-icon.svg");
+    let kept_times = root.join("same-icon.timestamps");
+    // The two documents differ only in their colours, so their byte counts are
+    // identical: blue field with an amber disc, then red field with a white one.
+    let before_svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" fill="#2080c0"/><circle cx="12" cy="12" r="7" fill="#fabe28"/></svg>"##;
+    let after_svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="1" y="1" width="22" height="22" fill="#c02020"/><circle cx="12" cy="12" r="7" fill="#f0f0f0"/></svg>"##;
+    assert_eq!(
+        before_svg.len(),
+        after_svg.len(),
+        "the fixture must be a same-length rewrite"
+    );
+    std::fs::write(&icon, before_svg).expect("the first artwork");
+
+    // A real `touch -r` keeps the timestamps of the file the launcher is about
+    // to read, the way an install that preserves mtimes does. Without it the
+    // rewrite would be visible to a stat and this journey would not prove the
+    // digest path at all.
+    let kept = std::process::Command::new("touch")
+        .arg("-r")
+        .arg(&icon)
+        .arg(&kept_times)
+        .status()
+        .expect("touch is available");
+    assert!(kept.success(), "touch -r made the timestamp reference");
+
+    std::fs::write(
+        apps.join("Same-App.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Same App\nIcon=same-icon\nExec=/bin/true\n",
+    )
+    .expect("entry");
+
+    let mut s = shell();
+    s.load_desktop_apps_from(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+    assert_eq!(s.desktop_apps.len(), 1);
+    assert_eq!(s.desktop_icon_names.slot_count(), 1);
+    open_launcher(&mut s);
+    let before = draw_frame(&mut s);
+    save_shot(&before, "61-before-the-same-length-rewrite");
+    let (before_blue, before_amber, before_red) = icon_chip_counts(&before, &s, 0);
+    assert!(
+        before_blue > 20 && before_amber > 5 && before_red < 5,
+        "the first artwork is on the tile: {before_blue} blue, {before_amber} amber, {before_red} red"
+    );
+
+    let len_before = std::fs::metadata(&icon).expect("before").len();
+    let mtime_before = std::fs::metadata(&icon).expect("before").modified().ok();
+    std::fs::write(&icon, after_svg).expect("the replacement artwork");
+    let replaced = std::process::Command::new("touch")
+        .arg("-r")
+        .arg(&kept_times)
+        .arg(&icon)
+        .status()
+        .expect("touch is available");
+    assert!(replaced.success(), "touch -r restored the timestamps");
+    let len_after = std::fs::metadata(&icon).expect("after").len();
+    let mtime_after = std::fs::metadata(&icon).expect("after").modified().ok();
+    assert_eq!(
+        len_before, len_after,
+        "the replacement must keep the byte count, or a stat could see it"
+    );
+    assert_eq!(
+        mtime_before, mtime_after,
+        "the replacement must keep the mtime, or a stat could see it"
+    );
+
+    let mut repainted = false;
+    for _ in 0..8 {
+        s.tick_after(1_010);
+        if s.desktop_icon_names.digests_changed() > 0 {
+            repainted = true;
+            break;
+        }
+    }
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "61-launcher-same-length-rewrite");
+    assert_eq!(
+        s.desktop_icon_names.files_changed(),
+        0,
+        "the stat pass must stay blind: length and mtime are both unchanged"
+    );
+    assert!(
+        repainted,
+        "a same-length, same-mtime rewrite was not noticed in 8 watched checks ({} head digests over {} slots)",
+        s.desktop_icon_names.head_digests(),
+        s.desktop_icon_names.slot_count()
+    );
+    assert_eq!(
+        s.desktop_icons_resolved, 0,
+        "the path did not move, so nothing is resolved again: {}",
+        s.desktop_icons_resolved
+    );
+
+    let (blue, amber, red) = icon_chip_counts(&canvas, &s, 0);
+    assert!(
+        red > 20 && blue < before_blue,
+        "the tile is not the replacement artwork: {red} red now, {before_red} before; {blue} blue now, {before_blue} before"
+    );
+    assert!(
+        amber < before_amber,
+        "the old artwork is still on the tile: {amber} amber now, {before_amber} before"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A new application in one of two application directories re-reads only that
 /// directory, and the launcher still shows the entry that did not move.
 ///

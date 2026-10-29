@@ -338,6 +338,23 @@ pub const LEAVES_PER_SCAN: usize = 12;
 /// sixteen checks.
 pub const FILES_PER_SCAN: usize = 32;
 
+/// The most bytes of an icon the head digest reads.
+///
+/// A rewrite that keeps a file's length and both mtimes is invisible to any
+/// `stat`; the bytes are the only signal left. Half a kilobyte covers an SVG's
+/// header and its first shapes, and a PNG's signature and header chunks, without
+/// reading artwork that the image cache is about to decode anyway. The digest is
+/// not a substitute for a full hash: a change that starts past this window and
+/// keeps the length is not seen, and that is a stated limit.
+pub const DIGEST_BYTES: usize = 512;
+
+/// The most head digests one check takes.
+///
+/// Separate from [`FILES_PER_SCAN`] and much smaller, because this opens and
+/// reads each file while a re-stat only looks at its metadata. Measured in §61:
+/// eight digests cost about what thirty-two `metadata` calls do.
+pub const DIGESTS_PER_SCAN: usize = 8;
+
 /// The directories `find_in_theme` reads inside one theme, deepest first.
 ///
 /// # Why the theme's own stamp is not enough
@@ -403,6 +420,40 @@ fn theme_leaves(theme: &Path) -> Vec<PathBuf> {
 struct FileStamp {
     len: u64,
     mtime: Option<std::time::SystemTime>,
+    /// A digest of the file's first [`DIGEST_BYTES`] bytes, or `None` when it has
+    /// not been taken. `stat` cannot tell two same-length files apart on a
+    /// filesystem that does not move mtimes, and this is what does.
+    head: Option<u32>,
+}
+
+/// A digest of the first [`DIGEST_BYTES`] of `path`.
+///
+/// FNV-1a over a stack buffer, folded with the byte count, so the digest needs no
+/// dependency, allocates nothing, and cannot be confused with the same prefix in
+/// a shorter file. `None` when the file cannot be opened: a name whose file
+/// vanished has no content to compare.
+fn head_digest(path: &Path) -> Option<u32> {
+    use std::io::Read as _;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buffer = [0u8; DIGEST_BYTES];
+    let mut filled = 0usize;
+    while filled < DIGEST_BYTES {
+        let Some(rest) = buffer.get_mut(filled..) else {
+            break;
+        };
+        match file.read(rest) {
+            Ok(0) => break,
+            Ok(read) => filled = filled.saturating_add(read),
+            Err(_) => return None,
+        }
+    }
+    let mut hash: u32 = 0x811c_9dc5;
+    for byte in buffer.get(..filled).unwrap_or(&[]) {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    let count = u32::try_from(filled).unwrap_or(u32::MAX);
+    Some(hash ^ count.wrapping_mul(0x9e37_79b9))
 }
 
 /// The stamp of the file `path`, or `None` when it is not a regular file.
@@ -414,7 +465,15 @@ fn file_stamp(path: &Path) -> Option<FileStamp> {
     Some(FileStamp {
         len: meta.len(),
         mtime: meta.modified().ok(),
+        head: None,
     })
+}
+
+/// The stamp of `path` including its head digest, taken once when a name answers.
+fn stamped_file(path: &Path) -> Option<FileStamp> {
+    let mut stamp = file_stamp(path)?;
+    stamp.head = head_digest(path);
+    Some(stamp)
 }
 
 /// One memoised `Icon=` answer.
@@ -487,6 +546,9 @@ pub struct IconNames {
     file_cursor: usize,
     file_stats: u64,
     files_changed: u64,
+    digest_cursor: usize,
+    head_digests: u64,
+    digests_changed: u64,
     resolved: u64,
     hits: u64,
     validated: u64,
@@ -564,6 +626,9 @@ impl IconNames {
             file_cursor: 0,
             file_stats: 0,
             files_changed: 0,
+            digest_cursor: 0,
+            head_digests: 0,
+            digests_changed: 0,
             resolved: 0,
             hits: 0,
             validated: 0,
@@ -610,6 +675,7 @@ impl IconNames {
             self.names.clear();
             self.slots.clear();
             self.file_cursor = 0;
+            self.digest_cursor = 0;
             self.dirs = icon_dirs.to_vec();
             self.order = fresh;
             self.capture_leaves();
@@ -783,8 +849,18 @@ impl IconNames {
             };
             self.file_stats = self.file_stats.saturating_add(1);
             let fresh = file_stamp(path);
-            if fresh != entry.file {
-                entry.file = fresh;
+            let moved = match entry.file {
+                Some(old) => fresh.is_none_or(|new| old.len != new.len || old.mtime != new.mtime),
+                None => true,
+            };
+            if moved {
+                // Length or mtime moved, so the digest taken against the old
+                // bytes is stale: the digest pass records the new one instead of
+                // reporting a second change for the same rewrite.
+                entry.file = fresh.map(|stamp| FileStamp {
+                    head: None,
+                    ..stamp
+                });
                 changed = true;
             }
         }
@@ -792,6 +868,81 @@ impl IconNames {
             self.files_changed = self.files_changed.saturating_add(1);
         }
         changed
+    }
+
+    /// Take the head digest of the next slice of resolved files.
+    ///
+    /// This is the only signal left when a rewrite keeps a file's length and
+    /// every mtime the filesystem reports: measured on this machine, rewriting a
+    /// file in place moves neither. Returns whether any digest moved, which the
+    /// caller treats exactly like a re-stat that moved.
+    ///
+    /// Bounded to [`DIGESTS_PER_SCAN`] reads, round-robin, and only across names
+    /// whose file was already stamped: a file whose length moved in the same pass
+    /// is recorded here and not reported twice.
+    pub fn scan_digests(&mut self) -> bool {
+        if self.slots.is_empty() {
+            return false;
+        }
+        let total = self.slots.len();
+        let count = total.min(DIGESTS_PER_SCAN);
+        let mut changed = false;
+        for _ in 0..count {
+            let index = if self.digest_cursor < total {
+                self.digest_cursor
+            } else {
+                0
+            };
+            self.digest_cursor = index.saturating_add(1);
+            if self.digest_cursor >= total {
+                self.digest_cursor = 0;
+            }
+            let Some(name) = self.slots.get(index).map(String::as_str) else {
+                continue;
+            };
+            let Some(entry) = self.names.get_mut(name) else {
+                continue;
+            };
+            let Some(path) = entry.path.clone() else {
+                continue;
+            };
+            let Some(file) = entry.file else {
+                continue;
+            };
+            self.head_digests = self.head_digests.saturating_add(1);
+            let fresh = head_digest(&path);
+            if file.head.is_none() {
+                // The first look at these bytes: record, never report.
+                entry.file = Some(FileStamp {
+                    head: fresh,
+                    ..file
+                });
+                continue;
+            }
+            if fresh != file.head {
+                entry.file = Some(FileStamp {
+                    head: fresh,
+                    ..file
+                });
+                changed = true;
+            }
+        }
+        if changed {
+            self.digests_changed = self.digests_changed.saturating_add(1);
+        }
+        changed
+    }
+
+    /// Head digests taken, across the life of this cache.
+    #[must_use]
+    pub fn head_digests(&self) -> u64 {
+        self.head_digests
+    }
+
+    /// Checks whose digest found a same-length rewrite.
+    #[must_use]
+    pub fn digests_changed(&self) -> u64 {
+        self.digests_changed
     }
 
     /// Resolved files re-stamped, across the life of this cache.
@@ -830,6 +981,7 @@ impl IconNames {
             self.names.clear();
             self.slots.clear();
             self.file_cursor = 0;
+            self.digest_cursor = 0;
         }
         self.resolved = self.resolved.saturating_add(1);
         let path = crate::themeicons::find_in(icon_dirs, name, 48);
@@ -844,7 +996,7 @@ impl IconNames {
                 .map(|(index, _)| index)
         });
         let stamp = witness.and_then(|index| self.order.get(index).map(|(_, stamp)| *stamp));
-        let file = path.as_deref().and_then(file_stamp);
+        let file = path.as_deref().and_then(stamped_file);
         self.names.insert(
             name.to_owned(),
             Cached {
@@ -2363,6 +2515,142 @@ mod tests {
         println!(
             "file scan: {per_scan:.1} us/check over {} slots ({FILES_PER_SCAN} metadata calls), cache {} bytes",
             names.slot_count(),
+            names.bytes()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A rewrite that keeps the length and every mtime is noticed by the head
+    /// digest, which is the one signal left.
+    ///
+    /// Measured on this machine: rewriting a file with the same number of bytes
+    /// leaves the file's length, the file's mtime, the directory's mtime and the
+    /// directory's entry count all byte-identical. §60's `stat` pass reports
+    /// nothing; this pass reports the change.
+    #[cfg(unix)]
+    #[test]
+    fn a_same_length_rewrite_is_noticed_by_the_head_digest() {
+        let root = scratch("icons-same-length");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        let icon = icons.join("hicolor/scalable/apps/same-icon.svg");
+        let first_bytes = b"<svg>AAAA</svg>";
+        let second_bytes = b"<svg>BBBB</svg>";
+        assert_eq!(
+            first_bytes.len(),
+            second_bytes.len(),
+            "the fixture must be a same-length rewrite"
+        );
+        std::fs::write(&icon, first_bytes).expect("icon");
+        let prog = program(&root, "run-me");
+        std::fs::write(
+            apps.join("Same.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Same\nIcon=same-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("entry");
+
+        let app_dirs = vec![apps.clone()];
+        let icon_dirs = vec![icons.clone()];
+        let mut names = IconNames::new(&icon_dirs);
+        let found = discover_with_cache(&app_dirs, &icon_dirs, &mut names);
+        assert_eq!(found.apps.len(), 1);
+        assert!(!names.scan_digests(), "the digest is the baseline it took");
+        assert_eq!(names.head_digests(), 1, "one head read for one name");
+
+        std::fs::write(&icon, second_bytes).expect("rewrite");
+        assert_eq!(
+            std::fs::metadata(&icon).expect("meta").len(),
+            first_bytes.len() as u64,
+            "the rewrite kept the length, so no stat can see it"
+        );
+        assert!(
+            !names.scan_files(),
+            "the §60 stat pass is blind to this by construction"
+        );
+        assert!(
+            names.scan_digests(),
+            "the head digest is what sees a same-length rewrite"
+        );
+        assert_eq!(names.digests_changed(), 1);
+        assert!(!names.scan_digests(), "the new digest is the baseline now");
+
+        let after = reload_with_cache(
+            &app_dirs,
+            &icon_dirs,
+            &found.apps,
+            &app_dirs,
+            true,
+            &mut names,
+        );
+        assert_eq!(
+            after.icons_resolved, 0,
+            "the path did not move, so nothing is resolved again: {}",
+            after.icons_resolved
+        );
+        println!(
+            "same-length rewrite: {} head digests, cache {} bytes",
+            names.head_digests(),
+            names.bytes()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The digest pass reads a fixed slice per check, and is measured.
+    #[cfg(unix)]
+    #[test]
+    fn a_head_digest_pass_is_bounded_and_measured() {
+        let root = scratch("icons-digest-bound");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        let prog = program(&root, "run-me");
+        let wanted = 40usize;
+        for index in 0..wanted {
+            std::fs::write(
+                icons.join(format!("hicolor/scalable/apps/dig-{index}.svg")),
+                "<svg/>",
+            )
+            .expect("icon");
+            std::fs::write(
+                apps.join(format!("dig-{index}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName=Dig {index:02}\nIcon=dig-{index}\nExec={}\n",
+                    prog.display()
+                ),
+            )
+            .expect("entry");
+        }
+        let icon_dirs = vec![icons];
+        let mut names = IconNames::new(&icon_dirs);
+        let found = discover_with_cache(std::slice::from_ref(&apps), &icon_dirs, &mut names);
+        assert_eq!(found.apps.len(), wanted);
+        assert!(DIGESTS_PER_SCAN < wanted, "the budget must bite");
+        let _ = names.scan_digests();
+        assert_eq!(
+            names.head_digests(),
+            DIGESTS_PER_SCAN as u64,
+            "one check reads one slice"
+        );
+
+        let started = std::time::Instant::now();
+        let rounds = 100u32;
+        for _ in 0..rounds {
+            let _ = names.scan_digests();
+        }
+        let per_digest_pass = started.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
+        let started = std::time::Instant::now();
+        for _ in 0..rounds {
+            let _ = names.scan_files();
+        }
+        let per_stat_pass = started.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
+        println!(
+            "digest pass: {per_digest_pass:.1} us/check for {DIGESTS_PER_SCAN} head reads; stat pass {per_stat_pass:.1} us/check for {FILES_PER_SCAN} metadata calls; {} bytes",
             names.bytes()
         );
         let _ = std::fs::remove_dir_all(&root);
