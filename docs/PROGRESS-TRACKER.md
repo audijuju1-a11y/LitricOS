@@ -5868,3 +5868,228 @@ The two frames the journey saved were opened:
 
 Commit `HEAD` and `origin/main` are the same commit; `git status
 --porcelain --untracked-files=no` is empty.
+
+## 63. Batch: capability grants survive a restart, and a corrupt record denies (verified)
+
+### 63.1 Requirement
+
+The gate matrix has carried this limitation since the broker was written, in its
+own words:
+
+> grants are in-memory and do not survive reboot (ADR-0016)
+
+The consequence is a permission system that forgets: the user answers a prompt,
+the daemon restarts, and every application is denied until it asks again — while
+the audit that explains what happened is gone with it. ADR-0016 also places the
+broker inside `litric-sysd` and says persistence belongs to the daemon, which is
+why the file lives there and `litric-caps` stays I/O-free.
+
+### 63.2 Audit, before the change
+
+Read on this tree before any edit:
+
+* `Broker` held `grants: HashMap<AppId, Vec<Grant>>` and `audit: Vec<AuditEntry>`
+  and nothing else; `Sysd::new` built it, called `grant_local_session`, and the
+  process owned it until exit.
+* The only `grant` call sites in the daemon were inside that constructor. There
+  was no wire verb that grants — deliberately: a client that could ask for a
+  capability would be the confused deputy the layer exists to prevent.
+* Nothing under `src/litric-sysd` read or wrote `/var/lib`; the daemon had no
+  state path, no `--state` flag and no start line reporting one.
+* A denial was visible only in `CAPS AUDIT`, from memory. `CAPS AUDIT` after a
+  restart returned `count=0`.
+
+So the measured “before” is exact: **restart → 0 active grants for the local
+client, 0 audit records**, whatever the user had answered.
+
+### 63.3 What the record stands on
+
+The format is line-oriented text with a protocol line, tabs between fields, and
+three properties that make it safe to trust:
+
+1. **Corruption is a denial.** A missing protocol line, a newer version, a bad
+   app id, an unparseable capability or scope, an unknown issuer or reason, a
+   line past 4 KiB, or a file past 256 KiB rejects the **whole** record. The
+   daemon then starts with an empty broker — the policy grants included — and
+   says `store=corrupt:<why>` on its start line and in `CAPS LIST`. Partial
+   acceptance would restore a subset nobody audited.
+2. **A write is atomic.** Temporary file in the same directory, `fsync`,
+   `rename`, `fsync` the directory — the shape `prefstore` proved. A power cut
+   leaves the previous record, never a prefix of the new one.
+3. **It is bounded.** `Broker::MAX_GRANTS = 1024` grant records and
+   `MAX_AUDIT_RECORDS = 512` decision records, both enforced on write *and* on
+   read, against a 256 KiB read ceiling. The audit ring in memory stays at its
+   own 4,096.
+
+Two semantics are stated rather than implied:
+
+* **A corrupt file is never overwritten.** A grant attempted while the record is
+  unreadable fails with “refusing to overwrite it”, because the damaged file is
+  the evidence of what happened.
+* **This is a checkpoint, not a write-ahead log.** Decisions are written at
+  startup, on every grant or revocation, and when `CAPS AUDIT` is read (that is
+  the moment the log has to be worth reading). Decisions made since the last
+  checkpoint are lost if the process is `SIGKILL`ed. §63.9 keeps that in the
+  limitation list instead of hiding it.
+
+### 63.4 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `src/litric-caps/src/lib.rs` | 80 | `Issuer::parse` — a token this build cannot read restores nothing, never `Policy` |
+| `src/litric-caps/src/lib.rs` | 168 | `Grant::restore` — the one constructor a store may use, revoked-at included |
+| `src/litric-caps/src/lib.rs` | 311 | `Broker::MAX_GRANTS = 1024` — the ceiling both the broker and the file use |
+| `src/litric-caps/src/lib.rs` | 348 | `grant_count` — what `CAPS LIST` reports |
+| `src/litric-caps/src/lib.rs` | 356 | `all_grants` — the snapshot the store writes |
+| `src/litric-caps/src/lib.rs` | 367 | `restore_grants` — bounded restore, returns how many were accepted |
+| `src/litric-caps/src/lib.rs` | 381 | `restore_audit` — the audit ring comes back through its existing cap |
+| `src/litric-caps/src/lib.rs` | 390 | `record_event` — a revocation is recorded as the decision it creates |
+| `src/litric-sysd/src/grants.rs` | 65 | `MAX_FILE_BYTES = 256 KiB` — past this the file is refused before it is buffered |
+| `src/litric-sysd/src/grants.rs` | 72 | `MAX_AUDIT_RECORDS = 512` — the newest decisions, measured at 45.6 B/line |
+| `src/litric-sysd/src/grants.rs` | 111 | `Store::load` — metadata first, then one bounded read |
+| `src/litric-sysd/src/grants.rs` | 141 | `Store::save` — temp file, fsync, rename, fsync the directory |
+| `src/litric-sysd/src/grants.rs` | 193 | `encode` — sorted grants, capped audit, tabs as separators |
+| `src/litric-sysd/src/grants.rs` | 285 | `decode` — one bad line rejects the whole record |
+| `src/litric-sysd/src/grants.rs` | 382 | `parse_app` — accepts the reserved system id the shell’s policy grants live under |
+| `src/litric-sysd/src/grants.rs` | 439 | `parse_capability` — the canonical `id@scope` form back to a capability |
+| `src/litric-sysd/src/grants.rs` | 455 | `parse_scope` — URI, resource and host, tried in that order so they stay distinct |
+| `src/litric-sysd/src/state.rs` | 169 | `with_grant_store` — loaded, seeded, or corrupt-and-empty; no fourth state |
+| `src/litric-sysd/src/state.rs` | 223 | `persist_grants` — refuses to overwrite a record it could not read |
+| `src/litric-sysd/src/state.rs` | 253 | `grant_and_save` — a grant is not “issued” until it is on disk |
+| `src/litric-sysd/src/state.rs` | 264 | `revoke_and_save` — revocation, its audit entry, and the write |
+| `src/litric-sysd/src/state.rs` | 214 | `save_grants` — the checkpoint the daemon calls when the audit is read |
+| `src/litric-sysd/src/state.rs` | 376 | reading the audit checkpoints it, so the log is worth reading after a crash |
+| `src/litric-sysd/src/state.rs` | 747 | `CAPS LIST` — the store note, record counts, and the client’s active capabilities |
+| `src/litric-sysd/src/proto.rs` | 85 | `CAPS LIST` on the wire: a question, no capability needed |
+| `src/litric-sysd/src/proto.rs` | 341 | its parser arm |
+| `src/litric-sysd/src/main.rs` | 52 | `/var/lib/litric-sysd/grants.conf` — under `/var`, so it survives a reboot |
+| `src/litric-sysd/src/main.rs` | 170 | the serve mode attaches the store it was given |
+| `src/litric-sysd/src/main.rs` | 181 | the start line carries `store=` and `records=`, so a boot log shows the state |
+| `src/litric-sysd/src/lib.rs` | 39 | the module is part of the daemon’s library, not a hidden binary detail |
+| `src/litric-sysd/src/grants.rs` | 574 | unit: eight damaged records are refused, none half-restored |
+| `src/litric-sysd/src/grants.rs` | 629 | unit: full-size record measured — bytes, save µs, load µs |
+| `src/litric-sysd/src/state.rs` | 844 | unit: grant and denial reloaded from the same file |
+| `src/litric-sysd/src/state.rs` | 888 | unit: corruption empties the broker, policy grants included |
+| `src/litric-sysd/src/state.rs` | 940 | unit: revoked-at and its audit entry survive |
+| `src/litric-sysd/tests/grants_restart.rs` | 98 | process test: two real daemons, one real socket, a damaged record |
+| `ci/lint-file-safety.py` | 160 | the store’s own temporary-file deletion, registered with its reason |
+| `ci/lint-file-safety.py` | 169 | the process test’s fixture and socket cleanup, registered with its reason |
+
+### 63.5 Tests, at two levels
+
+Unit tests in `src/litric-sysd/src/grants.rs` and `state.rs`:
+
+* `a_record_round_trips_through_the_file` — grants, an expiring grant, a revoked
+  grant and an audit entry survive exactly;
+* `a_header_only_record_is_an_empty_broker_not_corruption` — “the user revoked
+  everything” is a valid state, not damage;
+* `garbage_grants_nothing` — eight shapes of damage, every one refused;
+* `a_newer_version_is_refused_instead_of_guessed`;
+* `an_oversized_file_is_refused_before_it_is_read`;
+* `the_audit_is_written_at_its_cap_not_beyond` and
+  `the_grant_table_is_written_at_the_broker_cap` — the ceilings bite, and the
+  newest audit records are the ones kept;
+* `every_scope_kind_round_trips` and
+  `a_denial_reason_survives_with_the_field_it_needs` — the encoders are not
+  lossy for the cases the broker can produce;
+* `a_grant_and_a_denial_survive_a_restart`,
+  `a_revocation_survives_a_restart_and_is_audited`,
+  `an_expiring_grant_still_expires_after_a_restart`,
+  `a_corrupt_record_grants_nothing_including_the_policy_set`,
+  `a_corrupt_record_is_not_overwritten_by_a_new_grant`,
+  `caps_list_reports_the_store_and_the_grants`.
+
+The process test is `src/litric-sysd/tests/grants_restart.rs`:
+`a_corrupt_record_makes_a_restarted_daemon_grant_nothing` starts the real
+`litric-sysd --serve` twice over a real Unix socket, asserts `store=seeded` and
+a policy grant on the first run, damages the record with a truncated grant line,
+and asserts the second run answers `store=corrupt:…`, `grant_records=0`, and no
+`capability=` line at all. It is a restart of the binary, not a re-construction
+of a struct.
+
+### 63.6 Sensitivity proof
+
+The property that matters is “corrupt means none”. Forcing the old behaviour —
+keeping the policy grants when the record cannot be read — makes the test fail
+with the real panic:
+
+```text
+thread 'state::tests::a_corrupt_record_grants_nothing_including_the_policy_set' panicked at litric-sysd/src/state.rs:904:9:
+not even the policy grants may survive a corrupt record
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 201 filtered out
+```
+
+Restored to deny-all, the same test passes and the process test agrees over the
+socket.
+
+### 63.7 Measured costs
+
+Measured by `the_record_costs_what_the_budget_says`, which writes the worst case
+the format allows and reads it back with the production code path (debug build,
+one run, this host):
+
+| Figure | Value |
+| --- | ---: |
+| record, 1,024 grants + 512 audit records | **69,964 bytes** (68.3 KiB) |
+| save (create, write, fsync, rename, dir fsync) | **23,859 µs** |
+| load (metadata, read, parse, validate) | **4,792 µs** |
+| bytes per record line | ≈ 45.6 B |
+| read ceiling | 256 KiB — 3.7× the worst case above |
+| per-frame work added | **0** (the store is touched at startup, grant, revoke and audit read only) |
+| bytes persisted before this batch | 0 |
+
+The seeded record a normal boot writes is seven policy grants and no audit: a
+few hundred bytes. The 1,024-grant case is a ceiling, not an expectation. The
+23.9 ms save cost is `fsync` on this host’s filesystem, paid once per grant
+change — not on every decision, which is the reason the checkpoint design was
+chosen over writing on each `check`.
+
+### 63.8 Gate
+
+```text
+$ cargo fmt --all --check
+exit 0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+exit 0
+
+$ cargo test --workspace
+1,833 passed; 0 failed   (was 1,814 before this batch; +19)
+
+$ python3 ci/lint-doc-refs.py
+OK: 1,182 citation(s) across 156 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+OK: 110 deletion site(s), all inside reviewed functions
+
+$ bash ci/verify.sh
+summary: 32 pass, 2 fail, 3 skipped
+```
+
+The two failures and three skips are the recorded baseline: `keys/dev/` is absent
+on this host and mkosi/QEMU are not installed. No gate, golden frame or key file
+was edited.
+
+### 63.9 Limits, stated
+
+* **It is a checkpoint, not a WAL.** A `SIGKILL` between checkpoints loses the
+  decisions made since the last one. The grants themselves are written on the
+  change that creates them, so a permission cannot silently disappear; the
+  audit of the last few checks can.
+* **The file is protected by ownership, not cryptography.** Mode 0600 in a 0700
+  directory under a root-owned path. A host attacker who can write it can grant
+  whatever they like, exactly as they could edit `/etc/sudoers`; tamper-evident
+  records are a separate decision.
+* **There is still no wire verb that grants.** Persistence is for grants issued
+  by policy or by a future prompt path, not a way for a client to ask for one.
+  `CAPS LIST` is read-only introspection.
+* **Nothing has run inside a booted image.** The store path, the unit and the
+  mount are host-level facts; the image row stays evidence-level `UNIT` +
+  `INTEGRATION`-on-host until a builder boots it (§A1 of the plan).
+* **The parked `litric-capd` units remain parked.** ADR-0016 puts the broker
+  inside `litric-sysd`; this batch follows that rather than reviving the units.
+
+### 63.10 Git
+
+Base `4c1b7d3`. The batch is committed on `main` and pushed; `HEAD ==
+origin/main` and the tracked worktree is empty at the end of the turn.

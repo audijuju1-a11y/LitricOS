@@ -1,0 +1,25 @@
+   Compiling litric-shell v0.2.0 (/workspace/chats/d7991b8c41a570fd94f0a9bc/src/litric-shell)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.95s
+     Running unittests src/lib.rs (target/debug/deps/litric_shell-757f523aab285958)
+
+running 1 test
+test e2e::journey_launcher_reloads_only_the_changed_applications_directory ... FAILED
+
+failures:
+
+---- e2e::journey_launcher_reloads_only_the_changed_applications_directory stdout ----
+litric-shell: desktop: 2 directories, 2 entries read (["/tmp/litric-shell-e2e-desktop-incremental-362492/home/applications", "/tmp/litric-shell-e2e-desktop-incremental-362492/system/applications"] renamed, icons false)
+
+thread 'e2e::journey_launcher_reloads_only_the_changed_applications_directory' (362493) panicked at litric-shell/src/e2e.rs:5100:5:
+assertion `left == right` failed: a reload read 2 directories; only the changed one should be read
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    e2e::journey_launcher_reloads_only_the_changed_applications_directory
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 702 filtered out; finished in 1.77s
+
+error: test failed, to rerun pass `-p litric-shell --lib`

@@ -157,6 +157,20 @@ ALLOWED = {
     "src/litric-sysd/src/providers.rs": {
         "apply_file": "removes one Wi-Fi credential; the path is refused unless it is a direct child of iwd's state directory under the daemon root, and the network name was validated by `valid_ssid` before the path was built",
     },
+    "src/litric-sysd/src/grants.rs": {
+        "save": "removes only the store's own temporary file (grants.conf.tmp.<pid>) -- before writing, and again when the write failed -- never a grant record",
+        "fixture": "removes the temporary fixture root this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
+        "cleanup": "removes the temporary fixture root this test created under the system temp directory, after asserting the record it wrote round-tripped or was refused",
+    },
+    "src/litric-sysd/src/state.rs": {
+        "grants_fixture": "removes the temporary fixture root this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
+        "grants_cleanup": "removes the temporary fixture root this grant-restart test created under the system temp directory, after asserting the grants and audit it wrote were the ones a second daemon state loaded",
+    },
+    "src/litric-sysd/tests/grants_restart.rs": {
+        "scratch": "removes the temporary fixture root this process-level test is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
+        "a_corrupt_record_makes_a_restarted_daemon_grant_nothing": "removes this test's own stale socket before starting the first daemon, tagged with the process id under the system temp directory",
+        "cleanup": "removes the temporary fixture root and the socket this restart test created under the system temp directory, after stopping both daemons and asserting a corrupt record granted nothing",
+    },
     "src/litric-compositor/src/keymap.rs": {
         "load": "unlinks the keymap file it has just written into the session runtime directory, after the descriptor is open and before any client is given it: the path is built from the runtime directory the caller supplied, never a user path, and the open descriptor is what clients receive",
     },

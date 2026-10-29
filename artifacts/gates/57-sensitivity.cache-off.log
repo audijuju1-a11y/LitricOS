@@ -1,0 +1,25 @@
+   Compiling litric-shell v0.2.0 (/workspace/chats/d7991b8c41a570fd94f0a9bc/src/litric-shell)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.55s
+     Running unittests src/lib.rs (target/debug/deps/litric_shell-757f523aab285958)
+
+running 1 test
+test e2e::journey_launcher_resolves_a_shared_icon_name_once ... FAILED
+
+failures:
+
+---- e2e::journey_launcher_resolves_a_shared_icon_name_once stdout ----
+litric-shell: desktop: 1 directories, 2 entries, 2 names resolved (["/tmp/litric-shell-e2e-desktop-icon-name-370641/data/applications"] reread, icons false)
+
+thread 'e2e::journey_launcher_resolves_a_shared_icon_name_once' (370642) panicked at litric-shell/src/e2e.rs:5105:5:
+assertion `left == right` failed: two entries share one icon name, so the theme tree should be asked once, not 2 times
+  left: 2
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    e2e::journey_launcher_resolves_a_shared_icon_name_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 705 filtered out; finished in 1.65s
+
+error: test failed, to rerun pass `-p litric-shell --lib`

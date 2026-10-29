@@ -45,6 +45,12 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// and because `/` is a read-only dm-verity root that could not hold it anyway.
 const DEFAULT_SOCKET: &str = "/run/litric/sysd.sock";
 
+/// Where the durable capability record lives by default.
+///
+/// Under `/var` because it must survive a reboot — that is the whole point of
+/// the file — and because the read-only dm-verity root could not hold it.
+const DEFAULT_STATE: &str = "/var/lib/litric-sysd/grants.conf";
+
 /// What the command line asked for.
 #[derive(Debug)]
 enum Mode {
@@ -66,6 +72,7 @@ struct Args {
     socket: PathBuf,
     home: String,
     root: PathBuf,
+    state: PathBuf,
 }
 
 fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
@@ -74,6 +81,7 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
         socket: PathBuf::from(DEFAULT_SOCKET),
         home: std::env::var("HOME").unwrap_or_else(|_| "/root".to_owned()),
         root: PathBuf::from("/"),
+        state: PathBuf::from(DEFAULT_STATE),
     };
     let mut saw_mode = false;
     while let Some(a) = it.next() {
@@ -96,6 +104,7 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
             "--socket" => args.socket = PathBuf::from(need("--socket")?),
             "--home" => args.home = need("--home")?,
             "--root" => args.root = PathBuf::from(need("--root")?),
+            "--state" => args.state = PathBuf::from(need("--state")?),
             "--help" | "-h" => {
                 return Ok(Args {
                     mode: Mode::Help,
@@ -122,7 +131,7 @@ litric-sysd — the LitricOS system daemon
 
 USAGE:
     litric-sysd [--report] [--root DIR]
-    litric-sysd --serve [--socket PATH] [--home DIR] [--root DIR]
+    litric-sysd --serve [--socket PATH] [--home DIR] [--root DIR] [--state PATH]
     litric-sysd --query REQUEST [--socket PATH]
 
 OPTIONS:
@@ -132,6 +141,8 @@ OPTIONS:
     --socket PATH     Socket path (default /run/litric/sysd.sock).
     --home DIR        The home directory the storage layout is derived from.
     --root DIR        Where /proc and /sys are rooted. For testing.
+    --state PATH      The durable capability record. Default
+                      /var/lib/litric-sysd/grants.conf.
     -h, --help        This text.
     -V, --version     Version.
 ";
@@ -156,7 +167,7 @@ fn report(root: &Path, home: &str) -> ExitCode {
 
 #[cfg(unix)]
 fn run_server(args: &Args) -> ExitCode {
-    let state = state::Sysd::from_system(&args.home, &args.root);
+    let state = state::Sysd::from_system(&args.home, &args.root).with_grant_store(&args.state);
     let listener = match server::bind(&args.socket) {
         Ok(l) => l,
         Err(e) => {
@@ -166,6 +177,12 @@ fn run_server(args: &Args) -> ExitCode {
     };
     println!("litric.sysd.version={VERSION}");
     println!("litric.sysd.socket={}", args.socket.display());
+    println!(
+        "litric.sysd.grants={} store={} records={}",
+        state.grants_note(),
+        args.state.display(),
+        state.grant_count()
+    );
     // The measurements go to the console as well as the journal. A daemon that
     // starts silently is indistinguishable, from outside a headless VM, from
     // one that did not start; these lines are what tools/boot-test.sh greps for.

@@ -70,6 +70,22 @@ impl Issuer {
             Self::Developer => "developer",
         }
     }
+
+    /// Parse the audit token back.
+    ///
+    /// Unknown tokens are `None`, never a guess. A durable record whose issuer
+    /// cannot be read must not be restored as `Policy`: that would turn a
+    /// damaged line into an authority the user never granted.
+    #[must_use]
+    pub fn parse(token: &str) -> Option<Self> {
+        Some(match token {
+            "user" => Self::User,
+            "user-action" => Self::UserAction,
+            "policy" => Self::Policy,
+            "developer" => Self::Developer,
+            _ => return None,
+        })
+    }
 }
 
 /// A capability granted to an application.
@@ -140,6 +156,29 @@ impl Grant {
     #[must_use]
     pub const fn revoked_at(&self) -> Option<Timestamp> {
         self.revoked_at
+    }
+
+    /// Rebuild a grant from a durable record.
+    ///
+    /// Only a store calls this. It is deliberately not a `FromStr`: the fields
+    /// arrive as separate columns, the caller has already refused anything it
+    /// could not parse, and keeping the constructor explicit makes the one
+    /// place a revoked-at can be set from outside the broker visible.
+    #[must_use]
+    pub const fn restore(
+        capability: Capability,
+        issuer: Issuer,
+        issued_at: Timestamp,
+        expires_at: Option<Timestamp>,
+        revoked_at: Option<Timestamp>,
+    ) -> Self {
+        Self {
+            capability,
+            issuer,
+            issued_at,
+            expires_at,
+            revoked_at,
+        }
     }
 
     /// Whether this grant is usable at `now`.
@@ -263,6 +302,14 @@ impl Broker {
     /// settings UI reads for "recent activity".
     pub const DEFAULT_AUDIT_CAP: usize = 4096;
 
+    /// Hard ceiling on grants the broker will hold.
+    ///
+    /// One record per granted capability per application. At 1,024 the broker
+    /// holds 1,024 × (a grant plus a map entry) — tens of kilobytes — and a
+    /// hostile or damaged store cannot grow it without bound. The store writes
+    /// and reads against this same number so the two ceilings cannot drift.
+    pub const MAX_GRANTS: usize = 1024;
+
     /// Create an empty broker. **Every application starts with nothing.**
     #[must_use]
     pub fn new() -> Self {
@@ -294,6 +341,54 @@ impl Broker {
     #[must_use]
     pub fn is_registered(&self, app: &AppId) -> bool {
         self.grants.contains_key(app)
+    }
+
+    /// How many grant records are held, revoked and expired ones included.
+    #[must_use]
+    pub fn grant_count(&self) -> usize {
+        self.grants.values().map(Vec::len).sum()
+    }
+
+    /// Every grant on record, paired with its application.
+    ///
+    /// The daemon's store sorts this before writing so the file's contents do
+    /// not depend on hash order.
+    pub fn all_grants(&self) -> impl Iterator<Item = (&AppId, &Grant)> {
+        self.grants
+            .iter()
+            .flat_map(|(app, list)| list.iter().map(move |grant| (app, grant)))
+    }
+
+    /// Restore grants read from a durable record.
+    ///
+    /// The caller has already validated every field. This refuses to exceed
+    /// [`Self::MAX_GRANTS`], so a damaged or hostile file cannot grow the
+    /// broker without bound, and returns how many records were accepted.
+    pub fn restore_grants<I: IntoIterator<Item = (AppId, Grant)>>(&mut self, grants: I) -> usize {
+        let mut accepted: usize = 0;
+        for (app, grant) in grants {
+            if accepted >= Self::MAX_GRANTS {
+                break;
+            }
+            self.grants.entry(app).or_default().push(grant);
+            accepted = accepted.saturating_add(1);
+        }
+        accepted
+    }
+
+    /// Restore the audit ring, oldest first, through the same bound every
+    /// decision uses.
+    pub fn restore_audit<I: IntoIterator<Item = AuditEntry>>(&mut self, entries: I) {
+        for entry in entries {
+            self.record(entry);
+        }
+    }
+
+    /// Record an event that is decision-shaped but was not a `check` — the
+    /// daemon writes a revocation here so the log answers "when did this stop
+    /// working?" as well as "what did it ask for?".
+    pub fn record_event(&mut self, entry: AuditEntry) {
+        self.record(entry);
     }
 
     /// Issue a grant.

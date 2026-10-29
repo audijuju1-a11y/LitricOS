@@ -76,6 +76,13 @@ pub enum Request {
     TrashPlanEmpty,
     /// The capability audit log.
     CapsAudit,
+    /// The local client's active capabilities, and how the durable record was
+    /// read.
+    ///
+    /// A question: it changes nothing, needs no capability, and is what makes a
+    /// restart observable from outside the process (`store=loaded:<n>` after a
+    /// clean start, `store=corrupt:…` when the record was refused).
+    CapsList,
     /// Where the default sound sink's volume is, as the sound server reports it.
     ///
     /// A question, so it needs no capability and is allowed to the local client
@@ -329,6 +336,10 @@ impl Request {
                 "audit" => {
                     arity("CAPS AUDIT", 1)?;
                     Ok(Self::CapsAudit)
+                }
+                "list" => {
+                    arity("CAPS LIST", 1)?;
+                    Ok(Self::CapsList)
                 }
                 other => Err(ProtoError::BadArgument {
                     name: "CAPS subcommand",
@@ -661,6 +672,15 @@ mod tests {
             Ok(Request::TrashPlanEmpty)
         );
         assert_eq!(Request::parse("CAPS AUDIT"), Ok(Request::CapsAudit));
+        assert_eq!(Request::parse("CAPS LIST"), Ok(Request::CapsList));
+        assert_eq!(
+            Request::parse("CAPS LIST extra"),
+            Err(ProtoError::BadArity {
+                verb: "CAPS LIST",
+                expected: 1,
+                got: 2
+            })
+        );
     }
 
     // ---- the write half: provider actions ---------------------------------

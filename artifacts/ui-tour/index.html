@@ -1,0 +1,65 @@
+<!doctype html><meta charset="utf-8"><title>LitricOS UI Tour</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0;background:#0b0c0f;color:#e7e9ee;font:16px/1.6 system-ui,"Noto Sans Thai",sans-serif}
+header{padding:40px clamp(16px,5vw,72px) 8px}
+h1{font-size:clamp(28px,4vw,46px);margin:0 0 8px;letter-spacing:-.02em}
+h2{margin:44px 0 12px;font-size:22px;color:#9ff5c8}
+p{max-width:900px;color:#aeb4c0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:20px;padding:0 clamp(16px,5vw,72px) 24px}
+figure{margin:0;background:#14161b;border:1px solid #232732;border-radius:14px;overflow:hidden}
+img{display:block;width:100%;height:auto}
+figcaption{padding:9px 12px;color:#c9ced8;font-size:14px}
+code{background:#181b21;padding:2px 6px;border-radius:6px}
+.note{border-left:3px solid #f0b34a;padding:10px 14px;background:#191a17;color:#d9d3c2;max-width:900px;margin:14px clamp(16px,5vw,72px)}
+</style>
+<header><h1>LitricOS — UI Tour</h1>
+<p>เฟรมจริงจากตัววาดของ shell (<code>views::draw</code>) ที่เรนเดอร์แบบ headless บนโฮสต์ ด้วยฟอนต์ Noto ชุดเดียวกับภาพ OS ข้อมูลในภาพเป็น fixture คงที่ ไม่ใช่เครื่องที่ boot จริง</p>
+</header>
+<div class="note">ภาพทั้งหมดเป็น "ภาพประกอบการออกแบบที่รันจริงในโค้ด" — ไม่ใช่หลักฐานว่า image บูตได้ และไม่มี QEMU/Chromium ในสภาพแวดล้อมนี้</div>
+<h2>เดสก์ท็อปและ overlay</h2><div class="grid">
+<figure><img src="01-desktop-idle.png" loading="lazy" alt="เดสก์ท็อปว่าง"><figcaption>เดสก์ท็อปว่าง <span style="color:#6f7684">— 01-desktop-idle.png</span></figcaption></figure>
+<figure><img src="02-desktop-start.png" loading="lazy" alt="เริ่มระบบ: Activity + Environments"><figcaption>เริ่มระบบ: Activity + Environments <span style="color:#6f7684">— 02-desktop-start.png</span></figcaption></figure>
+<figure><img src="03-windows-overlap.png" loading="lazy" alt="สามหน้าต่างซ้อน"><figcaption>สามหน้าต่างซ้อน <span style="color:#6f7684">— 03-windows-overlap.png</span></figcaption></figure>
+<figure><img src="14-launcher.png" loading="lazy" alt="Launcher"><figcaption>Launcher <span style="color:#6f7684">— 14-launcher.png</span></figcaption></figure>
+<figure><img src="15-search.png" loading="lazy" alt="ค้นหา (Seek)"><figcaption>ค้นหา (Seek) <span style="color:#6f7684">— 15-search.png</span></figcaption></figure>
+<figure><img src="17-control-centre.png" loading="lazy" alt="Control Center"><figcaption>Control Center <span style="color:#6f7684">— 17-control-centre.png</span></figcaption></figure>
+<figure><img src="18-notifications.png" loading="lazy" alt="Notification Center"><figcaption>Notification Center <span style="color:#6f7684">— 18-notifications.png</span></figcaption></figure>
+<figure><img src="21-mission-control.png" loading="lazy" alt="Mission Control"><figcaption>Mission Control <span style="color:#6f7684">— 21-mission-control.png</span></figcaption></figure>
+<figure><img src="22-power-menu.png" loading="lazy" alt="Power menu"><figcaption>Power menu <span style="color:#6f7684">— 22-power-menu.png</span></figcaption></figure>
+<figure><img src="23-litro-menu.png" loading="lazy" alt="LitricOS menu"><figcaption>LitricOS menu <span style="color:#6f7684">— 23-litro-menu.png</span></figcaption></figure>
+</div>
+<h2>แอปพลิเคชันทั้ง 8</h2><div class="grid">
+<figure><img src="04-files.png" loading="lazy" alt="Files (มีไฟล์)"><figcaption>Files (มีไฟล์) <span style="color:#6f7684">— 04-files.png</span></figcaption></figure>
+<figure><img src="05-settings.png" loading="lazy" alt="Settings — Appearance"><figcaption>Settings — Appearance <span style="color:#6f7684">— 05-settings.png</span></figcaption></figure>
+<figure><img src="06-browser.png" loading="lazy" alt="Litric Browser"><figcaption>Litric Browser <span style="color:#6f7684">— 06-browser.png</span></figcaption></figure>
+<figure><img src="07-terminal.png" loading="lazy" alt="Terminal"><figcaption>Terminal <span style="color:#6f7684">— 07-terminal.png</span></figcaption></figure>
+<figure><img src="08-trash.png" loading="lazy" alt="Trash"><figcaption>Trash <span style="color:#6f7684">— 08-trash.png</span></figcaption></figure>
+<figure><img src="09-defender.png" loading="lazy" alt="Defender"><figcaption>Defender <span style="color:#6f7684">— 09-defender.png</span></figcaption></figure>
+<figure><img src="10-activity.png" loading="lazy" alt="Activity"><figcaption>Activity <span style="color:#6f7684">— 10-activity.png</span></figcaption></figure>
+<figure><img src="20-environments.png" loading="lazy" alt="Environments"><figcaption>Environments <span style="color:#6f7684">— 20-environments.png</span></figcaption></figure>
+</div>
+<h2>Settings ทั้ง 13 หน้า</h2><div class="grid">
+<figure><img src="settings-01-appearance.png" loading="lazy" alt="Appearance"><figcaption>Appearance <span style="color:#6f7684">— settings-01-appearance.png</span></figcaption></figure>
+<figure><img src="settings-02-display.png" loading="lazy" alt="Display"><figcaption>Display <span style="color:#6f7684">— settings-02-display.png</span></figcaption></figure>
+<figure><img src="settings-03-input.png" loading="lazy" alt="Input"><figcaption>Input <span style="color:#6f7684">— settings-03-input.png</span></figcaption></figure>
+<figure><img src="settings-04-network.png" loading="lazy" alt="Network"><figcaption>Network <span style="color:#6f7684">— settings-04-network.png</span></figcaption></figure>
+<figure><img src="settings-05-bluetooth.png" loading="lazy" alt="Bluetooth"><figcaption>Bluetooth <span style="color:#6f7684">— settings-05-bluetooth.png</span></figcaption></figure>
+<figure><img src="settings-06-power.png" loading="lazy" alt="Power"><figcaption>Power <span style="color:#6f7684">— settings-06-power.png</span></figcaption></figure>
+<figure><img src="settings-07-region.png" loading="lazy" alt="Region"><figcaption>Region <span style="color:#6f7684">— settings-07-region.png</span></figcaption></figure>
+<figure><img src="settings-08-environments.png" loading="lazy" alt="Environments"><figcaption>Environments <span style="color:#6f7684">— settings-08-environments.png</span></figcaption></figure>
+<figure><img src="settings-09-accessibility.png" loading="lazy" alt="Accessibility"><figcaption>Accessibility <span style="color:#6f7684">— settings-09-accessibility.png</span></figcaption></figure>
+<figure><img src="settings-10-sound.png" loading="lazy" alt="Sound"><figcaption>Sound <span style="color:#6f7684">— settings-10-sound.png</span></figcaption></figure>
+<figure><img src="settings-11-privacy.png" loading="lazy" alt="Privacy"><figcaption>Privacy <span style="color:#6f7684">— settings-11-privacy.png</span></figcaption></figure>
+<figure><img src="settings-12-accounts.png" loading="lazy" alt="Accounts"><figcaption>Accounts <span style="color:#6f7684">— settings-12-accounts.png</span></figcaption></figure>
+<figure><img src="settings-13-diagnostics.png" loading="lazy" alt="Diagnostics"><figcaption>Diagnostics <span style="color:#6f7684">— settings-13-diagnostics.png</span></figcaption></figure>
+</div>
+<h2>ล็อก จอเริ่มระบบ และสถานะพิเศษ</h2><div class="grid">
+<figure><img src="11-lock.png" loading="lazy" alt="Lock screen"><figcaption>Lock screen <span style="color:#6f7684">— 11-lock.png</span></figcaption></figure>
+<figure><img src="12-lock-password.png" loading="lazy" alt="Lock — กรอกรหัส"><figcaption>Lock — กรอกรหัส <span style="color:#6f7684">— 12-lock-password.png</span></figcaption></figure>
+<figure><img src="13-lock-customize.png" loading="lazy" alt="Lock — ปรับแต่ง"><figcaption>Lock — ปรับแต่ง <span style="color:#6f7684">— 13-lock-customize.png</span></figcaption></figure>
+<figure><img src="24-boot-intro.png" loading="lazy" alt="Boot intro"><figcaption>Boot intro <span style="color:#6f7684">— 24-boot-intro.png</span></figcaption></figure>
+<figure><img src="16-files-empty.png" loading="lazy" alt="Files (โฟลเดอร์ว่าง)"><figcaption>Files (โฟลเดอร์ว่าง) <span style="color:#6f7684">— 16-files-empty.png</span></figcaption></figure>
+<figure><img src="19-dialog-danger.png" loading="lazy" alt="ไดอะล็อกลบไฟล์"><figcaption>ไดอะล็อกลบไฟล์ <span style="color:#6f7684">— 19-dialog-danger.png</span></figcaption></figure>
+</div>
+</body>

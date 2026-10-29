@@ -106,6 +106,14 @@ pub struct Sysd {
     /// do not carry the radio's power at all, so this cache is the *only* place
     /// the interface can get a measurement from.
     bt: Option<bool>,
+    /// Where grants and the durable audit are written, when this build has a
+    /// store. `None` means memory-only: the daemon's tests and `--report` must
+    /// not touch `/var`.
+    grants_store: Option<crate::grants::Store>,
+    /// What happened when the store was opened, for `CAPS LIST`: `memory`,
+    /// `loaded:<n>`, `seeded`, or `corrupt:<why>`. A corrupt record is a
+    /// denial, and the user is entitled to see that it happened.
+    grants_note: String,
 }
 
 impl Sysd {
@@ -127,6 +135,8 @@ impl Sysd {
             storage: StorageBroker::new(Layout::for_home(home)),
             audio: None,
             bt: None,
+            grants_store: None,
+            grants_note: "memory".to_owned(),
             root: root.to_path_buf(),
             client,
             runner: Box::new(SystemRunner),
@@ -141,6 +151,140 @@ impl Sysd {
     pub fn with_runner(mut self, runner: Box<dyn Runner>) -> Self {
         self.runner = runner;
         self
+    }
+
+    /// Attach the durable grant record at `path`.
+    ///
+    /// Three outcomes, all deliberate:
+    ///
+    /// * the file exists and parses — its grants and audit replace the policy
+    ///   set the constructor built, because the file is the record of what this
+    ///   machine has already decided;
+    /// * the file does not exist — the policy grants stay and are written
+    ///   immediately, so the next start has something to prove survived;
+    /// * the file exists and cannot be read — the broker is emptied, including
+    ///   the policy grants, and [`Self::grants_note`] says why. A damaged
+    ///   permission record must not be a permission.
+    #[must_use]
+    pub fn with_grant_store(mut self, path: impl Into<PathBuf>) -> Self {
+        let store = crate::grants::Store::new(path);
+        match store.load() {
+            Ok(Some(loaded)) => {
+                self.caps = Broker::new();
+                let accepted = self.caps.restore_grants(loaded.grants);
+                self.caps.restore_audit(loaded.audit);
+                self.grants_note = format!("loaded:{accepted}");
+                self.grants_store = Some(store);
+            }
+            Ok(None) => {
+                self.grants_store = Some(store);
+                self.grants_note = "seeded".to_owned();
+                if let Err(error) = self.persist_grants() {
+                    self.grants_note = format!("seed-failed:{error}");
+                }
+            }
+            Err(error) => {
+                self.caps = Broker::new();
+                self.grants_note = format!("corrupt:{error}");
+                self.grants_store = Some(store);
+            }
+        }
+        self
+    }
+
+    /// How the grant store was read, for the journal and `CAPS LIST`.
+    #[must_use]
+    pub fn grants_note(&self) -> &str {
+        &self.grants_note
+    }
+
+    /// How many grant records this broker holds, revoked ones included.
+    #[must_use]
+    pub fn grant_count(&self) -> usize {
+        self.caps.grant_count()
+    }
+
+    /// Write the current grants and audit now.
+    ///
+    /// Decisions are recorded in memory on every check and written here, at the
+    /// moments a user or a client asks the daemon to account for them (and on
+    /// every grant change). This is a checkpoint, not a write-ahead log: the
+    /// decisions made since the last checkpoint are lost if the process is
+    /// killed without one, which is stated in §63 rather than papered over.
+    pub fn save_grants(&self) -> Result<(), String> {
+        self.persist_grants()
+    }
+
+    /// Write the current broker state, atomically.
+    ///
+    /// A store that failed to parse is never overwritten: the damaged file is
+    /// the evidence of what happened, and replacing it with the empty broker it
+    /// produced would erase the only copy.
+    fn persist_grants(&self) -> Result<(), String> {
+        let Some(store) = &self.grants_store else {
+            return Ok(());
+        };
+        if self.grants_note.starts_with("corrupt") {
+            return Err("the grant record could not be read; refusing to overwrite it".to_owned());
+        }
+        let mut grants: Vec<crate::grants::Record> = self
+            .caps
+            .all_grants()
+            .map(|(app, grant)| (app.clone(), grant.clone()))
+            .collect();
+        grants.sort_by(|a, b| {
+            a.0.as_str()
+                .cmp(b.0.as_str())
+                .then_with(|| {
+                    a.1.capability()
+                        .to_string()
+                        .cmp(&b.1.capability().to_string())
+                })
+                .then_with(|| a.1.issued_at().cmp(&b.1.issued_at()))
+        });
+        store.save(&grants, self.caps.audit_log())
+    }
+
+    /// Issue a grant and write it down.
+    ///
+    /// Returns the write error rather than swallowing it: a grant the user
+    /// believes is durable but is not would come back as a permission that
+    /// silently evaporated after a reboot, which is worse than a refusal.
+    pub fn grant_and_save(&mut self, app: &AppId, grant: Grant) -> Result<(), String> {
+        self.caps.grant(app, grant);
+        self.persist_grants()
+    }
+
+    /// Revoke one capability and write the result down.
+    ///
+    /// The revocation is also recorded in the audit ring, as the decision it
+    /// creates: after this call, a check for that capability is refused with
+    /// `Reason::Revoked`. Live consent and revocation are different questions,
+    /// and the log keeps them distinguishable.
+    pub fn revoke_and_save(
+        &mut self,
+        app: &AppId,
+        id: CapabilityId,
+        now: Timestamp,
+    ) -> Result<usize, String> {
+        let affected: Vec<Capability> = self
+            .caps
+            .active_capabilities(app, now)
+            .into_iter()
+            .filter(|capability| capability.id() == id)
+            .collect();
+        let revoked = self.caps.revoke(app, id, now);
+        for capability in affected {
+            self.caps.record_event(litric_caps::AuditEntry {
+                app: app.clone(),
+                request: capability,
+                allowed: false,
+                reason: litric_caps::Reason::Revoked { at: now },
+                at: now,
+            });
+        }
+        self.persist_grants()?;
+        Ok(revoked)
     }
 
     /// Which application this daemon treats as its local client.
@@ -229,7 +373,12 @@ impl Sysd {
             Request::EnvSwitch(token) => self.env_switch(token),
             Request::TrashList => Response::ok(self.trash_list()),
             Request::TrashPlanEmpty => Response::ok(self.trash_plan_empty(now)),
-            Request::CapsAudit => Response::ok(self.caps_audit()),
+            Request::CapsAudit => {
+                let reply = Response::ok(self.caps_audit());
+                let _ = self.persist_grants();
+                reply
+            }
+            Request::CapsList => Response::ok(self.caps_list(now)),
             Request::Power { action, consent } => self.power(*action, *consent, now),
             Request::Action { action, consent } => self.action(action, *consent, now),
             Request::Resolve { app, uri, access } => self.resolve(app, uri, *access, now),
@@ -595,6 +744,23 @@ impl Sysd {
         out
     }
 
+    fn caps_list(&self, now: Timestamp) -> Vec<String> {
+        let mut out = vec![
+            format!("store={}", self.grants_note),
+            format!("grant_records={}", self.caps.grant_count()),
+            format!("audit_records={}", self.caps.audit_log().len()),
+        ];
+        if let Some(client) = &self.client {
+            out.push(format!("client={}", client.as_str()));
+            let mut active = self.caps.active_capabilities(client, now);
+            active.sort_by_cached_key(std::string::ToString::to_string);
+            for capability in active {
+                out.push(format!("capability={capability}"));
+            }
+        }
+        out
+    }
+
     fn caps_audit(&self) -> Vec<String> {
         let mut out = vec![format!("count={}", self.caps.audit_log().len())];
         for e in self.caps.audit_log() {
@@ -653,6 +819,200 @@ mod tests {
 
     fn line<'a>(r: &'a Response, prefix: &str) -> Option<&'a String> {
         r.lines().iter().find(|l| l.starts_with(prefix))
+    }
+
+    // ---- durable grants (§63) ----------------------------------------------
+
+    fn grants_fixture(name: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("litric-sysd-grants-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        root.join("var/lib/litric-sysd/grants.conf")
+    }
+
+    fn grants_cleanup(path: &Path) {
+        if let Some(root) = path.ancestors().nth(4) {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    fn camera() -> Capability {
+        Capability::unscoped(CapabilityId::Camera).expect("valid")
+    }
+
+    #[test]
+    fn a_grant_and_a_denial_survive_a_restart() {
+        // The property the batch exists for. Dropping the `Sysd` and building a
+        // new one from the same file is exactly what a daemon restart does to
+        // this state; nothing is kept in a static.
+        let path = grants_fixture("restart");
+        let app = AppId::parse("com.example.photos").expect("app");
+        {
+            let mut first = Sysd::new(4, 1024, "/home/alice", Path::new("no-such-root"))
+                .with_grant_store(&path);
+            assert!(
+                first.grants_note().starts_with("seeded"),
+                "first start seeds the record: {}",
+                first.grants_note()
+            );
+            first
+                .grant_and_save(&app, Grant::new(camera(), Issuer::User, 100))
+                .expect("the grant is written");
+            let mic = Capability::unscoped(CapabilityId::Microphone).expect("mic");
+            assert!(!first.caps.check(&app, &mic, 101).is_allowed());
+            first.save_grants().expect("the audit is checkpointed");
+        }
+
+        let second =
+            Sysd::new(4, 1024, "/home/alice", Path::new("no-such-root")).with_grant_store(&path);
+        assert!(
+            second.grants_note().starts_with("loaded:"),
+            "second start loads the record: {}",
+            second.grants_note()
+        );
+        assert!(
+            second
+                .caps
+                .active_capabilities(&app, 150)
+                .iter()
+                .any(|c| c.id() == CapabilityId::Camera),
+            "the camera grant must still be active after the restart"
+        );
+        let history = second.caps.audit_for(&app);
+        assert_eq!(history.len(), 1, "the denial is part of the record");
+        assert!(history.first().is_some_and(|e| !e.allowed));
+        grants_cleanup(&path);
+    }
+
+    #[test]
+    fn a_corrupt_record_grants_nothing_including_the_policy_set() {
+        // A damaged file must be a denial, never a subset nobody audited.
+        let path = grants_fixture("corrupt");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+        std::fs::write(
+            &path,
+            "litric-grants\t1\ngrant\tcom.example.app\tcamera\tuser\t1\n",
+        )
+        .expect("write");
+
+        let mut state =
+            Sysd::new(4, 1024, "/home/alice", Path::new("no-such-root")).with_grant_store(&path);
+        assert!(
+            state.grants_note().starts_with("corrupt:"),
+            "the refusal must be visible: {}",
+            state.grants_note()
+        );
+        let client = state.client().expect("client").clone();
+        assert!(
+            state.caps.active_capabilities(&client, 0).is_empty(),
+            "not even the policy grants may survive a corrupt record"
+        );
+        assert_eq!(
+            state.caps.check(&client, &camera(), 0).reason(),
+            &litric_caps::Reason::UnknownApplication,
+            "an empty broker denies by default"
+        );
+        grants_cleanup(&path);
+    }
+
+    #[test]
+    fn a_corrupt_record_is_not_overwritten_by_a_new_grant() {
+        let path = grants_fixture("preserve");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+        let damaged = "this is not a grant record\n";
+        std::fs::write(&path, damaged).expect("write");
+        let mut state =
+            Sysd::new(4, 1024, "/home/alice", Path::new("no-such-root")).with_grant_store(&path);
+        let app = AppId::parse("com.example.app").expect("app");
+        let err = state
+            .grant_and_save(&app, Grant::new(camera(), Issuer::User, 1))
+            .expect_err("must refuse to write over the evidence");
+        assert!(err.contains("refusing to overwrite"), "{err}");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            damaged,
+            "the damaged file is evidence and must be left alone"
+        );
+        grants_cleanup(&path);
+    }
+
+    #[test]
+    fn a_revocation_survives_a_restart_and_is_audited() {
+        let path = grants_fixture("revocation");
+        let app = AppId::parse("com.example.recorder").expect("app");
+        {
+            let mut first = Sysd::new(4, 1024, "/home/alice", Path::new("no-such-root"))
+                .with_grant_store(&path);
+            first
+                .grant_and_save(&app, Grant::new(camera(), Issuer::User, 100))
+                .expect("granted");
+            let n = first
+                .revoke_and_save(&app, CapabilityId::Camera, 200)
+                .expect("revoked and written");
+            assert_eq!(n, 1);
+        }
+
+        let second =
+            Sysd::new(4, 1024, "/home/alice", Path::new("no-such-root")).with_grant_store(&path);
+        assert!(
+            second.caps.active_capabilities(&app, 250).is_empty(),
+            "a revoked grant must not come back active"
+        );
+        let held = second.caps.grants_for(&app);
+        assert_eq!(held.len(), 1, "history is kept, not deleted");
+        assert_eq!(held.first().and_then(Grant::revoked_at), Some(200));
+        let history = second.caps.audit_for(&app);
+        assert!(
+            history
+                .iter()
+                .any(|e| e.reason.token() == "revoked" && e.at == 200),
+            "the revocation is in the persisted audit: {history:?}"
+        );
+        grants_cleanup(&path);
+    }
+
+    #[test]
+    fn an_expiring_grant_still_expires_after_a_restart() {
+        let path = grants_fixture("expiry");
+        let app = AppId::parse("com.example.photos").expect("app");
+        {
+            let mut first = Sysd::new(4, 1024, "/home/alice", Path::new("no-such-root"))
+                .with_grant_store(&path);
+            first
+                .grant_and_save(&app, Grant::expiring(camera(), Issuer::User, 100, 200))
+                .expect("granted");
+        }
+        let second =
+            Sysd::new(4, 1024, "/home/alice", Path::new("no-such-root")).with_grant_store(&path);
+        assert!(second
+            .caps
+            .active_capabilities(&app, 199)
+            .iter()
+            .any(|c| c.id() == CapabilityId::Camera));
+        assert!(
+            second.caps.active_capabilities(&app, 200).is_empty(),
+            "the deadline must survive the file as a deadline, not be forgotten"
+        );
+        grants_cleanup(&path);
+    }
+
+    #[test]
+    fn caps_list_reports_the_store_and_the_grants() {
+        let path = grants_fixture("list");
+        let mut state =
+            Sysd::new(4, 1024, "/home/alice", Path::new("no-such-root")).with_grant_store(&path);
+        let reply = state.handle(&crate::proto::Request::CapsList, NOW);
+        assert!(reply.is_ok(), "{reply:?}");
+        assert!(line(&reply, "store=seeded").is_some());
+        assert!(
+            reply
+                .lines()
+                .iter()
+                .any(|l| l.starts_with("capability=power.control")),
+            "the policy grants are listed: {:?}",
+            reply.lines()
+        );
+        grants_cleanup(&path);
     }
 
     #[test]

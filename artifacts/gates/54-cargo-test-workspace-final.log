@@ -1,0 +1,2114 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/litric_bench-d2a822703b8c6cc5)
+
+running 47 tests
+test chaos::tests::different_seed_different_storm ... ok
+test chaos::tests::seq_is_dense_from_one ... ok
+test corpus::tests::eicar_is_present_and_exact ... ok
+test corpus::tests::the_categories_are_exactly_fifty ... ok
+test chaos::tests::histogram_sums_to_total_and_covers_classes ... ok
+test corpus::tests::hard_negatives_are_benign_but_scary_looking ... ok
+test forensics::tests::jsonl_round_trips_the_essential_fields ... ok
+test forensics::tests::a_modified_event_is_detected ... ok
+test forensics::tests::timelines_reconstruct_per_sample ... ok
+test forensics::tests::the_chain_verifies_when_untouched ... ok
+test chaos::tests::higher_level_draws_more_crash_events ... ok
+test chaos::tests::same_seed_same_storm ... ok
+test recovery::tests::regression_classification_covers_all_cases ... ok
+test report::tests::csv_escaping_handles_commas_quotes_newlines ... ok
+test recovery::tests::broken_sandbox_report_fails_first_step ... ok
+test recovery::tests::missing_markers_fail_inspection ... ok
+test report::tests::manifest_lists_all_artifacts ... ok
+test report::tests::summary_json_is_parseable_shape ... ok
+test report::tests::report_md_contains_required_sections ... ok
+test recovery::tests::clean_root_recovers ... ok
+test recovery::tests::leftover_files_fail_volume_verification ... ok
+test safety::tests::a_critical_stop_carries_what_a_forensic_needs ... ok
+test scan::tests::an_out_of_range_percentile_reports_nothing ... ok
+test safety::tests::an_unmarked_directory_is_host_clearance ... ok
+test report::tests::write_all_produces_every_file ... ok
+test safety::tests::a_provisioned_volume_unlocks_levels ... ok
+test scan::tests::latency_percentiles_are_monotonic_and_sane ... ok
+test scan::tests::level_zero_benign_only_corpus_has_zero_tps ... ok
+test scan::tests::outcome_mapping_distinguishes_limitation_from_pass ... ok
+test scan::tests::percentile_is_not_clamped_to_the_u32_ceiling ... ok
+test severity::tests::crashed_is_never_a_detection_nor_a_clean_pass ... ok
+test severity::tests::every_truth_and_outcome_lands_in_exactly_one_counter ... ok
+test severity::tests::outcomes_round_trip_through_the_machine_names ... ok
+test severity::tests::rates_are_not_narrowed_to_u32 ... ok
+test severity::tests::the_scoreboard_counts_each_quadrant_once ... ok
+test stress::tests::deep_tree_file_count_is_geometric_and_saturating ... ok
+test stress::tests::level_gates_escalation ... ok
+test stress::tests::plan_is_deterministic_per_seed ... ok
+test stress::tests::plan_never_exceeds_budget ... ok
+test tests::the_version_is_stamped_from_the_crate ... ok
+test corpus::tests::every_sample_digest_matches_its_content ... ok
+test corpus::tests::hostile_samples_never_contain_real_executable_headers ... ok
+test scan::tests::every_sample_produces_exactly_one_forensic_event ... ok
+test scan::tests::benign_never_counts_as_detection_in_a_clean_run ... ok
+test scan::tests::category_gaps_capture_per_family_truth ... ok
+test scan::tests::eicar_is_always_detected_and_counted ... ok
+test corpus::tests::generation_is_deterministic_across_calls ... ok
+
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running unittests src/bin/litricos-test.rs (target/debug/deps/litricos_test-34d18466ae72f7f6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_browser-6af475416f0eef31)
+
+running 111 tests
+test base64::tests::malformed_input_is_refused ... ok
+test base64::tests::rfc_4648_test_vectors ... ok
+test base64::tests::nonzero_padding_bits_are_refused ... ok
+test base64::tests::the_whole_alphabet_decodes ... ok
+test engine::tests::the_null_engine_is_honest_about_itself ... ok
+test engine::tests::every_navigation_fails_the_same_way_rather_than_sometimes_succeeding ... ok
+test html::tests::a_table_keeps_its_columns_and_values ... ok
+test html::tests::headings_paragraphs_images_and_rules_keep_their_order ... ok
+test html::tests::hidden_blocks_contribute_no_text_and_entities_are_decoded ... ok
+test html::tests::unknown_tags_keep_their_text_and_unterminated_tags_do_not_panic ... ok
+test html::tests::a_table_without_a_header_row_is_all_body_and_is_bounded ... ok
+test http::tests::a_refused_connection_is_a_sentence_not_a_panic ... ok
+test http::tests::a_chunked_reply_is_refused_by_name ... ok
+test http::tests::a_page_is_fetched_over_a_real_loopback_socket ... ok
+test http::tests::a_page_with_no_length_is_read_to_the_close ... ok
+test http::tests::a_server_error_is_reported_as_its_status_without_pretending_it_loaded ... ok
+test http::tests::a_target_is_percent_encoded_where_a_request_line_cannot_hold_it ... ok
+test http::tests::the_loopback_predicate_is_narrow ... ok
+test http::tests::only_this_machine_is_reachable_and_only_over_plain_http ... ok
+test jpeg::tests::a_dc_only_block_is_flat ... ok
+test jpeg::tests::a_scan_without_its_tables_is_refused ... ok
+test jpeg::tests::header_level_refusals_are_specific ... ok
+test http::tests::an_oversized_content_length_is_refused_before_the_body_is_read ... ok
+test jpeg::tests::huffman_counts_that_overflow_their_lengths_are_refused ... ok
+test jpeg::tests::refused_encodings_are_named ... ok
+test jpeg::tests::a_wrong_restart_marker_is_refused ... ok
+test jpeg::tests::the_zigzag_table_walks_the_antidiagonals ... ok
+test http::tests::a_short_body_is_an_error_not_a_smaller_page ... ok
+test json::tests::a_document_round_trips_through_the_writer ... ok
+test json::tests::duplicate_keys_are_found_in_large_objects_too ... ok
+test jpeg::tests::rgb_encoded_jpegs_are_refused_rather_than_miscoloured ... ok
+test json::tests::escapes_decode_including_surrogate_pairs ... ok
+test json::tests::invalid_documents_are_refused_with_the_right_error ... ok
+test json::tests::integer_accessors_are_exact_or_absent ... ok
+test json::tests::nested_structures_parse_in_order ... ok
+test json::tests::numbers_are_written_inside_the_json_grammar ... ok
+test json::tests::nesting_is_limited_to_the_documented_depth ... ok
+test html::tests::the_limits_are_pinned_and_enforced ... ok
+test json::tests::scalars_parse ... ok
+test json::tests::the_writer_escapes_exactly_what_must_be_escaped ... ok
+test policy::tests::a_decision_applies_to_the_whole_origin_not_the_page ... ok
+test policy::tests::a_default_port_cannot_step_around_a_refusal ... ok
+test policy::tests::a_different_scheme_is_a_different_origin ... ok
+test policy::tests::a_non_default_port_survives_the_upgrade ... ok
+test policy::tests::a_server_on_this_machine_may_use_plain_http_and_nothing_else_may ... ok
+test policy::tests::a_tracker_cannot_hide_behind_a_default_port_or_a_bad_one ... ok
+test policy::tests::an_insecure_origin_can_never_hold_a_sensitive_permission ... ok
+test policy::tests::changing_a_decision_replaces_it_rather_than_stacking ... ok
+test policy::tests::every_permission_starts_at_ask_and_nothing_is_granted_by_default ... ok
+test policy::tests::forgetting_a_site_removes_everything_about_it ... ok
+test policy::tests::https_is_allowed ... ok
+test policy::tests::https_only_refuses_http_and_offers_the_upgrade ... ok
+test policy::tests::only_the_physical_world_permissions_prompt ... ok
+test policy::tests::permissions_that_read_the_world_map_to_system_capabilities ... ok
+test policy::tests::status_lines_report_the_policy_in_force ... ok
+test policy::tests::trackers_are_blocked_including_their_subdomains ... ok
+test policy::tests::the_defaults_are_the_strict_ones ... ok
+test policy::tests::turning_tracker_blocking_off_lets_them_through ... ok
+test policy::tests::upgrading_drops_the_old_default_port ... ok
+test tab::tests::a_blocked_page_still_enters_history ... ok
+test tab::tests::a_failed_tab_says_which_site_failed ... ok
+test tab::tests::a_new_tab_is_empty_and_named ... ok
+test tab::tests::a_page_with_no_title_is_labelled_by_its_host ... ok
+test tab::tests::an_empty_history_is_safe_to_walk ... ok
+test tab::tests::history_of_a_single_page_has_no_back_or_forward ... ok
+test tab::tests::back_and_forward_walk_the_history ... ok
+test tab::tests::navigating_records_history_and_starts_loading ... ok
+test tab::tests::navigating_while_part_way_back_discards_the_forward_entries ... ok
+test tab::tests::reloading_the_same_address_does_not_grow_the_history ... ok
+test tests::a_closed_tab_can_be_reopened_most_recent_first ... ok
+test tests::a_malformed_address_is_reported_on_the_tab_instead_of_becoming_a_search ... ok
+test tests::a_session_starts_empty_and_opens_tabs ... ok
+test tests::closing_the_active_tab_moves_focus_and_does_not_leave_it_dangling ... ok
+test tests::a_tracker_is_refused ... ok
+test tests::navigating_a_tab_that_is_gone_is_reported_not_ignored ... ok
+test tests::plain_http_is_refused_by_policy_before_the_engine_is_asked ... ok
+test tests::status_lines_say_that_no_engine_is_integrated ... ok
+test tests::the_reopen_list_is_bounded ... ok
+test tests::typing_words_reports_that_there_is_no_search_provider ... ok
+test tests::without_an_engine_a_navigation_fails_and_names_what_is_missing ... ok
+test url::tests::a_bad_port_is_refused ... ok
+test url::tests::a_bare_host_is_assumed_to_be_https ... ok
+test url::tests::a_file_url_keeps_its_empty_authority_slashes ... ok
+test url::tests::a_default_port_is_the_same_origin_as_no_port ... ok
+test url::tests::a_malformed_supported_address_is_an_error_not_a_search ... ok
+test url::tests::a_mixed_script_host_is_flagged_rather_than_rendered_convincingly ... ok
+test url::tests::a_nonsense_host_is_refused ... ok
+test url::tests::a_plain_https_url_parses ... ok
+test url::tests::a_port_is_parsed_and_kept_in_the_origin ... ok
+test url::tests::a_scheme_with_no_authority_keeps_its_whole_body_as_the_path ... ok
+test url::tests::a_tab_label_is_the_host_for_a_site_and_the_file_name_for_a_file ... ok
+test url::tests::a_truncated_ipv6_literal_is_not_a_host ... ok
+test url::tests::a_url_with_no_path_gets_a_root_one ... ok
+test url::tests::a_whole_script_host_is_not_flagged ... ok
+test url::tests::an_empty_address_bar_searches_for_nothing_rather_than_erroring ... ok
+test url::tests::an_ipv6_literal_keeps_its_colons_and_still_takes_a_port ... ok
+test url::tests::an_unsupported_scheme_says_which_one ... ok
+test base64::tests::every_byte_value_and_length_round_trips ... ok
+test url::tests::embedded_credentials_are_refused_outright ... ok
+test url::tests::http_is_not_secure_and_https_is ... ok
+test url::tests::every_parsed_url_round_trips_through_its_text ... ok
+test url::tests::one_site_has_one_canonical_text_form ... ok
+test url::tests::something_that_looks_like_a_scheme_but_is_not_supported_is_searched ... ok
+test url::tests::the_origin_is_the_security_boundary_not_the_path ... ok
+test url::tests::the_host_is_lowercased_but_the_path_is_not ... ok
+test url::tests::typing_a_host_navigates_and_typing_words_searches ... ok
+test jpeg::tests::output_matches_djpeg_within_the_stated_tolerance ... ok
+test json::tests::randomized_mutations_never_panic_and_are_deterministic ... ok
+test json::tests::a_megabyte_string_parses_and_serialises_in_linear_time ... ok
+test jpeg::tests::every_truncation_is_an_error_and_none_panics ... ok
+test jpeg::tests::random_bit_flips_never_panic ... ok
+
+test result: ok. 111 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.70s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_caps-32b1ba70324a075d)
+
+running 53 tests
+test capability::tests::any_grant_covers_everything_but_a_specific_grant_never_covers_any ... ok
+test capability::tests::authorisation_requires_both_id_and_scope_to_match ... ok
+test capability::tests::accepts_well_formed_storage_uris ... ok
+test capability::tests::filesystem_capabilities_always_require_an_explicit_scope ... ok
+test capability::tests::display_form_is_stable ... ok
+test capability::tests::host_matching_is_case_insensitive ... ok
+test capability::tests::dangerous_capabilities_require_live_consent_and_an_indicator ... ok
+test capability::tests::host_wildcards_match_subdomains_only ... ok
+test capability::tests::keylogging_and_screen_reading_are_classified_critical ... ok
+test capability::tests::locking_the_screen_always_needs_the_user_in_the_moment ... ok
+test capability::tests::every_capability_has_a_human_prompt ... ok
+test capability::tests::every_capability_round_trips_through_its_token ... ok
+test capability::tests::narrow_grant_does_not_authorise_its_parent ... ok
+test capability::tests::network_capabilities_may_be_scoped_or_not ... ok
+test capability::tests::never_scoped_capabilities_refuse_a_scope ... ok
+test capability::tests::prefix_containment_is_segment_aware ... ok
+test capability::tests::rejects_control_characters_and_unknown_schemes ... ok
+test capability::tests::rejects_traversal_rather_than_resolving_it ... ok
+test capability::tests::resource_containment_is_segment_aware ... ok
+test capability::tests::scope_kinds_never_cross ... ok
+test capability::tests::resource_scopes_parse_into_their_own_kind ... ok
+test capability::tests::resource_scopes_reject_what_they_cannot_authorise ... ok
+test capability::tests::the_new_capabilities_are_not_silently_the_old_ones ... ok
+test capability::tests::suspending_a_machine_is_not_the_same_grant_as_dimming_it ... ok
+test capability::tests::the_root_scope_contains_everything_beneath_it_but_nothing_beside_it ... ok
+test capability::tests::trailing_slashes_are_normalised_away ... ok
+test capability::tests::unknown_tokens_are_rejected_not_guessed ... ok
+test capability::tests::tokens_are_unique ... ok
+test tests::a_later_valid_grant_overrides_an_earlier_expired_one ... ok
+test tests::a_destructive_scope_without_consent_is_refused_by_the_broker ... ok
+test tests::a_grant_authorises_only_within_its_scope ... ok
+test tests::a_refused_consent_is_recorded_with_its_reason ... ok
+test tests::an_app_with_no_grants_can_do_nothing ... ok
+test tests::a_revoked_grant_does_not_shadow_a_valid_one ... ok
+test tests::a_capability_that_needs_no_consent_is_unaffected_by_the_flag ... ok
+test tests::audit_can_be_filtered_per_application ... ok
+test tests::both_allows_and_denies_are_recorded ... ok
+test tests::an_expired_grant_is_exactly_as_powerful_as_no_grant ... ok
+test tests::an_unregistered_app_is_denied_and_distinguishable ... ok
+test tests::an_expiring_grant_stops_working_at_its_deadline ... ok
+test tests::consent_is_not_a_grant ... ok
+test tests::full_lifecycle_of_a_photo_app ... ok
+test tests::identity_is_case_normalised_so_a_lookalike_is_the_same_app_not_a_new_one ... ok
+test tests::one_apps_grant_never_authorises_another_app ... ok
+test tests::preview_checks_do_not_pollute_the_log ... ok
+test tests::read_does_not_imply_write ... ok
+test tests::registration_conveys_no_authority ... ok
+test tests::revocation_preserves_history ... ok
+test tests::revoke_all_removes_everything_and_reports_the_count ... ok
+test tests::revoking_one_capability_leaves_the_others_alone ... ok
+test tests::revocation_takes_effect_on_the_very_next_check ... ok
+test tests::the_user_can_purge_their_own_history ... ok
+test tests::the_audit_buffer_is_bounded ... ok
+
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_compositor-e58323556751ac59)
+
+running 6 tests
+test tests::a_buffer_that_names_memory_outside_the_pool_is_refused ... ok
+test tests::an_xrgb_frame_becomes_opaque_without_touching_its_colour ... ok
+test tests::a_frame_is_read_row_by_row_through_a_stride ... ok
+test tests::shift_control_alt_and_super_are_the_xkb_bits_the_keymap_declares ... ok
+test tests::an_offset_into_the_pool_is_honoured ... ok
+test tests::a_scaled_buffer_reports_its_logical_size ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/client.rs (target/debug/deps/client-e3e1161b824d85a4)
+
+running 4 tests
+test a_client_that_vanishes_does_not_take_the_server_with_it ... ok
+test a_foreign_client_maps_a_window_and_goes_away_cleanly ... ok
+test a_relative_runtime_directory_is_refused ... ok
+test two_servers_refuse_the_same_socket ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_core-6cb7680f2306d5e9)
+
+running 37 tests
+test error::tests::abi_discriminants_are_frozen ... ok
+test error::tests::display_is_stable_and_machine_readable ... ok
+test error::tests::security_events_are_flagged_for_audit ... ok
+test error::tests::integrity_failure_is_never_retryable ... ok
+test error::tests::transient_failures_are_retryable ... ok
+test error::tests::unknown_wire_value_degrades_instead_of_panicking ... ok
+test error::tests::wire_discriminants_round_trip ... ok
+test handle::tests::boundary_values_survive ... ok
+test handle::tests::generation_overflow_wraps_without_corrupting_neighbours ... ok
+test handle::tests::invalid_handle_is_zero_and_typed_checks_fail ... ok
+test handle::tests::kind_confusion_is_rejected ... ok
+test handle::tests::round_trips_all_fields ... ok
+test handle::tests::stale_generation_is_a_different_handle ... ok
+test handle::tests::unknown_kind_tag_does_not_panic ... ok
+test id::tests::accepts_ordinary_ids ... ok
+test id::tests::canonicalises_case ... ok
+test id::tests::enforces_length_limits ... ok
+test id::tests::near_miss_namespaces_are_not_reserved ... ok
+test id::tests::path_component_never_escapes ... ok
+test id::tests::rejects_homograph_and_traversal_attempts ... ok
+test id::tests::rejects_hyphen_edges_and_leading_digits ... ok
+test id::tests::rejects_structural_nonsense ... ok
+test id::tests::reserves_platform_namespace_from_third_parties ... ok
+test pct::tests::empty_and_a_literal_dash_are_distinct_fields ... ok
+test pct::tests::invalid_utf8_is_refused_for_text_but_available_as_bytes ... ok
+test pct::tests::every_byte_round_trips ... ok
+test pct::tests::lowercase_hex_is_accepted_on_input ... ok
+test pct::tests::malformed_escapes_are_refused_not_passed_through ... ok
+test pct::tests::raw_bytes_the_encoder_would_escape_are_refused ... ok
+test pct::tests::spaces_newlines_and_percent_are_escaped ... ok
+test pct::tests::thai_text_round_trips_through_utf8_escapes ... ok
+test version::tests::abi_hosting_is_asymmetric ... ok
+test version::tests::abi_parses_both_spellings ... ok
+test version::tests::parses_and_orders_versions ... ok
+test version::tests::pre_release_sorts_below_its_release ... ok
+test version::tests::rejects_ambiguous_numeric_forms ... ok
+test version::tests::version_round_trips_through_display ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_defender-1776ea7e05177783)
+
+running 35 tests
+test cache::tests::capacity_bounded_lru_eviction ... ok
+test cache::tests::deny_verdicts_cache_and_overwrite ... ok
+test cache::tests::generation_bump_stales_everything ... ok
+test denylist::tests::case_insensitive_lookup ... ok
+test cache::tests::clear_and_default_behaviour ... ok
+test denylist::tests::iteration_is_sorted ... ok
+test denylist::tests::rejects_malformed_lines_without_panicking ... ok
+test denylist::tests::insert_rejects_short_hashes ... ok
+test cache::tests::hit_and_miss_roundtrip ... ok
+test engine::tests::clean_files_cache_as_clean ... ok
+test denylist::tests::parses_comments_blanks_and_labels ... ok
+test engine::tests::empty_engine_allows_everything ... ok
+test engine::tests::feed_reload_invalidates_cache ... ok
+test engine::tests::mode_switch_changes_unknown_handling ... ok
+test patterns::tests::build_rejects_degenerate_patterns ... ok
+test engine::tests::hash_tier_detect_deny_cache ... ok
+test engine::tests::failed_pattern_reload_keeps_old_set ... ok
+test engine::tests::pattern_tier_detects_unlisted_content ... ok
+test patterns::tests::classic_ushers ... ok
+test patterns::tests::clean_input_yields_nothing ... ok
+test patterns::tests::overlapping_self_matches ... ok
+test patterns::tests::prefix_patterns_both_fire ... ok
+test patterns::tests::finds_eicar_in_noise ... ok
+test sha256::tests::nist_vectors ... ok
+test verdict::tests::detection_denies_even_when_permissive ... ok
+test verdict::tests::every_decision_is_cacheable ... ok
+test verdict::tests::tier_ordering ... ok
+test verdict::tests::clean_allows_in_both_modes ... ok
+test verdict::tests::unscannable_follows_the_mode ... ok
+test cache::tests::churn_stays_bounded ... ok
+test sha256::tests::streaming_matches_one_shot ... ok
+test engine::tests::engine_cache_stays_bounded ... ok
+test sha256::tests::chunk_boundaries_agree ... ok
+test patterns::tests::thousand_patterns_smoke ... ok
+test sha256::tests::million_a_streamed ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_design-e3e1a7f95261bc8b)
+
+running 40 tests
+test color::tests::compositing_is_clamped_against_out_of_range_alpha ... ok
+test color::tests::conformance_thresholds_are_the_wcag_ones ... ok
+test color::tests::compositing_moves_luminance_monotonically ... ok
+test color::tests::compositing_at_the_extremes_is_exact ... ok
+test color::tests::contrast_is_symmetric_and_self_is_one ... ok
+test color::tests::hex_round_trips ... ok
+test color::tests::contrast_black_on_white_is_the_maximum ... ok
+test color::tests::luminance_matches_the_wcag_reference_points ... ok
+test elevation_tests::higher_elevation_never_casts_less_shadow ... ok
+test tests::accent_tokens_are_unique_and_round_trip ... ok
+test tests::adaptive_glass_is_far_more_transparent_over_a_dark_wallpaper ... ok
+test tests::adaptive_glass_firms_up_over_a_bright_wallpaper_without_being_told ... ok
+test tests::body_text_passes_aa_on_every_solid_surface_in_every_theme ... ok
+test tests::adaptive_glass_never_becomes_a_hole_or_a_solid_slab ... ok
+test tests::adaptive_glass_returns_the_minimum_not_merely_a_sufficient_alpha ... ok
+test tests::borders_are_visible_against_their_own_surface ... ok
+test tests::body_text_stays_legible_on_glass_over_the_worst_backdrop ... ok
+test tests::choosing_an_accent_moves_only_the_accent_pair ... ok
+test tests::every_accent_keeps_text_legible_on_its_own_fill ... ok
+test tests::every_theme_respects_the_glass_alpha_floor ... ok
+test tests::every_accent_is_readable_as_text_on_the_theme_backgrounds ... ok
+test tests::high_contrast_glass_is_never_adapted ... ok
+test tests::high_contrast_themes_give_up_translucency_not_contrast ... ok
+test tests::high_contrast_themes_ignore_the_accent_choice ... ok
+test tests::line_height_ratio_loosens_for_body_and_tightens_for_display ... ok
+test tests::no_motion_token_exceeds_the_settle_budget ... ok
+test tests::secondary_text_passes_aa_on_every_solid_surface ... ok
+test tests::reduced_motion_settles_within_one_frame ... ok
+test tests::secondary_text_stays_legible_on_glass_over_the_worst_backdrop ... ok
+test tests::motion_tokens_are_ordered_and_springs_stay_damped ... ok
+test tests::text_on_accent_passes_aa_in_every_theme ... ok
+test tests::status_colours_are_readable_on_the_base_background ... ok
+test tests::the_alpha_floor_is_where_legibility_actually_breaks ... ok
+test tests::spacing_and_radius_scales_are_strictly_increasing ... ok
+test tests::spacing_sits_on_a_grid ... ok
+test tests::the_type_scale_is_strictly_increasing_with_its_line_heights ... ok
+test tests::the_default_accent_is_the_theme_itself ... ok
+test tests::theme_tokens_are_unique_and_every_theme_is_constructible ... ok
+test tests::wcag_large_text_threshold_is_applied_at_24px ... ok
+test tests::adaptive_glass_holds_aa_across_the_entire_backdrop_space ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_env-10ec73005ca20600)
+
+running 20 tests
+test tests::a_compromised_environment_never_switches_silently ... ok
+test tests::a_failed_switch_leaves_the_display_where_it_was ... ok
+test tests::a_failed_environment_is_reset_never_resumed ... ok
+test tests::a_hibernated_guest_frees_its_memory_for_another ... ok
+test tests::an_unmodified_key_cannot_be_a_switch_binding ... ok
+test tests::a_guest_cannot_be_budgeted_into_starving_the_host ... ok
+test tests::bindings_are_remappable_and_conflicts_are_refused ... ok
+test tests::illegal_transitions_are_refused_without_mutating ... ok
+test tests::losing_the_active_environment_falls_back_to_the_host ... ok
+test tests::only_litric_is_the_host ... ok
+test tests::planning_a_switch_does_not_perform_it ... ok
+test tests::suspend_holds_memory_and_hibernate_releases_it ... ok
+test tests::switching_reports_the_mechanism_not_just_success ... ok
+test tests::the_default_bindings_are_win_1_2_3 ... ok
+test tests::the_escape_binding_always_reaches_the_host_and_cannot_be_taken ... ok
+test tests::the_host_budget_cannot_be_set_by_anyone ... ok
+test tests::the_host_can_never_be_suspended_hibernated_or_stopped ... ok
+test tests::tokens_are_unique_across_environments_and_states ... ok
+test tests::two_guests_are_budgeted_against_each_other_not_independently ... ok
+test tests::windows_is_not_distributable_and_the_model_says_so ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_envd-df1633cb10b7bf86)
+
+running 14 tests
+test tests::a_guest_that_never_ran_has_no_exit_record ... ok
+test tests::a_missing_disk_fails_the_plan_not_the_boot ... ok
+test tests::an_empty_budget_is_refused_before_any_disk_is_touched ... ok
+test tests::a_running_guest_cannot_be_launched_again ... ok
+test tests::killing_a_never_started_guest_is_a_no_op ... ok
+test tests::monitor_commands_spell_what_the_model_means ... ok
+test tests::network_is_only_present_when_granted ... ok
+test tests::no_reboot_is_always_passed ... ok
+test tests::the_host_never_gets_a_launch_plan ... ok
+test tests::the_argv_carries_the_approved_budget_and_nothing_else ... ok
+test tests::the_monitor_socket_is_per_environment_and_per_run_directory ... ok
+test tests::the_plan_round_trips_through_the_command_builder ... ok
+test tests::the_supervisor_only_admits_guests ... ok
+test tests::window_mode_uses_sdl_and_headless_uses_none ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/litric_envd-4ce1f142b02b1a62)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_files-17de6cb16d0f5e8e)
+
+running 129 tests
+test crc32::tests::the_standard_check_value ... ok
+test crc32::tests::incremental_updates_equal_one_update ... ok
+test deflate::tests::roundtrip_empty ... ok
+test deflate::tests::max_length_encodes_and_decodes ... ok
+test deflate::tests::every_write_closes_its_block ... ok
+test deflate::tests::roundtrip_literals_only ... ok
+test gzip::tests::bad_magic_is_refused ... ok
+test gzip::tests::concatenated_members_decode_in_order ... ok
+test gzip::tests::corrupt_trailer_is_refused ... ok
+test deflate::tests::all_length_symbols_reachable ... ok
+test gzip::tests::fname_is_parsed ... ok
+test gzip::tests::garbage_between_members_is_refused ... ok
+test gzip::tests::double_finish_is_refused ... ok
+test gzip::tests::fresh_encoder_finishes_with_empty_member ... ok
+test gzip::tests::header_shape_is_rfc_canonical ... ok
+test gzip::tests::reserved_flags_are_refused ... ok
+test gzip::tests::roundtrip_small_and_empty ... ok
+test gzip::tests::truncated_trailer_is_refused ... ok
+test inflate::tests::a_distance_before_the_output_start_is_refused ... ok
+test inflate::tests::a_hand_assembled_fixed_block ... ok
+test inflate::tests::a_stored_block_and_what_follows_it ... ok
+test inflate::tests::bit_reversal ... ok
+test inflate::tests::malformed_streams_are_refused_with_corrupt_archive ... ok
+test inflate::tests::the_output_cap_is_a_limit_error ... ok
+test ops::tests::move_onto_an_occupied_directory_swaps_instead_of_deleting_first ... ok
+test ops::tests::replace_installs_the_new_item_and_removes_the_old ... ok
+test ops::tests::replace_keeps_the_destination_when_the_copy_fails ... ok
+test ops::tests::resolve_reports_a_file_standing_in_the_middle ... ok
+test path::tests::converts_to_error_kind ... ok
+test path::tests::join_validates ... ok
+test path::tests::parent_and_filename ... ok
+test path::tests::parses_and_normalizes ... ok
+test path::tests::rejects_control_bytes_and_long_segments ... ok
+test path::tests::rejects_dot_segments_and_traversal ... ok
+test path::tests::rejects_overlong_paths ... ok
+test path::tests::segments_enumerate ... ok
+test proto::tests::entry_lines_encode_and_are_parseable_back ... ok
+test gzip::tests::streaming_encoder_roundtrips ... ok
+test proto::tests::parses_verbs_and_fields ... ok
+test proto::tests::rejects_the_documented_shapes ... ok
+test proto::tests::replies_round_trip ... ok
+test proto::tests::max_line_is_allowed_exactly ... ok
+test deflate::tests::roundtrip_chunked_writes ... ok
+test server::tests::a_folder_the_user_named_with_a_space_can_be_addressed ... ok
+test deflate::tests::roundtrip_all_bytes_and_far_distances ... ok
+test server::tests::a_path_that_is_not_a_socket_is_never_deleted ... ok
+test deflate::tests::roundtrip_highly_repetitive ... ok
+test server::tests::a_raw_path_containing_a_percent_sign_is_not_mistaken_for_an_escape ... ok
+test gzip::tests::output_cap_enforced ... ok
+test server::tests::a_stale_socket_file_is_replaced ... ok
+test server::tests::a_connection_from_the_daemons_own_user_is_served_over_a_real_socket ... ok
+test server::tests::a_burst_above_the_connection_cap_is_refused_and_the_daemon_keeps_serving ... ok
+test server::tests::conflicts_names_only_the_occupied ... ok
+test server::tests::copy_reports_progress_and_keeps_both_into_the_source_dir ... ok
+test server::tests::delete_counts_what_it_removed ... ok
+test server::tests::hello_announces_version_root_and_trash ... ok
+test server::tests::import_brings_a_staged_download_into_the_tree ... ok
+test server::tests::import_refuses_every_way_out_of_the_staging_directory ... ok
+test server::tests::import_never_overwrites_and_never_leaves_a_partial_file ... ok
+test server::tests::a_request_at_the_line_limit_is_framed_and_one_byte_over_is_refused ... ok
+test server::tests::every_verb_refuses_a_path_that_leaves_the_root ... ok
+test server::tests::import_without_a_configured_directory_says_so ... ok
+test server::tests::mount_parsing_and_host_selection ... ok
+test server::tests::list_hidden_one_returns_dot_entries_and_zero_does_not ... ok
+test server::tests::percent_counts_safely ... ok
+test server::tests::logical_paths_survive_the_wire ... ok
+test server::tests::mkdir_stat_and_list_round_trip ... ok
+test server::tests::move_refuses_a_directory_into_itself ... ok
+test server::tests::read_capped_keeps_short_files_whole ... ok
+test server::tests::quit_is_recognised ... ok
+test server::tests::places_lists_the_conventional_spots ... ok
+test server::tests::readtext_reports_text_and_binary ... ok
+test server::tests::read_capped_never_reads_past_the_cap ... ok
+test server::tests::rename_refuses_to_overwrite ... ok
+test server::tests::search_finds_by_name_and_marks_truncation_shape ... ok
+test server::tests::the_connection_cap_serves_exactly_max_connections ... ok
+test server::tests::serve_stream_answers_over_pipes ... ok
+test server::tests::restoring_an_entry_that_came_from_another_root_is_refused_not_guessed ... ok
+test server::tests::the_socket_is_owner_only_and_a_live_daemons_socket_is_not_stolen ... ok
+test server::tests::a_trashed_name_with_a_space_can_be_listed_and_restored ... ok
+test server::tests::unknown_verbs_and_malformed_requests_fail_cleanly ... ok
+test server::tests::trashlist_reports_the_original_logical_location_for_a_legacy_entry ... ok
+test server::tests::writetext_refuses_a_traversal_name ... ok
+test server::tests::writetext_never_overwrites_and_decodes_unicode ... ok
+test server::tests::writetext_creates_the_file_with_its_content ... ok
+test storage::tests::a_standard_name_that_is_a_file_is_refused_not_replaced ... ok
+test storage::tests::a_symlinked_root_is_refused ... ok
+test tar::tests::checksum_mismatch_is_refused ... ok
+test storage::tests::a_new_root_gets_every_standard_folder_once ... ok
+test server::tests::readtext_caps_a_file_larger_than_the_viewer_limit ... ok
+test tar::tests::every_forbidden_entry_shape_is_refused_on_read ... ok
+test tar::tests::link_entries_are_refused ... ok
+test tar::tests::entry_limit_enforced ... ok
+test tar::tests::on_disk_shape_is_ustar ... ok
+test tests::an_error_survives_a_trip_through_io_error ... ok
+test tests::every_error_kind_has_the_adr_token ... ok
+test tar::tests::roundtrip_files_and_dirs ... ok
+test tests::os_errors_map_to_their_kinds ... ok
+test tests::policies_round_trip ... ok
+test tests::the_ratio_rule_exempts_small_entries_only ... ok
+test tests::the_invalid_name_mapping_keys_off_the_raw_os_code ... ok
+test tar::tests::octal_fields_round_trip ... ok
+test server::tests::an_endless_line_is_discarded_instead_of_buffered ... ok
+test trashinfo::tests::a_host_root_of_slash_keeps_the_leading_separator ... ok
+test trashinfo::tests::a_legacy_uri_entry_still_restores_to_the_right_place ... ok
+test trashinfo::tests::a_legacy_uri_entry_that_is_still_percent_encoded_is_decoded_first ... ok
+test trashinfo::tests::a_sibling_that_shares_the_roots_text_prefix_is_not_inside_it ... ok
+test trash::tests::an_entry_written_in_the_legacy_uri_form_still_lists_and_restores ... ok
+test trashinfo::tests::a_trailing_slash_on_the_root_does_not_change_the_answer ... ok
+test trashinfo::tests::an_absolute_location_under_the_root_maps_back_to_a_logical_path ... ok
+test trashinfo::tests::an_unrecognised_value_is_returned_unchanged_so_it_can_be_refused ... ok
+test trashinfo::tests::encode_and_decode_are_inverses_for_awkward_names ... ok
+test trashinfo::tests::the_record_carries_the_absolute_location_and_the_date ... ok
+test trashinfo::tests::spaces_and_non_ascii_are_percent_encoded_and_round_trip ... ok
+test trashinfo::tests::the_record_never_writes_a_uri ... ok
+test trashinfo::tests::the_root_itself_is_the_logical_root ... ok
+test zip::tests::every_forbidden_name_is_refused ... ok
+test zip::tests::crc_mismatch_is_refused ... ok
+test zip::tests::on_disk_shape_has_pkmagic ... ok
+test zip::tests::overlapping_entries_are_refused ... ok
+test zip::tests::ratio_bomb_is_refused ... ok
+test zip::tests::zip64_is_refused ... ok
+test zip::tests::roundtrip_mixed_methods ... ok
+test server::tests::trash_restore_and_purge_round_trip ... ok
+test trash::tests::an_entry_whose_path_names_nothing_inside_the_root_is_refused_not_guessed ... ok
+test trash::tests::the_recorded_path_is_the_absolute_location_not_a_uri ... ok
+test trash::tests::an_empty_trash_name_cannot_address_the_trash_directory_itself ... ok
+test gzip::tests::roundtrip_repetitive_and_textual ... ok
+test deflate::tests::roundtrip_text_like ... ok
+
+test result: ok. 129 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running unittests src/main.rs (target/debug/deps/litric_filesd-121ed5dc398e191d)
+
+running 8 tests
+test tests::an_unknown_argument_is_refused_rather_than_ignored ... ok
+test tests::a_root_can_be_named_for_a_fixture ... ok
+test tests::a_command_line_with_no_mode_is_refused ... ok
+test tests::a_flag_missing_its_value_is_refused ... ok
+test tests::a_socket_run_takes_its_path ... ok
+test tests::help_and_version_exit_cleanly ... ok
+test tests::the_unit_invocation_parses ... ok
+test tests::two_modes_at_once_are_refused ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/filesd.rs (target/debug/deps/filesd-f4f28ce4556094ed)
+
+running 3 tests
+test the_binary_refuses_a_root_it_cannot_serve ... ok
+test the_binary_reports_what_it_would_serve ... ok
+test the_binary_serves_a_whole_files_session ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_input-326a46124c88d76b)
+
+running 70 tests
+test backend::tests::a_learned_range_is_reported_in_the_devices_own_words ... ok
+test backend::tests::a_scripted_source_replays_a_packet_at_a_time ... ok
+test backend::tests::an_empty_source_polls_empty_forever ... ok
+test backend::tests::a_wake_between_real_records_is_dropped_and_the_records_survive ... ok
+test backend::tests::opening_a_root_with_no_devices_reports_that_rather_than_failing ... ok
+test backend::tests::the_report_lists_what_opened ... ok
+test device::tests::a_bit_past_the_end_is_absent_rather_than_a_panic ... ok
+test device::tests::a_bitmap_indexes_words_from_the_right ... ok
+test device::tests::a_keyboard_is_recognised ... ok
+test device::tests::a_mouse_is_recognised ... ok
+test device::tests::a_root_with_no_input_class_yields_nothing_rather_than_failing ... ok
+test device::tests::a_single_word_bitmap_reads_its_low_bits ... ok
+test device::tests::a_power_button_is_not_a_keyboard ... ok
+test device::tests::a_touchscreen_is_recognised_and_a_tablet_without_touch_is_not ... ok
+test device::tests::junk_in_a_bitmap_reads_as_zero_rather_than_failing ... ok
+test evdev::tests::a_32_bit_record_parses_with_the_32_bit_abi ... ok
+test evdev::tests::a_broken_clock_cannot_wrap_the_millisecond_conversion ... ok
+test evdev::tests::a_key_press_parses ... ok
+test evdev::tests::a_negative_relative_motion_keeps_its_sign ... ok
+test evdev::tests::a_short_buffer_is_refused_rather_than_padded ... ok
+test evdev::tests::a_stream_yields_whole_records_and_leaves_a_partial_one ... ok
+test evdev::tests::an_empty_stream_consumes_nothing ... ok
+test evdev::tests::the_record_size_is_the_kernel_abi_not_a_guess ... ok
+test event::tests::a_double_click_says_so_and_a_release_does_not ... ok
+test event::tests::descriptions_include_the_modifiers_that_were_held ... ok
+test event::tests::distance_is_euclidean ... ok
+test keys::tests::a_command_is_not_text ... ok
+test keys::tests::a_key_with_no_character_produces_no_text ... ok
+test event::tests::user_activity_is_what_a_person_did ... ok
+test backend::tests::a_device_that_cannot_be_opened_is_reported_with_a_reason ... ok
+test device::tests::a_device_with_no_name_file_still_appears ... ok
+test keys::tests::a_shortcut_key_is_the_same_on_both_layouts_where_the_key_is_the_same ... ok
+test keys::tests::an_unknown_scancode_is_carried_not_dropped ... ok
+test keys::tests::caps_lock_affects_letters_and_leaves_the_number_row_alone ... ok
+test keys::tests::every_layout_covers_the_whole_alphabet_and_the_digits ... ok
+test keys::tests::layouts_are_found_by_name_and_missing_ones_are_reported_not_guessed ... ok
+test keys::tests::letters_resolve_through_the_layout ... ok
+test keys::tests::modifier_keys_are_recognised_as_modifiers ... ok
+test keys::tests::no_layout_maps_one_scancode_twice ... ok
+test keys::tests::non_character_keys_are_layout_independent ... ok
+test keys::tests::normalising_drops_lock_state_but_keeps_the_real_modifiers ... ok
+test keys::tests::shift_and_caps_together_cancel_for_letters ... ok
+test keys::tests::shift_produces_the_shifted_character ... ok
+test keys::tests::shortcut_labels_read_the_way_they_are_written ... ok
+test keys::tests::the_uk_layout_differs_where_it_should_and_agrees_elsewhere ... ok
+test state::tests::a_click_lands_at_the_position_the_same_packet_moved_to ... ok
+test state::tests::a_command_key_combination_types_nothing ... ok
+test state::tests::a_high_resolution_wheel_reports_fractions_of_a_detent ... ok
+test state::tests::a_keypress_produces_a_key_event_and_the_text_it_typed ... ok
+test state::tests::a_modifier_release_clears_it ... ok
+test state::tests::a_second_click_somewhere_else_is_a_fresh_click ... ok
+test state::tests::a_slow_second_click_is_a_fresh_click ... ok
+test state::tests::a_triple_click_stops_at_three ... ok
+test state::tests::a_whole_recorded_packet_parses_and_replays ... ok
+test state::tests::an_empty_packet_produces_nothing ... ok
+test state::tests::an_absolute_tablet_position_maps_the_full_device_range_to_the_screen ... ok
+test state::tests::auto_repeat_is_marked_and_still_types ... ok
+test state::tests::caps_lock_toggles_on_press_and_survives_release ... ok
+test state::tests::changing_the_layout_changes_what_is_typed ... ok
+test state::tests::holding_shift_changes_the_text_but_not_the_key ... ok
+test state::tests::motion_is_clamped_to_the_display_but_the_delta_is_not ... ok
+test state::tests::nothing_is_emitted_without_a_sync ... ok
+test state::tests::one_packet_of_motion_produces_one_move ... ok
+test state::tests::resizing_the_display_brings_the_pointer_back_on_screen ... ok
+test state::tests::set_abs_max_ignores_ranges_that_cannot_be_real ... ok
+test state::tests::the_default_range_matches_what_the_automation_harness_sends ... ok
+test state::tests::the_wheel_scrolls_content_down_when_it_turns_forward ... ok
+test state::tests::two_quick_clicks_in_the_same_place_are_a_double_click ... ok
+test device::tests::discovery_reads_a_fixture_tree_and_sorts_it ... ok
+test backend::tests::a_waker_ends_a_blocked_poll_without_producing_input ... ok
+
+test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_locale-cbe5b51d32c10c21)
+
+running 43 tests
+test civil::tests::a_known_instant_round_trips ... ok
+test civil::tests::a_far_future_date_is_still_right ... ok
+test civil::tests::a_leap_day_exists_and_the_day_after_it_is_march ... ok
+test civil::tests::every_day_of_a_leap_year_round_trips ... ok
+test civil::tests::century_leap_rules_are_the_gregorian_ones ... ok
+test civil::tests::weekdays_advance_by_one_per_day_and_wrap ... ok
+test civil::tests::month_abbreviations_line_up_with_month_numbers ... ok
+test civil::tests::dates_before_the_epoch_do_not_produce_nonsense ... ok
+test civil::tests::the_epoch_itself ... ok
+test locale::tests::a_24_hour_locale_shows_a_24_hour_clock ... ok
+test locale::tests::a_12_hour_locale_shows_a_12_hour_clock ... ok
+test locale::tests::a_language_without_a_region_is_accepted ... ok
+test locale::tests::a_local_time_formats_the_same_instant_differently_in_two_places ... ok
+test locale::tests::an_empty_environment_variable_is_ignored_rather_than_parsed ... ok
+test locale::tests::date_order_follows_the_region_and_no_country_is_hard_coded ... ok
+test locale::tests::detection_falls_back_to_the_config_file_then_says_it_gave_up ... ok
+test locale::tests::detection_follows_the_posix_precedence ... ok
+test locale::tests::midnight_and_noon_are_twelve_not_zero ... ok
+test locale::tests::numbers_use_the_regions_separators ... ok
+test locale::tests::percentages_follow_the_number_format ... ok
+test locale::tests::seconds_are_available_without_changing_the_convention ... ok
+test locale::tests::status_lines_say_where_every_setting_came_from ... ok
+test locale::tests::posix_and_bcp47_tags_both_parse ... ok
+test locale::tests::the_c_locale_is_the_fallback_and_is_not_american ... ok
+test locale::tests::the_keyboard_layout_comes_from_the_locale ... ok
+test locale::tests::the_week_starts_where_the_region_starts_it ... ok
+test tests::an_undetectable_machine_says_utc_on_its_clock ... ok
+test tests::a_known_zone_shows_a_local_clock_with_no_suffix ... ok
+test locale::tests::temperature_converts_for_the_regions_that_are_not_metric ... ok
+test tests::detection_of_an_empty_root_is_honest_about_both_halves ... ok
+test tests::the_clock_sleeps_until_the_minute_turns ... ok
+test tz::tests::a_file_that_is_not_tzif_is_refused_rather_than_producing_an_empty_zone ... ok
+test tz::tests::a_fixed_offset_zone_parses_and_applies_everywhere ... ok
+test tz::tests::a_machine_that_was_never_told_where_it_is_reports_utc_honestly ... ok
+test tz::tests::a_negative_offset_moves_the_date_backwards ... ok
+test tz::tests::a_truncated_tzif_is_refused_rather_than_read_past_its_end ... ok
+test tz::tests::a_zone_name_cannot_escape_the_database ... ok
+test tz::tests::a_zone_with_daylight_saving_changes_at_the_transition ... ok
+test tz::tests::local_time_is_utc_plus_the_offset_in_force ... ok
+test tz::tests::offsets_that_are_not_whole_hours_format_correctly ... ok
+test tz::tests::the_next_transition_is_findable_so_the_clock_knows_when_to_redraw ... ok
+test tz::tests::utc_is_labelled_as_a_fallback_with_the_reason ... ok
+test tz::tests::detection_prefers_tz_then_localtime_then_says_it_gave_up ... ok
+
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_manifest-0ff7c7767706dd2d)
+
+running 19 tests
+test tests::a_key_before_any_section_is_rejected ... ok
+test tests::a_duplicate_key_is_rejected_not_last_wins ... ok
+test tests::a_duplicate_capability_is_rejected ... ok
+test tests::an_unknown_capability_is_a_hard_error ... ok
+test tests::abi_compatibility_is_asymmetric ... ok
+test tests::an_unknown_key_or_section_is_a_hard_error ... ok
+test tests::comments_blank_lines_and_whitespace_are_tolerated ... ok
+test tests::consent_lines_are_human_language_not_tokens ... ok
+test tests::optional_sections_take_documented_defaults ... ok
+test tests::parses_a_well_formed_manifest ... ok
+test tests::every_required_field_is_actually_required ... ok
+test tests::rejects_control_characters_used_to_smuggle_lines ... ok
+test tests::rejects_a_capability_scope_with_traversal ... ok
+test tests::rejects_a_malformed_application_id ... ok
+test tests::scoped_and_host_capabilities_both_parse ... ok
+test tests::rejects_an_entrypoint_that_escapes_the_package ... ok
+test tests::enforces_size_limits ... ok
+test tests::the_consent_list_is_ordered_most_dangerous_first ... ok
+test tests::parsing_never_panics_on_arbitrary_input ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_notifyd-8cce6ba7bb6ad4ca)
+
+running 50 tests
+test client::tests::a_missing_daemon_is_an_error_and_not_a_hang ... ok
+test proto::tests::a_block_line_without_an_equals_sign_is_refused ... ok
+test proto::tests::a_control_character_is_a_forged_line_and_is_refused ... ok
+test proto::tests::a_dismiss_needs_a_number_that_is_a_number ... ok
+test proto::tests::a_note_missing_its_title_is_not_reconstructed ... ok
+test proto::tests::a_post_block_becomes_a_pending_note ... ok
+test proto::tests::a_note_round_trips_through_its_lines ... ok
+test proto::tests::a_post_needs_an_application_and_a_title ... ok
+test proto::tests::a_response_declares_its_own_length ... ok
+test proto::tests::a_ttl_that_is_not_a_number_is_refused_rather_than_defaulted ... ok
+test client::tests::a_take_from_a_desktop_that_was_down_returns_what_was_posted ... ok
+test proto::tests::an_error_message_cannot_break_framing ... ok
+test client::tests::a_text_post_is_the_same_path_as_a_pending_one ... ok
+test proto::tests::an_oversized_block_is_refused_before_it_is_parsed ... ok
+test client::tests::a_post_and_a_take_round_trip_over_a_real_socket ... ok
+test proto::tests::critical_notifications_never_expire_and_neither_do_untimed_ones ... ok
+test proto::tests::an_unknown_field_is_ignored_not_refused ... ok
+test proto::tests::an_unknown_verb_is_refused_rather_than_guessed ... ok
+test proto::tests::every_priority_round_trips_through_its_token ... ok
+test proto::tests::post_is_not_a_one_line_request ... ok
+test proto::tests::the_simple_verbs_parse ... ok
+test client::tests::a_count_and_a_list_do_not_consume_anything ... ok
+test queue::tests::a_corrupt_field_drops_the_record_and_not_the_queue ... ok
+test queue::tests::a_critical_note_survives_a_flood_of_low_ones ... ok
+test queue::tests::a_next_id_that_lags_behind_the_notes_never_reissues_an_id ... ok
+test queue::tests::a_taken_queue_is_empty_and_hands_over_everything ... ok
+test queue::tests::an_absent_file_is_an_empty_queue_not_an_error ... ok
+test queue::tests::a_truncated_record_is_skipped_rather_than_shown_as_half_a_message ... ok
+test queue::tests::clearing_reports_how_many_went ... ok
+test queue::tests::dismiss_removes_exactly_one_and_says_whether_it_did ... ok
+test queue::tests::expiry_drops_what_the_sender_timed_and_keeps_what_it_did_not ... ok
+test queue::tests::a_file_holding_more_notes_than_capacity_loads_only_the_capacity ... ok
+test queue::tests::the_newest_notification_is_first_and_ids_are_never_reused ... ok
+test server::tests::a_list_does_not_remove_anything ... ok
+test queue::tests::garbage_produces_an_empty_queue_rather_than_a_failure ... ok
+test server::tests::a_post_is_answered_with_its_id_and_whether_it_reached_the_disk ... ok
+test server::tests::a_second_take_is_empty ... ok
+test server::tests::a_take_reply_parses_back_into_the_notes_that_were_queued ... ok
+test server::tests::a_truncated_note_block_is_dropped_rather_than_merged ... ok
+test server::tests::an_expired_note_is_not_returned_even_if_it_is_still_queued ... ok
+test server::tests::dismiss_and_clear_report_what_they_did ... ok
+test server::tests::info_says_where_the_queue_lives_and_what_it_lost ... ok
+test server::tests::take_hands_over_the_queue_and_empties_it_in_one_request ... ok
+test server::tests::the_connection_cap_serves_exactly_max_connections ... ok
+test server::tests::a_live_daemons_socket_is_not_replaced_and_the_socket_is_owner_only ... ok
+test server::tests::a_stale_socket_is_replaced_and_a_file_is_never_deleted ... ok
+test server::tests::a_socket_query_round_trips_a_post_and_a_take ... ok
+test queue::tests::the_file_is_private_and_leaves_no_temporary_behind ... ok
+test queue::tests::the_queue_round_trips_through_its_file_with_ids_intact ... ok
+test client::tests::a_daemon_that_accepts_and_says_nothing_times_out_rather_than_freezing_the_desktop ... ok
+
+test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+     Running unittests src/main.rs (target/debug/deps/litric_notifyd-8ffddcf7cb8c75b7)
+
+running 7 tests
+test tests::an_option_without_its_value_is_an_error_not_a_default ... ok
+test tests::an_unknown_argument_is_refused_rather_than_ignored ... ok
+test tests::a_post_parses_its_optional_fields ... ok
+test tests::a_post_that_is_missing_its_title_is_refused_before_it_reaches_the_wire ... ok
+test tests::an_unreadable_priority_or_ttl_is_refused_rather_than_defaulted ... ok
+test tests::no_arguments_means_report ... ok
+test tests::every_mode_parses ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_shell-757f523aab285958)
+
+running 694 tests
+test activity::tests::a_count_is_pluralised_and_a_single_one_is_not ... ok
+test activity::tests::columns_keep_their_natural_width_and_the_last_ones_are_dropped_when_they_cannot ... ok
+test activity::tests::a_row_is_never_shorter_than_its_own_text ... ok
+test anim::tests::a_budget_snap_that_moves_the_value_reports_the_move ... ok
+test anim::tests::a_retargeted_spring_settles_on_the_new_target_within_budget ... ok
+test anim::tests::a_spring_at_rest_spends_no_frames ... ok
+test anim::tests::a_stalled_compositor_cannot_teleport_the_value ... ok
+test anim::tests::a_step_that_changes_nothing_reports_nothing ... ok
+test anim::tests::interrupting_a_closing_panel_reopens_smoothly ... ok
+test anim::tests::reduced_motion_arrives_in_one_step_without_travel ... ok
+test anim::tests::retargeting_mid_flight_keeps_momentum_instead_of_restarting ... ok
+test anim::tests::retargeting_to_the_current_target_is_a_no_op ... ok
+test anim::tests::the_same_seed_of_steps_gives_the_same_sequence ... ok
+test activity::tests::an_unmeasured_meter_is_a_dash_and_claims_nothing ... ok
+test activity::tests::a_meter_draws_the_band_it_crossed_and_the_marks_that_are_on ... ok
+test activity::tests::the_table_shows_every_process_and_says_what_it_could_not_fit ... ok
+test activity::tests::an_empty_table_says_the_daemon_did_not_answer_rather_than_nothing_is_running ... ok
+test apps::scan_mode_tests::the_scan_queue_caps_are_pinned ... ok
+test apps::scan_mode_tests::the_two_modes_promise_different_coverage ... ok
+test apps::tests::a_failed_directory_read_replaces_the_rows_with_the_reason ... ok
+test apps::tests::a_files_place_click_navigates_and_pins ... ok
+test apps::tests::a_header_click_only_resorts ... ok
+test apps::tests::a_malformed_address_is_refused_in_the_omnibox_instead_of_searched_or_sent ... ok
+test apps::tests::a_viewer_counts_lines_the_way_an_editor_does ... ok
+test apps::tests::a_viewer_shows_only_the_lines_that_fit ... ok
+test apps::tests::a_viewer_slices_multibyte_lines_on_their_boundaries ... ok
+test apps::tests::breadcrumbs_and_crumb_targets_match_the_path ... ok
+test apps::tests::browser_bookmarks_toggle_and_remain_unique ... ok
+test apps::tests::browser_close_keeps_the_focused_tab_focused ... ok
+test appicons::tests::a_tinted_mark_takes_the_colour_and_keeps_its_shape ... ok
+test apps::tests::browser_hotspots_map_totally ... ok
+test apps::tests::browser_tabs_open_close_and_keep_the_window_alive ... ok
+test apps::tests::canonicalisation_leaves_search_urls_and_plain_tokens_alone ... ok
+test apps::tests::browser_history_back_forward_and_new_navigation_trim_forward ... ok
+test apps::tests::decoding_covers_percent_and_dash_forms ... ok
+test apps::tests::clipboard_records_copy_and_cut ... ok
+test apps::tests::first_boot_desktop_keeps_only_frequent_destinations ... ok
+test apps::tests::dialogs_open_with_the_right_field_and_selection ... ok
+test apps::tests::history_buttons_know_when_they_have_nowhere_to_go ... ok
+test apps::tests::history_works_like_explorers_back_forward_stack ... ok
+test apps::tests::list_reply_parses_into_sorted_rows ... ok
+test apps::tests::one_site_has_one_entry_however_it_is_typed ... ok
+test apps::tests::search_engines_build_their_urls_and_round_trip ... ok
+test apps::tests::multiple_selection_tracks_names_when_sorted_and_compresses_together ... ok
+test apps::tests::search_engines_round_trip_through_their_stored_tokens ... ok
+test apps::tests::select_all_uses_the_visible_rows_and_filter_is_respected ... ok
+test apps::tests::selection_asked_once_per_built_list_matches_the_one_shot_query ... ok
+test apps::tests::selection_survives_through_the_visible_view ... ok
+test apps::tests::sorting_toggles_and_switches_columns ... ok
+test apps::tests::the_defender_model_tracks_a_scan_end_to_end ... ok
+test apps::tests::the_desktop_grid_has_the_standard_icons ... ok
+test apps::tests::the_defender_model_stays_bounded_on_big_scans ... ok
+test apps::tests::the_filter_narrows_without_touching_the_listing ... ok
+test apps::tests::the_omnibox_searches_google_by_default ... ok
+test apps::tests::the_root_crumb_goes_home_from_any_depth ... ok
+test canvas::tests::a_backdrop_of_the_wrong_size_is_refused ... ok
+test canvas::tests::a_client_frame_is_scaled_to_the_window_and_xrgb_is_made_opaque ... ok
+test apps::tests::up_from_a_nested_path_goes_to_its_parent ... ok
+test canvas::tests::a_client_frame_never_paints_outside_its_window ... ok
+test canvas::tests::a_clip_stops_drawing_outside_it ... ok
+test canvas::tests::a_filled_rect_covers_its_interior_and_leaves_the_outside_alone ... ok
+test canvas::tests::a_fractional_clip_draws_exactly_the_pixels_whose_centres_it_contains ... ok
+test appicons::tests::an_icon_is_drawn_inside_its_box_and_nowhere_else ... ok
+test canvas::tests::a_gradient_runs_from_top_to_bottom ... ok
+test canvas::tests::a_line_is_drawn_between_its_endpoints_and_not_beyond_them ... ok
+test appicons::tests::the_same_size_is_scaled_once ... ok
+test canvas::tests::a_rounded_rect_actually_rounds_its_corners ... ok
+test activity::tests::a_window_with_no_room_says_what_it_hid_rather_than_hiding_it ... ok
+test appicons::tests::scaling_keeps_a_transparent_corner_transparent ... ok
+test canvas::tests::a_soft_shadow_is_billed_to_the_shadow_not_to_plain_fills ... ok
+test canvas::tests::a_zero_length_line_draws_a_dot_rather_than_dividing_by_zero ... ok
+test canvas::tests::an_arc_starts_and_ends_where_it_was_asked_to ... ok
+test canvas::tests::an_arc_swept_backwards_takes_the_other_route ... ok
+test canvas::tests::blending_at_the_extremes_is_exact ... ok
+test canvas::tests::blending_halfway_lands_halfway ... ok
+test canvas::tests::blitting_restores_only_inside_the_clip ... ok
+test canvas::tests::blur_moves_a_hard_edge_into_a_ramp ... ok
+test canvas::tests::blur_of_a_flat_region_changes_nothing ... ok
+test canvas::tests::brightest_does_not_change_with_the_clip ... ok
+test canvas::tests::brightest_finds_the_bright_corner_an_average_would_hide ... ok
+test canvas::tests::clips_nest_and_restore ... ok
+test canvas::tests::damage_off_the_screen_is_dropped_and_damage_across_its_edge_is_cut ... ok
+test canvas::tests::damage_over_half_the_screen_plans_a_full_repaint ... ok
+test canvas::tests::distant_damage_stays_separate_and_nearby_damage_merges ... ok
+test canvas::tests::edges_are_anti_aliased_rather_than_stepped ... ok
+test canvas::tests::glass_with_a_backdrop_ignores_what_is_under_it ... ok
+test canvas::tests::a_shadow_under_an_opaque_panel_with_a_backdrop_leaves_the_same_frame ... ok
+test canvas::tests::luminance_agrees_with_the_design_crate_at_the_anchors ... ok
+test canvas::tests::mixing_two_frames_is_a_per_channel_cross_fade ... ok
+test canvas::tests::no_damage_plans_no_regions ... ok
+test canvas::tests::out_of_range_coverage_cannot_wrap_a_channel ... ok
+test canvas::tests::regions_are_capped_and_still_cover_every_damaged_pixel ... ok
+test canvas::tests::saturation_leaves_grey_grey ... ok
+test activity::tests::the_same_table_is_still_readable_at_a_larger_scale_and_a_different_width ... ok
+test canvas::tests::a_sampled_search_bills_the_samples_it_takes ... ok
+test canvas::tests::the_fill_buckets_account_for_every_pixel_it_walks ... ok
+test canvas::tests::a_clipped_glass_blur_visits_about_the_damage_region_not_the_panel ... ok
+test canvas::tests::a_glass_panel_the_damage_region_misses_blurs_nothing ... ok
+test canvas::tests::the_glass_source_is_the_live_glass_path_away_from_the_edges ... ok
+test canvas::tests::a_partial_glass_blur_paints_what_the_full_one_painted ... ok
+test appicons::tests::every_icon_decodes_as_256_square_rgba ... ok
+test canvas::tests::the_pixel_bill_names_the_loop_that_asked ... ok
+test canvas::tests::integer_rounding_blends_exactly_as_float_rounding_did ... ok
+test canvas::tests::the_shadow_buckets_account_for_every_walked_pixel ... ok
+test canvas::tests::the_sliding_window_blur_matches_even_over_a_short_buffer ... ok
+test canvas::tests::the_one_pass_shadow_visits_far_fewer_pixels_under_a_window ... ok
+test canvas::tests::the_hoisted_shadow_geometry_equals_the_distance_function ... ok
+test canvas::tests::the_sliding_window_blur_matches_the_summing_blur_exactly ... ok
+test canvas::tests::the_two_cursor_rectangles_of_a_pointer_move_become_one_whole_pixel_region ... ok
+test canvas::tests::two_clips_that_do_not_overlap_draw_nothing ... ok
+test canvas::tests::with_alpha_rounds_the_way_it_always_did ... ok
+test canvas::tests::writes_outside_the_canvas_are_dropped_not_wrapped ... ok
+test copy::tests::interface_kinds_do_not_carry_the_kernel_name ... ok
+test copy::tests::places_are_named_the_way_the_window_names_them ... ok
+test copy::tests::programs_a_person_opened_are_called_what_they_are ... ok
+test copy::tests::storage_says_what_can_be_done_not_what_the_disk_is_formatted_as ... ok
+test copy::tests::the_connection_states_are_the_three_plain_ones ... ok
+test copy::tests::the_guard_list_rejects_every_machine_token ... ok
+test canvas::tests::the_one_pass_shadow_equals_the_twelve_ring_shadow ... ok
+test desktop::tests::a_canvas_without_a_backdrop_still_profiles_the_live_blur ... ok
+test desktop::tests::an_unreadable_wave_falls_back_to_solid_obsidian ... ok
+test desktop::tests::byte_sizes_read_the_way_a_person_expects ... ok
+test canvas::tests::the_attached_glass_matches_the_per_pixel_distance ... ok
+test desktop::tests::every_wallpaper_choice_paints_something_different ... ok
+test desktop::tests::a_rendered_desktop_is_not_a_blank_screen ... ok
+test desktop::tests::glass_may_not_magnify_the_colours_behind_it ... ok
+test canvas::tests::the_shadow_panel_interval_changes_no_pixel ... ok
+test desktop::tests::glass_over_a_white_backdrop_firms_up_on_its_own ... ok
+test desktop::tests::reduced_transparency_is_opaque_and_does_not_read_the_backdrop ... ok
+test canvas::tests::the_stroke_line_equals_the_per_pixel_distance ... ok
+test canvas::tests::the_filled_core_skips_the_distance_and_changes_no_pixel ... ok
+test canvas::tests::the_stroke_band_walk_equals_the_full_distance_walk ... ok
+test desktop::tests::the_clock_is_utc_and_says_so ... ok
+test desktop::tests::the_compositor_scene_carries_a_glass_backdrop_of_its_own_size ... ok
+test desktop::tests::the_compositor_scene_profiles_the_copy_path_not_the_live_blur ... ok
+test desktop::tests::every_glass_surface_keeps_text_readable ... ok
+test desktop::tests::the_flat_wallpaper_is_one_colour_and_the_glow_is_not ... ok
+test desktop::tests::the_light_wallpaper_is_solid_pearl ... ok
+test desktop::tests::every_wallpaper_still_leaves_the_glass_a_readable_alpha ... ok
+test canvas::tests::the_bounded_ring_scan_equals_the_unbounded_one ... ok
+test desktop::tests::ui_text_never_renders_as_pencil_strokes ... ok
+test desktop::tests::uptime_formats_at_every_scale ... ok
+test desktop::tests::wallpaper_tokens_are_unique_and_round_trip ... ok
+test desktop::tests::rendering_survives_an_absurdly_small_screen ... ok
+test desktop_entry::tests::a_plain_entry_parses_with_its_vector_and_name ... ok
+test desktop_entry::tests::an_oversized_entry_is_not_read ... ok
+test desktop_entry::tests::discovery_prefers_the_earlier_directory_and_lists_real_apps_only ... ok
+test desktop_entry::tests::entries_that_are_not_runnable_applications_are_refused ... ok
+test desktop_entry::tests::field_codes_and_quotes_are_removed_leaving_literal_arguments ... ok
+test desktop_entry::tests::the_bounds_are_pinned ... ok
+test domkey::tests::a_printing_key_is_named_by_what_it_typed ... ok
+test domkey::tests::an_unknown_scancode_has_no_physical_name ... ok
+test domkey::tests::enter_carries_a_carriage_return_and_other_named_keys_carry_nothing ... ok
+test domkey::tests::every_letter_maps_to_its_uppercase_ascii_virtual_key ... ok
+test domkey::tests::function_keys_run_contiguously_including_f13_to_f24 ... ok
+test domkey::tests::letters_digits_and_arrows_have_their_specified_names ... ok
+test domkey::tests::modifiers_map_to_the_cdp_bits_and_altgr_is_not_alt ... ok
+test domkey::tests::named_keys_use_the_specification_values ... ok
+test drm::tests::a_band_is_pitch_bytes_per_row_with_the_canvas_inside_it ... ok
+test drm::tests::a_canvas_narrower_than_the_mode_leaves_the_rest_black ... ok
+test drm::tests::a_full_frame_is_one_band_then_a_flip ... ok
+test drm::tests::a_handshake_parses_into_geometry ... ok
+test drm::tests::a_helper_that_exits_is_an_error_that_names_the_card ... ok
+test desktop::tests::the_embedded_wave_decodes_at_full_size ... ok
+test drm::tests::a_nonsense_handshake_is_refused_with_what_was_said ... ok
+test drm::tests::anything_that_is_not_the_protocol_is_refused ... ok
+test drm::tests::bands_touch_merge_and_gaps_stay_separate ... ok
+test drm::tests::card_discovery_prefers_the_lowest_index ... ok
+test drm::tests::damage_becomes_merged_row_bands ... ok
+test desktop::tests::rendering_with_no_environments_still_draws ... ok
+test drm::tests::damage_sends_only_its_bands_and_still_flips ... ok
+test drm::tests::off_screen_and_empty_damage_is_clipped_away ... ok
+test drm::tests::damage_that_covers_nothing_writes_nothing_at_all ... ok
+test e2e::every_control_state_renders_differently ... ok
+test e2e::journey_a_display_scale_change_undoes_itself_unless_it_is_kept ... ok
+test desktop::tests::the_wallpaper_is_not_one_flat_colour ... ok
+test e2e::journey_a_machine_that_cannot_check_a_password_refuses_to_lock ... ok
+test desktop::tests::glass_over_a_dark_wallpaper_stays_transparent ... ok
+test desktop::tests::zero_total_memory_does_not_divide_by_zero ... ok
+test desktop::tests::the_light_theme_produces_a_light_desktop ... ok
+test e2e::journey_a_threat_notification_banners_through_notifications ... ok
+test e2e::journey_a_running_defender_scan_can_be_stopped_from_the_window ... ok
+test desktop::tests::the_wallpaper_stays_a_backdrop_not_a_gradient_demo ... ok
+test e2e::journey_a_refusal_closes_the_field_before_it_can_be_asked_again ... ok
+test e2e::journey_activity_ends_a_real_process_after_confirmation ... ok
+test e2e::journey_activity_ends_a_real_process_tree_after_confirmation ... ok
+test e2e::journey_browser_menu_starts_engine_session_and_reports_honestly ... ok
+test e2e::journey_browser_history_and_bookmarks_are_clickable_and_keep_visits ... ok
+test e2e::journey_activity_refuses_a_process_outside_its_scope ... ok
+test drm::tests::a_helper_that_never_speaks_is_an_error_not_a_hang ... ok
+test e2e::journey_browser_search_commits_to_the_engine_url ... ok
+test e2e::journey_clicking_a_window_never_hits_the_desktop_icon_behind_it ... ok
+test e2e::journey_defender_fast_and_deep_scans_cover_different_folders ... ok
+test e2e::journey_browser_opens_a_real_comic_page_and_renders_it ... ok
+test e2e::journey_context_menu_rows_all_do_something ... ok
+test e2e::journey_a_download_opens_in_files_and_is_scanned ... ok
+test e2e::journey_browser_searches_google_and_picks_engines ... ok
+test e2e::journey_activity_environment_and_settings_controls_change_real_state ... ok
+test e2e::journey_browser_loads_a_page_from_a_local_web_server_and_reports_a_failed_fetch ... ok
+test e2e::journey_defender_restores_a_legacy_quarantine_entry_unverified ... ok
+test e2e::journey_defender_scans_and_reports_eicar_end_to_end ... ok
+test e2e::journey_delete_asks_first_and_trash_only_after_confirm ... ok
+test e2e::journey_desktop_menu_keeps_its_folder_on_the_desktop_with_files_in_front ... ok
+test e2e::journey_defender_refuses_to_quarantine_a_file_that_is_gone ... ok
+test e2e::journey_defender_scans_a_real_folder_fast_and_deep ... ok
+test e2e::journey_engine_chip_and_quick_link_navigate ... ok
+test e2e::journey_defender_refuses_to_restore_a_tampered_quarantine_entry ... ok
+test e2e::journey_files_context_menu_creates_its_folder_in_the_open_folder ... ok
+test e2e::journey_files_selects_with_mouse_and_compresses_multiple_items ... ok
+test e2e::journey_focus_elevation_glides_instead_of_snapping ... ok
+test e2e::journey_defender_quarantine_refreshes_an_open_files_window ... ok
+test e2e::journey_defender_quarantines_and_restores_a_real_threat ... ok
+test e2e::journey_files_window_is_drawn_with_places_rows_and_commands ... ok
+test e2e::journey_launcher_click_opens_focuses_then_minimizes ... ok
+test e2e::journey_launcher_draws_an_svg_only_theme_icon ... ok
+test e2e::journey_files_watch_shows_an_outside_change_without_a_click ... ok
+test e2e::journey_mission_control_is_keyboard_only ... ok
+test e2e::journey_launcher_draws_the_icon_the_desktop_entry_names ... ok
+test e2e::journey_new_folder_from_the_files_menu_lands_in_the_open_folder ... ok
+test e2e::journey_files_refresh_shows_a_change_made_outside_the_shell ... ok
+test e2e::journey_opening_the_browser_reaches_for_the_engine_itself ... ok
+test e2e::journey_mission_control_shows_windows_from_every_workspace_and_opens_one ... ok
+test e2e::journey_locking_hides_the_session_and_only_a_password_brings_it_back ... ok
+test e2e::journey_launcher_lists_a_real_desktop_app_and_starts_it_through_sysd ... ok
+test e2e::journey_rename_via_f2_and_confirm_dialog ... ok
+test e2e::journey_reader_lays_out_a_table_of_values_in_columns ... ok
+test e2e::journey_right_click_background_tab_closes_that_tab ... ok
+test e2e::journey_powering_off_asks_first_and_only_a_confirmation_acts ... ok
+test e2e::journey_right_click_background_tab_reloads_that_tab ... ok
+test e2e::journey_right_click_desktop_menu_creates_a_folder_via_dialog ... ok
+test e2e::journey_right_click_files_row_shows_row_menu ... ok
+test e2e::journey_right_click_trash_row_targets_that_row ... ok
+test e2e::journey_terminal_runs_a_real_command ... ok
+test e2e::journey_the_bars_height_is_a_strip_and_its_width_is_wider_than_a_shelf ... ok
+test e2e::journey_the_desktop_is_bare_and_applications_open_from_the_launcher ... ok
+test e2e::journey_searching_in_the_launcher_filters_and_escape_collapses ... ok
+test e2e::journey_the_launcher_marks_which_applications_are_running ... ok
+test e2e::journey_the_lock_does_not_collect_a_password_it_could_not_check ... ok
+test e2e::journey_the_omnibox_takes_keys_not_just_text ... ok
+test e2e::journey_the_launcher_opens_on_the_apps_menu_and_a_tile_opens_the_app ... ok
+test e2e::journey_the_search_field_finds_a_window_on_another_workspace ... ok
+test e2e::journey_hidden_files_toggle_is_a_real_read_and_survives_a_restart ... ok
+test e2e::journey_the_search_field_finds_an_action_and_runs_it ... ok
+test e2e::journey_trash_window_restores_after_files_trash ... ok
+test e2e::journey_viewer_opens_text_files_with_scrolling ... ok
+test e2e::journey_the_lock_customize_sheet_changes_the_look_live ... ok
+test e2e::lock_idle_shows_the_account_and_a_direct_unlock_path ... ok
+test e2e::merged_pointer_moves_are_one_cursor_step_from_where_the_arrow_was_left ... ok
+test fb::tests::a_canvas_smaller_than_the_screen_is_placed_not_stretched ... ok
+test fb::tests::a_missing_stride_falls_back_to_an_unpadded_row ... ok
+test fb::tests::a_padded_stride_is_believed_rather_than_recomputed ... ok
+test fb::tests::damage_outside_the_screen_is_clipped_rather_than_refused ... ok
+test fb::tests::discovery_of_a_fixture_root_finds_the_framebuffer ... ok
+test fb::tests::discovery_of_a_root_without_a_framebuffer_is_none_not_a_guess ... ok
+test fb::tests::encoding_into_a_short_slice_writes_nothing_rather_than_panicking ... ok
+test fb::tests::format_names_round_trip ... ok
+test fb::tests::nonsense_geometry_is_refused_instead_of_defaulted ... ok
+test fb::tests::presenting_damage_writes_only_the_rows_that_changed ... ok
+test fb::tests::presenting_no_damage_writes_nothing ... ok
+test fb::tests::presenting_writes_exactly_one_frame_of_the_declared_size ... ok
+test fb::tests::rgb565_packs_into_two_bytes ... ok
+test fb::tests::sysfs_geometry_parses ... ok
+test fb::tests::xbgr_is_the_other_order ... ok
+test fb::tests::xrgb_puts_blue_in_the_first_byte ... ok
+test filewatch::tests::a_deferred_check_is_not_retried_until_the_next_interval ... ok
+test filewatch::tests::losing_and_regaining_the_folder_are_each_one_change ... ok
+test filewatch::tests::the_digest_changes_when_the_table_would_draw_differently ... ok
+test filewatch::tests::the_watcher_reads_at_most_once_per_interval_and_only_after_a_real_read ... ok
+test font::tests::a_capital_is_as_tall_as_the_tokens_say_it_is ... ok
+test font::tests::a_heavier_weight_puts_down_more_ink ... ok
+test font::tests::an_unknown_character_draws_a_box_rather_than_nothing ... ok
+test font::tests::drawing_nothing_costs_nothing_and_returns_the_pen_unmoved ... ok
+test font::tests::drawing_puts_ink_on_the_canvas_within_the_measured_box ... ok
+test font::tests::every_glyph_except_space_actually_draws_something ... ok
+test font::tests::every_glyph_has_a_positive_advance ... ok
+test font::tests::every_printable_ascii_character_has_a_glyph ... ok
+test font::tests::glyphs_stay_inside_their_advance_and_their_vertical_bounds ... ok
+test font::tests::measuring_matches_where_drawing_leaves_the_pen ... ok
+test font::tests::no_character_is_defined_twice ... ok
+test font::tests::text_is_clipped_by_the_canvas_rather_than_writing_out_of_bounds ... ok
+test font::tests::text_sits_on_its_baseline_rather_than_over_it ... ok
+test font::tests::tracking_is_applied_between_characters_and_not_after_the_last ... ok
+test fsbridge::tests::a_link_to_a_file_cannot_be_read_through ... ok
+test fsbridge::tests::a_record_written_in_the_legacy_uri_form_still_lists_and_restores ... ok
+test fsbridge::tests::a_storage_root_that_is_a_link_is_refused ... ok
+test fsbridge::tests::a_symbolic_link_in_a_parent_is_refused_and_nothing_is_written_through_it ... ok
+test fsbridge::tests::a_trash_directory_replaced_by_a_link_is_not_written_through ... ok
+test fsbridge::tests::a_traversing_or_absolute_old_name_is_refused_by_rename ... ok
+test fsbridge::tests::compress_then_extract_round_trips_a_tree ... ok
+test fsbridge::tests::copy_keeps_both_and_numbers_the_next_clash ... ok
+test fsbridge::tests::copy_of_name_follows_the_explorer_rule ... ok
+test fsbridge::tests::dot_segments_and_traversal_are_refused ... ok
+test fsbridge::tests::hidden_entries_are_listed_only_when_the_caller_asks ... ok
+test fsbridge::tests::list_read_create_rename_and_delete_round_trip ... ok
+test fsbridge::tests::names_are_validated_before_any_touch_of_the_disk ... ok
+test fsbridge::tests::rename_refuses_an_existing_destination_and_keeps_both_files ... ok
+test fsbridge::tests::search_finds_nested_names_case_insensitively ... ok
+test fsbridge::tests::storage_initialisation_is_idempotent_and_never_removes_anything ... ok
+test fsbridge::tests::the_error_for_a_full_or_read_only_disk_is_a_sentence ... ok
+test fsbridge::tests::the_trash_record_holds_the_absolute_location_not_a_uri ... ok
+test fsbridge::tests::trash_write_list_restore_and_purge ... ok
+test fsclient::tests::a_folder_named_with_a_space_and_a_percent_sign_survives_the_round_trip ... ok
+test fsclient::tests::a_missing_daemon_is_an_error_not_a_quiet_fallback ... ok
+test fsclient::tests::a_path_the_line_grammar_cannot_carry_is_encoded ... ok
+test fsclient::tests::a_plain_path_goes_on_the_wire_as_it_is ... ok
+test fsclient::tests::a_staged_download_reaches_downloads_through_the_daemon ... ok
+test fsclient::tests::an_encoded_path_no_longer_starts_with_a_slash ... ok
+test fsclient::tests::every_error_kind_maps_to_a_sentence_the_window_can_show ... ok
+test fsclient::tests::join_keeps_one_separator_at_the_root ... ok
+test fsclient::tests::reply_fields_decode ... ok
+test fsclient::tests::the_created_name_is_taken_from_the_full_path ... ok
+test fsclient::tests::the_files_window_operations_all_go_through_the_daemon ... ok
+test fsclient::tests::the_parent_of_a_top_level_item_is_the_root ... ok
+test i18n::tests::a_language_with_no_face_is_not_printed_as_boxes ... ok
+test i18n::tests::english_and_thai_catalogs_are_selectable ... ok
+test i18n::tests::language_tokens_round_trip ... ok
+test icons::tests::a_heavier_weight_puts_down_more_ink ... ok
+test icons::tests::a_non_square_box_centres_the_icon_rather_than_stretching_it ... ok
+test icons::tests::every_icon_draws_something ... ok
+test icons::tests::every_icon_fills_a_reasonable_share_of_its_box ... ok
+test icons::tests::every_icon_has_a_distinct_name ... ok
+test icons::tests::every_icon_stays_inside_its_box ... ok
+test icons::tests::icons_are_legible_at_top_bar_size ... ok
+test icons::tests::muted_audio_differs_from_audio ... ok
+test inbox::tests::a_missing_queue_is_an_error_the_caller_can_ignore ... ok
+test inbox::tests::every_queued_priority_maps_to_a_distinct_desktop_one ... ok
+test inbox::tests::the_socket_is_where_the_unit_puts_it ... ok
+test link::tests::a_rejected_payload_header_closes_the_link ... ok
+test link::tests::a_truncated_payload_closes_the_link ... ok
+test link::tests::an_overlong_line_closes_the_link_instead_of_growing_memory ... ok
+test link::tests::coalescing_is_exact_when_nothing_is_drained_in_between ... ok
+test link::tests::commands_are_written_as_lines_and_embedded_newlines_are_refused ... ok
+test link::tests::dropping_the_link_ends_its_reader_thread ... ok
+test link::tests::eof_closes_the_link_after_delivering_what_came_before ... ok
+test link::tests::lines_and_payloads_arrive_in_order_and_each_wakes_the_loop ... ok
+test link::tests::the_last_frame_for_a_key_is_the_one_that_survives ... ok
+test lock::tests::a_drift_under_half_a_step_keeps_the_frame_it_had ... ok
+test e2e::every_app_layout_is_audited_at_both_resolutions_and_all_built_in_themes ... ok
+test lock::tests::a_frame_from_a_warm_cache_is_the_frame_from_a_cold_one ... ok
+test lock::tests::a_run_of_refusals_waits_longer_each_time_and_stops_at_the_cap ... ok
+test lock::tests::a_secret_is_hex_on_the_wire_and_lower_case ... ok
+test lock::tests::a_secret_never_prints_itself ... ok
+test lock::tests::a_verified_password_clears_the_wait ... ok
+test lock::tests::every_preset_group_round_trips_through_choose ... ok
+test lock::tests::nothing_is_typed_into_a_field_that_is_not_out ... ok
+test lock::tests::still_lock_has_no_animation_frames_but_motion_is_bounded ... ok
+test lock::tests::taking_the_secret_empties_the_buffer ... ok
+test lock::tests::the_default_look_is_the_designed_one ... ok
+test lock::tests::the_drift_does_not_replay_a_pause_in_one_frame ... ok
+test lock::tests::the_drift_reaches_the_field_in_whole_pixels ... ok
+test lock::tests::the_drift_stops_when_motion_is_still ... ok
+test lock::tests::the_keyframes_start_and_end_at_rest ... ok
+test lock::tests::the_wait_expires_on_the_shells_clock ... ok
+test lock::tests::the_widget_switches_are_two_way ... ok
+test monitor::tests::a_byte_rate_reads_at_the_scale_a_person_watches ... ok
+test monitor::tests::a_machine_with_no_counters_gets_an_honest_unavailable_not_a_flat_line ... ok
+test monitor::tests::a_percentage_is_clamped_and_a_missing_measurement_is_absent ... ok
+test monitor::tests::a_read_only_image_explains_itself_and_a_writable_volume_does_not ... ok
+test monitor::tests::a_read_only_system_image_is_explained_on_the_screen_it_appears_on ... ok
+test monitor::tests::a_series_is_drawn_across_its_box_with_the_ceiling_it_was_given ... ok
+test monitor::tests::no_second_sample_means_no_per_core_grid ... ok
+test monitor::tests::sizes_are_reported_at_a_scale_a_person_reads ... ok
+test monitor::tests::the_graphs_draw_what_was_measured_and_say_what_was_not ... ok
+test monitor::tests::the_kernels_own_filesystems_are_not_shown_as_storage ... ok
+test monitor::tests::the_memory_meter_says_used_of_total_and_lists_the_breakdown ... ok
+test lock::tests::a_panel_is_the_same_whether_its_blur_is_reused_or_redone ... ok
+test monitor::tests::the_storage_list_keeps_real_volumes_and_explains_the_read_only_ones ... ok
+test overview::tests::an_empty_overview_draws_nothing_and_keeps_the_selection_valid ... ok
+test monitor::tests::the_monitor_draws_rows_for_measured_facts_and_nothing_for_none ... ok
+test overview::tests::left_and_right_wrap_and_up_and_down_clamp ... ok
+test overview::tests::the_column_count_grows_with_the_windows_and_stops_at_four ... ok
+test overview::tests::the_grid_covers_the_area_without_overlap_or_overflow ... ok
+test prefstore::tests::a_file_from_before_the_flag_existed_still_counts_as_finished_setup ... ok
+test prefstore::tests::a_garbage_file_parses_to_defaults_instead_of_stopping_the_desktop ... ok
+test prefstore::tests::a_record_round_trips_through_the_file ... ok
+test prefstore::tests::bool_tokens_accept_the_forms_a_person_writes ... ok
+test prefstore::tests::an_absent_file_is_not_an_error_and_a_present_one_counts_as_set_up ... ok
+test prefstore::tests::do_not_disturb_round_trips_through_the_file_and_defaults_off ... ok
+test prefstore::tests::malformed_lines_are_skipped_rather_than_failing_the_whole_record ... ok
+test prefstore::tests::hidden_file_visibility_round_trips_through_the_file ... ok
+test prefstore::tests::the_encoded_record_names_its_version_first ... ok
+test prefstore::tests::saving_over_a_stale_temporary_still_succeeds ... ok
+test prefstore::tests::the_schedule_round_trips_and_an_unknown_one_keeps_the_default ... ok
+test prefstore::tests::the_search_engine_round_trips_and_an_unknown_one_keeps_the_default ... ok
+test prefstore::tests::the_file_is_private_to_the_account_and_leaves_no_temporary_behind ... ok
+test prefstore::tests::the_ui_scale_round_trips_and_a_size_this_build_does_not_draw_is_ignored ... ok
+test prefstore::tests::unknown_keys_and_values_keep_the_defaults ... ok
+test present::tests::a_broken_helper_degrades_and_still_presents ... ok
+test present::tests::a_machine_with_neither_surface_reports_what_it_looked_for ... ok
+test present::tests::a_card_and_an_installed_helper_are_preferred_over_the_framebuffer ... ok
+test present::tests::an_oversize_framebuffer_is_refused_before_it_is_opened ... ok
+test present::tests::fbdev_can_be_forced_where_a_card_exists ... ok
+test present::tests::an_oversize_card_mode_falls_back_and_says_why ... ok
+test present::tests::requiring_drm_on_a_machine_without_it_is_an_error_naming_the_cause ... ok
+test present::tests::the_flag_accepts_the_three_choices_and_nothing_else ... ok
+test present::tests::the_surface_budget_names_the_mode_and_why_it_is_over ... ok
+test present::tests::without_a_card_the_framebuffer_is_used_and_the_reason_is_recorded ... ok
+test process::tests::a_child_in_this_session_is_really_terminated ... ok
+test process::tests::a_process_that_has_gone_reports_that_it_has_gone ... ok
+test present::tests::requiring_an_oversize_card_mode_is_an_error ... ok
+test process::tests::a_tree_will_not_start_from_init ... ok
+test process::tests::init_and_this_desktop_are_refused ... ok
+test quarantine::tests::a_legacy_record_restores_unverified ... ok
+test quarantine::tests::a_link_is_refused_and_its_target_is_left_alone ... ok
+test quarantine::tests::a_second_quarantine_never_replaces_the_first ... ok
+test quarantine::tests::out_of_scope_and_missing_files_are_refused_without_moving_anything ... ok
+test quarantine::tests::quarantine_contains_the_file_and_restore_puts_it_back ... ok
+test quarantine::tests::restore_refuses_to_overwrite_or_to_use_a_tampered_record ... ok
+test quarantine::tests::tampered_bytes_are_refused_and_kept ... ok
+test reader::tests::a_missing_file_is_refused_in_a_sentence ... ok
+test reader::tests::a_page_reference_resolves_only_to_this_machines_server ... ok
+test reader::tests::a_table_is_laid_out_as_columns_of_values ... ok
+test reader::tests::escapes_in_a_file_address_are_decoded ... ok
+test reader::tests::the_cache_bounds_are_pinned ... ok
+test reader::tests::the_reader_serves_this_machines_files_and_web_server_only ... ok
+test registry::tests::a_link_opens_the_page_the_setting_lives_on ... ok
+test registry::tests::a_link_to_nothing_is_refused_rather_than_redirected ... ok
+test registry::tests::a_page_that_owns_settings_owns_at_least_one_row ... ok
+test registry::tests::a_schedule_detail_never_claims_a_theme_that_is_not_showing ... ok
+test e2e::journey_trash_restore_refreshes_an_open_files_window ... ok
+test registry::tests::a_search_finds_the_row_and_not_only_its_page ... ok
+test registry::tests::an_empty_query_finds_nothing ... ok
+test registry::tests::every_key_the_store_writes_is_either_searchable_or_declared_internal ... ok
+test registry::tests::every_page_slug_is_unique_and_parses_back ... ok
+test registry::tests::no_key_is_registered_twice ... ok
+test registry::tests::every_row_names_a_key_the_store_writes ... ok
+test registry::tests::the_forms_a_link_is_written_in_all_work ... ok
+test revert::tests::a_kept_change_never_expires ... ok
+test revert::tests::a_zero_window_expires_on_the_first_tick_and_a_whole_one_does_not ... ok
+test registry::tests::the_link_round_trips_to_the_same_target ... ok
+test revert::tests::the_clock_runs_out_exactly_once_at_the_end_of_the_window ... ok
+test seek::tests::a_query_with_no_words_finds_nothing ... ok
+test seek::tests::a_broken_settings_link_is_searched_for_like_any_other_text ... ok
+test seek::tests::a_setting_row_is_reachable_by_a_word_its_page_does_not_use ... ok
+test seek::tests::a_settings_page_is_reachable_by_its_name ... ok
+test seek::tests::a_typed_settings_link_opens_that_row_and_nothing_else ... ok
+test seek::tests::a_window_is_reachable_by_its_title ... ok
+test seek::tests::an_action_is_reachable_by_what_it_does ... ok
+test seek::tests::the_application_comes_before_an_action_that_mentions_it ... ok
+test seek::tests::the_list_is_bounded ... ok
+test settings::tests::a_page_slug_is_the_page_whatever_its_case ... ok
+test settings::tests::failed_persistence_restores_the_previous_values ... ok
+test settings::tests::manual_keeps_the_chosen_theme_at_every_hour ... ok
+test settings::tests::the_schedule_leaves_a_high_contrast_theme_alone ... ok
+test settings::tests::the_schedule_switches_at_the_hours_the_row_promises ... ok
+test settings::tests::the_schedule_tokens_round_trip_and_unknown_ones_are_refused ... ok
+test seek::tests::the_same_query_returns_the_same_list ... ok
+test process::tests::a_tree_is_terminated_from_the_leaves_up ... ok
+test shell::browser_tab_keys::ctrl_t_is_new_tab_in_the_browser_and_not_a_theme_cycle_in_settings ... ok
+test shell::browser_tab_keys::ctrl_t_opens_a_tab_and_ctrl_w_closes_it ... ok
+test shell::browser_tab_keys::ctrl_tab_cycles_and_wraps_in_both_directions ... ok
+test shell::browser_tab_keys::ctrl_digits_choose_a_tab_and_nine_is_the_last ... ok
+test shell::browser_tab_keys::a_selected_tab_draws_a_second_state_channel ... ok
+test shell::browser_tab_strip::a_strip_that_fits_has_no_bumpers ... ok
+test shell::browser_tab_strip::closing_back_to_one_tab_resets_the_strip_offset ... ok
+test shell::net_probe_tests::probe_reports_a_definite_answer ... ok
+test shell::browser_tab_strip::selecting_a_tab_past_the_edge_reveals_it ... ok
+test shell::scan_worker_tests::a_file_past_the_read_ceiling_is_reported_as_unread_not_clean ... ok
+test shell::scan_worker_tests::a_finished_scan_says_what_it_did_not_cover ... ok
+test shell::scan_worker_tests::a_terminal_line_arrives_while_the_command_is_still_running ... ok
+test shell::scan_worker_tests::a_banner_closes_from_its_own_box_and_opens_the_centre_from_its_body ... ok
+test shell::scan_worker_tests::the_pump_moves_a_bounded_number_of_verdicts_per_frame ... ok
+test shell::scan_worker_tests::one_engine_makes_a_second_scan_of_the_same_file_a_cache_hit ... ok
+test shell::browser_tab_strip::the_right_bumper_reaches_a_tab_past_the_window_edge ... ok
+test e2e::the_launcher_morph_repaints_the_dock_and_not_the_screen ... ok
+test shell::tests::a_closed_panel_is_kept_exactly_while_its_exit_spring_has_pixels ... ok
+test shell::tests::a_dismissed_banner_keeps_its_pixels_until_its_spring_lands ... ok
+test shell::tests::a_dismissed_dialog_keeps_its_panel_but_not_its_buttons ... ok
+test shell::tests::a_focus_change_damages_both_windows_and_the_top_bar ... ok
+test shell::tests::a_frame_header_is_read_as_tab_width_height_and_length ... ok
+test shell::tests::a_key_event_does_not_also_carry_printable_text ... ok
+test shell::tests::a_machine_with_no_processes_says_unavailable_rather_than_empty ... ok
+test shell::tests::a_network_rate_is_a_difference_and_nothing_is_invented_without_one ... ok
+test shell::tests::a_non_interactive_desktop_ignores_input ... ok
+test shell::tests::a_notification_queued_while_the_desktop_was_down_arrives_with_its_own_timestamp ... ok
+test shell::tests::a_notification_whose_lifetime_ran_out_while_the_desktop_was_down_is_not_shown ... ok
+test shell::sidebar_scroll::a_squeezed_files_window_can_reach_trash ... ok
+test shell::tests::a_power_request_carries_the_confirmation_word ... ok
+test shell::tests::a_process_share_is_of_the_whole_machine_and_absent_until_two_samples_exist ... ok
+test shell::tests::a_process_whose_pid_was_reused_does_not_report_a_spike ... ok
+test shell::tests::a_quick_settings_toggle_changes_real_state ... ok
+test shell::sidebar_scroll::a_squeezed_settings_window_can_reach_its_last_page ... ok
+test shell::tests::a_spring_settles_within_its_token_budget_at_every_frame_pace ... ok
+test shell::tests::a_stored_do_not_disturb_is_applied_at_load_and_only_silences_banners ... ok
+test shell::tests::a_tab_line_carries_the_address_and_title_a_tab_shows ... ok
+test shell::tests::a_tab_line_ends_the_load_and_reload_starts_another ... ok
+test shell::tests::adaptive_idle_lowers_the_frame_rate_and_input_brings_it_straight_back ... ok
+test shell::tests::adopting_does_not_interrupt_even_when_the_note_is_critical ... ok
+test shell::tests::alt_tab_opens_the_switcher_and_releasing_alt_commits ... ok
+test shell::tests::alt_tab_with_nothing_open_does_nothing ... ok
+test shell::tests::an_idle_desktop_asks_for_no_repaint_at_all ... ok
+test shell::tests::an_idle_desktop_sleeps_instead_of_polling_its_own_frame_rate ... ok
+test shell::tests::backspace_in_the_launcher_deletes_rather_than_closing_it ... ok
+test shell::tests::choosing_a_power_profile_emits_an_effect_rather_than_only_a_label ... ok
+test e2e::journey_this_litric_creates_renames_moves_and_trashes ... ok
+test shell::tests::clearing_notifications_leaves_the_critical_ones ... ok
+test shell::tests::clicking_a_hotspot_activates_it_only_if_the_release_lands_there_too ... ok
+test shell::tests::clicking_a_title_bar_starts_a_drag_and_a_double_click_maximizes ... ok
+test shell::tests::clicking_outside_an_overlay_dismisses_it ... ok
+test shell::tests::closing_a_window_damages_all_of_its_shadow ... ok
+test shell::tests::crossing_into_a_window_button_repaints_the_whole_button ... ok
+test shell::tests::ctrl_alt_home_always_returns_to_the_host ... ok
+test shell::tests::degraded_mode_still_works_and_names_what_is_missing ... ok
+test shell::tests::diagnostics_report_the_state_that_matters ... ok
+test shell::tests::do_not_disturb_is_stored_applied_to_the_queue_and_rolled_back ... ok
+test shell::tests::do_not_disturb_silences_everything_except_critical ... ok
+test shell::tests::dragging_a_window_gets_the_fastest_frame_budget ... ok
+test shell::tests::escape_closes_the_launcher_and_leaves_the_desktop_alone ... ok
+test shell::tests::every_power_command_names_itself_for_the_user_and_for_the_daemon ... ok
+test shell::tests::facts_damage_only_what_displays_them ... ok
+test shell::tests::first_run_setup_finishes_from_the_keyboard ... ok
+test shell::tests::mission_control_closes_on_escape_and_the_backdrop ... ok
+test shell::tests::mission_control_shows_every_workspace_and_opens_the_chosen_window ... ok
+test shell::tests::motion_that_outlives_the_idle_timer_still_runs_at_the_active_pace ... ok
+test shell::tests::moving_the_pointer_damages_only_the_cursor_and_what_it_crossed ... ok
+test shell::tests::notifications_expire_but_critical_ones_never_do ... ok
+test shell::tests::opening_a_setting_row_from_search_lands_on_its_page_with_the_row_focused ... ok
+test shell::tests::opening_a_window_repaints_the_window_and_an_overlay_repaints_everything ... ok
+test shell::tests::opening_an_application_twice_focuses_the_first_window ... ok
+test shell::tests::opening_the_panel_asks_for_the_two_measurements_and_closing_asks_nothing ... ok
+test shell::tests::reduce_transparency_changes_the_real_material_and_persists ... ok
+test shell::tests::reopening_a_panel_reverses_its_spring_instead_of_drawing_two_copies ... ok
+test shell::tests::scrolling_the_desktop_does_not_change_workspace ... ok
+test shell::tests::scrolling_the_top_bar_changes_workspace ... ok
+test shell::tests::show_desktop_minimizes_everything ... ok
+test shell::tests::choosing_a_search_engine_persists_it_and_a_restart_applies_it ... ok
+test shell::tests::swapping_between_panels_that_share_a_spring_does_not_keep_a_ghost ... ok
+test shell::tests::tapping_meta_opens_the_launcher_and_a_combination_does_not ... ok
+test shell::tests::the_accent_applies_on_standard_themes_and_not_on_high_contrast_ones ... ok
+test shell::tests::the_appearance_schedule_follows_the_clock_and_nothing_else ... ok
+test shell::tests::the_application_cycle_stays_inside_the_application ... ok
+test shell::tests::the_clock_repaints_the_top_bar_only_when_its_text_changes ... ok
+test shell::tests::the_close_button_closes_the_window_it_is_on ... ok
+test shell::tests::the_hidden_files_switch_persists_and_marks_the_listing_stale ... ok
+test shell::tests::the_launcher_does_not_type_into_the_desktop_when_it_is_closed ... ok
+test shell::tests::the_minimize_key_restores_before_it_hides ... ok
+test shell::tests::the_network_tile_offers_only_what_the_kernel_reports ... ok
+test shell::tests::the_next_expiry_is_the_earliest_one ... ok
+test shell::tests::the_next_wallpaper_row_changes_the_wallpaper_and_not_the_theme ... ok
+test shell::tests::the_notification_queue_is_bounded_and_drops_the_oldest_ordinary_one ... ok
+test shell::tests::the_quarters_snap_to_the_work_area ... ok
+test shell::tests::the_queue_is_adopted_in_the_order_it_was_posted ... ok
+test shell::tests::the_quick_motion_switch_persists_like_the_settings_row ... ok
+test shell::tests::the_radio_switch_needs_a_provider_and_a_measured_position ... ok
+test shell::tests::the_same_note_handed_over_twice_is_shown_once ... ok
+test shell::tests::a_retired_menu_is_still_painted_but_registers_no_click_target ... ok
+test shell::tests::the_shell_says_why_a_missing_engine_cannot_show_a_page ... ok
+test shell::tests::the_start_page_is_not_offered_a_reload_because_it_has_no_page ... ok
+test shell::tests::the_volume_controls_ask_for_steps_and_the_panel_follows_the_measurement ... ok
+test shell::tests::turning_adaptive_idle_off_keeps_the_compositor_active ... ok
+test shell::tests::typing_in_the_launcher_filters_and_enter_opens_the_match ... ok
+test shell::tests::unknown_facts_are_reported_as_unavailable_rather_than_zero ... ok
+test shell::tests::win_1_asks_for_an_environment_switch ... ok
+test shell::tests::window_shortcuts_act_on_the_focused_window ... ok
+test shell::tests::workspaces_switch_and_windows_move_between_them ... ok
+test shortcuts::tests::a_clean_meta_tap_opens_the_launcher_and_a_dirty_one_does_not ... ok
+test shortcuts::tests::a_modifier_alone_never_resolves_on_press ... ok
+test shortcuts::tests::a_plain_key_is_not_a_shortcut ... ok
+test shortcuts::tests::a_reserved_shortcut_cannot_be_rebound ... ok
+test shortcuts::tests::a_search_that_matches_nothing_returns_nothing ... ok
+test shortcuts::tests::alt_tab_and_alt_shift_tab_go_opposite_ways ... ok
+test shortcuts::tests::an_empty_search_lists_everything_in_a_stable_order ... ok
+test shortcuts::tests::an_exact_name_beats_everything ... ok
+test shortcuts::tests::an_extra_modifier_is_a_different_shortcut ... ok
+test shortcuts::tests::escape_dismisses_and_is_reserved ... ok
+test shortcuts::tests::every_application_has_a_distinct_identity_and_a_usable_window_size ... ok
+test shortcuts::tests::every_shortcut_has_a_readable_label ... ok
+test shortcuts::tests::launcher_search_finds_applications_by_more_than_their_name ... ok
+test shortcuts::tests::lock_state_does_not_change_a_shortcut ... ok
+test shortcuts::tests::no_two_shortcuts_share_a_binding ... ok
+test shortcuts::tests::rebinding_something_that_is_not_in_the_table_is_refused ... ok
+test shortcuts::tests::rebinding_works_and_refuses_a_collision ... ok
+test shortcuts::tests::resetting_a_meta_tap_forgets_it ... ok
+test shortcuts::tests::search_ranks_a_name_match_above_a_description_match ... ok
+test shortcuts::tests::the_defender_is_findable_and_bound ... ok
+test shortcuts::tests::the_environment_shortcuts_resolve ... ok
+test taskmgr::history_tests::a_measurement_that_was_never_taken_is_absent_rather_than_zero ... ok
+test taskmgr::history_tests::a_sample_extends_every_series_it_measured ... ok
+test taskmgr::history_tests::the_history_is_bounded_and_drops_the_oldest_sample ... ok
+test taskmgr::tests::a_category_reset_leaves_the_other_categories_alone ... ok
+test taskmgr::tests::a_closed_group_still_counts_the_rows_it_hides ... ok
+test taskmgr::tests::a_column_toggled_off_comes_back_where_it_belongs ... ok
+test taskmgr::tests::a_process_burning_a_quarter_of_the_machine_reads_twenty_five_percent ... ok
+test taskmgr::tests::a_process_with_no_rate_sorts_below_every_measured_one ... ok
+test taskmgr::tests::a_selection_that_is_gone_is_cleared_instead_of_pointing_at_another_row ... ok
+test taskmgr::tests::a_share_of_the_machine_is_never_more_than_the_machine ... ok
+test taskmgr::tests::a_short_header_is_shorter_but_still_names_the_column ... ok
+test taskmgr::tests::a_threshold_marks_a_process_by_the_setting_not_by_a_constant ... ok
+test taskmgr::tests::an_action_with_nothing_selected_does_nothing ... ok
+test taskmgr::tests::an_export_is_something_another_program_can_read ... ok
+test taskmgr::tests::an_unmeasured_field_prints_a_dash_in_every_format ... ok
+test taskmgr::tests::copying_a_row_and_the_table_produces_text_a_person_can_paste ... ok
+test shell::tests::the_shell_shows_the_frame_a_broker_sends_and_forwards_a_click ... ok
+test taskmgr::tests::every_feature_changes_something_the_table_reads ... ok
+test taskmgr::tests::every_filter_hides_what_it_says_it_hides ... ok
+test taskmgr::tests::grouping_puts_the_heaviest_group_first_and_respects_a_closed_one ... ok
+test taskmgr::tests::the_registry_covers_every_column_key_metric_and_group ... ok
+test taskmgr::tests::the_same_machine_data_renders_differently_under_different_preferences ... ok
+test taskmgr::tests::the_selection_follows_its_process_across_a_resort ... ok
+test taskmgr::tests::the_table_sorts_by_the_key_it_was_given_in_both_directions ... ok
+test taskmgr::tests::the_table_width_is_the_sum_of_the_columns_it_shows ... ok
+test taskmgr::tests::time_reads_as_a_duration_at_every_scale_a_process_can_reach ... ok
+test textaudit::tests::a_label_over_a_right_aligned_value_is_a_same_line_collision ... ok
+test textaudit::tests::a_space_cannot_collide_with_anything ... ok
+test textaudit::tests::adjacent_columns_are_not_a_collision ... ok
+test textaudit::tests::properly_spaced_rows_do_not_collide ... ok
+test textaudit::tests::rows_set_closer_than_their_own_height_are_reported_even_without_x_overlap ... ok
+test textaudit::tests::text_in_two_stacked_windows_is_reported_as_cross_surface ... ok
+test textaudit::tests::the_report_names_the_worst_case_first ... ok
+test textedit::tests::an_arrow_without_shift_collapses_the_selection_to_the_right_end ... ok
+test textedit::tests::backspace_and_delete_remove_one_character_each_side ... ok
+test textedit::tests::chord_text_is_not_typed ... ok
+test textedit::tests::control_characters_never_enter_the_field ... ok
+test textedit::tests::ctrl_a_selects_everything_and_backspace_clears_it ... ok
+test textedit::tests::ctrl_arrows_and_ctrl_backspace_work_by_word ... ok
+test textedit::tests::cut_removes_the_selection_and_returns_it ... ok
+test textedit::tests::enter_submits_escape_cancels_and_unrelated_keys_are_ignored ... ok
+test textedit::tests::multibyte_text_is_edited_by_character_without_ever_splitting_utf8 ... ok
+test textedit::tests::select_range_snaps_inside_multibyte_characters_and_clamps ... ok
+test textedit::tests::shift_arrows_select_and_typing_replaces_the_selection ... ok
+test textedit::tests::the_character_limit_is_enforced_on_typing_and_on_set_text ... ok
+test textedit::tests::typing_inserts_at_the_caret_and_moves_it ... ok
+test themeicons::tests::a_name_that_could_escape_the_theme_is_refused ... ok
+test themeicons::tests::a_png_at_the_size_directory_wins_over_an_svg ... ok
+test taskmgr::tests::every_dimension_is_read_by_the_table_or_its_behaviour ... ok
+test themeicons::tests::a_theme_that_names_no_icon_falls_back_to_its_parent ... ok
+test themeicons::tests::an_inherit_cycle_terminates ... ok
+test themeicons::tests::an_oversized_file_is_not_an_icon ... ok
+test themeicons::tests::an_svg_is_found_and_rasterised_when_the_theme_has_no_png ... ok
+test themeicons::tests::a_real_png_is_found_decoded_and_drawn ... ok
+test themeicons::tests::bilinear_scaling_is_not_nearest_neighbour ... ok
+test themeicons::tests::rasterising_a_theme_sized_icon_is_quick_and_the_cache_is_bounded ... ok
+test themeicons::tests::the_bounds_are_pinned ... ok
+test ui::tests::a_column_hands_out_rows_that_do_not_overlap ... ok
+test ui::tests::a_long_file_name_wraps_instead_of_eliding_to_five_letters ... ok
+test ui::tests::a_name_too_long_for_two_lines_is_elided_where_it_stops_fitting ... ok
+test ui::tests::a_selected_row_is_marked_as_well_as_tinted ... ok
+test ui::tests::a_short_name_is_one_line_and_an_empty_one_is_none ... ok
+test themeicons::tests::an_svg_over_its_bounds_is_refused_and_a_huge_path_does_not_hang ... ok
+test ui::tests::a_sidebar_draws_only_the_rows_inside_its_pane ... ok
+test ui::tests::a_toggle_shows_its_state_by_position_and_by_a_tick ... ok
+test ui::tests::eliding_keeps_text_within_the_width_it_was_given ... ok
+test ui::tests::a_sidebar_says_there_is_more_only_when_there_is ... ok
+test ui::tests::every_state_looks_different_from_normal ... ok
+test ui::tests::hotspots_hit_the_topmost_and_forget_on_clear ... ok
+test ui::tests::progress_never_overflows_its_track ... ok
+test ui::tests::spacing_and_radius_scale_together ... ok
+test ui::tests::state_resolution_has_a_fixed_precedence ... ok
+test ui::tests::the_cursor_draws_inside_the_bounds_it_reports ... ok
+test ui::tests::the_cursor_is_visible_on_both_black_and_white ... ok
+test ui::tests::the_full_radius_does_not_overflow_when_scaled ... ok
+test ui::tests::the_sidebar_scroll_stops_at_the_last_row ... ok
+test ui::tests::the_sidebar_width_policy_is_bounded_at_both_ends ... ok
+test ui::tests::every_material_except_flat_paints_something ... ok
+test shell::tests::stop_is_sent_only_while_a_page_is_actually_arriving ... ok
+test shell::sidebar_scroll::a_covered_sidebar_does_not_steal_the_wheel ... ok
+test views::tests::breadcrumbs_drop_their_head_before_their_tail ... ok
+test views::tests::dock_magnification_follows_smoothstep_golden_values ... ok
+test views::tests::a_launcher_search_with_no_matches_says_so_and_keeps_the_field ... ok
+test views::tests::a_long_label_in_a_menu_is_elided_to_the_width_it_has ... ok
+test views::tests::drawing_survives_a_tiny_display ... ok
+test views::tests::a_window_draws_its_chrome_where_the_hit_test_expects_it ... ok
+test shell::tests::a_pointer_move_repaints_only_the_arrow_and_matches_a_whole_frame ... ok
+test views::tests::drawing_an_unimplemented_application_says_so ... ok
+test views::tests::every_top_bar_hotspot_lies_inside_the_top_bar ... ok
+test e2e::journey_no_machine_token_reaches_the_system_surfaces ... ok
+test views::tests::no_panel_row_is_drawn_outside_the_panel ... ok
+test views::tests::quick_settings_registers_every_control_it_draws ... ok
+test views::tests::drawing_is_stable_across_frames_when_nothing_changes ... ok
+test views::tests::the_activity_window_shows_unavailable_rather_than_zero ... ok
+test views::tests::the_bluetooth_page_says_no_radio_rather_than_unavailable ... ok
+test views::tests::the_diagnostic_overlay_only_appears_when_asked_for ... ok
+test views::tests::the_input_page_names_the_keyboard_that_is_attached ... ok
+test views::tests::the_panel_offers_no_control_where_the_machine_reports_no_provider ... ok
+test views::tests::the_power_menu_offers_four_transitions_inside_the_screen ... ok
+test views::tests::the_desktop_has_a_short_bar_at_rest_and_the_launcher_offers_everything ... ok
+test wordmark::tests::every_point_is_finite_and_no_stroke_is_empty ... ok
+test wordmark::tests::nothing_is_inked_at_zero_and_everything_at_one ... ok
+test wordmark::tests::reduced_motion_holds_the_finished_mark_then_ends ... ok
+test wordmark::tests::rendering_a_partial_mark_draws_fewer_pixels_than_the_full_one ... ok
+test wordmark::tests::the_committed_svg_is_the_generated_one ... ok
+test wordmark::tests::the_inked_length_grows_monotonically ... ok
+test views::tests::the_notification_list_draws_when_empty_and_when_full ... ok
+test views::tests::the_launcher_is_the_dock_expanded_and_registers_a_tile_for_each_app ... ok
+test wordmark::tests::the_mark_stays_inside_its_box ... ok
+test wordmark::tests::the_pen_moves_left_to_right ... ok
+test wordmark::tests::the_reveal_is_a_prefix_of_the_mark ... ok
+test wordmark::tests::the_loop_keeps_frames_coming_during_the_intro ... ok
+test views::tests::the_top_bar_draws_and_registers_its_hotspots ... ok
+test wordmark::tests::the_intro_is_the_mark_then_the_desktop ... ok
+test views::tests::the_switcher_lists_one_row_per_window ... ok
+test views::tests::the_system_bars_centre_names_the_focused_application ... ok
+test e2e::journey_reduce_transparency_changes_the_rendered_frame_and_survives_a_restart ... ok
+test e2e::journey_do_not_disturb_persists_silences_the_banner_and_survives_a_restart ... ok
+
+test result: ok. 694 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 54.83s
+
+     Running unittests src/main.rs (target/debug/deps/litric_shell-61633dd5d764149b)
+
+running 33 tests
+test tests::a_bluetooth_adapter_line_carries_its_address ... ok
+test tests::a_machine_with_no_battery_reports_none_not_zero_percent ... ok
+test tests::a_facts_field_is_read_by_exact_key ... ok
+test tests::a_network_line_keeps_its_mac_and_its_state ... ok
+test tests::a_process_line_is_read_field_by_field_and_a_short_one_is_skipped ... ok
+test tests::a_sound_card_name_with_spaces_is_not_cut_at_the_first_word ... ok
+test tests::a_png_is_written_and_is_a_png ... ok
+test tests::an_account_name_that_would_change_the_request_line_is_refused ... ok
+test tests::an_escape_that_is_not_hex_is_left_as_it_was_written ... ok
+test tests::a_battery_is_read_when_there_is_one ... ok
+test tests::a_corrupt_browser_file_keeps_its_readable_entries_and_is_reported ... ok
+test tests::browser_data_lives_in_the_directory_the_unit_opens_for_writing ... ok
+test tests::an_unreadable_mount_table_is_none_rather_than_a_guess ... ok
+test tests::bad_values_are_refused_rather_than_defaulted ... ok
+test tests::defaults_are_the_production_paths ... ok
+test tests::files_live_in_their_own_state_directory_not_at_the_boot_root ... ok
+test tests::input_devices_are_parsed_with_their_names_intact ... ok
+test tests::only_an_explicit_verified_reply_unlocks ... ok
+test tests::an_unreadable_browser_file_is_reported_rather_than_called_a_first_run ... ok
+test tests::options_parse ... ok
+test tests::over_budget_logging_is_rate_limited_but_never_silent ... ok
+test tests::saved_addresses_load_as_one_canonical_spelling ... ok
+test tests::network_state_is_read_from_sysfs_and_absent_when_there_is_none ... ok
+test tests::a_temporary_file_left_by_a_crash_does_not_block_the_next_save ... ok
+test tests::browser_history_and_bookmarks_round_trip_as_encoded_private_state ... ok
+test tests::the_root_filesystem_is_read_from_the_mount_table ... ok
+test tests::first_run_stays_pending_until_setup_is_recorded ... ok
+test tests::the_accent_choice_survives_a_restart_and_unknown_tokens_fall_back ... ok
+test tests::rendering_on_a_machine_with_nothing_still_produces_a_desktop ... ok
+test tests::start_reports_file_storage_that_cannot_be_opened_instead_of_an_empty_folder ... ok
+test tests::start_prepares_the_file_share_before_the_files_app_opens ... ok
+test tests::a_new_desktop_starts_without_open_application_windows ... ok
+test tests::a_partial_redraw_is_pixel_identical_to_a_full_redraw ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.56s
+
+     Running tests/design_lint.rs (target/debug/deps/design_lint-99ef447dc82e3232)
+
+running 4 tests
+test rule_views_are_not_bold_starved ... ok
+test rule_motion_uses_tokens_only ... ok
+test rule_no_float_radius_outside_the_family ... ok
+test rule_no_raw_colour_literals_in_views ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/font_standards.rs (target/debug/deps/font_standards-e55146c53f2c643a)
+
+running 10 tests
+test every_glyph_the_interface_can_draw_exists ... ok
+test figures_are_tabular ... ok
+test figures_are_lining ... ok
+test the_face_uses_standard_sans_proportions ... ok
+test punctuation_is_set_closer_than_letters_and_never_wider ... ok
+test the_space_is_a_space ... ok
+test a_sentence_of_mixed_content_stays_on_one_line ... ok
+test letters_keep_a_side_bearing_rather_than_only_not_colliding ... ok
+test no_two_letters_touch_at_ui_sizes ... ok
+test the_side_bearing_holds_at_every_size_the_shell_sets ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/foreign_clients.rs (target/debug/deps/foreign_clients-a43afc9a6f5c3ae1)
+
+running 3 tests
+test a_command_typed_into_the_terminal_launches_a_graphical_application ... ok
+test a_linux_application_opens_a_window_on_the_litric_desktop ... ok
+test a_desktop_without_a_runtime_directory_says_why_it_cannot_host_apps ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/overflow_audit.rs (target/debug/deps/overflow_audit-fba27c0814b3c558)
+
+running 3 tests
+test tests::an_impossible_box_records_an_overflow_rather_than_lying ... ok
+test tests::clipping_elides_and_never_exceeds_the_box ... ok
+test tests::drawing_through_the_helper_stays_inside_a_clip ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/text_layout_audit.rs (target/debug/deps/text_layout_audit-260c76b5eef7b095)
+
+running 9 tests
+test the_desktop_chrome_does_not_draw_text_over_text ... ok
+test a_narrow_window_does_not_draw_text_over_text ... ok
+test settings_does_not_draw_text_over_text ... ok
+test the_system_monitor_does_not_draw_text_over_text ... ok
+test a_full_interface_is_clean ... ok
+test the_activity_window_shows_a_process_table_without_drawing_text_over_text ... ok
+test every_window_is_clean_in_the_light_theme ... ok
+test every_window_does_not_draw_text_over_text ... ok
+test every_window_is_clean_at_every_size_it_can_have ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.07s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_storage-b2a8973a6c1867ff)
+
+running 21 tests
+test tests::a_read_grant_does_not_permit_a_write ... ok
+test tests::an_app_reaches_its_own_private_storage_with_no_capability_at_all ... ok
+test tests::a_grant_on_one_folder_does_not_reach_a_sibling ... ok
+test tests::containment_is_segment_wise ... ok
+test tests::containment_never_crosses_namespaces_or_owners ... ok
+test tests::every_uri_produces_a_valid_capability_scope ... ok
+test tests::one_app_cannot_reach_another_apps_private_storage ... ok
+test tests::parses_every_namespace ... ok
+test tests::namespace_properties_are_coherent ... ok
+test tests::private_namespace_requires_a_well_formed_owner ... ok
+test tests::parsing_never_panics_on_arbitrary_input ... ok
+test tests::rejects_control_characters_backslashes_and_empty_segments ... ok
+test tests::rejects_traversal_rather_than_resolving_it ... ok
+test tests::rejects_unknown_and_absolute_paths ... ok
+test tests::resolution_places_each_namespace_under_its_own_root ... ok
+test tests::resolved_paths_never_escape_their_root ... ok
+test tests::round_trips_through_the_canonical_form ... ok
+test tests::schemes_are_unique ... ok
+test tests::secure_storage_has_no_filesystem_path ... ok
+test tests::shared_namespaces_require_a_capability ... ok
+test tests::trailing_slash_is_normalised ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_sysd-6fa8bf39c1e87bd6)
+
+running 186 tests
+test action::tests::a_missing_systemctl_is_reported_rather_than_hidden ... ok
+test action::tests::the_argv_is_never_built_from_anything_a_caller_said ... ok
+test action::tests::a_nonzero_exit_is_not_success_and_says_why ... ok
+test action::tests::a_transition_runs_the_base_tool_with_a_fixed_argv ... ok
+test action::tests::every_action_parses_its_own_token_and_has_a_capability ... ok
+test action::tests::the_three_verbs_do_not_authorise_each_other ... ok
+test facts::tests::a_process_name_with_spaces_and_parens_does_not_shift_the_fields ... ok
+test facts::tests::a_counter_that_went_backwards_is_not_a_spike ... ok
+test action::tests::the_real_runner_reports_a_program_that_is_not_there_rather_than_panicking ... ok
+test facts::tests::a_process_with_no_name_in_parens_is_refused_rather_than_guessed ... ok
+test facts::tests::a_root_without_verity_reports_off_rather_than_nothing ... ok
+test facts::tests::busy_since_boot_is_an_average_and_says_so_when_it_cannot_be_computed ... ok
+test facts::tests::cmdline_parameters_are_read_with_the_last_occurrence_winning ... ok
+test facts::tests::cpu_line_must_be_the_aggregate_not_a_per_core_line ... ok
+test facts::tests::cpu_online_handles_ranges_and_lists ... ok
+test facts::tests::cpu_times_split_busy_from_idle_with_iowait_on_the_idle_side ... ok
+test facts::tests::cpu_share_is_a_fraction_of_the_whole_machine_and_fabricates_nothing ... ok
+test facts::tests::loadavg_parses_including_the_task_fraction ... ok
+test facts::tests::meminfo_parses_the_fields_that_matter ... ok
+test facts::tests::meminfo_survives_junk_lines ... ok
+test facts::tests::meminfo_without_memtotal_is_rejected_rather_than_defaulted ... ok
+test facts::tests::mglru_is_a_bitmask_not_a_boolean ... ok
+test facts::tests::mounts_report_read_only_and_unescape_the_mount_point ... ok
+test facts::tests::per_cpu_counters_are_read_in_order_and_never_from_the_aggregate ... ok
+test facts::tests::a_process_walks_the_real_layout_of_a_proc_directory ... ok
+test facts::tests::the_cpu_model_comes_from_the_kernel_not_from_a_table ... ok
+test facts::tests::the_process_reply_escapes_the_characters_that_would_break_it ... ok
+test facts::tests::the_real_uid_is_the_first_of_the_four_on_the_uid_line ... ok
+test facts::tests::uptime_parses ... ok
+test facts::tests::used_memory_is_measured_against_available_not_free ... ok
+test facts::tests::utilisation_is_the_ratio_of_the_difference_between_two_samples ... ok
+test facts::tests::utilisation_needs_two_distinct_samples ... ok
+test facts::tests::utilisation_rejects_a_counter_that_went_backwards ... ok
+test facts::tests::vm_rss_parses ... ok
+test launch::tests::a_directory_and_a_non_executable_file_are_not_programs ... ok
+test launch::tests::a_program_that_disappears_after_validation_fails_honestly ... ok
+test facts::tests::the_process_list_is_bounded_while_it_is_collected ... ok
+test launch::tests::a_vector_over_the_bounds_is_refused ... ok
+test launch::tests::an_empty_or_relative_program_is_refused_before_anything_runs ... ok
+test launch::tests::hex_round_trips_through_the_protocol_encoding ... ok
+test platform::audio::tests::a_card_line_with_no_name_still_reports_the_driver ... ok
+test platform::audio::tests::a_machine_with_no_sound_hardware_is_reported_as_having_none ... ok
+test facts::tests::facts_read_from_a_fixture_root_and_report_stable_lines ... ok
+test platform::audio::tests::cards_are_parsed_and_the_detail_line_is_not_a_card ... ok
+test platform::audio::tests::pcm_devices_report_playback_and_capture_separately ... ok
+test facts::tests::reading_a_root_that_has_no_proc_yields_nothing_rather_than_zeroes ... ok
+test platform::bluetooth::tests::a_machine_with_no_radio_says_so ... ok
+test platform::audio::tests::no_sound_server_is_reported_as_none_and_no_look_at_all_as_unknown ... ok
+test platform::bluetooth::tests::a_radio_with_no_daemon_is_not_reported_as_working ... ok
+test platform::bluetooth::tests::hard_and_soft_blocks_are_told_apart ... ok
+test platform::bluetooth::tests::only_bluetooth_radios_decide_the_bluetooth_verdict ... ok
+test platform::input::tests::a_bitmap_is_read_word_by_word_not_as_one_number ... ok
+test platform::input::tests::a_machine_with_no_input_reports_zero_and_not_none ... ok
+test platform::bluetooth::tests::a_host_fixture_is_read_end_to_end ... ok
+test platform::input::tests::a_mouse_is_recognised_by_its_two_relative_axes ... ok
+test platform::input::tests::a_keyboard_is_recognised_by_the_letter_a_and_not_by_its_buttons ... ok
+test platform::net::tests::a_mask_that_is_not_a_run_of_ones_has_no_prefix_length ... ok
+test platform::net::tests::a_route_whose_mask_is_not_a_netmask_is_dropped_rather_than_invented ... ok
+test platform::net::tests::a_route_with_no_next_hop_says_so_instead_of_naming_address_zero ... ok
+test platform::input::tests::a_node_whose_name_cannot_be_read_is_listed_rather_than_dropped ... ok
+test platform::net::tests::a_short_net_dev_row_is_skipped_not_padded ... ok
+test platform::net::tests::a_single_zero_group_is_not_compressed ... ok
+test platform::net::tests::ip_addr_garbage_yields_nothing_rather_than_a_guess ... ok
+test platform::net::tests::ip_addr_output_is_parsed_per_line ... ok
+test platform::input::tests::a_tablet_is_a_pointer_even_though_it_reports_no_deltas ... ok
+test platform::net::tests::ipv6_addresses_are_compressed_the_way_every_other_tool_prints_them ... ok
+test platform::net::tests::net_dev_counters_are_read_positionally ... ok
+test platform::net::tests::operstate_keeps_the_three_answers_apart ... ok
+test platform::net::tests::resolv_conf_reports_servers_search_and_whether_it_was_there ... ok
+test platform::net::tests::route_hex_is_little_endian ... ok
+test platform::net::tests::the_reply_says_why_there_are_no_ipv4_addresses ... ok
+test platform::power::tests::a_capacity_the_kernel_does_not_know_is_not_a_number ... ok
+test platform::power::tests::a_desktop_reports_no_battery_rather_than_a_flat_one ... ok
+test platform::power::tests::missing_attributes_are_hyphens_not_zeros ... ok
+test platform::power::tests::not_charging_is_its_own_state ... ok
+test platform::power::tests::percentage_can_come_from_energy_when_there_is_no_capacity_file ... ok
+test platform::session::tests::a_helper_that_exists_but_cannot_execute_is_not_a_verifier ... ok
+test platform::session::tests::a_lock_is_offered_exactly_when_a_password_can_be_verified ... ok
+test platform::power::tests::a_laptop_fixture_is_read_end_to_end ... ok
+test platform::session::tests::a_locked_unset_or_unknown_password_refuses_the_lock ... ok
+test platform::session::tests::a_logind_record_is_parsed_field_by_field ... ok
+test platform::session::tests::a_machine_with_two_active_sessions_has_no_single_active_one ... ok
+test platform::session::tests::a_record_missing_everything_but_an_id_still_parses ... ok
+test platform::session::tests::a_session_that_is_not_in_the_foreground_is_not_called_active ... ok
+test platform::session::tests::a_ready_image_reports_the_account_and_no_refusal ... ok
+test platform::session::tests::sessions_are_read_from_disk_and_their_absence_is_reported ... ok
+test platform::session::tests::the_desktop_account_beats_a_root_serial_session ... ok
+test platform::session::tests::the_verifier_is_found_on_the_filesystem_not_assumed ... ok
+test platform::net::tests::fixture_tree_is_read_end_to_end ... ok
+test platform::tests::reading_a_directory_that_is_a_file_is_not_an_error ... ok
+test proto::tests::a_link_takes_up_and_down_and_not_on_and_off ... ok
+test proto::tests::a_power_request_that_is_not_understood_is_refused_rather_than_guessed ... ok
+test platform::tests::a_root_that_does_not_exist_produces_no_claims_at_all ... ok
+test proto::tests::a_response_declares_its_line_count ... ok
+test proto::tests::a_wifi_join_decodes_hex_and_never_echoes_a_secret ... ok
+test proto::tests::a_verification_carries_its_confirmation_or_it_does_not_carry_one ... ok
+test proto::tests::an_empty_line_is_an_error_not_a_ping ... ok
+test proto::tests::an_error_reply_carries_a_stable_kind ... ok
+test proto::tests::an_oversized_line_is_refused_before_it_is_parsed ... ok
+test proto::tests::arguments_are_not_case_folded ... ok
+test proto::tests::arity_is_enforced_in_both_directions ... ok
+test proto::tests::audio_parses_a_percentage_and_a_mute_word ... ok
+test proto::tests::error_kinds_are_stable_tokens ... ok
+test proto::tests::newlines_inside_a_payload_cannot_desynchronise_the_count ... ok
+test proto::tests::power_actions_parse_and_carry_consent ... ok
+test proto::tests::resolve_parses_all_three_access_words ... ok
+test action::tests::a_captured_call_returns_the_printed_answer_and_the_status ... ok
+test proto::tests::simple_verbs_parse_and_are_case_insensitive ... ok
+test proto::tests::subcommands_parse ... ok
+test platform::tests::an_empty_but_readable_machine_reports_zeroes_that_are_true ... ok
+test proto::tests::the_radio_takes_on_and_off ... ok
+test proto::tests::unknown_provider_subcommands_are_refused_by_name ... ok
+test proto::tests::unknown_verbs_and_subcommands_are_named_in_the_error ... ok
+test action::tests::the_real_runner_feeds_a_program_its_standard_input ... ok
+test providers::tests::a_failed_verification_is_a_failure_and_not_an_accepted_login ... ok
+test providers::tests::a_grant_for_one_interface_does_not_cover_another ... ok
+test providers::tests::a_level_is_read_from_what_wireplumber_prints ... ok
+test providers::tests::a_link_change_runs_ip_with_a_fixed_argv ... ok
+test providers::tests::a_missing_tool_is_reported_as_a_failure_and_not_as_success ... ok
+test providers::tests::a_pairing_plan_does_not_claim_the_device_is_paired ... ok
+test providers::tests::a_password_travels_on_standard_input_and_never_on_the_command_line ... ok
+test providers::tests::a_power_state_is_read_from_what_bluetoothctl_prints ... ok
+test providers::tests::a_radio_grant_covers_every_device_and_a_device_grant_covers_its_own ... ok
+test providers::tests::a_refused_action_runs_nothing_at_all ... ok
+test providers::tests::a_tool_that_had_to_be_killed_is_reported_as_a_timeout ... ok
+test providers::tests::account_names_follow_the_distributions_rule ... ok
+test providers::tests::an_empty_password_is_refused_rather_than_verified ... ok
+test providers::tests::an_illegal_interface_never_becomes_a_plan ... ok
+test providers::tests::bluetooth_addresses_are_six_hex_pairs_and_not_all_zero ... ok
+test providers::tests::every_action_carries_a_capability_for_its_own_scope ... ok
+test providers::tests::every_action_passes_its_deadline_to_the_runner ... ok
+test providers::tests::every_plan_is_bounded_and_the_slow_ones_get_longer ... ok
+test providers::tests::a_failed_file_write_stops_before_the_tool_runs ... ok
+test providers::tests::hex_decoding_round_trips_and_refuses_anything_else ... ok
+test providers::tests::interface_names_are_checked_against_the_kernels_rules ... ok
+test providers::tests::mute_is_a_number_because_that_is_what_the_tool_takes ... ok
+test providers::tests::network_names_are_refused_rather_than_escaped ... ok
+test providers::tests::only_a_verification_demands_consent ... ok
+test providers::tests::passphrases_are_the_wpa_range_and_ascii_only ... ok
+test providers::tests::joining_a_wifi_network_writes_a_private_credential_and_then_connects ... ok
+test providers::tests::performing_an_audio_change_runs_the_tool_once ... ok
+test providers::tests::reading_the_level_asks_the_tool_and_reports_its_answers ... ok
+test providers::tests::reading_the_radio_asks_the_tool_and_reports_its_answers ... ok
+test providers::tests::the_password_reaches_the_helper_on_stdin_and_leaves_no_trace_in_the_reply ... ok
+test providers::tests::forgetting_a_network_removes_the_credential ... ok
+test providers::tests::volume_becomes_a_fraction_with_a_ceiling ... ok
+test server::tests::the_connection_cap_serves_exactly_max_connections ... ok
+test state::tests::a_confirmed_power_request_runs_the_base_tool_once ... ok
+test state::tests::a_confirmed_verification_reaches_the_helper_with_the_password_on_stdin ... ok
+test server::tests::a_live_daemons_socket_is_not_replaced_and_the_socket_is_owner_only ... ok
+test server::tests::a_stale_socket_is_replaced_and_a_file_is_never_deleted ... ok
+test state::tests::a_grant_that_has_expired_no_longer_resolves ... ok
+test state::tests::a_malformed_app_id_is_rejected_before_anything_else_happens ... ok
+test state::tests::a_provider_action_that_failed_is_an_error_and_says_which_kind ... ok
+test state::tests::a_power_request_without_consent_never_runs_anything ... ok
+test state::tests::a_provider_action_with_an_illegal_argument_is_the_callers_error ... ok
+test providers::tests::the_wireless_interface_is_found_in_the_roots_sysfs ... ok
+test providers::tests::the_credential_file_is_written_before_the_tool_is_asked_to_connect ... ok
+test state::tests::a_provider_action_without_a_grant_runs_nothing ... ok
+test state::tests::a_revoked_grant_cannot_power_the_machine_off ... ok
+test state::tests::a_switch_says_it_only_moved_the_state_machine ... ok
+test state::tests::a_transition_that_did_not_happen_is_an_error_not_a_success ... ok
+test state::tests::a_verification_without_the_confirmation_word_never_reaches_the_helper ... ok
+test launch::tests::a_real_program_runs_and_its_marker_appears ... ok
+test state::tests::an_empty_trash_reports_zero_rather_than_failing ... ok
+test state::tests::an_authorised_volume_change_runs_the_audio_tool_once ... ok
+test state::tests::an_unknown_environment_is_refused_by_name ... ok
+test state::tests::env_list_reports_every_environment_and_the_host_reservation ... ok
+test state::tests::every_power_request_appears_in_the_audit_log ... ok
+test launch::tests::the_argument_vector_reaches_the_program_without_a_shell ... ok
+test state::tests::every_provider_request_appears_in_the_audit_log ... ok
+test state::tests::a_radio_that_cannot_be_asked_says_so ... ok
+test state::tests::one_app_cannot_resolve_another_apps_private_storage ... ok
+test state::tests::ping_answers ... ok
+test state::tests::planning_a_switch_changes_nothing ... ok
+test state::tests::resolving_with_a_grant_returns_a_real_path ... ok
+test state::tests::resolving_without_a_grant_is_denied ... ok
+test state::tests::the_local_client_is_the_platform_shell_and_holds_only_implemented_actions ... ok
+test state::tests::a_sound_server_that_cannot_be_asked_says_so ... ok
+test state::tests::facts_from_an_unreadable_root_are_absent_rather_than_zero ... ok
+test state::tests::a_volume_change_is_read_back_rather_than_assumed ... ok
+test state::tests::from_system_falls_back_instead_of_refusing_to_start ... ok
+test state::tests::a_radio_change_is_read_back_rather_than_assumed ... ok
+test state::tests::the_audio_level_is_a_measurement_and_not_a_default ... ok
+test state::tests::the_radio_power_is_a_measurement_and_not_an_echo ... ok
+test action::tests::a_tool_that_never_exits_is_killed_and_reported_as_a_timeout ... ok
+
+test result: ok. 186 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+     Running unittests src/main.rs (target/debug/deps/litric_sysd-8344d508183a7bca)
+
+running 5 tests
+test tests::an_unknown_argument_is_refused_rather_than_ignored ... ok
+test tests::an_option_without_its_value_is_an_error_not_a_default ... ok
+test tests::no_arguments_means_report ... ok
+test tests::modes_parse ... ok
+test tests::options_parse ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_text-19e8fb259a444ac7)
+
+running 5 tests
+test tests::a_missing_script_face_is_substituted_rather_than_fatal ... ok
+test tests::latin_regular_and_bold_have_distinct_real_weights ... ok
+test tests::the_documented_cap_ratio_matches_the_installed_face ... ok
+test tests::a_directory_with_no_latin_face_is_refused_with_the_paths_it_tried ... ok
+test tests::mixed_english_and_thai_uses_shaped_thai_fallback ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_trash-2b96829dee47105e)
+
+running 17 tests
+test tests::an_item_larger_than_the_whole_trash_is_refused_rather_than_evicting_everything ... ok
+test tests::a_dotfile_is_not_treated_as_having_an_extension ... ok
+test tests::a_name_collision_never_overwrites_the_earlier_file ... ok
+test tests::auto_empty_removes_by_age_oldest_first ... ok
+test tests::auto_empty_removes_by_capacity_oldest_first ... ok
+test tests::per_application_storage_does_not_go_to_the_user_trash ... ok
+test tests::missing_items_are_reported_not_silently_ignored ... ok
+test tests::nothing_to_do_is_reported_as_nothing ... ok
+test tests::emptying_returns_what_it_removed_oldest_first ... ok
+test tests::restore_refuses_to_overwrite_whatever_is_there_now ... ok
+test tests::planning_an_empty_does_not_perform_it ... ok
+test tests::retention_can_be_disabled_and_then_only_capacity_applies ... ok
+test tests::restore_returns_the_original_location ... ok
+test tests::the_collision_suffix_keeps_the_extension_usable ... ok
+test tests::the_ledger_exposes_the_original_storage_uri_not_a_trashinfo_path ... ok
+test tests::trashing_records_where_it_came_from ... ok
+test tests::used_bytes_tracks_add_and_remove ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_winbridge-4afee0537a29f214)
+
+running 49 tests
+test bottle::tests::broken_bottle_must_be_rebuilt_not_blessed ... ok
+test bottle::tests::capability_list_is_stable_and_complete ... ok
+test bottle::tests::default_isolation_denies_network_and_home ... ok
+test bottle::tests::installer_profile_is_the_most_restrictive ... ok
+test bottle::tests::components_are_deduplicated_and_ordered ... ok
+test bottle::tests::lifecycle_transitions_are_enforced ... ok
+test bottle::tests::new_bottle_starts_created_and_cannot_launch ... ok
+test bottle::tests::path_component_is_traversal_safe ... ok
+test bottle::tests::proton_carries_d3d_translation_and_wine_does_not ... ok
+test compat::tests::a_caveat_is_neither_a_promise_nor_a_refusal ... ok
+test compat::tests::a_known_working_program_offers_no_alternative_it_does_not_need ... ok
+test compat::tests::an_unknown_program_is_unknown_and_not_optimistic ... ok
+test compat::tests::every_blocked_or_caveat_entry_says_what_to_do_instead ... ok
+test compat::tests::every_entry_carries_a_reason_that_could_be_checked ... ok
+test compat::tests::matching_is_case_insensitive_and_matches_anywhere_in_the_name ... ok
+test compat::tests::no_two_entries_share_a_key ... ok
+test compat::tests::roblox_is_recorded_as_blocked_with_a_reason_and_a_way_forward ... ok
+test compat::tests::status_lines_carry_the_verdict ... ok
+test installer::tests::contains_handles_edges ... ok
+test installer::tests::detection_is_bounded_and_panic_free ... ok
+test installer::tests::every_recognised_family_has_silent_args ... ok
+test installer::tests::msi_is_detected_from_ole_magic_even_without_pe ... ok
+test pe::tests::detects_dotnet_assemblies ... ok
+test pe::tests::parses_a_32bit_console_application ... ok
+test installer::tests::generic_hints_yield_unknown_not_a_guess ... ok
+test pe::tests::identifies_msi_containers ... ok
+test installer::tests::specific_signature_wins_over_generic ... ok
+test pe::tests::parses_a_64bit_gui_application ... ok
+test pe::tests::refuses_things_that_cannot_run_with_a_specific_reason ... ok
+test installer::tests::plain_program_is_not_an_installer ... ok
+test pe::tests::lying_size_of_optional_header_is_contained ... ok
+test pe::tests::rejects_bad_optional_header ... ok
+test pe::tests::rejects_dos_stub_without_pe_image ... ok
+test pe::tests::rejects_non_pe_input_without_panicking ... ok
+test pe::tests::rejects_out_of_range_pe_offset ... ok
+test pe::tests::subsystem_offset_is_correct_for_both_pe_forms ... ok
+test installer::tests::detects_each_known_family ... ok
+test tests::installs_request_only_gpu_by_default ... ok
+test tests::every_step_has_a_human_label ... ok
+test tests::msi_is_planned_via_msiexec ... ok
+test tests::dotnet_binaries_get_wine_and_the_framework ... ok
+test pe::tests::truncation_at_every_offset_never_panics ... ok
+test tests::plans_an_nsis_install_unattended ... ok
+test tests::rejects_non_windows_files_distinctly_from_unrunnable_ones ... ok
+test tests::portable_programs_skip_the_installer_step ... ok
+test tests::native_binaries_get_proton ... ok
+test tests::unrecognised_installer_is_attended_and_says_so ... ok
+test tests::signature_presence_is_never_reported_as_validity ... ok
+test tests::planning_never_panics_on_arbitrary_input ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (target/debug/deps/litric_wm-b5af6e528ce3c9e6)
+
+running 48 tests
+test geom::tests::a_window_shorter_than_its_title_bar_does_not_produce_negative_content ... ok
+test geom::tests::chrome_geometry_is_one_source_of_truth ... ok
+test geom::tests::constraining_moves_before_it_shrinks ... ok
+test geom::tests::intersection_and_intersects_agree ... ok
+test geom::tests::containment_excludes_the_far_edges ... ok
+test geom::tests::touching_rectangles_do_not_intersect ... ok
+test geom::tests::union_covers_both_and_ignores_empties ... ok
+test manager::tests::a_drag_can_never_put_the_title_bar_above_the_top_bar ... ok
+test manager::tests::a_cancelled_drag_puts_the_window_back ... ok
+test manager::tests::a_maximized_window_cannot_be_resized_but_can_be_dragged_free ... ok
+test manager::tests::alt_tab_walks_most_recently_used_order_and_comes_back ... ok
+test manager::tests::closing_the_focused_window_moves_focus_to_the_next_most_recent ... ok
+test manager::tests::a_window_on_another_workspace_is_neither_drawn_nor_hit ... ok
+test manager::tests::closing_the_last_window_leaves_no_focus_rather_than_a_dangling_one ... ok
+test manager::tests::a_new_window_takes_focus_and_the_top_of_the_stack ... ok
+test manager::tests::alt_tab_with_no_windows_does_nothing ... ok
+test manager::tests::alt_tab_with_one_window_stays_on_it ... ok
+test manager::tests::corners_resize_and_the_middle_does_not ... ok
+test manager::tests::cycling_an_application_stays_inside_it_and_wraps ... ok
+test manager::tests::cycling_brings_back_a_minimized_window_of_the_same_application ... ok
+test manager::tests::diagnostics_name_the_focus_and_every_window ... ok
+test manager::tests::dragging_a_title_bar_moves_the_window_by_the_pointer_delta ... ok
+test manager::tests::dragging_to_the_left_edge_snaps_to_the_left_half ... ok
+test manager::tests::every_change_records_damage_and_taking_it_clears_it ... ok
+test manager::tests::hit_testing_empty_desktop_finds_nothing ... ok
+test manager::tests::hit_testing_finds_the_topmost_window ... ok
+test manager::tests::maximize_fills_the_work_area_and_restore_puts_it_back ... ok
+test manager::tests::minimizing_hides_a_window_but_keeps_it_in_the_switcher ... ok
+test manager::tests::nothing_happening_produces_no_damage ... ok
+test manager::tests::opening_windows_cascades_them_so_none_is_hidden_exactly_behind_another ... ok
+test manager::tests::raising_reorders_without_changing_focus ... ok
+test manager::tests::resizing_from_the_south_east_grows_the_window ... ok
+test manager::tests::resizing_from_the_west_moves_the_left_edge_and_keeps_the_right_one ... ok
+test manager::tests::resizing_stops_at_the_minimum_size ... ok
+test manager::tests::resizing_the_display_keeps_every_window_reachable ... ok
+test manager::tests::revealing_a_window_switches_to_its_workspace_and_undoes_a_minimize ... ok
+test manager::tests::snapping_left_then_restoring_returns_to_the_original_size ... ok
+test manager::tests::switching_to_the_workspace_already_showing_changes_nothing ... ok
+test manager::tests::the_close_button_is_hit_where_it_is_drawn ... ok
+test manager::tests::the_title_bar_is_hit_where_it_is_drawn ... ok
+test manager::tests::the_work_area_starts_below_the_top_bar ... ok
+test manager::tests::window_ids_are_never_reused ... ok
+test manager::tests::workspaces_wrap_in_both_directions ... ok
+test window::tests::a_minimized_window_is_not_visible_but_is_still_a_window ... ok
+test window::tests::a_new_window_remembers_where_it_started ... ok
+test window::tests::halves_tile_the_work_area_exactly ... ok
+test window::tests::only_a_normal_window_can_be_dragged ... ok
+test window::tests::quarters_tile_the_work_area_exactly ... ok
+
+test result: ok. 48 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests litric_bench
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_browser
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_caps
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_compositor
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_defender
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_design
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_env
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_envd
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_files
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_input
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_locale
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_manifest
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_notifyd
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_shell
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_storage
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_sysd
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_text
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_trash
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_winbridge
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests litric_wm
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

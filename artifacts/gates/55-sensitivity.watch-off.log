@@ -1,0 +1,24 @@
+   Compiling litric-shell v0.2.0 (/workspace/chats/d7991b8c41a570fd94f0a9bc/src/litric-shell)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.87s
+     Running unittests src/lib.rs (target/debug/deps/litric_shell-757f523aab285958)
+
+running 1 test
+test e2e::journey_launcher_notices_an_app_installed_while_it_runs ... FAILED
+
+failures:
+
+---- e2e::journey_launcher_notices_an_app_installed_while_it_runs stdout ----
+
+thread 'e2e::journey_launcher_notices_an_app_installed_while_it_runs' (350883) panicked at litric-shell/src/e2e.rs:5116:5:
+assertion `left == right` failed: the entry written while the shell ran is not in the list; status: None
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    e2e::journey_launcher_notices_an_app_installed_while_it_runs
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 699 filtered out; finished in 1.61s
+
+error: test failed, to rerun pass `-p litric-shell --lib`
