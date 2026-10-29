@@ -4425,3 +4425,154 @@ The icon journey also fails if the path is not resolved: it asserts
 * **Still no CSS, scripts, forms or links.** The reader lays out headings,
   paragraphs, tables, pictures and rules. A page that is mostly a script-driven
   application still reads as its static text.
+
+## 54. Batch: a scalable-only icon theme renders its real artwork (verified)
+
+### 54.1 Requirement and audit
+
+Sources: this file's own §53.6 limits (the remaining list it left) and the
+checklist row `G.07,G,Icons,PARTIAL` — "32 icon variants drawn from one vector
+module that inherits colour. Icon-only controls still have no label, tooltip or
+accessible name (Part 16 F.14)." The three limits §53.6 stated are quoted here
+verbatim:
+
+> **SVG icons are still not decoded.** A theme that ships only `scalable/*.svg`
+> falls back to the generated glyph. There is no SVG renderer in this image and
+> none was invented.
+>
+> **No `Inherits=` theme chain.** Lookup tries the flat directory, then each
+> theme directory with `hicolor` first, at the nearest size; it does not follow a
+> theme's declared parents.
+>
+> **Nearest-neighbour scaling.** A 16 px icon drawn at 82 px is blocky; the tile
+> is still the real artwork, not a fabricated one.
+
+The audit found, in this order:
+
+* `find_in` never probed a `scalable/` directory: only `<size>x<size>` PNG
+  directories and a flat `<name>.png` were tried, so an SVG-only theme resolved
+  to nothing and the tile fell back to the generated glyph in `icons.rs`.
+* There was no SVG reader in the tree and no `index.theme` reader either: a
+  theme's `Inherits=` list was never opened.
+* `scale` was nearest neighbour — right for a downscale, visibly blocky for the
+  16 px → 82 px case the launcher and the dock produce.
+
+This batch adds (1) `scalable/*.svg` to the lookup, with a PNG at an equal or
+better size still winning, (2) a bounded SVG rasteriser written in the module —
+no dependency was added, because the workspace has no SVG crate and this batch
+did not bring one in, (3) an `Inherits=` walk with a depth cap and a cycle guard,
+and (4) bilinear resampling for upscales only.
+
+The first end-to-end run of the rasteriser **failed on a real bug this batch
+wrote**: `rect_polygon` returned four corner points and `fill_polygons` walked
+only the `windows(2)` edges, so the closing edge was missing, exactly one
+crossing was found, and the blue field of the test document was never painted —
+0 blue pixels of 4356. The filler now closes every ring implicitly (SVG fills a
+subpath as if it ended with `Z`), and a `<polyline>` stays open because it is only
+ever stroked. The pixel assertion caught what the compiler had accepted.
+
+### 54.2 The connection
+
+| File | Line | What it connects |
+| --- | --- | --- |
+| `src/litric-shell/src/themeicons.rs` | 14 | module doc: what the reader supports and what it approximates |
+| `src/litric-shell/src/themeicons.rs` | 48, 51, 54, 57, 60, 63, 66, 69, 72, 75 | the bounds: 512 KiB PNG, 256 KiB SVG, 512 px edge, 48 cached copies, 64 themes, depth 8, 400 elements, 20 000 points, 128 px raster side, 40 000 000 samples |
+| `src/litric-shell/src/themeicons.rs` | 108, 118 | `find` / `find_in`: the one lookup entry the shell calls |
+| `src/litric-shell/src/themeicons.rs` | 137, 243 | a flat `<name>.svg`, then `<theme>/scalable/apps/<name>.svg` |
+| `src/litric-shell/src/themeicons.rs` | 163, 191, 213 | the `Inherits=` walk: breadth-first over declared parents, depth-capped, names deduplicated so a cycle terminates |
+| `src/litric-shell/src/themeicons.rs` | 271, 280 | `ceiling` picks 256 KiB for an SVG; `is_svg` is the one extension test |
+| `src/litric-shell/src/themeicons.rs` | 319 | `draw`: the only path from an icon file to pixels |
+| `src/litric-shell/src/themeicons.rs` | 337, 359 | `scaled` (bounded cache) and `decode_at` (file size checked before reading, SVG or PNG) |
+| `src/litric-shell/src/themeicons.rs` | 417, 419 | `resample`: bilinear for an upscale, average for a downscale |
+| `src/litric-shell/src/themeicons.rs` | 786 | `rasterize_svg`: elements → polygons → fills, bounded by the constants above |
+| `src/litric-shell/src/themeicons.rs` | 1379 | `fill_polygons`: nonzero/even-odd spans, every ring closed implicitly |
+| `src/litric-shell/src/desktop_entry.rs` | 151 | `icon_path` = `themeicons::find_in(icon_dirs, icon, 48)`: discovery resolves once, at startup |
+| `src/litric-shell/src/views.rs` | 4273 | the launcher tile draws that path; the generated glyph is only the fallback |
+| `src/litric-shell/src/views.rs` | 4389 | the launcher search row draws the same path — one drawing path, not two |
+| `src/litric-shell/src/e2e.rs` | 5069 | journey: a real XDG applications tree plus an SVG-only theme, discovery, the real launcher frame, colours asserted, path removed, frames compared |
+| `src/litric-shell/src/e2e.rs` | 5117, 5158 | the two frames saved for review: SVG-drawn and glyph fallback |
+| `ci/lint-file-safety.py` | 142 | the journey's temporary-root cleanup, recorded with its reason |
+
+### 54.3 Cost
+
+Measured, not estimated:
+
+* **Rasterisation:** 0.411 ms per 48 px icon. Method: the unit test clears the
+  cache and rasterises the same document 20 times inside one `Instant`, then
+  divides by 20 (`rasterising_a_theme_sized_icon_is_quick_and_the_cache_is_bounded`).
+* **Cache ceiling:** 3 145 728 bytes = 48 entries × 128 px × 128 px × 4 bytes,
+  asserted in the same test. An icon is rasterised only when a tile is drawn and
+  only once per (path, size).
+* **Skip when off:** no SVG is parsed unless a tile resolves to one. A PNG path
+  never touches the SVG code, and a tile with no icon never opens a file.
+
+No per-frame work was added: the draw loop calls `draw`, which hits the cache,
+exactly as §53 did. The rasteriser is a one-off per (path, size) and its worst
+case is bounded by the constants (256 KiB file, 400 elements, 20 000 points,
+40 000 000 sample budget, 128 px side). An oversized file is refused before it
+is read; a path with a huge `d` runs out of budget instead of hanging, which the
+test `an_svg_over_its_bounds_is_refused_and_a_huge_path_does_not_hang` asserts.
+
+### 54.4 Tests and gates
+
+Tests added: 8 unit tests (`an_svg_is_found_and_rasterised_when_the_theme_has_no_png`,
+`a_png_at_the_size_directory_wins_over_an_svg`,
+`a_theme_that_names_no_icon_falls_back_to_its_parent`, `an_inherit_cycle_terminates`,
+`an_svg_over_its_bounds_is_refused_and_a_huge_path_does_not_hang`,
+`bilinear_scaling_is_not_nearest_neighbour`,
+`rasterising_a_theme_sized_icon_is_quick_and_the_cache_is_bounded`,
+`the_bounds_are_pinned`) and 1 e2e journey
+(`journey_launcher_draws_an_svg_only_theme_icon`), 9 in total.
+
+Commands run, with their real results:
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test --workspace` | 1783 passed, 0 failed |
+| `python3 ci/lint-doc-refs.py` | OK: 993 citations across 155 documents |
+| `python3 ci/lint-file-safety.py` | exit 0, with the new journey's cleanup site recorded at line 142 and its reason printed |
+| `bash ci/verify.sh` | `summary: 32 pass, 2 fail, 3 skipped` |
+
+The two failures are the unchanged absent local dev-key material (`secureboot`,
+`pcr`, `verity`); the three skips are the QEMU-only checks, which this host
+cannot run. No gate was weakened, no key was generated or committed, and no
+golden fingerprint changed: the golden dump records desktop frames, and this
+batch changes a frame only where a real theme icon resolves, which the golden
+fixtures do not have.
+
+### 54.5 Sensitivity
+
+Each direction was disabled, the journey re-run, then the code restored:
+
+* With `.svg` lookups disabled (`if false && usable(...)` at all three probe
+  sites), the journey fails before it draws:
+  `panicked at litric-shell/src/e2e.rs:5100:10: the SVG icon resolved`.
+* With the SVG decode disabled (`if false && is_svg(path)`, so a scalable icon
+  falls through to the PNG decoder), it fails on the pixels:
+  `panicked at litric-shell/src/e2e.rs:5149:5: the SVG's shapes are not on
+  screen: 39 blue, 0 amber of 676` — the glyph fallback has neither the
+  document's blue field nor its amber circle.
+* Restored, both runs pass (`test result: ok. 1 passed`), and `rg 'false &&'`
+  over the module returns nothing.
+
+### 54.6 Limits
+
+* **One sample per pixel, no antialiasing.** Edges are hard; at 82 px a curve
+  shows stair-steps where librsvg would be smooth. The artwork, colours and
+  shapes are the document's own.
+* **Attributes, not stylesheets.** `fill`/`stroke` come from presentation
+  attributes; `<style>`, `class` selectors and CSS are not read.
+* **Gradients are approximated** by their first stop, drawn flat. `mask`,
+  `clipPath`, `filter` and `pattern` are skipped, so a themed icon that depends
+  on a mask renders its unmasked shapes.
+* **No `<text>`, `<use>`/`<symbol>` instancing, or external images.** A document
+  that needs them loses those parts.
+* **Stroke geometry is a quad strip** with butt ends, not mitered or rounded
+  joins, so a very thick stroked icon can differ by a pixel at a corner.
+* **The theme list is read once per process.** A theme or application installed
+  while the shell is running needs a restart to appear, unchanged from §52.
+* **Discovery is still a startup cost.** It runs on the shell's start path, not
+  in the background; a machine with hundreds of `applications` directories pays
+  it once, before the first frame.

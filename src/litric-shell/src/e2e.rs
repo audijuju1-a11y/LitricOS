@@ -5056,3 +5056,123 @@ fn journey_reader_lays_out_a_table_of_values_in_columns() {
     assert!(value_ink > 60, "the value column is drawn: {value_ink} px");
     stop.store(true, Ordering::Relaxed);
 }
+
+/// A theme that ships only a scalable SVG still gives the launcher its icon.
+///
+/// The temporary theme has no PNG anywhere: the only artwork is
+/// `hicolor/scalable/apps/vector-icon.svg`. The journey asserts the desktop
+/// entry resolved to that `.svg`, draws the launcher through the real path,
+/// checks the SVG's own colours reached the tile, and then removes the icon to
+/// compare the same tile drawn with the fallback glyph.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_draws_an_svg_only_theme_icon() {
+    let root = e2e_root("desktop-svg-icon");
+    let apps_dir = root.join("data/applications");
+    let svg_dir = root.join("data/icons/hicolor/scalable/apps");
+    std::fs::create_dir_all(&apps_dir).expect("applications");
+    std::fs::create_dir_all(&svg_dir).expect("scalable icons");
+    std::fs::write(
+        svg_dir.join("vector-icon.svg"),
+        r##"<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" fill="#2080c0"/>
+  <circle cx="12" cy="12" r="6" fill="rgb(250, 190, 40)"/>
+  <path d="M 4 20 L 12 5 L 20 20 Z" fill="#f0f0f0"/>
+</svg>"##,
+    )
+    .expect("the scalable icon");
+    std::fs::write(
+        apps_dir.join("vector.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Vector App\nIcon=vector-icon\nExec=/bin/true\n",
+    )
+    .expect("the entry");
+
+    let themes = root.join("data/icons");
+    let apps = crate::desktop_entry::discover_in_with(
+        std::slice::from_ref(&apps_dir),
+        std::slice::from_ref(&themes),
+    );
+    assert_eq!(apps.len(), 1, "one real entry: {apps:?}");
+    let path = apps
+        .first()
+        .and_then(|a| a.icon_path.as_deref())
+        .expect("the SVG icon resolved");
+    assert!(
+        path.extension().and_then(|e| e.to_str()) == Some("svg"),
+        "the resolved icon is the scalable SVG: {}",
+        path.display()
+    );
+
+    let mut s = shell();
+    s.load_desktop_apps(apps);
+    show_dock(&mut s);
+    let _ = draw_frame(&mut s);
+    let button = s.hotspots().rect_of(Hot::MenuApps).expect("Apps menu");
+    click(&mut s, button.center().0, button.center().1);
+    for _ in 0..60 {
+        s.tick_after(FRAME_MS);
+    }
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "54-launcher-svg-icon");
+    let cell = s
+        .hotspots()
+        .rect_of(Hot::LauncherItem(App::ALL.len()))
+        .expect("the vector application's tile");
+    let chip = Rect::new(cell.center().0 - 41.0, cell.y + 4.0, 82.0, 82.0);
+
+    // The document's own colours are on screen: the blue field, the amber
+    // circle. A glyph fallback has neither.
+    let mut blue = 0usize;
+    let mut amber = 0usize;
+    let mut sampled = 0usize;
+    let mut x = chip.x + 2.0;
+    while x < chip.right() - 2.0 {
+        let mut y = chip.y + 2.0;
+        while y < chip.bottom() - 2.0 {
+            if let Some(px) = canvas.get(x as i64, y as i64) {
+                sampled = sampled.saturating_add(1);
+                let r = (px >> 16) & 0xFF;
+                let g = (px >> 8) & 0xFF;
+                let b = px & 0xFF;
+                if b > 120 && b > r.saturating_add(40) {
+                    blue = blue.saturating_add(1);
+                }
+                if r > 180 && g > 120 && b < 120 {
+                    amber = amber.saturating_add(1);
+                }
+            }
+            y += 3.0;
+        }
+        x += 3.0;
+    }
+    assert!(
+        sampled > 200 && blue > 40 && amber > 20,
+        "the SVG's shapes are not on screen: {blue} blue, {amber} amber of {sampled}"
+    );
+
+    if let Some(app) = s.desktop_apps.first_mut() {
+        app.icon_path = None;
+    }
+    let plain = draw_frame(&mut s);
+    save_shot(&plain, "54-launcher-svg-icon-fallback-glyph");
+    let mut changed = 0usize;
+    let mut counted = 0usize;
+    let mut x = chip.x + 4.0;
+    while x < chip.right() - 4.0 {
+        let mut y = chip.y + 4.0;
+        while y < chip.bottom() - 4.0 {
+            counted = counted.saturating_add(1);
+            if canvas.get(x as i64, y as i64) != plain.get(x as i64, y as i64) {
+                changed = changed.saturating_add(1);
+            }
+            y += 4.0;
+        }
+        x += 4.0;
+    }
+    assert!(
+        changed * 3 > counted,
+        "the SVG replaced the glyph: {changed}/{counted} pixels differ"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
