@@ -3181,11 +3181,13 @@ fetched and the broker's staging path could not be exercised end to end here.
 
 ### 40.1 What was missing
 
-"Quarantine" existed only as a mention in the denylist planner: there was no
-move, no record on disk, no list and no restore. The Defender window drew each
-finding as text with no hotspot (`draw_defender` in
+"Quarantine" and restore existed only as plans: a designed API
+(`docs/API-00-contracts.md`, `defender_quarantine` / `defender_restore`), a
+phase goal asking for quarantine with restore, and a mention of a planner. No
+move, record on disk, list or restore existed in the shell. The Defender window
+drew each finding as text with no hotspot (`draw_defender` in
 `src/litric-shell/src/views.rs`), so a finding could be reported but not acted
-on. Restore did not exist at all, not even in planning.
+on.
 
 ### 40.2 The one service both halves use
 
