@@ -323,12 +323,41 @@ Three line protocols and no bus:
 | Path | Protocol | Notable rule |
 |---|---|---|
 | Files | LFP/1 over a Unix socket, one connection per process | **Never retried** once the request line is written |
-| Browser | `LITRIC_BROWSER_SOCK` | Frames, not requests |
+| Browser, web addresses | `LITRIC_BROWSER_SOCK` | Frames, not requests; needs Chromium, which this image does not contain |
 | Notifications | `litric-notifyd` queue file + socket | Text in, text out |
 
 The LFP/1 rule is stated as a correctness property, not an optimisation: if the
 connection breaks after the request line, the daemon may already have performed
 the rename or the delete, and a retry would do it twice.
+
+**A local page does not use a socket at all.** A `file://` address is read,
+parsed, laid out and drawn inside the window: the file is read
+(`src/litric-shell/src/reader.rs` line 100), the page is parsed into
+headings, paragraphs and pictures (`src/litric-browser/src/html.rs` line 62),
+laid out at the window's width (`src/litric-shell/src/reader.rs` line 222),
+pictures are decoded only when their block is on screen
+(`src/litric-shell/src/reader.rs` line 413) and drawn
+(`src/litric-shell/src/canvas.rs` line 1147), and the wheel scrolls the page
+with a clamp (`src/litric-shell/src/reader.rs` line 183). The shell routes
+`file://` to this path before the broker is consulted
+(`src/litric-shell/src/shell.rs` line 1952, function at line 1979),
+the wheel scroll is handled at line 2008, and the page surface draws it
+(`src/litric-shell/src/views.rs` line 2129).
+
+The bounds are explicit: at most 4 decoded pictures and 8,000,000 decoded pixels
+kept (`src/litric-shell/src/reader.rs` lines 37 and 40), at most 2
+new pictures decoded in one frame (line 46), at most 16 MiB per picture
+file (line 43); the parser accepts at most 4 MiB of page, 600 blocks and
+8,000 characters per block (`src/litric-browser/src/html.rs` lines 15, 18
+and 21).
+
+What this is not: a web engine. An `https://` page is still not fetched. There is
+no integrated rendering engine in this image — Chromium through
+`litric-browserd` is absent — and no TLS stack was added; the window says so
+rather than pretending. The verified proof is the journey
+`journey_browser_opens_a_real_comic_page_and_renders_it`
+(`src/litric-shell/src/e2e.rs` line 1465) and the progress tracker's
+section 38.
 
 ### I.06.3 Findings
 

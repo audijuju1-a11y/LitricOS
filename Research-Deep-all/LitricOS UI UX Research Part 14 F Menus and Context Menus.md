@@ -196,7 +196,7 @@ out, Escape. Neither exists in this shell.
 
 | Surface | Rows | Separators | Section | Notes |
 |---|---:|---:|---|---|
-| `Desktop` (wallpaper) | 6 | 2 | — | New folder, Scan now, Open Trash, Next wallpaper, Display settings |
+| `Desktop` (wallpaper) | 6 | 2 | — | New folder, Fast scan, Deep scan, Open Trash, Next wallpaper, Display settings |
 | `Files` (pane) | 7 | 3 | "Sort by" | New folder, New text file, Paste, then the three sort rows, then Details pane |
 | `FilesRow` | 8 | 2 | — | Open, Cut, Copy, Rename, Move to trash, Compress to ZIP, Extract here |
 | `Browser` | 2 | 0 | — | Start engine session, Reload |
