@@ -5130,3 +5130,189 @@ placeholder square.
 
 Commit `HEAD` and `origin/main` are the same commit; `git status
 --porcelain --untracked-files=no` is empty.
+
+## 59. Batch: an icon written into an installed theme appears without a restart (verified)
+
+### 59.1 Requirement
+
+§58 closed with this limit, in its own words:
+
+> **The watch is one directory deep.** A new icon file written *inside* an
+> existing theme's `scalable/apps/` changes no watched stamp, so it is only
+> noticed when something else moves that theme's own listing. Measured while
+> writing the `Inherits=` test: adding a second icon inside the theme's scalable
+> directory left the pass at 0 validated, while adding a plain file directly in
+> the theme directory moved it. The fix is a deeper stamp (per size directory)
+> or an inotify watch; neither is in this batch.
+
+This batch makes that file visible to a running launcher, and bounds what the
+deeper look costs.
+
+### 59.2 Audit, before the change
+
+* `icon_order` stamped each theme directory with `stamp_of(theme)` — that
+  directory's modification time plus its entry count, capped at
+  `MAX_WATCH_ENTRIES = 512`. `DesktopWatch::poll` watched the application
+  directories, the icon roots and the theme directories, the same way.
+* A theme directory's children are its *size* directories (`48x48`, `scalable`,
+  ...). The icon files live one level further, in `<size>/<category>`. Writing
+  `scalable/apps/foo.svg` therefore touches neither the theme's mtime nor its
+  entry count.
+* Measured on this machine, in Rust, before designing anything: creating a file
+  in a directory left that directory's modification time **byte-identical**
+  (`mtime unchanged after file create: true`), and creating a subdirectory did
+  the same (`true`). The entry count is the only signal this filesystem offers.
+  §55 and §56 already relied on the count for application directories; this is
+  the same fact applied one level deeper.
+* Measured costs, so the budget is a number rather than a guess: `metadata`
+  1.83 µs; `read_dir` on a 300-entry directory 137.03 µs; on a 3-entry directory
+  3.02 µs. The cost of a leaf stamp is therefore proportional to the files in
+  it, which is exactly why the scan is sliced.
+* `themeicons::find_in_theme` reads `<theme>/<size>/<category>/name.png`, then
+  `<theme>/scalable/<category>/name.svg` and `.png`, then the flat
+  `<theme>/name.*`. `scalable` and the numeric sizes are the directories the
+  scan has to cover; the flat case is already covered by the theme's own stamp.
+
+### 59.3 What the deep scan is, and what it stands on
+
+Each theme contributes up to `MAX_LEAVES_PER_THEME = 16` leaf directories:
+`scalable` first, then the numeric size directories nearest 48 px, five
+categories each, so a theme with one size directory and `scalable` contributes
+ten. `IconNames` records each leaf with the theme that owns it and a stamp taken
+when the order is built — **not** on the first check, because a file written
+between arming the cache and the first check would otherwise be recorded as part
+of the baseline and never reported.
+
+`scan_leaves` looks at `LEAVES_PER_SCAN = 12` leaves per call, round-robin, and
+reports whether any moved. When one did, `forget_themes` drops every name
+witnessed in that theme and every remembered miss, and leaves the names another
+theme answered alone. That is §58's per-name property, fed by a signal one
+directory deeper. A full cycle over the caps takes six checks, and checks happen
+at most once per `WATCH_INTERVAL_MS`.
+
+### 59.4 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `src/litric-shell/src/desktop_entry.rs` | 315 | `MAX_LEAVES_PER_THEME = 16` — leaves one theme contributes |
+| `src/litric-shell/src/desktop_entry.rs` | 321 | `MAX_THEME_LEAVES = 64` — leaves tracked across every theme |
+| `src/litric-shell/src/desktop_entry.rs` | 330 | `LEAVES_PER_SCAN = 12` — the per-check budget |
+| `src/litric-shell/src/desktop_entry.rs` | 342 | `theme_leaves` — `scalable` + numeric size dirs, one level down per category |
+| `src/litric-shell/src/desktop_entry.rs` | 441 | `IconNames::leaves` — leaf, owning theme, stamp |
+| `src/litric-shell/src/desktop_entry.rs` | 595 | `capture_leaves` — stamps the leaves when the order is built |
+| `src/litric-shell/src/desktop_entry.rs` | 622 | `scan_leaves` — one bounded slice per check, per-name invalidation |
+| `src/litric-shell/src/desktop_entry.rs` | 663 | `forget_themes` — drops hits witnessed there and every miss |
+| `src/litric-shell/src/desktop_entry.rs` | 726 | `leaf_scans()` / `leaves_moved()` / `leaf_count()` counters |
+| `src/litric-shell/src/desktop_entry.rs` | 995 | `DesktopWatch::due` — the interval gate, no disk touched |
+| `src/litric-shell/src/shell.rs` | 7306 | the check runs only when the interval elapsed |
+| `src/litric-shell/src/shell.rs` | 7314 | the deep scan, once per check |
+| `src/litric-shell/src/shell.rs` | 7327 | a leaf change is an icon change: decoded copies dropped, entries re-resolved |
+| `src/litric-shell/src/shell.rs` | 7347 | journal line reports the scans and the tracked leaf count |
+| `src/litric-shell/src/themeicons.rs` | 78 | one category list shared by `find_in_theme` and the scan |
+| `src/litric-shell/src/e2e.rs` | 5286 | module-level chip sampler (a nested `fn` would own the journey's cleanup) |
+| `src/litric-shell/src/e2e.rs` | 5332 | the e2e journey |
+| `src/litric-shell/src/desktop_entry.rs` | 1955 | unit: new icon in an existing theme |
+| `src/litric-shell/src/desktop_entry.rs` | 2050 | unit: the budget bites, and the measured cost |
+
+### 59.5 Tests that fail without it
+
+| Test | Asserts |
+| --- | --- |
+| `desktop_entry::tests::a_new_icon_in_an_existing_theme_is_noticed_by_the_deep_scan` | a warm cache with one hit (`zzz-other`) and one miss; a file written into `hicolor/scalable/apps` is reported by `scan_leaves`, `leaves_moved()` is 1, and the reload reports **1** name resolved with the hit kept |
+| `desktop_entry::tests::a_deep_scan_inspects_only_its_budget` | a theme offering 55 leaves is capped at 16, one scan inspects exactly 12, and the measured cost is printed |
+| `e2e::journey_launcher_picks_up_an_icon_written_into_an_existing_theme` | real temp XDG tree, launcher running: three entries start with **no** icon file, the artwork is written into the theme that already exists, six watched ticks pick it up, `desktop_icons_resolved == 2`, the pixels change, and both artworks are on the tiles |
+
+The §53/§54 SVG and inheritance tests and all four §57/§58 tests pass unchanged.
+
+### 59.6 Sensitivity
+
+With `scan_leaves` forced to return `false` on entry (the deep scan off, the
+§58 behaviour), the journey fails on the real assertion:
+
+```
+thread 'e2e::journey_launcher_picks_up_an_icon_written_into_an_existing_theme' panicked at litric-shell/src/e2e.rs:5388:5:
+an icon written into an existing theme was not picked up in 6 watched ticks (0 leaf scans of 5)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 714 filtered out
+```
+
+Restored, the same journey passes and the journal prints
+`icons true after 5 leaf scans of 5`.
+
+### 59.7 Cost, measured on this machine
+
+| Figure | Value | How |
+| --- | --- | --- |
+| one bounded scan, 16 tracked leaves, one of them holding 200 files | **158.4 µs** | printed by `a_deep_scan_inspects_only_its_budget` (debug test build, 200 scans averaged) |
+| `metadata` / `read_dir` on a 300-entry dir | 1.83 µs / 137.03 µs | `rustc -O` probe over 2000 / 500 iterations |
+| memory held by the leaf list, 16 leaves | **3 519 B** for the whole cache | `IconNames::bytes()` |
+| work per frame | **none** | the scan is reached only from `refresh_desktop`, behind `DesktopWatch::due`; §55's "30 frames, no stat" and §56's "poll only at period" tests still pass |
+| ceiling | 64 leaves tracked, 12 looked at per check → at most 12 `read_dir` calls per second across the whole desktop | `MAX_THEME_LEAVES`, `LEAVES_PER_SCAN` |
+
+### 59.8 Gates
+
+```
+$ cargo fmt --all --check
+FMT_EXIT=0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.24s
+CLIPPY_EXIT=0
+
+$ cargo test --workspace
+PASSED=1804 FAILED=0
+
+$ python3 ci/lint-doc-refs.py
+OK: 1063 citation(s) across 155 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+FILESAFETY_EXIT=0
+  (the new journey's fixture cleanup is registered with its reason)
+
+$ bash ci/verify.sh
+summary: 32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the pre-existing `keys/dev/` key material and the mkosi
+image check; the three skips are QEMU-only checks. No gate, golden frame or key
+was added, weakened or generated. `verify.sh` run without `cargo` on `PATH`
+reports `25 pass, 2 fail, 5 skipped`, which is the same script declining to run
+five Rust checks — the numbers above are from the documented environment.
+
+Three tests were added this turn (`#[test]` attributes in the two files went
+20 → 22 and 81 → 82); §58's `PASSED=1800` is the figure it recorded, and no test
+was removed or renamed.
+
+The two frames the journey saved were opened:
+
+* `artifacts/browser-shots/59-before-the-icon-lands.png` — three tiles on the
+  generated glyph, no artwork anywhere in the theme.
+* `artifacts/browser-shots/59-launcher-icon-lands-in-existing-theme.png` — the
+  same three tiles now carrying the documents that arrived: `Deep One` and
+  `Deep Two` on a blue field with an amber disc, `Late Deep` on a red field with
+  a white triangle, legible at 82 px, none a placeholder square.
+
+### 59.9 Limits
+
+* **A rename inside one directory is invisible.** The leaf stamp is the entry
+  count, because this filesystem moves no directory mtime; renaming `a.svg` to
+  `b.svg` keeps the count. A file *added* or *removed* is seen.
+* **`symbolic/` is not scanned.** Only `scalable` and numeric `WxH` size
+  directories are tracked, which are the directories `find_in_theme` reads.
+* **Sixteen leaves per theme.** A theme with more than three size directories on
+  top of `scalable` loses its farthest sizes — the ones the launcher's 48 px
+  lookup is least likely to answer from.
+* **Latency is a cycle, not a tick.** At the caps a full pass takes six checks;
+  a change is noticed when the cursor reaches its leaf, so up to ~6 s.
+* **The scan is armed only by `load_desktop_apps_from`.** A fixture list placed
+  by `load_desktop_apps` is still never watched, by design.
+* **`Inherits=` still clears the whole name map** on an order change (§58).
+* **Misses are still dropped by any change that touches their tree**, and the
+  512-name cap still clears rather than evicts.
+* **No inotify.** The crate is `#![forbid(unsafe_code)]` and dependency-free, so
+  this remains a polled stamp, with the one-second floor from §55.
+
+### 59.10 Git
+
+Commit `HEAD` and `origin/main` are the same commit; `git status
+--porcelain --untracked-files=no` is empty.

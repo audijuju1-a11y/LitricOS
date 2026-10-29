@@ -7303,9 +7303,18 @@ impl Shell {
         let Some(watch) = self.desktop_watch.as_mut() else {
             return false;
         };
-        let Some(change) = watch.poll(now_ms) else {
+        if !watch.due(now_ms) {
             return false;
-        };
+        }
+        let change = watch.poll(now_ms).unwrap_or_default();
+        // A file written into an existing theme's icon directory changes no
+        // mtime on this filesystem, so the theme's own stamp cannot see it. The
+        // bounded deep scan looks one level further, a slice of leaves per
+        // check.
+        let leaves_moved = self.desktop_icon_names.scan_leaves();
+        if change.app_dirs.is_empty() && !change.icons && !leaves_moved {
+            return false;
+        }
         let (app_dirs, icon_dirs) = {
             let (apps, icons) = watch.dirs();
             (apps.to_vec(), icons.to_vec())
@@ -7315,7 +7324,8 @@ impl Shell {
             .iter()
             .filter_map(|index| app_dirs.get(*index).cloned())
             .collect();
-        if change.icons {
+        let icons_moved = change.icons || leaves_moved;
+        if icons_moved {
             // A name that resolved a moment ago may resolve to a different file
             // now, so no decoded copy may outlive the change.
             crate::themeicons::clear_cache();
@@ -7325,7 +7335,7 @@ impl Shell {
             &icon_dirs,
             &self.desktop_apps,
             &reread,
-            change.icons,
+            icons_moved,
             &mut self.desktop_icon_names,
         );
         self.desktop_apps = found.apps;
@@ -7334,13 +7344,15 @@ impl Shell {
         self.desktop_icons_resolved = found.icons_resolved;
         self.desktop_icons_validated = found.icons_validated;
         eprintln!(
-            "litric-shell: desktop: {} directories, {} entries, {} names resolved, {} names validated ({:?} reread, icons {})",
+            "litric-shell: desktop: {} directories, {} entries, {} names resolved, {} names validated ({:?} reread, icons {} after {} leaf scans of {})",
             found.dirs_read,
             found.files_read,
             found.icons_resolved,
             found.icons_validated,
             reread,
-            change.icons
+            icons_moved,
+            self.desktop_icon_names.leaf_scans(),
+            self.desktop_icon_names.leaf_count()
         );
         self.desktop_watch = Some(crate::desktop_entry::DesktopWatch::new(
             &app_dirs, &icon_dirs, now_ms,

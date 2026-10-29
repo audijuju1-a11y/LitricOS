@@ -75,7 +75,8 @@ pub const MAX_RASTER_SIDE: usize = 128;
 pub const MAX_SVG_SAMPLES: usize = 40_000_000;
 
 /// The icon categories a theme puts artwork under.
-const CATEGORIES: [&str; 5] = ["apps", "applications", "categories", "devices", "places"];
+pub(crate) const CATEGORIES: [&str; 5] =
+    ["apps", "applications", "categories", "devices", "places"];
 
 /// The directories an icon may live under, in precedence order.
 #[must_use]

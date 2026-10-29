@@ -5277,6 +5277,153 @@ fn journey_launcher_re_resolves_only_the_name_a_new_theme_supplies() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// How many blue, amber and red sample points a launcher tile's chip carries.
+///
+/// A module-level helper rather than a nested one: `ci/lint-file-safety.py`
+/// attributes a deletion to the nearest `fn` above it, and a nested helper would
+/// take the blame for the journey's cleanup and hide which journey owns it.
+#[cfg(unix)]
+fn icon_chip_counts(
+    canvas: &Canvas,
+    s: &crate::shell::Shell,
+    offset: usize,
+) -> (usize, usize, usize) {
+    let cell = s
+        .hotspots()
+        .rect_of(Hot::LauncherItem(App::ALL.len().saturating_add(offset)))
+        .expect("a tile per application");
+    let chip = Rect::new(cell.center().0 - 41.0, cell.y + 4.0, 82.0, 82.0);
+    let (mut blue, mut amber, mut red) = (0usize, 0usize, 0usize);
+    let mut x = chip.x + 2.0;
+    while x < chip.right() - 2.0 {
+        let mut y = chip.y + 2.0;
+        while y < chip.bottom() - 2.0 {
+            if let Some(px) = canvas.get(x as i64, y as i64) {
+                let r = (px >> 16) & 0xFF;
+                let g = (px >> 8) & 0xFF;
+                let b = px & 0xFF;
+                if b > 120 && b > r.saturating_add(40) {
+                    blue = blue.saturating_add(1);
+                }
+                if r > 180 && g > 120 && b < 120 {
+                    amber = amber.saturating_add(1);
+                }
+                if r > 150 && r > g.saturating_add(60) {
+                    red = red.saturating_add(1);
+                }
+            }
+            y += 3.0;
+        }
+        x += 3.0;
+    }
+    (blue, amber, red)
+}
+
+/// An icon written into a theme the running launcher already knows appears
+/// without a restart.
+///
+/// The theme exists and is empty when the shell loads, so every `Icon=` name is
+/// a miss and the tiles start on the generated glyph. The artwork then lands in
+/// `<theme>/scalable/apps` -- a leaf whose own modification time does not move
+/// on this filesystem, so only the bounded deep leaf scan can see it. §58's
+/// theme-level stamp is blind to exactly this change.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_picks_up_an_icon_written_into_an_existing_theme() {
+    let root = e2e_root("desktop-icon-deep-leaf");
+    let apps = root.join("data/applications");
+    let icons = root.join("data/icons");
+    std::fs::create_dir_all(&apps).expect("applications");
+    std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+    for name in ["Deep One", "Deep Two"] {
+        std::fs::write(
+            apps.join(format!("{}.desktop", name.replace(' ', "-"))),
+            format!(
+                "[Desktop Entry]\nType=Application\nName={name}\nIcon=deep-icon\nExec=/bin/true\n"
+            ),
+        )
+        .expect("entry");
+    }
+    std::fs::write(
+        apps.join("Late-Deep.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Late Deep\nIcon=late-deep\nExec=/bin/true\n",
+    )
+    .expect("late entry");
+
+    let mut s = shell();
+    s.load_desktop_apps_from(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+    assert_eq!(s.desktop_apps.len(), 3);
+    assert!(
+        s.desktop_apps.iter().all(|app| app.icon_path.is_none()),
+        "the theme holds no artwork yet"
+    );
+    assert!(
+        s.desktop_icon_names.leaf_count() >= 5,
+        "the theme's leaves are tracked: {}",
+        s.desktop_icon_names.leaf_count()
+    );
+    open_launcher(&mut s);
+    let before = draw_frame(&mut s);
+    save_shot(&before, "59-before-the-icon-lands");
+    let (before_blue, before_amber, _) = icon_chip_counts(&before, &s, 0);
+
+    // The artwork arrives in the theme that already exists.
+    std::fs::write(
+        icons.join("hicolor/scalable/apps/deep-icon.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" fill="#2080c0"/>
+  <circle cx="12" cy="12" r="7" fill="#fabe28"/>
+</svg>"##,
+    )
+    .expect("deep icon");
+    std::fs::write(
+        icons.join("hicolor/scalable/apps/late-deep.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" fill="#c02020"/>
+  <path d="M 5 19 L 12 5 L 19 19 Z" fill="#f0f0f0"/>
+</svg>"##,
+    )
+    .expect("late icon");
+
+    let mut appeared = false;
+    for _ in 0..6 {
+        s.tick_after(1_010);
+        if s.desktop_apps.iter().all(|app| app.icon_path.is_some()) {
+            appeared = true;
+            break;
+        }
+    }
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "59-launcher-icon-lands-in-existing-theme");
+    assert!(
+        appeared,
+        "an icon written into an existing theme was not picked up in 6 watched ticks ({} leaf scans of {})",
+        s.desktop_icon_names.leaf_scans(),
+        s.desktop_icon_names.leaf_count()
+    );
+    assert_eq!(
+        s.desktop_icons_resolved, 2,
+        "two distinct names, each resolved once after the scan: {}",
+        s.desktop_icons_resolved
+    );
+
+    let (blue, amber, _) = icon_chip_counts(&canvas, &s, 0);
+    assert!(
+        blue > 20 && amber > 5,
+        "the tile is not the artwork that arrived: {blue} blue, {amber} amber"
+    );
+    assert!(
+        blue + amber > before_blue + before_amber + 20,
+        "the drawn pixels did not change when the icon arrived: {before_blue}+{before_amber} before, {blue}+{amber} after"
+    );
+    let (_, _, red) = icon_chip_counts(&canvas, &s, 2);
+    assert!(
+        red > 20,
+        "the second name's tile is not its own artwork: {red} red"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A new application in one of two application directories re-reads only that
 /// directory, and the launcher still shows the entry that did not move.
 ///

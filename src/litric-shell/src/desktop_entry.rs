@@ -303,6 +303,86 @@ pub fn reload_with_cache(
 /// the map is cleared rather than grown past it.
 pub const MAX_ICON_NAMES: usize = 512;
 
+/// The most leaf directories one theme contributes to the deep scan.
+///
+/// The leaves are the directories `themeicons::find_in` reads inside a theme:
+/// its `scalable` directory and each numeric size directory, one level further
+/// per category. A theme with eleven size directories would offer sixty leaves;
+/// sixteen keeps the vector small while still covering `scalable` (where a
+/// theme without rasters keeps every icon) and the sizes nearest the launcher's
+/// 48 px lookup. Leaves past the cap are not watched, and that is a stated limit
+/// rather than a silent one.
+pub const MAX_LEAVES_PER_THEME: usize = 16;
+
+/// The most leaf directories the deep scan tracks across every theme.
+///
+/// Four themes at the per-theme cap. Memory is one path pair and one stamp each,
+/// counted by [`IconNames::bytes`].
+pub const MAX_THEME_LEAVES: usize = 64;
+
+/// The most leaves one deep scan inspects.
+///
+/// This is what bounds a check: a `read_dir` per leaf, so a theme whose `apps`
+/// directory holds hundreds of icons costs the same as one that holds three, as
+/// long as the slice is the same size. At the caps a full cycle over the tracked
+/// leaves takes six checks, and a check happens at most once per
+/// [`WATCH_INTERVAL_MS`].
+pub const LEAVES_PER_SCAN: usize = 12;
+
+/// The directories `find_in_theme` reads inside one theme, deepest first.
+///
+/// # Why the theme's own stamp is not enough
+///
+/// A file added to `<theme>/scalable/apps` changes nothing the theme directory
+/// reports: measured on this machine's filesystem, creating a file leaves the
+/// parent directory's modification time byte-identical (`probe: mtime unchanged
+/// after file create: true`), so only the entry count moves — and that count
+/// belongs to the leaf, not to the theme. One level deeper is the cheapest place
+/// a new icon is visible at all.
+fn theme_leaves(theme: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(theme) else {
+        return Vec::new();
+    };
+    let mut scalable: Option<PathBuf> = None;
+    let mut sized: Vec<(u32, PathBuf)> = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "scalable" {
+            scalable = Some(entry.path());
+            continue;
+        }
+        let Some((width, height)) = name.split_once('x') else {
+            continue;
+        };
+        let (Ok(width), Ok(height)) = (width.parse::<u32>(), height.parse::<u32>()) else {
+            continue;
+        };
+        // Nearest to the launcher's own lookup size first, so the leaves most
+        // likely to answer are the ones the cap keeps.
+        sized.push((
+            width.abs_diff(48).saturating_add(height.abs_diff(48)),
+            entry.path(),
+        ));
+    }
+    sized.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let mut leaves: Vec<PathBuf> = Vec::new();
+    for base in scalable.iter().chain(sized.iter().map(|(_, path)| path)) {
+        for category in crate::themeicons::CATEGORIES {
+            if leaves.len() >= MAX_LEAVES_PER_THEME {
+                return leaves;
+            }
+            // Pushed whether or not it exists yet: a category directory that
+            // appears later is the same change as a file appearing in one that
+            // is already there.
+            leaves.push(base.join(category));
+        }
+    }
+    leaves
+}
+
 /// One memoised `Icon=` answer.
 #[derive(Debug, Clone)]
 struct Cached {
@@ -354,6 +434,14 @@ pub struct IconNames {
     dirs: Vec<PathBuf>,
     order: Vec<(PathBuf, Stamp)>,
     names: HashMap<String, Cached>,
+    /// `(leaf directory, the theme it belongs to, its stamp when the list was
+    /// built)`. Recorded when the order is built, not on the first scan: a file
+    /// written between arming the cache and the first check would otherwise be
+    /// recorded as part of the baseline and never reported.
+    leaves: Vec<(PathBuf, PathBuf, Stamp)>,
+    leaf_cursor: usize,
+    leaf_scans: u64,
+    leaves_moved: u64,
     resolved: u64,
     hits: u64,
     validated: u64,
@@ -419,14 +507,20 @@ impl IconNames {
     /// An empty cache armed for `icon_dirs` as they are now.
     #[must_use]
     pub fn new(icon_dirs: &[PathBuf]) -> Self {
-        Self {
+        let mut cache = Self {
             dirs: icon_dirs.to_vec(),
             order: icon_order(icon_dirs),
             names: HashMap::new(),
+            leaves: Vec::new(),
+            leaf_cursor: 0,
+            leaf_scans: 0,
+            leaves_moved: 0,
             resolved: 0,
             hits: 0,
             validated: 0,
-        }
+        };
+        cache.capture_leaves();
+        cache
     }
 
     /// Re-stamp the tree and drop the names a change can affect.
@@ -467,6 +561,7 @@ impl IconNames {
             self.names.clear();
             self.dirs = icon_dirs.to_vec();
             self.order = fresh;
+            self.capture_leaves();
             return;
         }
         let mut kept: HashMap<String, Cached> = HashMap::with_capacity(self.names.len());
@@ -489,6 +584,99 @@ impl IconNames {
         self.names = kept;
         self.dirs = icon_dirs.to_vec();
         self.order = fresh;
+        self.capture_leaves();
+    }
+
+    /// Rebuild the leaf list from the current order, stamping each leaf now.
+    ///
+    /// Called wherever the order is rebuilt, and once when a cache is armed. It
+    /// costs one `read_dir` per leaf, bounded by [`MAX_THEME_LEAVES`], at load
+    /// or on a theme change -- never in a frame and never per check.
+    fn capture_leaves(&mut self) {
+        self.leaves.clear();
+        self.leaf_cursor = 0;
+        for (dir, _) in &self.order {
+            for leaf in theme_leaves(dir) {
+                if self.leaves.len() >= MAX_THEME_LEAVES {
+                    return;
+                }
+                let stamp = stamp_of(&leaf);
+                self.leaves.push((leaf, dir.clone(), stamp));
+            }
+            if self.leaves.len() >= MAX_THEME_LEAVES {
+                return;
+            }
+        }
+    }
+
+    /// Look at the next slice of theme leaf directories.
+    ///
+    /// Returns whether anything moved. When it did, every name witnessed in the
+    /// theme that owns the changed leaf is dropped, and every remembered miss,
+    /// because a name that did not resolve a moment ago may resolve now. Names
+    /// witnessed in another theme are left alone: that is the per-name property
+    /// §58 established, now fed by a signal one directory deeper.
+    ///
+    /// Bounded to [`LEAVES_PER_SCAN`] directories, so one check costs a fixed
+    /// number of `read_dir` calls rather than one per icon on the machine.
+    pub fn scan_leaves(&mut self) -> bool {
+        if self.leaves.is_empty() {
+            self.capture_leaves();
+            return false;
+        }
+        let total = self.leaves.len();
+        let count = total.min(LEAVES_PER_SCAN);
+        let mut moved: Vec<PathBuf> = Vec::new();
+        for _ in 0..count {
+            // No modulo: a cursor that never leaves `0..total` cannot divide by
+            // a zero total or trip the crate's arithmetic lint.
+            let index = if self.leaf_cursor < total {
+                self.leaf_cursor
+            } else {
+                0
+            };
+            self.leaf_cursor = index.saturating_add(1);
+            if self.leaf_cursor >= total {
+                self.leaf_cursor = 0;
+            }
+            self.leaf_scans = self.leaf_scans.saturating_add(1);
+            let Some(leaf) = self.leaves.get_mut(index) else {
+                continue;
+            };
+            let fresh = stamp_of(&leaf.0);
+            let changed = leaf.2 != fresh;
+            leaf.2 = fresh;
+            if changed && !moved.iter().any(|theme| theme == &leaf.1) {
+                moved.push(leaf.1.clone());
+            }
+        }
+        if moved.is_empty() {
+            return false;
+        }
+        self.leaves_moved = self.leaves_moved.saturating_add(moved.len() as u64);
+        self.forget_themes(&moved);
+        true
+    }
+
+    /// Drop every name a change in `themes` can affect: the hits witnessed there
+    /// and every miss, which nothing witnesses.
+    fn forget_themes(&mut self, themes: &[PathBuf]) {
+        let mut kept: HashMap<String, Cached> = HashMap::with_capacity(self.names.len());
+        for (name, entry) in self.names.drain() {
+            self.validated = self.validated.saturating_add(1);
+            let still_good = match entry.witness {
+                Some(index) => self
+                    .order
+                    .get(index)
+                    .is_some_and(|(dir, _)| !themes.iter().any(|theme| theme == dir)),
+                // A miss is witnessed by the whole tree, not one directory.
+                None => false,
+            };
+            if still_good {
+                kept.insert(name, entry);
+            }
+        }
+        self.names = kept;
     }
 
     /// The file `name` resolves to under `icon_dirs`.
@@ -530,6 +718,25 @@ impl IconNames {
             },
         );
         path
+    }
+
+    /// Leaf directories the deep scan has looked at, across the life of this
+    /// cache.
+    #[must_use]
+    pub fn leaf_scans(&self) -> u64 {
+        self.leaf_scans
+    }
+
+    /// Themes a deep scan has reported moved, counted once per theme per scan.
+    #[must_use]
+    pub fn leaves_moved(&self) -> u64 {
+        self.leaves_moved
+    }
+
+    /// Leaf directories this cache tracks, at most [`MAX_THEME_LEAVES`].
+    #[must_use]
+    pub fn leaf_count(&self) -> usize {
+        self.leaves.len()
     }
 
     /// Names whose file was looked up, across the life of this cache.
@@ -581,6 +788,12 @@ impl IconNames {
                 .saturating_add(std::mem::size_of::<String>())
                 .saturating_add(std::mem::size_of::<Cached>())
                 .saturating_add(std::mem::size_of::<usize>().saturating_mul(2));
+        }
+        for (leaf, theme, _) in &self.leaves {
+            total = total
+                .saturating_add(leaf.as_os_str().len())
+                .saturating_add(theme.as_os_str().len())
+                .saturating_add(std::mem::size_of::<(PathBuf, PathBuf, Stamp)>());
         }
         total
     }
@@ -771,6 +984,16 @@ impl DesktopWatch {
         }
         self.reloads = self.reloads.saturating_add(1);
         Some(change)
+    }
+
+    /// Whether the interval has elapsed, without touching the disk.
+    ///
+    /// The shell asks this before it does any work: a check that only stamps
+    /// `.desktop` directories must not run when the deep leaf scan is going to
+    /// run on the same tick either.
+    #[must_use]
+    pub fn due(&self, now_ms: u64) -> bool {
+        now_ms >= self.next_ms
     }
 
     /// The directories this watch was armed with.
@@ -1717,6 +1940,156 @@ mod tests {
             .and_then(|app| app.icon_path.as_ref())
             .expect("the new theme resolved the name");
         assert_eq!(path.extension().and_then(|e| e.to_str()), Some("svg"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file written into an existing theme's `scalable/apps` is noticed by the
+    /// bounded deep scan, and only the names that theme answered are forgotten.
+    ///
+    /// A theme directory's own stamp cannot see this: creating a file in a
+    /// directory leaves that directory's modification time byte-identical on
+    /// this filesystem (measured), so §58's theme-level stamp is blind to it.
+    /// The leaf stamp is one directory deeper and sees the entry count move.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_icon_in_an_existing_theme_is_noticed_by_the_deep_scan() {
+        let root = scratch("icons-deep-leaf");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        std::fs::create_dir_all(icons.join("zzz-other/scalable/apps")).expect("other theme");
+        std::fs::write(
+            icons.join("zzz-other/scalable/apps/known-icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#20a040\"/></svg>",
+        )
+        .expect("known icon");
+        let prog = program(&root, "run-me");
+        std::fs::write(
+            apps.join("Known.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Known\nIcon=known-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("known entry");
+        std::fs::write(
+            apps.join("Late.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Late\nIcon=late-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("late entry");
+
+        let app_dirs = vec![apps.clone()];
+        let icon_dirs = vec![icons.clone()];
+        let mut names = IconNames::new(&icon_dirs);
+        assert!(
+            names.leaf_count() >= 10,
+            "both themes' leaves are tracked: {}",
+            names.leaf_count()
+        );
+        let first = discover_with_cache(&app_dirs, &icon_dirs, &mut names);
+        assert_eq!(first.icons_resolved, 2, "one hit and one miss");
+        assert!(!names.scan_leaves(), "nothing moved yet");
+        assert_eq!(
+            names.leaf_scans(),
+            names.leaf_count().min(LEAVES_PER_SCAN) as u64,
+            "one scan is one slice of the tracked leaves"
+        );
+
+        // The icon arrives in hicolor, the theme searched first.
+        std::fs::write(
+            icons.join("hicolor/scalable/apps/late-icon.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><circle cx=\"4\" cy=\"4\" r=\"3\" fill=\"#f0b020\"/></svg>",
+        )
+        .expect("late icon");
+        assert!(
+            names.scan_leaves(),
+            "a file written into an existing theme is a change the theme stamp cannot see"
+        );
+        assert_eq!(
+            names.leaves_moved(),
+            1,
+            "one theme moved, not one name per entry"
+        );
+
+        // Only the miss (nothing witnesses it) and names witnessed in hicolor are
+        // dropped: the hit answered by zzz-other survives.
+        let after = reload_with_cache(
+            &app_dirs,
+            &icon_dirs,
+            &first.apps,
+            &app_dirs,
+            true,
+            &mut names,
+        );
+        assert_eq!(
+            after.icons_resolved, 1,
+            "the miss resolved once and the hit was kept: {} names resolved",
+            after.icons_resolved
+        );
+        assert!(after.apps.iter().all(|app| app.icon_path.is_some()));
+        let late = after
+            .apps
+            .iter()
+            .find(|app| app.name == "Late")
+            .expect("the late entry");
+        let path = late.icon_path.as_ref().expect("resolved");
+        assert!(
+            path.ends_with("hicolor/scalable/apps/late-icon.svg"),
+            "{}",
+            path.display()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// One scan inspects a fixed slice, however many leaves a theme offers.
+    #[test]
+    fn a_deep_scan_inspects_only_its_budget() {
+        let root = scratch("icons-deep-bound");
+        let icons = root.join("icons");
+        for size in [
+            "8x8", "16x16", "22x22", "24x24", "32x32", "48x48", "64x64", "96x96", "256x256",
+            "512x512",
+        ] {
+            std::fs::create_dir_all(icons.join(format!("hicolor/{size}/apps"))).expect("size");
+        }
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("scalable");
+        let icon_dirs = vec![icons.clone()];
+        let mut names = IconNames::new(&icon_dirs);
+        assert_eq!(
+            names.leaf_count(),
+            MAX_LEAVES_PER_THEME,
+            "a theme is capped at its own budget"
+        );
+        assert!(LEAVES_PER_SCAN < names.leaf_count(), "the budget must bite");
+        let _ = names.scan_leaves();
+        assert_eq!(
+            names.leaf_scans(),
+            LEAVES_PER_SCAN as u64,
+            "one scan is one slice"
+        );
+
+        // The measured cost, on a leaf holding as many icons as a large theme's
+        // `apps` directory does. The number in §59 comes from this run.
+        let leaf = icons.join("hicolor/scalable/apps");
+        for index in 0..200 {
+            std::fs::write(leaf.join(format!("fill-{index}.svg")), b"<svg/>").expect("fill");
+        }
+        let started = std::time::Instant::now();
+        let rounds = 200u32;
+        for _ in 0..rounds {
+            let _ = names.scan_leaves();
+        }
+        let per_scan = started.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
+        println!(
+            "deep scan: {per_scan:.1} us/scan over {} tracked leaves (one holding 200 files), cache {} bytes, {} entries in the order",
+            names.leaf_count(),
+            names.bytes(),
+            names.len()
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
