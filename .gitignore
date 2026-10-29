@@ -19,3 +19,8 @@ __pycache__/
 # Development signing keys are excluded by keys/.gitignore, which is the file that
 # states why: a committed signing key — even a development one — is a key that
 # will eventually be used by mistake.
+
+# Workspace archives: a snapshot of this checkout, never evidence and never
+# reviewed. The gate and the tracker cite the files, not a tarball of them.
+artifacts/*.tar.gz
+artifacts/*.zip
