@@ -6950,7 +6950,11 @@ impl Shell {
             },
             crate::process::EndTarget::Tree => match crate::process::terminate_tree(pid) {
                 Ok(done) => {
-                    let mut message = format!("Asked {} processes to stop", done.asked);
+                    let mut message = if done.asked == 1 {
+                        "Asked 1 process to stop".to_owned()
+                    } else {
+                        format!("Asked {} processes to stop", done.asked)
+                    };
                     if done.refused > 0 {
                         message.push_str(&format!("; {} left alone", done.refused));
                     }
