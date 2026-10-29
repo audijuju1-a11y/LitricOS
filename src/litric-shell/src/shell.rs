@@ -435,6 +435,8 @@ pub enum Hot {
     SettingsMotion,
     /// Toggle opaque glass in the shell.
     SettingsTransparency,
+    /// Toggle whether Files lists dot-prefixed entries.
+    SettingsShowHidden,
     /// The UI-scale control on the Display page: cycles the scale and arms the
     /// countdown that puts the old one back.
     DisplayScale,
@@ -2950,10 +2952,14 @@ impl Shell {
             return;
         };
         let path = self.files.path.clone();
-        let changed = match bridge.list_dir(&path) {
-            Ok(entries) => self.files_watch.observe(&path, &entries, now_ms),
-            Err(_) => self.files_watch.observe_failure(&path, now_ms),
-        };
+        // The watcher must compare the same listing the table draws. Asking for
+        // hidden entries when the table shows them is what keeps the digest
+        // from reporting every visible-only read as a change.
+        let changed =
+            match bridge.list_dir_with_hidden(&path, self.settings.preferences.show_hidden) {
+                Ok(entries) => self.files_watch.observe(&path, &entries, now_ms),
+                Err(_) => self.files_watch.observe_failure(&path, now_ms),
+            };
         if changed {
             self.files_changed();
         }
@@ -3277,9 +3283,14 @@ impl Shell {
 
     /// Begin a shell-owned preference update and return its persistence effect.
     fn save_preferences(&mut self, preferences: crate::settings::Preferences) -> Vec<Effect> {
+        let shown_hidden = self.settings.preferences.show_hidden;
         let Some(next) = self.settings.begin(preferences) else {
             return Vec::new();
         };
+        if next.show_hidden != shown_hidden {
+            self.files.listed = None;
+            self.files_watch.reset();
+        }
         self.tokens.theme = resolved_theme(next, self.local_hour());
         self.quick.reduce_motion = next.reduce_motion;
         self.quick.reduce_transparency = next.reduce_transparency;
@@ -3288,11 +3299,30 @@ impl Shell {
         vec![Effect::PersistPreferences(next)]
     }
 
+    /// Turn hidden-file visibility on or off and persist the choice.
+    ///
+    /// Marking the listing stale is the connection that matters: the next
+    /// frame asks the file service for the directory with the new visibility,
+    /// so the table changes because a real read changed, not because a filter
+    /// was applied to rows already in memory.
+    fn toggle_show_hidden(&mut self) -> Vec<Effect> {
+        let mut next = self.settings.preferences;
+        next.show_hidden = !next.show_hidden;
+        self.save_preferences(next)
+    }
+
     /// Complete a preference write, rolling back the live theme and motion if
     /// persistence failed.
     pub fn finish_preferences_save(&mut self, result: Result<(), String>) {
+        let shown_hidden = self.settings.preferences.show_hidden;
         self.settings.finish(result);
         let preferences = self.settings.preferences;
+        if preferences.show_hidden != shown_hidden {
+            // The write failed and the record was rolled back: the table has to
+            // return to the visibility that is actually stored.
+            self.files.listed = None;
+            self.files_watch.reset();
+        }
         self.tokens.theme = resolved_theme(preferences, self.local_hour());
         self.quick.reduce_motion = preferences.reduce_motion;
         self.quick.reduce_transparency = preferences.reduce_transparency;
@@ -5528,6 +5558,11 @@ impl Shell {
                     self.files.select_all_visible();
                     Some(Vec::new())
                 }
+                // Explorer's own chord for hidden items. It is scoped to the
+                // Files window, so the Browser's Ctrl+H (history) is untouched.
+                Key::Char('h') if mods.ctrl && self.files.dialog.is_none() => {
+                    Some(self.toggle_show_hidden())
+                }
                 Key::Enter => {
                     // Open: folders navigate, files go through open_files_entry.
                     if let Some(p) = self.files.selected_path() {
@@ -6203,6 +6238,7 @@ impl Shell {
             Hot::SettingsSchedule => self.cycle_theme_schedule(),
             Hot::SettingsMotion => self.toggle_reduced_motion(),
             Hot::SettingsTransparency => self.toggle_reduced_transparency(),
+            Hot::SettingsShowHidden => self.toggle_show_hidden(),
             Hot::DisplayScale => self.cycle_ui_scale(),
             Hot::ScaleKeep => self.keep_pending_change(),
             Hot::ScaleUndo => {
@@ -9298,6 +9334,39 @@ mod tests {
         assert!(effects
             .iter()
             .any(|e| matches!(e, Effect::PersistPreferences(p) if p.reduce_motion)));
+    }
+
+    #[test]
+    fn the_hidden_files_switch_persists_and_marks_the_listing_stale() {
+        let mut s = shell();
+        assert!(
+            !s.settings.preferences.show_hidden,
+            "hidden entries start out hidden"
+        );
+        s.files.listed = Some("/Documents".to_owned());
+        let effects = s.activate(Hot::SettingsShowHidden);
+        assert!(s.settings.preferences.show_hidden);
+        assert!(
+            s.files.listed.is_none(),
+            "the table must be re-read with the new visibility"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::PersistPreferences(p) if p.show_hidden)),
+            "the choice must be stored: {effects:?}"
+        );
+        // The event loop writes the record and reports the result before the
+        // next input, which is what allows a second toggle to begin.
+        s.finish_preferences_save(Ok(()));
+        let effects = s.activate(Hot::SettingsShowHidden);
+        assert!(!s.settings.preferences.show_hidden);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::PersistPreferences(p) if !p.show_hidden)),
+            "turning it off is stored too: {effects:?}"
+        );
     }
 
     #[test]

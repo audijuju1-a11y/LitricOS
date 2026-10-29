@@ -119,7 +119,7 @@ impl Entry {
 pub const INTERNAL_KEYS: [&str; 2] = ["version", "onboarded"];
 
 /// Every setting the shell owns, in the order the pages present them.
-pub const ENTRIES: [Entry; 9] = [
+pub const ENTRIES: [Entry; 10] = [
     Entry {
         key: "theme",
         page: Page::Appearance,
@@ -191,6 +191,20 @@ pub const ENTRIES: [Entry; 9] = [
         synonyms: &["google", "duckduckgo", "bing", "omnibox", "provider"],
         kind: Kind::Choice,
         value: |p| p.search_engine.title().to_owned(),
+    },
+    Entry {
+        key: "show_hidden",
+        page: Page::Privacy,
+        title: "Show hidden files",
+        synonyms: &[
+            "hidden files",
+            "hidden items",
+            "dotfiles",
+            "show hidden",
+            "files",
+        ],
+        kind: Kind::Toggle,
+        value: |p| yes_no(p.show_hidden).to_owned(),
     },
 ];
 
@@ -463,6 +477,7 @@ mod tests {
             ("reduce motion", "reduce_motion"),
             ("transparency", "reduce_transparency"),
             ("duckduckgo", "search_engine"),
+            ("hidden files", "show_hidden"),
             ("ไทย", "language"),
         ] {
             let hits = search(query);

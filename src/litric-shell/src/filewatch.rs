@@ -132,6 +132,15 @@ impl Watch {
         self.next_ms = now_ms.saturating_add(INTERVAL_MS);
     }
 
+    /// Forget the recorded listing because what the table shows changed for a
+    /// reason other than the folder: the user turned hidden entries on or off.
+    /// The next real read arms the watcher again with the new visibility.
+    pub fn reset(&mut self) {
+        self.path = None;
+        self.digest = None;
+        self.failed = false;
+    }
+
     /// Postpone the next check without reading.
     ///
     /// Used when the folder cannot be watched right now — no visible Files

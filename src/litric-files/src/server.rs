@@ -1689,6 +1689,28 @@ mod tests {
     }
 
     #[test]
+    fn list_hidden_one_returns_dot_entries_and_zero_does_not() {
+        let (dir, root) = open_root("list-hidden");
+        std::fs::write(dir.join("Documents/.secret"), b"hidden").expect("dot file");
+        let mut conn = Connection::new(root);
+
+        match conn.dispatch("LIST /Documents hidden=0", &mut |_, _| {}) {
+            Outcome::Reply(lines) => assert!(
+                lines.iter().all(|line| !line.contains("name=.secret")),
+                "a normal listing hides dot entries: {lines:?}"
+            ),
+            other => panic!("not a reply: {other:?}"),
+        }
+        match conn.dispatch("LIST /Documents hidden=1", &mut |_, _| {}) {
+            Outcome::Reply(lines) => assert!(
+                lines.iter().any(|line| line.contains("name=.secret")),
+                "hidden=1 returns the dot entry: {lines:?}"
+            ),
+            other => panic!("not a reply: {other:?}"),
+        }
+    }
+
+    #[test]
     fn every_verb_refuses_a_path_that_leaves_the_root() {
         // One hostile input of each shape a client can put on the wire, against
         // every verb whose argument shape is already pinned by another test in

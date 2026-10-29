@@ -140,6 +140,7 @@ ALLOWED = {
         "journey_defender_refuses_to_quarantine_a_file_that_is_gone": "removes the temporary fixture root this refusal journey created, tagged with its own pid, after asserting no quarantine entry was invented",
         "journey_defender_refuses_to_restore_a_tampered_quarantine_entry": "removes the temporary fixture root this tamper journey created, tagged with its own pid, after asserting the tampered copy was kept",
         "journey_defender_restores_a_legacy_quarantine_entry_unverified": "removes the temporary fixture root this legacy-record journey created, tagged with its own pid, after asserting the file was restored",
+        "journey_hidden_files_toggle_is_a_real_read_and_survives_a_restart": "removes the temporary fixture root this hidden-visibility journey created, tagged with its own pid, after asserting the dot entry was absent before the switch, present after the real read, and present again in a restarted shell",
     },
     "src/litric-sysd/src/providers.rs": {
         "apply_file": "removes one Wi-Fi credential; the path is refused unless it is a direct child of iwd's state directory under the daemon root, and the network name was validated by `valid_ssid` before the path was built",

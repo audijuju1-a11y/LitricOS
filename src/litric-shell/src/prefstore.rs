@@ -114,6 +114,11 @@ pub fn parse(text: &str, defaults: Preferences) -> Preferences {
                     preferences.reduce_transparency = enabled;
                 }
             }
+            "show_hidden" => {
+                if let Some(enabled) = parse_bool(value) {
+                    preferences.show_hidden = enabled;
+                }
+            }
             "ui_scale" => {
                 if let Some(scale) = UiScale::parse(value) {
                     preferences.ui_scale = scale;
@@ -178,6 +183,9 @@ pub fn encode(preferences: Preferences) -> String {
     } else {
         "0"
     });
+    out.push('\n');
+    out.push_str("show_hidden=");
+    out.push_str(if preferences.show_hidden { "1" } else { "0" });
     out.push('\n');
     out.push_str("ui_scale=");
     out.push_str(preferences.ui_scale.token());
@@ -398,6 +406,25 @@ mod tests {
         // the whole record, and must not silently become the wrong engine.
         let parsed = parse("version=1\nsearch_engine=brave\n", Preferences::default());
         assert_eq!(parsed.search_engine, SearchEngine::Google);
+    }
+
+    #[test]
+    fn hidden_file_visibility_round_trips_through_the_file() {
+        let path = fixture("hidden");
+        let store = Store::new(&path);
+        let preferences = Preferences {
+            show_hidden: true,
+            ..Preferences::default()
+        };
+        store.save(preferences).expect("the record is written");
+        let text = fs::read_to_string(&path).expect("the record is readable");
+        assert!(text.contains("show_hidden=1"), "{text}");
+        let loaded = store
+            .load()
+            .expect("the record is read")
+            .expect("it exists");
+        assert!(loaded.show_hidden, "the Files choice survived the file");
+        cleanup(&path);
     }
 
     #[test]

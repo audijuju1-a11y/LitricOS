@@ -4290,3 +4290,111 @@ fn journey_reduce_transparency_changes_the_rendered_frame_and_survives_a_restart
     assert!(restarted.quick.reduce_transparency);
     assert_eq!(restarted.tokens.theme.glass.tint_alpha_pct, 100);
 }
+
+/// Hidden files are a real directory read, not a filter over rows already in
+/// memory. The fixture holds one visible and one dot-prefixed file; the open
+/// table starts without the dot entry, `Ctrl+H` asks the file service for a
+/// listing that includes it, and a restart reads the stored choice back. The
+/// only assertions about pixels are the before/after frames of that read.
+#[cfg(unix)]
+#[test]
+fn journey_hidden_files_toggle_is_a_real_read_and_survives_a_restart() {
+    let root = e2e_root("hidden-files");
+    let docs = root.join("Documents");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("visible.txt"), b"visible\n").unwrap();
+    std::fs::write(docs.join(".secret"), b"hidden data\n").unwrap();
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Files);
+    // Let the window's reveal spring settle before the frame that is compared.
+    for _ in 0..12 {
+        let _ = draw_frame(&mut s);
+    }
+    assert!(
+        s.files.rows.iter().any(|row| row.name == "visible.txt"),
+        "the real visible file is listed: {:?}",
+        s.files.rows
+    );
+    assert!(
+        !s.files.rows.iter().any(|row| row.name == ".secret"),
+        "the dot entry is absent before the switch: {:?}",
+        s.files.rows
+    );
+    assert_eq!(
+        std::fs::read(docs.join(".secret")).unwrap(),
+        b"hidden data\n",
+        "the hidden file really exists on disk"
+    );
+    let before = draw_frame(&mut s);
+
+    let effects = key_press(
+        &mut s,
+        Key::Char('h'),
+        Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        },
+    );
+    assert!(
+        s.settings.preferences.show_hidden,
+        "Ctrl+H did not reach the Files preference"
+    );
+    // The toggle marks the listing stale. The next composed frame is the real
+    // read, so the assertion about rows comes after it, not before.
+    let after = draw_frame(&mut s);
+    assert!(
+        s.files.rows.iter().any(|row| row.name == ".secret"),
+        "the refreshed table does not show the dot entry: {:?}",
+        s.files.rows
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::PersistPreferences(p) if p.show_hidden)),
+        "the switch did not ask for the choice to be stored: {effects:?}"
+    );
+    let differing = before
+        .pixels()
+        .iter()
+        .zip(after.pixels())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing > 100,
+        "the listing changed but the frame did not: {differing} pixels differ"
+    );
+
+    // Store the exact record the shell asked to persist, read it back, and
+    // start a fresh shell against the same real directory.
+    let saved = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::PersistPreferences(preferences) => Some(*preferences),
+            _ => None,
+        })
+        .expect("the toggle asks for a persisted record");
+    let store = crate::prefstore::Store::new(root.join("state/settings.conf"));
+    store.save(saved).expect("the record is written");
+    let loaded = store
+        .load()
+        .expect("the record is read")
+        .expect("the record exists");
+    assert!(loaded.show_hidden, "the store lost the choice");
+    s.finish_preferences_save(Ok(()));
+
+    let mut restarted = shell();
+    restarted.files_root = root.clone();
+    restarted.load_preferences(loaded);
+    restarted.open_app(App::Files);
+    for _ in 0..4 {
+        let _ = draw_frame(&mut restarted);
+    }
+    assert!(
+        restarted.files.rows.iter().any(|row| row.name == ".secret"),
+        "a restart from the record does not show the dot entry: {:?}",
+        restarted.files.rows
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

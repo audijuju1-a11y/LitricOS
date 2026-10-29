@@ -180,6 +180,13 @@ pub struct Preferences {
     /// Whether glass surfaces are drawn opaque instead of sampling the
     /// wallpaper. A readability preference, applied by the theme itself.
     pub reduce_transparency: bool,
+    /// Whether the Files table lists dot-prefixed entries.
+    ///
+    /// The file service has always been able to return them (`LIST path
+    /// hidden=1`); this is the choice that decides whether the shell asks. Off
+    /// by default, matching Explorer and every other file manager: hidden
+    /// entries are hidden until the user asks to see them.
+    pub show_hidden: bool,
     /// How much larger the interface is drawn. See [`UiScale`].
     pub ui_scale: UiScale,
     /// Whether first-run setup has finished. Until it has, the desktop shows the
@@ -208,6 +215,7 @@ impl Preferences {
             language,
             reduce_motion: false,
             reduce_transparency: false,
+            show_hidden: false,
             ui_scale: UiScale::Normal,
             onboarded: true,
             theme_schedule: ThemeSchedule::Manual,

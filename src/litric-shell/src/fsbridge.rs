@@ -326,11 +326,26 @@ impl FsBridge {
     /// # Errors
     /// As [`Self::host_path`], plus I/O.
     pub fn list_dir(&self, logical: &str) -> Result<Vec<Entry>, FsError> {
+        self.list_dir_with_hidden(logical, false)
+    }
+
+    /// Read one directory, asking the service for dot-prefixed entries only
+    /// when `show_hidden` is set. The filter is applied by the file service on
+    /// the daemon path and by the local fallback here, so the Files choice
+    /// changes one real directory read rather than hiding rows after the fact.
+    ///
+    /// # Errors
+    /// As [`Self::host_path`], plus I/O.
+    pub fn list_dir_with_hidden(
+        &self,
+        logical: &str,
+        show_hidden: bool,
+    ) -> Result<Vec<Entry>, FsError> {
         // The daemon owns the user's documents (ADR-0019), so the operation
         // does not happen in this process at all.
         #[cfg(unix)]
         if let Some(daemon) = &self.daemon {
-            return daemon.list_dir(logical);
+            return daemon.list_dir(logical, show_hidden);
         }
         #[cfg(not(unix))]
         {
@@ -350,7 +365,7 @@ impl FsBridge {
                 let Ok(name) = entry.file_name().into_string() else {
                     continue;
                 };
-                if name.starts_with('.') {
+                if !show_hidden && name.starts_with('.') {
                     continue;
                 }
                 let Ok(info) = entry.metadata() else {
@@ -1397,6 +1412,37 @@ mod tests {
         ));
         b.delete("/Work").expect("delete tree");
         assert!(!b.exists("/Work").unwrap());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hidden_entries_are_listed_only_when_the_caller_asks() {
+        let root = temp_root("hidden");
+        std::fs::create_dir_all(root.join("Documents")).expect("fixture folder");
+        std::fs::write(root.join("Documents/visible.txt"), b"visible").expect("visible file");
+        std::fs::write(root.join("Documents/.secret"), b"hidden").expect("hidden file");
+        let b = FsBridge::open(&root, litric_locale::TimeZone::utc("test")).expect("bridge");
+
+        let hidden_excluded = b.list_dir("/Documents").expect("listing");
+        assert!(
+            hidden_excluded.iter().all(|entry| entry.name != ".secret"),
+            "a normal listing hides dot entries: {hidden_excluded:?}"
+        );
+        assert!(
+            hidden_excluded
+                .iter()
+                .any(|entry| entry.name == "visible.txt"),
+            "a normal listing still shows visible entries"
+        );
+
+        let hidden_included = b
+            .list_dir_with_hidden("/Documents", true)
+            .expect("listing with hidden entries");
+        assert!(
+            hidden_included.iter().any(|entry| entry.name == ".secret"),
+            "the explicit request returns the dot entry: {hidden_included:?}"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 

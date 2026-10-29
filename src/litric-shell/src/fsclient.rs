@@ -204,10 +204,16 @@ impl Daemon {
 
     // ---- the operations, one per LFP/1 verb -------------------------------
 
-    /// `LIST <path>`: the folder's entries, hidden files excluded, as the Files
-    /// window shows them.
-    pub fn list_dir(&self, logical: &str) -> Result<Vec<Entry>, FsError> {
-        let lines = self.call(&format!("LIST {}", wire_path(logical)))?;
+    /// `LIST <path> [hidden=1]`: the folder's entries. Dot-prefixed entries
+    /// are returned only when `show_hidden` asks for them, which is the same
+    /// choice the Files window records in `settings.conf`.
+    pub fn list_dir(&self, logical: &str, show_hidden: bool) -> Result<Vec<Entry>, FsError> {
+        let request = if show_hidden {
+            format!("LIST {} hidden=1", wire_path(logical))
+        } else {
+            format!("LIST {}", wire_path(logical))
+        };
+        let lines = self.call(&request)?;
         let mut out = Vec::new();
         for line in &lines {
             if !line.starts_with("e ") {

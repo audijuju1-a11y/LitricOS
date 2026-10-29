@@ -3802,3 +3802,110 @@ high-contrast themes are now actually opaque rather than adapted down; that is
 the behaviour their own comments always claimed, but it is a visible change.
 No performance metric is claimed. There is no executable research-deep-all
 runner in this repository, so none was run.
+
+## 49. Batch: hidden-file visibility is a persisted, service-backed Files choice (verified)
+
+### 49.1 Audit
+
+The request says the corpus is `research-deep-all` with 15 files. The only
+directory with that role is `Research-Deep-all` (capitalised), and it is tracked
+on every branch. The exact searches were:
+
+```text
+find /workspace/chats/d7991b8c41a570fd94f0a9bc /tmp "$HOME" -maxdepth 6 \
+  -type d \( -iname 'research-deep-all' -o -iname 'research_deep_all' \
+  -o -iname 'research-deepall' -o -iname 'deep-research' \) -print
+  -> only .../Research-Deep-all
+
+git ls-tree -r --name-only origin/main | rg -c -i '^Research-Deep-all/'
+  -> 37
+
+for ref in $(git for-each-ref --format='%(refname)'); do
+  git ls-tree -r --name-only "$ref" | rg -c -i 'research'
+done
+  -> 41 main/freebuff refs, 18 redesign/audit refs, 2 tag refs
+     (the extra four are docs/research, docs/UI-RESEARCH-*.md)
+
+git log --all --name-only --pretty=format: | sort -u | rg -i 'research'
+  -> the same paths; no 15-file variant exists in history
+
+git ls-remote origin
+  -> main, audit/comprehensive-2026-10-15, redesign/shell-v4,
+     freebuff/d7991b8c41a570fd94f0a9bc, refs/tags/LitricOS
+```
+
+The corpus is 30 Markdown research parts plus 7 CSV registers, not 15 files.
+That is a count mismatch in the request, not a missing dependency; the corpus
+was used as the requirements source. The relevant rows are `WA.13.05.e16`
+("Hidden items — displays hidden files and folders") and `WB.01.09.a04`
+(File Explorer, "Show hidden and system files") in
+`Research-Deep-all/LitricOS UI UX Research Part 3  Windows 11 Shell and File Explorer.md`
+and `Research-Deep-all/LitricOS UI UX Research Part 2 Windows 11 26H2 Settings.md`.
+
+The code gap was concrete. `FsBridge::list_dir` filtered every name beginning
+with `.` and `fsclient::Daemon::list_dir` always sent plain `LIST <path>`. The
+file service already supported the capability: `src/litric-files/src/server.rs`
+parsed a second `hidden=1` field and `Root::list_dir` applied it. The shell had
+no preference, no registry row, no Settings control and no Files key for it, so
+the backend capability was unreachable. This is a wired capability, not a new
+filter over rows already in memory.
+
+### 49.2 The connection
+
+| File | What it does |
+|---|---|
+| `src/litric-shell/src/settings.rs` | `Preferences::show_hidden` defaults to `false`; hidden entries stay hidden until the user asks. |
+| `src/litric-shell/src/prefstore.rs` | Parses and writes `show_hidden=0/1` in the existing line-oriented, atomic record. No schema bump: adding a key does not change an existing key's meaning. |
+| `src/litric-shell/src/registry.rs` | A tenth entry, `show_hidden`, on Privacy with the synonyms `hidden files`, `hidden items`, `dotfiles`, `show hidden` and `files`; search and `litric://settings/privacy/show_hidden` reach it. |
+| `src/litric-shell/src/fsclient.rs` | The real service request is `LIST <path> hidden=1` only when the preference is on; otherwise the wire request is unchanged. |
+| `src/litric-shell/src/fsbridge.rs` | `list_dir_with_hidden` is the single read path. The daemon receives the flag; the local fallback applies the same rule. `list_dir` remains the hidden-excluded wrapper for every caller that did not ask. |
+| `src/litric-shell/src/views.rs` | `refresh_files` reads through `list_dir_with_hidden` with the stored preference; the Privacy page draws a real Show hidden files button and a line describing the current state. `settings_rows_from` places those rows below the button without duplicating row layout. |
+| `src/litric-shell/src/shell.rs` | `Hot::SettingsShowHidden` calls `toggle_show_hidden`, which goes through `save_preferences`; a change invalidates the listing and resets the watcher. `Ctrl+H` is scoped to the Files window. `finish_preferences_save` re-invalidates on a failed write so the table returns to the stored visibility. The watcher reads with the same flag, so its digest cannot oscillate. |
+| `src/litric-shell/src/filewatch.rs` | `Watch::reset` forgets a digest recorded under the old visibility; the next real read arms it again. |
+| `src/litric-files/src/server.rs` | A test proves `LIST /Documents hidden=0` omits `.secret` and `LIST /Documents hidden=1` returns it. |
+| `src/litric-shell/src/e2e.rs` | One headless journey over real temp files drives `Ctrl+H` through the input path, asserts the dot entry is absent before and present after the next composed frame, measures the frame delta, stores the exact record the shell asked for, and reloads it into a fresh shell against the same directory. |
+| `docs/evidence/golden/fingerprints.json` | Only `15-search` is re-baselined (old hash `0x965b93930f291ecb`, new `0x1f5a70ea6ad1bfde`). The new frame shows the intended second result, "Show hidden files — Settings · Privacy", for the query `fil`. The other 23 fingerprints are unchanged. |
+
+### 49.3 Cost
+
+One preference write per confirmed toggle through the existing atomic store. A
+toggle marks the listing stale; the next frame performs one directory read with
+the new flag. While the preference is off, the request string, local read and
+rendering are the same as before. There is no polling change, no watcher
+interval change, no new thread, dependency, daemon verb or privilege. The
+watcher still performs at most one read per second while Files is visible, and
+`Watch::reset` prevents an extra read from being interpreted as a change. No
+performance number is claimed because none was measured.
+
+### 49.4 Tests and gates
+
+New tests: `prefstore::tests::hidden_file_visibility_round_trips_through_the_file`,
+`fsbridge::tests::hidden_entries_are_listed_only_when_the_caller_asks`,
+`shell::tests::the_hidden_files_switch_persists_and_marks_the_listing_stale`,
+`server::tests::list_hidden_one_returns_dot_entries_and_zero_does_not`, and
+`e2e::journey_hidden_files_toggle_is_a_real_read_and_survives_a_restart`.
+
+```text
+cargo test --workspace        passed=1734 failed=0   (was 1,729; +5)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+python3 ci/lint-file-safety.py   OK: every deletion site is reviewed
+python3 ci/check-golden-frames.py --frames build/frames   PASS
+bash ci/verify.sh             32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the unchanged absent local dev-key material: the mkosi
+schema check reports the secureboot, pcr and verity key files, and the key-pair
+check reports secureboot and verity. They are not caused by this batch and were
+not papered over; no keys were generated or committed. The three skips are
+mkosi, QEMU and the idle measurement that needs them.
+
+### 49.5 Limits
+
+There is no display and no QEMU here, so the proof is headless frames over the
+real draw and filesystem paths, not a photograph of a monitor. Hidden means the
+Linux dot-prefix convention; there is no xattr or system/attribute hidden bit,
+and the choice is global to Files rather than per-folder. The corpus count is
+37, not the 15 stated in the request. No performance metric is claimed. This
+batch used the Research-Deep-all corpus and its gates; no separate executable
+research-deep-all runner exists in this repository.

@@ -889,7 +889,7 @@ fn refresh_files(shell: &mut Shell) {
             return;
         }
     };
-    match bridge.list_dir(&shell.files.path) {
+    match bridge.list_dir_with_hidden(&shell.files.path, shell.settings.preferences.show_hidden) {
         Ok(entries) => {
             // Arm the bounded watcher from this real read, so its next check
             // compares against what the table is actually showing and the
@@ -2939,7 +2939,18 @@ fn settings_button(
 }
 
 fn settings_rows(canvas: &mut Canvas, t: &Tokens, pane: Rect, rows: &[(String, String)]) {
-    let mut y = pane.y + t.px(56.0);
+    settings_rows_from(canvas, t, pane, pane.y + t.px(56.0), rows);
+}
+
+/// [`settings_rows`] starting below a control the page drew first.
+fn settings_rows_from(
+    canvas: &mut Canvas,
+    t: &Tokens,
+    pane: Rect,
+    start: f32,
+    rows: &[(String, String)],
+) {
+    let mut y = start;
     for (label, value) in rows {
         let row = Rect::new(
             pane.x + t.sp(Space::Lg),
@@ -3390,11 +3401,37 @@ fn draw_settings_page(
             ));
             settings_rows(canvas, t, pane, &rows);
         }
-        Page::Privacy => settings_rows(
-            canvas,
-            t,
-            pane,
-            &[
+        Page::Privacy => {
+            let label = format!(
+                "{} · {}",
+                "Show hidden files",
+                if shell.settings.preferences.show_hidden {
+                    "On"
+                } else {
+                    "Off"
+                }
+            );
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SettingRow {
+                    key: "show_hidden",
+                    label: &label,
+                    hot: Hot::SettingsShowHidden,
+                },
+            );
+            let rows = [
+                (
+                    "Hidden files".to_owned(),
+                    if shell.settings.preferences.show_hidden {
+                        "Listed in Files · Ctrl+H toggles".to_owned()
+                    } else {
+                        "Not listed in Files · Ctrl+H toggles".to_owned()
+                    },
+                ),
                 (
                     "Browser permissions".to_owned(),
                     "Per-site prompts are not connected yet".to_owned(),
@@ -3403,8 +3440,9 @@ fn draw_settings_page(
                     "File access".to_owned(),
                     format!("Persistent store: {}", shell.files_root.display()),
                 ),
-            ],
-        ),
+            ];
+            settings_rows_from(canvas, t, pane, pane.y + t.px(98.0), &rows);
+        }
         Page::Accounts => settings_rows(
             canvas,
             t,
