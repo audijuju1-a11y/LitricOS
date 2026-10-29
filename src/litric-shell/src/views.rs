@@ -883,7 +883,8 @@ fn refresh_files(shell: &mut Shell) {
     let bridge = match shell.try_files_bridge(zone) {
         Ok(b) => b,
         Err(e) => {
-            shell.files.apply_error(e.to_string());
+            let message = shell.read_error(&e);
+            shell.files.apply_error(message);
             shell.files.listed = Some(shell.files.path.clone());
             return;
         }
@@ -901,7 +902,10 @@ fn refresh_files(shell: &mut Shell) {
                 .collect();
             shell.files.apply_entries(rows);
         }
-        Err(e) => shell.files.apply_error(e.to_string()),
+        Err(e) => {
+            let message = shell.read_error(&e);
+            shell.files.apply_error(message);
+        }
     }
     shell.files.listed = Some(shell.files.path.clone());
 }
@@ -1146,6 +1150,12 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         dw,
         t.px(22.0),
     );
+    // Refresh is pinned beside Details instead of joining the dropping
+    // chain: a stale listing is exactly when the control is needed, so the
+    // narrowest window that can draw Details still draws Refresh.
+    let refresh_label = "Refresh";
+    let refresh_w = font::measure(refresh_label, &s_cmd) + t.px(12.0);
+    let refresh_r = Rect::new(det_r.x - t.px(6.0) - refresh_w, det_r.y, refresh_w, det_r.h);
     // The readout is drawn after the buttons, in the gap before the Details
     // toggle, rather than at a fixed x. At x=150 the buttons grew into it and
     // "0 items" was drawn over "Compress": 32x16 pixels of one string on top of
@@ -1166,7 +1176,7 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         // drawn over "Details ✕" (33x18 pixels of overlap). The same actions
         // stay reachable from the context menu and the keyboard shortcuts, which
         // drive one model with these buttons.
-        if r.right() > det_r.x - t.px(6.0) {
+        if r.right() > refresh_r.x - t.px(6.0) {
             return 0.0;
         }
         ui::button(canvas, &t, r, label, ui::State::Normal, tone);
@@ -1219,9 +1229,20 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     shell
         .hotspots_mut()
         .push(det_r, Hot::Files(FilesHot::Details));
+    ui::button(
+        canvas,
+        &t,
+        refresh_r,
+        refresh_label,
+        ui::State::Normal,
+        Tone::Neutral,
+    );
+    shell
+        .hotspots_mut()
+        .push(refresh_r, Hot::Files(FilesHot::Refresh));
 
     let readout_x = bx + t.px(10.0);
-    let readout_room = (det_r.x - readout_x - t.px(10.0)).max(0.0);
+    let readout_room = (refresh_r.x - readout_x - t.px(10.0)).max(0.0);
     if readout_room > t.px(30.0) {
         let note = ui::elide(&filter_note, &s_cmd, readout_room);
         font::draw(canvas, &note, readout_x, cmd.y + t.px(15.0), &s_cmd);

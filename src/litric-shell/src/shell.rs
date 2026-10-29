@@ -2884,6 +2884,39 @@ impl Shell {
         self.request_full_redraw();
     }
 
+    /// The sentence the Files window shows when a folder cannot be read.
+    ///
+    /// The technical cause is appended only in diagnostics mode: the ordinary
+    /// window says what a person can act on, not what the layer called it.
+    pub(crate) fn read_error(&self, error: &crate::fsbridge::FsError) -> String {
+        let plain = match error {
+            crate::fsbridge::FsError::NotFound => {
+                "This folder no longer exists. It may have been moved or deleted."
+            }
+            crate::fsbridge::FsError::Denied => "You do not have permission to read this folder.",
+            crate::fsbridge::FsError::NotADirectory => "This is not a folder any more.",
+            crate::fsbridge::FsError::Unsupported => {
+                "The file service is unavailable on this platform."
+            }
+            _ => "This folder could not be read.",
+        };
+        if self.diagnostics {
+            format!("{plain} ({error})")
+        } else {
+            plain.to_owned()
+        }
+    }
+
+    /// Ask for a fresh directory read of the folder Files is showing.
+    ///
+    /// The next frame does the read through the same bridge navigation uses.
+    /// This only marks the listing stale, so one click is one read and no
+    /// polling or watcher is involved.
+    fn request_files_refresh(&mut self) {
+        self.files.listed = None;
+        self.request_full_redraw();
+    }
+
     /// Submit the desktop's own dialog.
     ///
     /// Returns the effects the submission produced, which is what makes the
@@ -5351,6 +5384,12 @@ impl Shell {
                     self.request_full_redraw();
                     Some(Vec::new())
                 }
+                // F5 re-reads the folder through the same request the
+                // command-row control uses.
+                Key::Function(5) if self.files.dialog.is_none() => {
+                    self.request_files_refresh();
+                    Some(Vec::new())
+                }
                 Key::Delete if self.files.dialog.is_none() => {
                     let paths = self.files.selected_paths();
                     if mods.ctrl {
@@ -6382,10 +6421,11 @@ impl Shell {
             // Files clicks mutate the model; the view refreshes the listing
             // when it sees `listed` lag `path`.
             Hot::Files(h) => {
-                // Paste is an operation with a target, not navigation: the
-                // model leaves it to the shell because the source is the
-                // clipboard and the destination is the folder on screen.
-                if h == crate::apps::FilesHot::Paste {
+                // Refresh needs the filesystem bridge, so it belongs to the
+                // shell; it marks the listing stale and the next frame reads.
+                if h == crate::apps::FilesHot::Refresh {
+                    self.request_files_refresh();
+                } else if h == crate::apps::FilesHot::Paste {
                     self.paste_clipboard();
                 } else {
                     let _ = crate::apps::files_action(&mut self.files, h);

@@ -3604,3 +3604,53 @@ No QEMU or display is available, so the proof is the headless frame driven by
 the same input path a person drives, over real files. The Trash journey is
 Unix-only where it needs a real freedesktop trash move; the Defender journey
 runs on every host the tests build for. No performance number is claimed.
+
+
+## 46. Batch: Files can re-read a folder on demand (verified)
+
+### 46.1 What the audit found
+
+There was no Files refresh control at all: no `FilesHot` variant, no context
+row, no shortcut, and F5 was unbound. The only re-read was the implicit
+staleness check in `views.rs` (`refresh_files` reads when `files.listed`
+differs from `files.path`), so a folder changed by a program outside LitricOS
+stayed as last drawn until the user navigated away and back. The command row
+drew New folder, Paste, Compress, Extract and Details; nothing there could ask
+for a fresh read.
+
+### 46.2 The wiring
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/apps.rs` | `FilesHot::Refresh` names the control; the model arm returns `None` because the shell owns the filesystem read. |
+| `src/litric-shell/src/shell.rs` | `request_files_refresh()` clears `files.listed` and asks for a redraw; the existing `refresh_files` performs one `list_dir` through the same `FilesBridge` navigation uses. Called by the `Hot::Files(FilesHot::Refresh)` click and by F5 while Files is focused, so both routes are one behaviour. `read_error()` turns the bridge error into a plain sentence ("This folder no longer exists…", permission, not-a-folder, service unavailable); the technical cause is appended only with diagnostics on. |
+| `src/litric-shell/src/views.rs` | A Refresh button is pinned beside Details, and the dropping command buttons and the item readout now stop before it, so the control survives the narrowest window that draws Details. A failed read goes through `read_error`, and `apply_error` clears the stale rows. |
+| `src/litric-shell/src/e2e.rs` | One journey over real files: an external create and delete are absent/pre-click stale, Refresh makes the table match the disk, F5 does the same on a later change, and a folder removed under the window produces "no longer exists" with no rows left behind. |
+| `ci/lint-file-safety.py` | The journey's fixture cleanup is in the review allowlist with its reason, like its siblings. |
+
+### 46.3 Cost
+
+One directory read per user action, on the next frame, through the bridge every
+listing already uses. Nothing is read in the click handler, nothing is
+scheduled, and there is still no watcher and no polling.
+
+### 46.4 Gates
+
+```text
+cargo test --workspace        passed=1720 failed=0   (was 1,719; +1)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the unchanged absent `keys/dev/` material; the four skips
+are the documented missing host tools. No test deleted, no gate relaxed, no
+dependency added.
+
+### 46.5 Limits
+
+There is still no filesystem watcher: an outside change appears only when the
+user asks. A failed read clears the table and shows the reason rather than
+keeping rows that are no longer true. No QEMU or display is available, so the
+proof is the headless frame over real files, and no performance number is
+claimed.

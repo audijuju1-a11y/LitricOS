@@ -1807,6 +1807,8 @@ pub enum FilesHot {
     Compress,
     /// The extract button.
     Extract,
+    /// Re-read the current folder from disk.
+    Refresh,
 }
 
 /// Map a Files hotspot onto the model. Navigation returns the path to load,
@@ -1918,6 +1920,8 @@ pub fn files_action(app: &mut FilesApp, hot: FilesHot) -> Option<String> {
             None
         }
         FilesHot::New | FilesHot::Filter | FilesHot::Paste => None,
+        // The shell owns Refresh: it needs the filesystem bridge, not the model.
+        FilesHot::Refresh => None,
     }
 }
 

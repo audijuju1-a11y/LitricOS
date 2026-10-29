@@ -4033,3 +4033,109 @@ fn journey_activity_refuses_a_process_outside_its_scope() {
         "the refused process is untouched"
     );
 }
+
+/// A folder changed by something other than the shell is not watched: the
+/// open table keeps the listing it last read until a person asks for a fresh
+/// read. The Refresh control must really read the disk, and a folder that has
+/// gone must say so instead of keeping stale rows.
+#[test]
+fn journey_files_refresh_shows_a_change_made_outside_the_shell() {
+    let root = e2e_root("files-refresh");
+    let docs = root.join("Documents");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("before.txt"), b"old\n").unwrap();
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Files);
+    let _ = draw_frame(&mut s);
+    let names = |shell: &Shell| {
+        shell
+            .files
+            .visible()
+            .iter()
+            .map(|row| row.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert!(names(&s).iter().any(|n| n == "before.txt"));
+    assert!(!names(&s).iter().any(|n| n == "after.txt"));
+
+    // Outside the shell: one file appears and another goes.
+    std::fs::write(docs.join("after.txt"), b"new\n").unwrap();
+    std::fs::remove_file(docs.join("before.txt")).unwrap();
+    let _ = draw_frame(&mut s);
+    // No watcher and no polling: before the click the table is the old read.
+    // If a refresh ever became automatic this assertion would fail, which is
+    // what makes the journey sensitive to the wiring rather than trivial.
+    assert!(
+        names(&s).iter().any(|n| n == "before.txt"),
+        "the table must still show the old listing before Refresh: {:?}",
+        names(&s)
+    );
+    assert!(
+        !names(&s).iter().any(|n| n == "after.txt"),
+        "the table must not show an outside change before Refresh: {:?}",
+        names(&s)
+    );
+
+    let refresh = s
+        .hotspots()
+        .rect_of(Hot::Files(FilesHot::Refresh))
+        .expect("the Files command row draws a real Refresh control");
+    let _ = click(&mut s, refresh.center().0, refresh.center().1);
+    let _ = draw_frame(&mut s);
+    assert!(
+        names(&s).iter().any(|n| n == "after.txt"),
+        "Refresh read the folder on disk: {:?}",
+        names(&s)
+    );
+    assert!(
+        !names(&s).iter().any(|n| n == "before.txt"),
+        "the deleted file is gone from the refreshed table: {:?}",
+        names(&s)
+    );
+    assert!(s.files.error.is_none(), "a good read clears the error");
+
+    // The keyboard route goes through the same request: a change made after
+    // the last read is not shown until F5 asks for it.
+    std::fs::write(docs.join("keyed.txt"), b"key\n").unwrap();
+    let _ = draw_frame(&mut s);
+    assert!(
+        !names(&s).iter().any(|n| n == "keyed.txt"),
+        "the table is still the old read before F5"
+    );
+    let _ = key_press(&mut s, Key::Function(5), Modifiers::NONE);
+    let _ = draw_frame(&mut s);
+    assert!(
+        names(&s).iter().any(|n| n == "keyed.txt"),
+        "F5 re-read the folder through the same request: {:?}",
+        names(&s)
+    );
+
+    // The folder disappears while it is open. The read fails, the stale rows
+    // go, and the window says what happened in plain language.
+    std::fs::create_dir_all(docs.join("gone")).unwrap();
+    s.files.navigate("/Documents/gone");
+    let _ = draw_frame(&mut s);
+    assert!(s.files.rows.is_empty(), "the new folder is empty");
+    std::fs::remove_dir_all(docs.join("gone")).unwrap();
+    let _ = draw_frame(&mut s);
+    let refresh = s
+        .hotspots()
+        .rect_of(Hot::Files(FilesHot::Refresh))
+        .expect("Refresh is still drawn after navigation");
+    let _ = click(&mut s, refresh.center().0, refresh.center().1);
+    let _ = draw_frame(&mut s);
+
+    assert!(
+        s.files.rows.is_empty(),
+        "no stale rows survive a failed read"
+    );
+    let error = s.files.error.as_deref().unwrap_or_default();
+    assert!(
+        error.contains("no longer exists"),
+        "the window explains the missing folder: {error:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

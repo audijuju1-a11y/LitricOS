@@ -134,6 +134,7 @@ ALLOWED = {
         "journey_viewer_opens_text_files_with_scrolling": "removes the temporary root this journey created",
         "journey_defender_quarantines_and_restores_a_real_threat": "removes the temporary fixture root this Defender containment journey created, tagged with its own pid, after asserting the file was contained and restored",
         "journey_defender_quarantine_refreshes_an_open_files_window": "removes the temporary fixture root this journey created, tagged with its own pid, after asserting a containment move refreshes the open Files table",
+        "journey_files_refresh_shows_a_change_made_outside_the_shell": "removes the temporary fixture root this journey created, tagged with its own pid, plus the empty folder it deletes to prove a failed refresh reports an error",
         "journey_trash_restore_refreshes_an_open_files_window": "removes the temporary fixture root this journey created, tagged with its own pid, after asserting a Trash restore refreshes the open Files table",
         "journey_defender_refuses_to_quarantine_a_file_that_is_gone": "removes the temporary fixture root this refusal journey created, tagged with its own pid, after asserting no quarantine entry was invented",
         "journey_defender_refuses_to_restore_a_tampered_quarantine_entry": "removes the temporary fixture root this tamper journey created, tagged with its own pid, after asserting the tampered copy was kept",
