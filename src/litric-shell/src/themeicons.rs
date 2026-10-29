@@ -311,6 +311,25 @@ thread_local! {
     static CACHE: RefCell<Cache> = RefCell::new(HashMap::new());
 }
 
+/// Drop every decoded icon.
+///
+/// Called when the icon tree changed on disk: a name that resolved to nothing a
+/// moment ago may resolve now, and a name that resolved elsewhere must not keep
+/// drawing the old file. The cache is bounded at [`MAX_CACHED`] copies, so this
+/// is a small one-off drop, not a rebuild — the next draw decodes what it needs
+/// and a tile that is never drawn costs nothing.
+pub fn clear_cache() {
+    CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+/// How many scaled copies the cache holds.
+///
+/// For the diagnostics line and the tests, never for the draw path.
+#[must_use]
+pub fn cache_len() -> usize {
+    CACHE.with(|cache| cache.borrow().len())
+}
+
 /// Decode and scale `path` to `size`, drawing it into `r`.
 ///
 /// Returns whether anything was drawn: a missing, unreadable, oversized or

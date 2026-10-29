@@ -164,6 +164,199 @@ pub fn discover_in_with(dirs: &[PathBuf], icon_dirs: &[PathBuf]) -> Vec<DesktopA
     apps
 }
 
+/// The shortest time between two looks for installed or removed applications.
+///
+/// One second is the top-bar clock's own resolution and the shell's idle wake
+/// cap, so the check rides on a wake-up that was already happening and never
+/// asks the frame loop to wake for it.
+pub const WATCH_INTERVAL_MS: u64 = 1_000;
+
+/// The most directories one stamp inspects.
+///
+/// One `applications` directory per XDG data root, the icon roots, and one
+/// directory per theme under them: tens on a real machine, bounded here so a
+/// machine with thousands of theme directories cannot turn a check into a scan.
+pub const MAX_WATCH_DIRS: usize = 96;
+
+/// The most directory entries one stamp counts.
+///
+/// The count stops here so a directory with a hundred thousand entries cannot
+/// make a check unbounded. Beyond this many entries in one directory, only the
+/// modification time is compared.
+pub const MAX_WATCH_ENTRIES: usize = 512;
+
+/// What one directory looked like: its modification time and, up to
+/// [`MAX_WATCH_ENTRIES`], how many entries it holds.
+///
+/// The count is not redundant. This sandbox's filesystem — and a real one on a
+/// coarse clock — reports a directory's modification time to the second, so an
+/// entry created and looked for inside the same second would otherwise be
+/// invisible until something else touched the directory. Adding or removing a
+/// `.desktop` file or a theme directory changes the count immediately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    mtime: Option<std::time::SystemTime>,
+    entries: u32,
+}
+
+fn stamp_of(path: &Path) -> Stamp {
+    let mtime = std::fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok());
+    let entries = std::fs::read_dir(path).map_or(0, |iter| {
+        iter.flatten()
+            .take(MAX_WATCH_ENTRIES)
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX)
+    });
+    Stamp { mtime, entries }
+}
+
+/// The directories whose modification time says whether the installed set
+/// changed: the application directories and the themes under each icon root.
+fn watch_paths(app_dirs: &[PathBuf], icon_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for dir in app_dirs.iter().chain(icon_dirs) {
+        if !paths.iter().any(|seen| seen == dir) && paths.len() < MAX_WATCH_DIRS {
+            paths.push(dir.clone());
+        }
+    }
+    for root in icon_dirs {
+        if paths.len() >= MAX_WATCH_DIRS {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(root) else {
+            continue;
+        };
+        let mut themes: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|entry| entry.path())
+            .collect();
+        themes.sort();
+        for theme in themes {
+            if paths.len() >= MAX_WATCH_DIRS {
+                break;
+            }
+            if !paths.iter().any(|seen| seen == &theme) {
+                paths.push(theme);
+            }
+        }
+    }
+    paths
+}
+
+/// A bounded watch for applications or icon themes installed or removed while
+/// the shell is running.
+///
+/// # Why a stamp and not a subscription
+///
+/// The shell crate is `#![forbid(unsafe_code)]` and takes no dependencies, so
+/// there is no `inotify` call here and no watcher crate to lean on. The honest
+/// bounded version is what this is: the modification time of the directories
+/// that would change when something is installed, removed or renamed, read at
+/// most once per [`WATCH_INTERVAL_MS`] and compared with the last look. Nothing
+/// is read at all until the interval has elapsed, and nothing is read when the
+/// list was placed by hand (`Shell::load_desktop_apps`), so a fixture host is
+/// never touched.
+///
+/// # What it notices
+///
+/// A `.desktop` file appearing, disappearing or being renamed in an
+/// applications directory; a theme directory appearing or disappearing under an
+/// icon root; and a theme gaining or losing a directory of its own. Adding a
+/// single icon file inside an existing theme's `scalable/apps` does not change
+/// any of those mtimes, and is not claimed.
+#[derive(Debug, Clone)]
+pub struct DesktopWatch {
+    app_dirs: Vec<PathBuf>,
+    icon_dirs: Vec<PathBuf>,
+    paths: Vec<PathBuf>,
+    seen: Vec<Stamp>,
+    next_ms: u64,
+    checks: u64,
+    stats: u64,
+    reloads: u64,
+}
+
+impl DesktopWatch {
+    /// Arm the watch over `app_dirs` and `icon_dirs`, recording the tree as it
+    /// is now.
+    #[must_use]
+    pub fn new(app_dirs: &[PathBuf], icon_dirs: &[PathBuf], now_ms: u64) -> Self {
+        let paths = watch_paths(app_dirs, icon_dirs);
+        let seen: Vec<Stamp> = paths.iter().map(|path| stamp_of(path)).collect();
+        Self {
+            app_dirs: app_dirs.to_vec(),
+            icon_dirs: icon_dirs.to_vec(),
+            paths,
+            seen,
+            next_ms: now_ms.saturating_add(WATCH_INTERVAL_MS),
+            checks: 0,
+            stats: 0,
+            reloads: 0,
+        }
+    }
+
+    /// Whether the tree changed since the last look.
+    ///
+    /// `false` before the interval has elapsed, without touching the disk: the
+    /// frame loop may call this every frame and pay one comparison.
+    pub fn poll(&mut self, now_ms: u64) -> bool {
+        if now_ms < self.next_ms {
+            return false;
+        }
+        self.next_ms = now_ms.saturating_add(WATCH_INTERVAL_MS);
+        self.checks = self.checks.saturating_add(1);
+        let mut changed = false;
+        for (index, path) in self.paths.iter().enumerate() {
+            self.stats = self.stats.saturating_add(1);
+            let fresh = stamp_of(path);
+            if self.seen.get(index).copied() != Some(fresh) {
+                changed = true;
+                if let Some(slot) = self.seen.get_mut(index) {
+                    *slot = fresh;
+                }
+            }
+        }
+        if changed {
+            self.reloads = self.reloads.saturating_add(1);
+        }
+        changed
+    }
+
+    /// The directories this watch was armed with.
+    #[must_use]
+    pub fn dirs(&self) -> (&[PathBuf], &[PathBuf]) {
+        (&self.app_dirs, &self.icon_dirs)
+    }
+
+    /// Directories one stamp inspects. For the diagnostics line and the tests.
+    #[must_use]
+    pub fn paths(&self) -> usize {
+        self.paths.len()
+    }
+
+    /// Checks that reached the disk.
+    #[must_use]
+    pub fn checks(&self) -> u64 {
+        self.checks
+    }
+
+    /// `stat` calls this watch has made.
+    #[must_use]
+    pub fn stats(&self) -> u64 {
+        self.stats
+    }
+
+    /// Times the tree changed.
+    #[must_use]
+    pub fn reloads(&self) -> u64 {
+        self.reloads
+    }
+}
+
 /// Parse one desktop entry.
 ///
 /// `source` is kept for diagnostics and `id` is the desktop-file id the caller
@@ -561,5 +754,157 @@ mod tests {
         assert_eq!(MAX_APPS, 128);
         assert_eq!(MAX_FILES_PER_DIR, 512);
         assert_eq!(MAX_FILE_BYTES, 64 * 1024);
+    }
+
+    #[test]
+    fn the_watch_reads_nothing_before_its_interval() {
+        let root = scratch("watch-idle");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(&icons).expect("icons");
+        let mut watch = DesktopWatch::new(
+            std::slice::from_ref(&apps),
+            std::slice::from_ref(&icons),
+            10,
+        );
+        assert!(watch.paths() >= 2, "both directories are watched");
+        assert!(
+            !watch.poll(10 + WATCH_INTERVAL_MS - 1),
+            "inside the interval"
+        );
+        assert_eq!(watch.stats(), 0, "an early poll must not touch the disk");
+        assert_eq!(watch.checks(), 0);
+        assert!(!watch.poll(10 + WATCH_INTERVAL_MS), "nothing changed");
+        assert_eq!(
+            watch.stats(),
+            u64::try_from(watch.paths()).unwrap_or(u64::MAX)
+        );
+        assert!(
+            !watch.poll(10 + WATCH_INTERVAL_MS + 1),
+            "the interval restarts"
+        );
+        assert_eq!(
+            watch.stats(),
+            u64::try_from(watch.paths()).unwrap_or(u64::MAX),
+            "one batch per second, not per call"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_installed_entry_and_a_new_theme_are_both_a_change() {
+        let root = scratch("watch-install");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(&icons).expect("icons");
+        let mut watch =
+            DesktopWatch::new(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+        assert!(
+            !watch.poll(WATCH_INTERVAL_MS),
+            "the tree as armed is not a change"
+        );
+
+        let prog = program(&root, "run-me");
+        std::fs::write(
+            apps.join("late.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Late App\nExec={}\nIcon=late-icon\n",
+                prog.display()
+            ),
+        )
+        .expect("entry");
+        assert!(
+            watch.poll(WATCH_INTERVAL_MS * 2),
+            "a new .desktop must be noticed"
+        );
+        assert_eq!(watch.reloads(), 1);
+
+        // The reload the shell performs is the same discovery: the entry is
+        // really there, with the name it declared.
+        let found = discover_in(std::slice::from_ref(&apps));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found.first().map(|a| a.name.as_str()), Some("Late App"));
+
+        // A theme installed afterwards is a change through the icon root.
+        let mut watch =
+            DesktopWatch::new(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+        std::fs::create_dir_all(icons.join("brand-new-theme/scalable/apps")).expect("theme");
+        assert!(
+            watch.poll(WATCH_INTERVAL_MS),
+            "a new theme directory must be noticed"
+        );
+
+        // And removing the entry is a change too.
+        std::fs::remove_file(apps.join("late.desktop")).expect("remove");
+        assert!(watch.poll(WATCH_INTERVAL_MS * 2), "a removed entry");
+        assert!(discover_in(std::slice::from_ref(&apps)).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn one_check_costs_a_bounded_number_of_directory_reads() {
+        let root = scratch("watch-cost");
+        let apps = root.join("applications");
+        std::fs::create_dir_all(&apps).expect("apps");
+        // A real applications directory: a few hundred entries.
+        for index in 0..200 {
+            std::fs::write(apps.join(format!("entry-{index:03}.desktop")), b"x").expect("entry");
+        }
+        let mut watch =
+            DesktopWatch::new(std::slice::from_ref(&apps), std::slice::from_ref(&root), 0);
+        let start = std::time::Instant::now();
+        let runs = 20u64;
+        for step in 0..runs {
+            assert!(
+                !watch.poll(WATCH_INTERVAL_MS.saturating_mul(step + 1)),
+                "nothing changed"
+            );
+        }
+        let per = start.elapsed().as_secs_f64() * 1000.0 / runs as f64;
+        println!(
+            "one watch check: {per:.3} ms over {} directories ({} stat calls)",
+            watch.paths(),
+            watch.stats()
+        );
+        assert!(per < 25.0, "a check took {per:.1} ms");
+        assert_eq!(
+            watch.stats(),
+            u64::try_from(watch.paths())
+                .unwrap_or(0)
+                .saturating_mul(runs)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_watched_paths_are_bounded() {
+        let root = scratch("watch-bound");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        for index in 0..(MAX_WATCH_DIRS + 40) {
+            std::fs::create_dir_all(icons.join(format!("theme-{index:03}"))).expect("theme");
+        }
+        let watch = DesktopWatch::new(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+        assert_eq!(watch.paths(), MAX_WATCH_DIRS, "the cap holds");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_missing_directory_is_not_a_change_every_second() {
+        let root = scratch("watch-missing");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        // No icon root at all: `None` on both sides is stable, not churn.
+        let mut watch =
+            DesktopWatch::new(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+        assert!(!watch.poll(WATCH_INTERVAL_MS));
+        assert!(!watch.poll(WATCH_INTERVAL_MS * 2));
+        assert_eq!(watch.reloads(), 0, "absence is not a change on its own");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

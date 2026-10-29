@@ -4576,3 +4576,146 @@ Each direction was disabled, the journey re-run, then the code restored:
 * **Discovery is still a startup cost.** It runs on the shell's start path, not
   in the background; a machine with hundreds of `applications` directories pays
   it once, before the first frame.
+
+## 55. Batch: an application or theme installed while the shell runs appears without a restart (verified)
+
+### 55.1 Requirement and audit
+
+Source: this file's own §54.6 limits, which ended with
+
+> **The theme list is read once per process.** A theme or application installed
+> while the shell is running needs a restart to appear, unchanged from §52.
+>
+> **Discovery is still a startup cost.** It runs on the shell's start path, not
+> in the background; a machine with hundreds of `applications` directories pays
+> it once, before the first frame.
+
+and the checklist row `G.07,G,Icons,PARTIAL`, whose remaining gap was that the
+shell had no way to notice the machine changing under it.
+
+The audit found exactly three places that made the list static:
+
+* `main.rs` line 1203 called `desktop_entry::discover()` once, at
+  `start()`, and handed the result to `Shell::load_desktop_apps`; nothing kept
+  the directories it read.
+* `themeicons` kept decoded icons in a thread-local `HashMap` with no way to
+  drop it, and `find_in` resolved a name against the tree as it was at that
+  moment. A theme installed later could never be found by a name that had
+  already resolved to nothing.
+* There was no watcher for either. The Files window has had one since §45
+  (`filewatch`), and nothing equivalent existed for installed applications.
+
+This batch adds `desktop_entry::DesktopWatch`: the modification time and entry
+count of the directories an install would touch, compared at most once a second,
+with the shell reloading the list, dropping the decoded icon cache and redrawing
+only when the comparison says something changed. No `inotify` call (the crate is
+`#![forbid(unsafe_code)]`) and no dependency was added.
+
+**A real finding shaped the design.** The first version compared only directory
+mtimes. Its test failed on this machine, and the cause was measured: this
+filesystem reports a directory's mtime at **one-second granularity** — `stat`
+after a write 0.2 s later showed a delta of `0 ns` — so an entry created in the
+same second as the last look was invisible, permanently. The stamp therefore
+carries a bounded entry count beside the mtime, which changes the moment a file
+or directory is added or removed. Both signals are documented in the module.
+
+### 55.2 The connection
+
+| File | Line | What it connects |
+| --- | --- | --- |
+| `src/litric-shell/src/desktop_entry.rs` | 172 | `WATCH_INTERVAL_MS`: one look a second, the clock's own resolution |
+| `src/litric-shell/src/desktop_entry.rs` | 179, 186 | bounds: at most 96 directories stamped, at most 512 entries counted per directory |
+| `src/litric-shell/src/desktop_entry.rs` | 202 | `stamp_of`: one `stat` plus a capped `read_dir` count per directory |
+| `src/litric-shell/src/desktop_entry.rs` | 218 | the watched set: the applications directories, the icon roots, and each theme under them |
+| `src/litric-shell/src/desktop_entry.rs` | 272, 287 | `DesktopWatch` and the recorded tree it is armed with |
+| `src/litric-shell/src/desktop_entry.rs` | 306 | `poll`: returns before touching the disk until the interval elapses; compares every stamp otherwise |
+| `src/litric-shell/src/shell.rs` | 3096 | `Shell::desktop_watch`: `None` for a fixture's list, armed for a real one |
+| `src/litric-shell/src/shell.rs` | 7254 | `load_desktop_apps_from`: discover, resolve icons, arm the watch |
+| `src/litric-shell/src/shell.rs` | 7275 | `refresh_desktop`: on a change, drop the icon cache and reload the list |
+| `src/litric-shell/src/shell.rs` | 4710 | the tick that calls it: one batch of `stat` calls a second, none per frame |
+| `src/litric-shell/src/themeicons.rs` | 321, 329 | `clear_cache` (the icon tree moved) and `cache_len` (the measured ceiling) |
+| `src/litric-shell/src/main.rs` | 1203 | the session starts watched, over `data_dirs()` and `theme_dirs()` |
+| `src/litric-shell/src/e2e.rs` | 5069 | journey: an empty temporary tree, an entry and its SVG written while the shell runs, the launcher drawn, the entry removed |
+| `ci/lint-file-safety.py` | 142 | the journey's temporary-root cleanup, recorded with its reason |
+
+`Shell::load_desktop_apps` still exists and now clears the watch: a list placed by
+a fixture is never watched, so no test stats the host and no golden frame can
+depend on the machine it ran on.
+
+### 55.3 Cost
+
+Measured, not estimated:
+
+* **One check: 0.254 ms** over 2 directories in the unit fixture (an
+  `applications` directory with 200 entries plus its root), 2 `stat` calls and 2
+  bounded `read_dir` counts per check. Method:
+  `one_check_costs_a_bounded_number_of_directory_reads` polls 20 times inside one
+  `Instant` with the interval forced forward each time, and divides.
+* **One check a second at most**, and **none per frame**: the journey asserts the
+  `stats` counter is unchanged across 30 frames (480 ms) with the launcher open.
+  `poll` returns before any syscall while the interval has not elapsed.
+* **Skip when not armed:** a fixture list (`load_desktop_apps`) leaves the watch
+  `None`, so the tick does one `Option` test and nothing else.
+* **Icon cache:** unchanged ceiling, 48 entries = 3 145 728 bytes; a change drops
+  it whole (bounded, one-off) because the name-to-file mapping may have moved.
+* **RAM:** the watch keeps the directory paths (one `PathBuf` each, at most 96)
+  and one `Stamp` (an `Option<SystemTime>` and a `u32`) per directory. No
+  directory entries are retained.
+
+### 55.4 Tests and gates
+
+Tests added: 5 unit tests in `desktop_entry` (`the_watch_reads_nothing_before_its_interval`,
+`an_installed_entry_and_a_new_theme_are_both_a_change`, `the_watched_paths_are_bounded`,
+`a_missing_directory_is_not_a_change_every_second`,
+`one_check_costs_a_bounded_number_of_directory_reads`) and 1 e2e journey
+(`journey_launcher_notices_an_app_installed_while_it_runs`), 6 in total.
+
+Commands run, with their real results:
+
+| Command | Result |
+| --- | --- |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test --workspace` | 1789 passed, 0 failed |
+| `python3 ci/lint-doc-refs.py` | OK, all citations resolve |
+| `python3 ci/lint-file-safety.py` | exit 0, with the new journey's cleanup site recorded at line 142 |
+| `bash ci/verify.sh` | `summary: 32 pass, 2 fail, 3 skipped` |
+
+The two failures are the unchanged absent local dev-key material; the three skips
+are the QEMU-only checks. No gate was weakened, no key was generated, and no
+golden fingerprint changed: the golden dump records desktop frames with no
+discovered application in them, and every fixture list is unwatched.
+
+### 55.5 Sensitivity
+
+With invalidation disabled — `if true || now_ms < self.next_ms`, so `poll` never
+compares — the journey fails on the assertion that matters:
+
+```
+panicked at litric-shell/src/e2e.rs:5116:5:
+assertion `left == right` failed: the entry written while the shell ran is not in the list; status: None
+  left: 0
+ right: 1
+```
+
+Restored, the same journey passes (`test result: ok. 1 passed`) and
+`rg 'true \|\| now_ms'` over the module returns nothing.
+
+### 55.6 Limits
+
+* **One second of latency.** A change is seen on the next tick at or after the
+  interval; there is no event, so an install is not instant.
+* **A change beyond the count cap and inside the same second can be missed.**
+  The count stops at 512 entries per directory; past that only the mtime is
+  compared, and on a filesystem with one-second mtime granularity an add and a
+  removal inside the same second would cancel out. Real directories are far
+  below the cap.
+* **An icon file added inside an existing theme is not noticed.** The watch
+  compares directory stamps; `<theme>/scalable/apps/foo.svg` appearing does not
+  change the theme directory's stamp. Installing the theme, or changing which
+  theme a name resolves in, is noticed.
+* **A change reloads the whole list.** Discovery re-runs over every applications
+  directory when the stamp moves; it is bounded (`MAX_FILES_PER_DIR`, `MAX_APPS`)
+  and measured in §52, not incremental.
+* **No `inotify`, no threads.** This is a poll by design: the shell crate forbids
+  `unsafe` and the workspace takes no dependencies.

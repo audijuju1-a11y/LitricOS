@@ -3090,6 +3090,10 @@ pub struct Shell {
     /// reads the host's application directories from `new`, so a test that
     /// builds a shell gets no host-dependent list.
     pub desktop_apps: Vec<crate::desktop_entry::DesktopApp>,
+    /// The directories the discovered list came from and the stamp of their
+    /// last look. `None` when the list was placed by hand (`load_desktop_apps`),
+    /// in which case nothing is watched and no host directory is touched.
+    pub desktop_watch: Option<crate::desktop_entry::DesktopWatch>,
     /// The last launch outcome, shown in the launcher's title row. `None`
     /// before anything has been started.
     pub app_status: Option<String>,
@@ -3645,6 +3649,7 @@ impl Shell {
             files_daemon: None,
             browser: crate::apps::BrowserApp::default(),
             desktop_apps: Vec::new(),
+            desktop_watch: None,
             app_status: None,
             reader: None,
             defender: DefenderState::default(),
@@ -4699,6 +4704,12 @@ impl Shell {
         // the only periodic filesystem read in the shell, and it is bounded to
         // one a second by `filewatch`.
         self.watch_open_folder(now_ms);
+        // An application or icon theme installed or removed outside the shell
+        // reaches the launcher here: one batch of `stat` calls a second, none
+        // while the interval has not elapsed, and none for a fixture's list.
+        if self.refresh_desktop(now_ms) {
+            self.request_full_redraw();
+        }
         // The overlay springs follow the overlay state and advance one step.
         // sync() is idempotent, so doing it here means no call site that
         // opens or closes an overlay has to remember the animation exists.
@@ -7228,10 +7239,53 @@ impl Shell {
         vec![Effect::Launched(app)]
     }
 
-    /// Replace the discovered application list.
+    /// Replace the discovered application list with a list the caller made.
+    ///
+    /// The list is not watched: the shell must not stat the host while a
+    /// fixture owns the launcher, and a hand-placed list is exactly that.
     pub fn load_desktop_apps(&mut self, apps: Vec<crate::desktop_entry::DesktopApp>) {
         self.desktop_apps = apps;
+        self.desktop_watch = None;
         self.request_full_redraw();
+    }
+
+    /// Discover this machine's applications from `app_dirs`, resolve their icons
+    /// in `icon_dirs`, and watch both for a change made outside the shell.
+    pub fn load_desktop_apps_from(
+        &mut self,
+        app_dirs: &[std::path::PathBuf],
+        icon_dirs: &[std::path::PathBuf],
+        now_ms: u64,
+    ) {
+        self.desktop_apps = crate::desktop_entry::discover_in_with(app_dirs, icon_dirs);
+        self.desktop_watch = Some(crate::desktop_entry::DesktopWatch::new(
+            app_dirs, icon_dirs, now_ms,
+        ));
+        self.request_full_redraw();
+    }
+
+    /// Look for applications or icon themes installed or removed since the last
+    /// look, and reload the launcher when something changed.
+    ///
+    /// Bounded by `desktop_entry::WATCH_INTERVAL_MS`: at most one batch of
+    /// `stat` calls a second, nothing while the interval has not elapsed, and
+    /// nothing at all when the list was placed by a fixture. A change drops the
+    /// decoded icon cache, because a name that resolved a moment ago may now
+    /// resolve to a different file.
+    pub fn refresh_desktop(&mut self, now_ms: u64) -> bool {
+        let Some(watch) = self.desktop_watch.as_mut() else {
+            return false;
+        };
+        if !watch.poll(now_ms) {
+            return false;
+        }
+        let (app_dirs, icon_dirs) = {
+            let (apps, icons) = watch.dirs();
+            (apps.to_vec(), icons.to_vec())
+        };
+        crate::themeicons::clear_cache();
+        self.load_desktop_apps_from(&app_dirs, &icon_dirs, now_ms);
+        true
     }
 
     /// How many slots the launcher's grid has: the built-ins, then the

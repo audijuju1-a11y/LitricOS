@@ -1197,8 +1197,14 @@ fn start(args: &Args, width: u32, height: u32, scale: f32) -> Session {
     shell.facts_root = args.root.clone();
     shell.load_preferences(preferences);
     // The programs this machine actually has, validated before they are
-    // offered. Discovery is bounded and runs once, at startup.
-    shell.load_desktop_apps(litric_shell::desktop_entry::discover());
+    // offered. Discovery is bounded; the directories it read are watched from
+    // here on, so an application or theme installed while the session runs
+    // reaches the launcher without a restart.
+    shell.load_desktop_apps_from(
+        &litric_shell::desktop_entry::data_dirs(),
+        &litric_shell::themeicons::theme_dirs(),
+        0,
+    );
     let (history, bookmarks, browser_warning) = load_browser_data(args);
     shell.browser.history = history.into();
     shell.browser.bookmarks = bookmarks;

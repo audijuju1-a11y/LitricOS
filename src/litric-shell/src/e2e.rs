@@ -5057,6 +5057,163 @@ fn journey_reader_lays_out_a_table_of_values_in_columns() {
     stop.store(true, Ordering::Relaxed);
 }
 
+/// An application and its icon theme installed while the shell runs reach the
+/// launcher without a restart, and removing the entry takes it away again.
+///
+/// The tree is a temporary XDG data root, the icon is a real scalable SVG, and
+/// the entry is a real desktop file: the shell discovers both through
+/// `desktop_entry`, then the watch is driven by the shell's own clock, not by a
+/// signal the test hands it.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_notices_an_app_installed_while_it_runs() {
+    let root = e2e_root("desktop-watch");
+    let apps_dir = root.join("data/applications");
+    let icon_dir = root.join("data/icons");
+    std::fs::create_dir_all(&apps_dir).expect("applications");
+    std::fs::create_dir_all(icon_dir.join("hicolor/scalable/apps")).expect("theme");
+
+    let mut s = shell();
+    s.load_desktop_apps_from(
+        std::slice::from_ref(&apps_dir),
+        std::slice::from_ref(&icon_dir),
+        0,
+    );
+    assert!(
+        s.desktop_apps.is_empty(),
+        "the temporary tree starts empty: {:?}",
+        s.desktop_apps
+    );
+    let builtins = App::ALL.len();
+    assert_eq!(s.launcher_len(), builtins);
+
+    open_launcher(&mut s);
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "55-launcher-before-install");
+    assert!(
+        s.hotspots().rect_of(Hot::LauncherItem(builtins)).is_none(),
+        "a tile exists for an application that is not installed"
+    );
+
+    // Install the way a package manager would: the scalable icon first, then the
+    // entry that names it.
+    std::fs::write(
+        icon_dir.join("hicolor/scalable/apps/late-icon.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" fill="#2080c0"/>
+  <circle cx="12" cy="12" r="6" fill="rgb(250, 190, 40)"/>
+  <path d="M 4 20 L 12 5 L 20 20 Z" fill="#f0f0f0"/>
+</svg>"##,
+    )
+    .expect("the scalable icon");
+    std::fs::write(
+        apps_dir.join("late.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Late App\nIcon=late-icon\nExec=/bin/true\n",
+    )
+    .expect("the entry");
+
+    // The shell's own clock: one second later the watch is due.
+    s.tick_after(1_010);
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "55-launcher-after-install");
+
+    assert_eq!(
+        s.desktop_apps.len(),
+        1,
+        "the entry written while the shell ran is not in the list; status: {:?}",
+        s.app_status
+    );
+    assert_eq!(
+        s.desktop_apps.first().map(|a| a.name.as_str()),
+        Some("Late App")
+    );
+    let icon = s
+        .desktop_apps
+        .first()
+        .and_then(|a| a.icon_path.as_deref())
+        .expect("the icon the entry names resolved");
+    assert_eq!(icon.extension().and_then(|e| e.to_str()), Some("svg"));
+    assert_eq!(
+        s.launcher_len(),
+        builtins + 1,
+        "the launcher grew by exactly one slot"
+    );
+    assert_eq!(s.launcher_name(builtins), Some("Late App"));
+    let cell = s
+        .hotspots()
+        .rect_of(Hot::LauncherItem(builtins))
+        .expect("the new application has a tile");
+    let chip = Rect::new(cell.center().0 - 41.0, cell.y + 4.0, 82.0, 82.0);
+
+    // The theme's own colours, not the generated glyph: the glyph has neither a
+    // blue field nor an amber disc.
+    let mut blue = 0usize;
+    let mut amber = 0usize;
+    let mut sampled = 0usize;
+    let mut x = chip.x + 2.0;
+    while x < chip.right() - 2.0 {
+        let mut y = chip.y + 2.0;
+        while y < chip.bottom() - 2.0 {
+            if let Some(px) = canvas.get(x as i64, y as i64) {
+                sampled = sampled.saturating_add(1);
+                let r = (px >> 16) & 0xFF;
+                let g = (px >> 8) & 0xFF;
+                let b = px & 0xFF;
+                if b > 120 && b > r.saturating_add(40) {
+                    blue = blue.saturating_add(1);
+                }
+                if r > 180 && g > 120 && b < 120 {
+                    amber = amber.saturating_add(1);
+                }
+            }
+            y += 3.0;
+        }
+        x += 3.0;
+    }
+    assert!(
+        sampled > 200 && blue > 40 && amber > 20,
+        "the installed theme's artwork is not on the new tile: {blue} blue, {amber} amber of {sampled}"
+    );
+
+    // Frames cost nothing: inside the interval no directory is read at all.
+    let before = s
+        .desktop_watch
+        .as_ref()
+        .map(crate::desktop_entry::DesktopWatch::stats)
+        .expect("the real list is watched");
+    for _ in 0..30 {
+        s.tick_after(FRAME_MS);
+    }
+    let after = s
+        .desktop_watch
+        .as_ref()
+        .map(crate::desktop_entry::DesktopWatch::stats)
+        .unwrap_or(before);
+    assert_eq!(
+        before, after,
+        "a frame read the directories for the launcher"
+    );
+    let _ = draw_frame(&mut s);
+
+    // Remove the entry: the launcher must stop offering it.
+    std::fs::remove_file(apps_dir.join("late.desktop")).expect("remove the entry");
+    s.tick_after(1_010);
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "55-launcher-after-removal");
+    assert!(
+        s.desktop_apps.is_empty(),
+        "a removed entry must leave the launcher: {:?}",
+        s.desktop_apps
+    );
+    assert_eq!(s.launcher_len(), builtins);
+    assert!(
+        s.hotspots().rect_of(Hot::LauncherItem(builtins)).is_none(),
+        "a tile remained for an application that is gone"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A theme that ships only a scalable SVG still gives the launcher its icon.
 ///
 /// The temporary theme has no PNG anywhere: the only artwork is
