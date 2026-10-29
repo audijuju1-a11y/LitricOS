@@ -109,6 +109,11 @@ pub fn parse(text: &str, defaults: Preferences) -> Preferences {
                     preferences.reduce_motion = enabled;
                 }
             }
+            "reduce_transparency" => {
+                if let Some(enabled) = parse_bool(value) {
+                    preferences.reduce_transparency = enabled;
+                }
+            }
             "ui_scale" => {
                 if let Some(scale) = UiScale::parse(value) {
                     preferences.ui_scale = scale;
@@ -166,6 +171,13 @@ pub fn encode(preferences: Preferences) -> String {
     out.push('\n');
     out.push_str("reduce_motion=");
     out.push_str(if preferences.reduce_motion { "1" } else { "0" });
+    out.push('\n');
+    out.push_str("reduce_transparency=");
+    out.push_str(if preferences.reduce_transparency {
+        "1"
+    } else {
+        "0"
+    });
     out.push('\n');
     out.push_str("ui_scale=");
     out.push_str(preferences.ui_scale.token());
@@ -303,6 +315,7 @@ mod tests {
         preferences.accent = Accent::Teal;
         preferences.wallpaper = Wallpaper::Glow;
         preferences.reduce_motion = true;
+        preferences.reduce_transparency = true;
         store.save(preferences).expect("the record is written");
         let loaded = store
             .load()
@@ -446,6 +459,7 @@ mod tests {
             "wallpaper=",
             "language=",
             "reduce_motion=",
+            "reduce_transparency=",
             "ui_scale=",
             "onboarded=",
             "theme_schedule=",

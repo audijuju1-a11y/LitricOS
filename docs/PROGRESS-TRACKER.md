@@ -3664,7 +3664,8 @@ check in `views::refresh_files`, which runs during the draw and reads only when
 `files.listed` differs from `files.path`; `docs/PROGRESS-TRACKER.md` §46 and the
 journey it added both said so explicitly. Files has no refresh timer, no
 inotify subscription and no notify dependency, and it cannot have the last two:
-`src/litric-shell/src/lib.rs` and `src/main.rs` are `#![forbid(unsafe_code)]`,
+`src/litric-shell/src/lib.rs` and `src/litric-shell/src/main.rs` are
+`#![forbid(unsafe_code)]`,
 so there is no safe `inotify_init1` call here, and the workspace has no watcher
 crate. The honest option is a bounded check through the bridge that already
 owns the directory, not a second filesystem backend and not an unsafe syscall
@@ -3712,3 +3713,92 @@ one Files model), and a minimized window is not read until it is visible again.
 No performance number is claimed: the only measured cost is the read count in
 the journey. No QEMU or display is available, so the proof is headless frames
 over real files.
+
+## 48. Batch: "Reduce Transparency" is a real material, and the quick switches persist (verified)
+
+### 48.1 Audit
+
+The switch was already drawn and already claimed to be applied, but nothing
+rendered from it. `QuickSettings::reduce_transparency` existed in `shell.rs`,
+defaulted to `false`, and was listed in `QuickSettings::applied`; the quick
+panel drew it through `views::draw_quick_settings` using
+`quick.is_applied("reduce_transparency")`; and `Hot::QuickToggle(2)` did
+exactly one thing: flip the bool. No renderer read the field. The material had
+two independent reasons a tint value alone could not fix it:
+
+* `desktop::glass` recomputed alpha from the backdrop with
+  `Glass::adaptive_alpha_pct`, ignoring the theme's own `tint_alpha_pct`; a
+  theme set to 100% would still be drawn translucently.
+* `desktop::glass_at` used the caller's alpha (88 for popovers), so a popover
+  would stay translucent whatever the theme said.
+* `desktop::glass_params` forced a minimum blur of one pixel, so even a
+  zero-blur theme still paid for a backdrop blur.
+
+The preference record had no such key either: `Preferences` had no
+`reduce_transparency` field, `prefstore` neither parsed nor wrote it, and the
+registry had eight entries with Accessibility containing only Reduce motion.
+A restart therefore discarded the choice. Its neighbour had a smaller version
+of the same problem: the quick Reduce Motion switch flipped
+`quick.reduce_motion` directly instead of calling the existing
+`toggle_reduced_motion`, so it changed the running shell but never persisted.
+
+### 48.2 The connection
+
+| File | What it does |
+|---|---|
+| `src/litric-design/src/lib.rs` | `Theme::with_reduced_transparency` replaces the glass preset with `blur_px: 0`, `saturation_pct: 100`, `tint_alpha_pct: 100` while keeping the theme's border and specular values. The `Glass::blur_px` contract now says zero means opaque. |
+| `src/litric-shell/src/desktop.rs` | `glass` and `glass_at` take one early path through `solid_glass` when the theme is opaque: full-strength tint, the same edge and highlight, no `backdrop_brightest` read and no `glass_backdrop` call. `glass_params` returns `(0, 1.0)` for an opaque or zero-blur theme. This also corrects the high-contrast themes, which declared 100% but were still being adapted down by the solver. |
+| `src/litric-shell/src/settings.rs` | `Preferences::reduce_transparency`, default off. |
+| `src/litric-shell/src/prefstore.rs` | Parses `reduce_transparency` with the existing boolean parser and writes it in the same line-oriented format. No schema version bump: the format's own rule is that adding a key does not change the meaning of an existing one. |
+| `src/litric-shell/src/registry.rs` | A ninth entry, `reduce_transparency`, on Accessibility with the synonyms `transparency`, `blur`, `glass`, `readability`, `opaque`, so search and `litric://settings/...` links reach it. |
+| `src/litric-shell/src/shell.rs` | `resolved_theme` applies the flag to every theme it builds (startup, save, rollback, schedule). `load_preferences`, `save_preferences` and `finish_preferences_save` keep `quick.reduce_transparency` in step with the record. `toggle_reduced_transparency` goes through `save_preferences`, and `Hot::QuickToggle(2)` and `Hot::QuickToggle(3)` now call the transparency and motion toggles instead of mutating live flags. |
+| `src/litric-shell/src/views.rs` | The Accessibility page draws a real Reduce transparency row next to Reduce motion, using the same `settings_button` and focus key as every other Settings row. |
+| `src/litric-shell/src/e2e.rs` | One new headless journey opens Quick Settings through the real command, waits for its reveal spring, clicks the actual `Hot::QuickToggle(2)` hotspot, and asserts the state, the persisted effect, the opaque material, a real frame difference, and a restart from the saved record. |
+
+### 48.3 Cost
+
+One preference write per confirmed toggle, through the existing atomic
+preference store; no new dependency, thread, timer, polling interval, daemon
+verb or privilege. In the opaque state the renderer does strictly less work per
+panel: it skips the brightest-backdrop scan and the blur pass, and the
+compositor is told not to build a blurred copy. No runtime performance number is
+claimed because none was measured.
+
+### 48.4 Tests and gates
+
+New tests: `desktop::tests::reduced_transparency_is_opaque_and_does_not_read_the_backdrop`,
+`shell::tests::reduce_transparency_changes_the_real_material_and_persists`,
+`shell::tests::the_quick_motion_switch_persists_like_the_settings_row`, and
+`e2e::journey_reduce_transparency_changes_the_rendered_frame_and_survives_a_restart`.
+
+```text
+cargo test --workspace        passed=1729 failed=0   (was 1,725; +4)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+bash ci/verify.sh             32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the unchanged absent `keys/dev/secureboot` and
+`keys/dev/verity`; the three skips are the documented missing host tools and
+the measurement that needs them (mkosi, QEMU, idle RAM/CPU). No test deleted, no
+gate relaxed, no dependency added.
+
+The golden-frame gate ran for the first time here because the image fonts are
+now installed; until then it had been skipped as missing fonts. Two frames,
+`03-windows-overlap` and `04-files`, were over threshold from Files work that
+landed after the last recording (`This Litric`, Refresh/New folder and the size
+column). Both were reviewed against the committed evidence, and only those two
+fingerprints were re-recorded. The material in this batch is unreachable in that
+dumper: it composes the Dark theme only (82% glass, 32 px blur) and never loads
+preferences, so the opaque branch cannot execute there. The inherited citation in §47 was also corrected to
+`src/litric-shell/src/main.rs`.
+
+### 48.5 Limits
+
+There is no display and no QEMU here, so the proof is a headless frame over the
+real draw path, not a photograph of a monitor. The setting is global: every
+glass surface becomes opaque together, and there is no per-app override. The
+high-contrast themes are now actually opaque rather than adapted down; that is
+the behaviour their own comments always claimed, but it is a visible change.
+No performance metric is claimed. There is no executable research-deep-all
+runner in this repository, so none was run.

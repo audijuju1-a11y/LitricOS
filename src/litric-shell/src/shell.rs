@@ -433,6 +433,8 @@ pub enum Hot {
     SettingsSchedule,
     /// Toggle reduced motion in the shell.
     SettingsMotion,
+    /// Toggle opaque glass in the shell.
+    SettingsTransparency,
     /// The UI-scale control on the Display page: cycles the scale and arms the
     /// countdown that puts the old one back.
     DisplayScale,
@@ -3221,7 +3223,12 @@ fn resolved_theme(preferences: crate::settings::Preferences, hour: u8) -> litric
     let kind = preferences
         .theme_schedule
         .effective(preferences.theme, hour);
-    litric_design::Theme::of(kind).with_accent(preferences.accent)
+    let theme = litric_design::Theme::of(kind).with_accent(preferences.accent);
+    if preferences.reduce_transparency {
+        theme.with_reduced_transparency()
+    } else {
+        theme
+    }
 }
 
 impl Shell {
@@ -3230,6 +3237,7 @@ impl Shell {
         self.settings = crate::settings::Model::new(preferences);
         self.tokens.theme = resolved_theme(preferences, self.local_hour());
         self.quick.reduce_motion = preferences.reduce_motion;
+        self.quick.reduce_transparency = preferences.reduce_transparency;
         self.browser.engine = preferences.search_engine;
         // The stored step is a multiplier on the display's own scale, so one
         // record is right on a 1x panel and on a 2x one. Nothing is provisional
@@ -3274,6 +3282,7 @@ impl Shell {
         };
         self.tokens.theme = resolved_theme(next, self.local_hour());
         self.quick.reduce_motion = next.reduce_motion;
+        self.quick.reduce_transparency = next.reduce_transparency;
         self.browser.engine = next.search_engine;
         self.request_full_redraw();
         vec![Effect::PersistPreferences(next)]
@@ -3286,6 +3295,7 @@ impl Shell {
         let preferences = self.settings.preferences;
         self.tokens.theme = resolved_theme(preferences, self.local_hour());
         self.quick.reduce_motion = preferences.reduce_motion;
+        self.quick.reduce_transparency = preferences.reduce_transparency;
         // The record is the authority on the step, so a failed write leaves the
         // screen at the size that is actually stored rather than at the one the
         // disk refused.
@@ -3404,6 +3414,17 @@ impl Shell {
     fn toggle_reduced_motion(&mut self) -> Vec<Effect> {
         let mut next = self.settings.preferences;
         next.reduce_motion = !next.reduce_motion;
+        self.save_preferences(next)
+    }
+
+    /// Flip the opacity of every glass surface, through the preference record.
+    ///
+    /// The theme is rebuilt by [`Self::save_preferences`], so the material and
+    /// the stored choice can never disagree, and a failed write rolls both back
+    /// in [`Self::finish_preferences_save`].
+    fn toggle_reduced_transparency(&mut self) -> Vec<Effect> {
+        let mut next = self.settings.preferences;
+        next.reduce_transparency = !next.reduce_transparency;
         self.save_preferences(next)
     }
 
@@ -6181,6 +6202,7 @@ impl Shell {
             Hot::SettingsWallpaper => self.cycle_wallpaper(),
             Hot::SettingsSchedule => self.cycle_theme_schedule(),
             Hot::SettingsMotion => self.toggle_reduced_motion(),
+            Hot::SettingsTransparency => self.toggle_reduced_transparency(),
             Hot::DisplayScale => self.cycle_ui_scale(),
             Hot::ScaleKeep => self.keep_pending_change(),
             Hot::ScaleUndo => {
@@ -6227,12 +6249,12 @@ impl Shell {
                 self.switcher_holding = false;
                 Vec::new()
             }
+            Hot::QuickToggle(2) => self.toggle_reduced_transparency(),
+            Hot::QuickToggle(3) => self.toggle_reduced_motion(),
             Hot::QuickToggle(n) => {
                 match n {
                     0 => self.quick.do_not_disturb = !self.quick.do_not_disturb,
-                    1 => self.quick.adaptive_idle = !self.quick.adaptive_idle,
-                    2 => self.quick.reduce_transparency = !self.quick.reduce_transparency,
-                    _ => self.quick.reduce_motion = !self.quick.reduce_motion,
+                    _ => self.quick.adaptive_idle = !self.quick.adaptive_idle,
                 }
                 self.notifications.do_not_disturb = self.quick.do_not_disturb;
                 Vec::new()
@@ -9228,6 +9250,54 @@ mod tests {
             100,
         );
         assert_eq!(s.overlay, Overlay::None);
+    }
+
+    #[test]
+    fn reduce_transparency_changes_the_real_material_and_persists() {
+        let mut s = shell();
+        let clear = s.tokens.theme.glass;
+        assert!(clear.tint_alpha_pct < 100);
+
+        let effects = s.activate(Hot::QuickToggle(2));
+        assert!(s.quick.reduce_transparency);
+        assert!(s.settings.preferences.reduce_transparency);
+        assert_eq!(s.tokens.theme.glass.tint_alpha_pct, 100);
+        assert_eq!(s.tokens.theme.glass.blur_px, 0);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::PersistPreferences(p) if p.reduce_transparency)),
+            "the quick switch must persist, not only redraw: {effects:?}"
+        );
+        // The write completes, as the event loop does before the next click.
+        s.finish_preferences_save(Ok(()));
+
+        // A restart reads the record back and rebuilds the same opaque material.
+        let saved = s.settings.preferences;
+        let mut restarted = shell();
+        restarted.load_preferences(saved);
+        assert!(restarted.quick.reduce_transparency);
+        assert_eq!(restarted.tokens.theme.glass.tint_alpha_pct, 100);
+
+        // Flipping it back restores the translucent material exactly.
+        let effects = s.activate(Hot::QuickToggle(2));
+        assert!(!s.settings.preferences.reduce_transparency);
+        assert_eq!(s.tokens.theme.glass, clear);
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::PersistPreferences(p) if !p.reduce_transparency)));
+    }
+
+    #[test]
+    fn the_quick_motion_switch_persists_like_the_settings_row() {
+        let mut s = shell();
+        assert!(!s.settings.preferences.reduce_motion);
+        let effects = s.activate(Hot::QuickToggle(3));
+        assert!(s.quick.reduce_motion);
+        assert!(s.settings.preferences.reduce_motion);
+        assert!(effects
+            .iter()
+            .any(|e| matches!(e, Effect::PersistPreferences(p) if p.reduce_motion)));
     }
 
     #[test]

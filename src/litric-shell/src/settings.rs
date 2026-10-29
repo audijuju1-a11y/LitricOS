@@ -177,6 +177,9 @@ pub struct Preferences {
     pub language: Language,
     /// Whether shell animation is reduced.
     pub reduce_motion: bool,
+    /// Whether glass surfaces are drawn opaque instead of sampling the
+    /// wallpaper. A readability preference, applied by the theme itself.
+    pub reduce_transparency: bool,
     /// How much larger the interface is drawn. See [`UiScale`].
     pub ui_scale: UiScale,
     /// Whether first-run setup has finished. Until it has, the desktop shows the
@@ -204,6 +207,7 @@ impl Preferences {
             wallpaper: Wallpaper::System,
             language,
             reduce_motion: false,
+            reduce_transparency: false,
             ui_scale: UiScale::Normal,
             onboarded: true,
             theme_schedule: ThemeSchedule::Manual,

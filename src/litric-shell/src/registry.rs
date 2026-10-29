@@ -119,7 +119,7 @@ impl Entry {
 pub const INTERNAL_KEYS: [&str; 2] = ["version", "onboarded"];
 
 /// Every setting the shell owns, in the order the pages present them.
-pub const ENTRIES: [Entry; 8] = [
+pub const ENTRIES: [Entry; 9] = [
     Entry {
         key: "theme",
         page: Page::Appearance,
@@ -167,6 +167,14 @@ pub const ENTRIES: [Entry; 8] = [
         synonyms: &["animation", "motion", "transitions"],
         kind: Kind::Toggle,
         value: |p| yes_no(p.reduce_motion).to_owned(),
+    },
+    Entry {
+        key: "reduce_transparency",
+        page: Page::Accessibility,
+        title: "Reduce transparency",
+        synonyms: &["transparency", "blur", "glass", "readability", "opaque"],
+        kind: Kind::Toggle,
+        value: |p| yes_no(p.reduce_transparency).to_owned(),
     },
     Entry {
         key: "ui_scale",
@@ -453,6 +461,7 @@ mod tests {
             ("wallpaper", "wallpaper"),
             ("night", "theme_schedule"),
             ("reduce motion", "reduce_motion"),
+            ("transparency", "reduce_transparency"),
             ("duckduckgo", "search_engine"),
             ("ไทย", "language"),
         ] {

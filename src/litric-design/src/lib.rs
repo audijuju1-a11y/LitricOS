@@ -300,6 +300,25 @@ impl Theme {
             glass: self.glass,
         }
     }
+
+    /// This theme with glass made fully opaque and unblurred.
+    ///
+    /// "Reduce transparency" is a readability setting, not a tint change. The
+    /// adaptive solver in [`Glass::adaptive_alpha_pct`] would still choose a
+    /// translucent alpha for contrast, and the renderer would still blur the
+    /// backdrop; only an opaque material stops every panel sampling what is
+    /// behind it. The hairline and specular edge are kept, because they are what
+    /// keeps a flat panel from reading as a hole in the wallpaper.
+    #[must_use]
+    pub fn with_reduced_transparency(mut self) -> Self {
+        self.glass = Glass {
+            blur_px: 0,
+            saturation_pct: 100,
+            tint_alpha_pct: 100,
+            ..self.glass
+        };
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +338,9 @@ impl Theme {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Glass {
     /// Backdrop blur radius in logical pixels.
+    ///
+    /// Zero means the material is opaque and nothing behind it may be sampled.
+    /// The renderer treats that as a promise rather than as a very small blur.
     pub blur_px: u16,
     /// Backdrop saturation multiplier, in percent. 100 = unchanged.
     pub saturation_pct: u16,

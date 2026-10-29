@@ -4229,3 +4229,64 @@ fn journey_files_watch_shows_an_outside_change_without_a_click() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn journey_reduce_transparency_changes_the_rendered_frame_and_survives_a_restart() {
+    let mut s = shell();
+    s.load_preferences(crate::settings::Preferences::new(
+        ThemeKind::Dark,
+        crate::i18n::Language::English,
+    ));
+    s.perform(Action::ToggleQuickSettings);
+    // Let the reveal spring settle: the material is the variable under test,
+    // not the panel's position.
+    for _ in 0..40 {
+        let _ = draw_frame(&mut s);
+    }
+    let toggle = s
+        .hotspots()
+        .rect_of(Hot::QuickToggle(2))
+        .expect("quick settings draws the Reduce Transparency switch");
+    assert!(s.tokens.theme.glass.tint_alpha_pct < 100);
+    let before = draw_frame(&mut s);
+
+    let effects = click(&mut s, toggle.center().0, toggle.center().1);
+    assert!(s.settings.preferences.reduce_transparency);
+    assert!(s.quick.reduce_transparency);
+    assert_eq!(s.tokens.theme.glass.tint_alpha_pct, 100);
+    assert_eq!(s.tokens.theme.glass.blur_px, 0);
+    assert!(effects
+        .iter()
+        .any(|e| matches!(e, Effect::PersistPreferences(p) if p.reduce_transparency)));
+
+    let after = draw_frame(&mut s);
+    let differing = before
+        .pixels()
+        .iter()
+        .zip(after.pixels())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing > 1_000,
+        "the switch changed state but not the frame: {differing} pixels differ"
+    );
+
+    // The material itself is opaque, not merely flagged: a fresh panel over
+    // white returns the full-strength tint and asks for no blur.
+    let mut c = Canvas::new(200, 120, rgb(0xFFFFFF));
+    let panel = desktop::glass(
+        &mut c,
+        &s.tokens.theme,
+        Rect::new(10.0, 10.0, 180.0, 100.0),
+        8.0,
+    );
+    assert_eq!(panel.alpha_pct, 100);
+    assert_eq!(desktop::glass_params(&s.tokens.theme), (0, 1.0));
+
+    // A restart from the record keeps both the choice and the material.
+    let saved = s.settings.preferences;
+    let mut restarted = shell();
+    restarted.load_preferences(saved);
+    assert!(restarted.quick.reduce_transparency);
+    assert_eq!(restarted.tokens.theme.glass.tint_alpha_pct, 100);
+}

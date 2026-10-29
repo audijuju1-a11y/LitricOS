@@ -96,6 +96,13 @@ pub struct GlassPanel {
 /// it without re-deriving anything.
 pub fn glass(canvas: &mut Canvas, theme: &Theme, r: Rect, radius: f32) -> GlassPanel {
     let tint = theme.palette.glass_tint;
+    // An opaque theme has nothing to solve: sampling the backdrop and then
+    // laying the tint on at 100% would produce the same pixels for more work,
+    // and the blur would be invisible. "Reduce transparency" is exactly this
+    // case, and so are the high-contrast themes.
+    if theme.glass.tint_alpha_pct >= 100 {
+        return solid_glass(canvas, theme, r, radius);
+    }
     let primary = theme.palette.text_primary;
     let secondary = theme.palette.text_secondary;
 
@@ -154,6 +161,12 @@ pub fn glass_at(
     alpha_pct: u8,
 ) -> GlassPanel {
     let tint = theme.palette.glass_tint;
+    // A caller's preferred alpha cannot make an opaque material translucent:
+    // the theme owns that decision. Without this branch a popover would stay
+    // 88% over a reduced-transparency desktop and contradict the setting.
+    if theme.glass.tint_alpha_pct >= 100 {
+        return solid_glass(canvas, theme, r, radius);
+    }
     let backdrop = design(canvas.backdrop_brightest(r));
     let (blur, saturation) = glass_params(theme);
     canvas.glass_backdrop(r, radius, blur, saturation);
@@ -171,13 +184,44 @@ pub fn glass_at(
     }
 }
 
+/// Draw an opaque glass panel: the tint at full strength, the same hairline and
+/// specular edge, and no backdrop read at all.
+///
+/// Used by [`glass`] and [`glass_at`] when the theme says glass is opaque, so
+/// both paths agree on what an opaque material is and neither pays for a blur
+/// whose result the tint would completely cover.
+fn solid_glass(canvas: &mut Canvas, theme: &Theme, r: Rect, radius: f32) -> GlassPanel {
+    let tint = theme.palette.glass_tint;
+    canvas.fill_round_rect(r, radius, with_alpha(px(tint), 1.0));
+    let border = f32::from(theme.glass.border_alpha_pct) / 100.0;
+    canvas.stroke_round_rect(r, radius, 1.0, with_alpha(rgb(0xFFFFFF), border));
+    let hl = f32::from(theme.glass.highlight_alpha_pct) / 100.0;
+    canvas.fill_round_rect(
+        Rect::new(r.x + radius * 0.6, r.y + 0.5, r.w - radius * 1.2, 1.0),
+        0.5,
+        with_alpha(rgb(0xFFFFFF), hl),
+    );
+    GlassPanel {
+        rect: r,
+        radius,
+        alpha_pct: 100,
+        surface: px(tint),
+    }
+}
+
 /// The blur radius and saturation every glass surface of a theme uses.
 ///
 /// One function, so the backdrop [`Compositor::new`] makes once and the live
 /// path in [`glass`] cannot drift apart. The render benchmark uses it too, so
 /// the scene it times carries the same backdrop the shipped desktop does.
+///
+/// An opaque theme returns `(0, 1.0)`: there is no backdrop to blur or boost,
+/// and the compositor should not build a blurred copy nobody will sample.
 #[must_use]
 pub fn glass_params(theme: &Theme) -> (u32, f32) {
+    if theme.glass.tint_alpha_pct >= 100 || theme.glass.blur_px == 0 {
+        return (0, 1.0);
+    }
     let blur = u32::from(theme.glass.blur_px)
         .checked_div(3)
         .unwrap_or(1)
@@ -1230,6 +1274,39 @@ mod tests {
             "over white the tint only reached {}%",
             p.alpha_pct
         );
+    }
+
+    #[test]
+    fn reduced_transparency_is_opaque_and_does_not_read_the_backdrop() {
+        let theme = Theme::of(ThemeKind::Dark).with_reduced_transparency();
+        let mut c = Canvas::new(200, 120, rgb(0xFFFFFF));
+        let p = glass(&mut c, &theme, Rect::new(10.0, 10.0, 180.0, 100.0), 8.0);
+        assert_eq!(p.alpha_pct, 100, "the material still chose an alpha");
+        assert_eq!(
+            glass_params(&theme),
+            (0, 1.0),
+            "an opaque panel still blurs"
+        );
+        // The surface is the tint itself: had the white backdrop been sampled
+        // it would have lightened the colour.
+        assert_eq!(p.surface, super::px(theme.palette.glass_tint));
+        assert_eq!(
+            c.get(100, 60),
+            Some(p.surface),
+            "the panel's pixels are not the opaque tint"
+        );
+
+        // A popover's caller-chosen alpha cannot override the theme either.
+        let mut c2 = Canvas::new(200, 120, rgb(0xFFFFFF));
+        let popover = glass_at(
+            &mut c2,
+            &theme,
+            Rect::new(10.0, 10.0, 180.0, 100.0),
+            8.0,
+            88,
+        );
+        assert_eq!(popover.alpha_pct, 100);
+        assert_eq!(popover.surface, super::px(theme.palette.glass_tint));
     }
 
     #[test]

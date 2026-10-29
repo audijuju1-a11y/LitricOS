@@ -3330,6 +3330,28 @@ fn draw_settings_page(
                 },
             );
             y += t.px(42.0);
+            let transparency = format!(
+                "{} · {}",
+                "Reduce transparency",
+                if shell.settings.preferences.reduce_transparency {
+                    "On"
+                } else {
+                    "Off"
+                }
+            );
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SettingRow {
+                    key: "reduce_transparency",
+                    label: &transparency,
+                    hot: Hot::SettingsTransparency,
+                },
+            );
+            y += t.px(42.0);
             let note = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
             font::draw(
                 canvas,
