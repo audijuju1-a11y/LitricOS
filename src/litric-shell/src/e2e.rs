@@ -2401,3 +2401,83 @@ fn journey_a_display_scale_change_undoes_itself_unless_it_is_kept() {
     assert!((rebooted.tokens.scale - 1.25).abs() < 0.001);
     assert!(rebooted.scale_revert.is_none());
 }
+
+/// A fast scan and a deep scan must not be the same scan with a different
+/// label: the deep one reaches folders the fast one promises not to walk. The
+/// fixture nests a threat ten folders below Documents, which is outside the
+/// fast walk's depth and inside the deep walk's, then drives the real button
+/// and the real worker over it.
+#[cfg(unix)]
+#[test]
+fn journey_defender_fast_and_deep_scans_cover_different_folders() {
+    use crate::apps::ScanMode;
+    use litric_defender::verdict::Decision;
+
+    let root = e2e_root("defender-modes");
+    let mut dir = root.join("Documents");
+    for i in 0..11 {
+        dir = dir.join(format!("level{i}"));
+    }
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("eicar.com"), EICAR).unwrap();
+    std::fs::write(root.join("Documents").join("clean.txt"), b"hello").unwrap();
+
+    let zone = litric_locale::TimeZone::utc("test");
+    let bridge = crate::fsbridge::FsBridge::open(&root, zone).unwrap();
+
+    let (fast, _) = crate::shell::collect_for_mode(&bridge, ScanMode::Fast);
+    assert!(
+        !fast.iter().any(|p| p.ends_with("eicar.com")),
+        "the fast scan stays inside the depth it promises: {fast:?}"
+    );
+    assert!(
+        fast.iter().any(|p| p.ends_with("clean.txt")),
+        "the fast scan still reaches the top level: {fast:?}"
+    );
+    let (deep, _) = crate::shell::collect_for_mode(&bridge, ScanMode::Deep);
+    assert!(
+        deep.iter().any(|p| p.ends_with("eicar.com")),
+        "the deep scan reaches the nested file: {deep:?}"
+    );
+
+    // The file the deep scan reached is the one the engine denies.
+    let mut engine = litric_defender::engine::Engine::new();
+    engine.load_denylist(crate::shell::eicar_denylist());
+    let target = deep
+        .iter()
+        .find(|p| p.ends_with("eicar.com"))
+        .expect("the deep queue holds the nested file");
+    let host = bridge.host_path(target).unwrap();
+    let bytes = std::fs::read(&host).unwrap();
+    let report = engine.scan(target, bytes.len() as u64, 0, &bytes);
+    assert!(matches!(report.decision, Decision::Deny { .. }));
+
+    // And the window is wired to it: clicking Deep scan runs the deep mode.
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Defender);
+    let _ = draw_frame(&mut s);
+    let deep_btn = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::DeepScan))
+        .expect("the Deep scan button is drawn");
+    click(&mut s, deep_btn.center().0, deep_btn.center().1);
+    assert_eq!(s.defender.app.mode, ScanMode::Deep, "the button chose deep");
+    for _ in 0..400 {
+        s.scan_step(16);
+        if !s.defender.running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!s.defender.running, "the deep scan finished");
+    assert_eq!(
+        s.defender.app.state,
+        ScanState::Done {
+            scanned: 2,
+            threats: 1
+        },
+        "the wired deep scan scanned both files and reported the threat"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -1422,12 +1422,95 @@ pub enum ScanState {
     },
 }
 
+/// How much of the home folder a Defender scan covers.
+///
+/// The two modes are a promise about coverage, not a speed knob: a fast scan
+/// walks the folders a person keeps documents in, a deep scan walks the whole
+/// home. The window names the mode it is running, so "no threats found" never
+/// has to be qualified by the user guessing what was actually looked at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScanMode {
+    /// The folders people keep documents in: quick, bounded, run often.
+    #[default]
+    Fast,
+    /// Every folder in the home directory: slower, for a deliberate check.
+    Deep,
+}
+
+impl ScanMode {
+    /// Both modes, in the order the window offers them.
+    pub const ALL: [Self; 2] = [Self::Fast, Self::Deep];
+
+    /// The button label and the word the result sentence uses.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fast => "Fast scan",
+            Self::Deep => "Deep scan",
+        }
+    }
+
+    /// Where the scan starts, as logical paths inside the file service.
+    #[must_use]
+    pub fn roots(self) -> &'static [&'static str] {
+        match self {
+            Self::Fast => &[
+                "/Documents",
+                "/Downloads",
+                "/Pictures",
+                "/Music",
+                "/Videos",
+                "/Projects",
+            ],
+            Self::Deep => &["/"],
+        }
+    }
+
+    /// How many folder levels below a root the walk descends.
+    #[must_use]
+    pub fn depth(self) -> usize {
+        match self {
+            Self::Fast => 8,
+            Self::Deep => 24,
+        }
+    }
+
+    /// The largest number of files one run will queue.
+    ///
+    /// The queue is a list of paths held while the worker runs, so this is a
+    /// memory ceiling as much as a time one: 2,000 short paths in a fast scan
+    /// and 40,000 in a deep scan stay inside the daemon's own budget, and the
+    /// result sentence reports the entries the cap refused.
+    #[must_use]
+    pub fn file_cap(self) -> usize {
+        match self {
+            Self::Fast => 2_000,
+            Self::Deep => 40_000,
+        }
+    }
+
+    /// What this mode covers, in the words the window shows beside it.
+    #[must_use]
+    pub fn coverage(self) -> &'static str {
+        match self {
+            Self::Fast => {
+                "Documents, Downloads, Pictures, Music, Videos and Projects. Finishes quickly."
+            }
+            Self::Deep => {
+                "Every folder in your home, 24 levels deep. Takes longer; run it when you have time."
+            }
+        }
+    }
+}
+
 /// The Defender window model. Scanning itself happens in
 /// [`crate::defender`]; this holds what the window shows.
 #[derive(Debug, Clone, Default)]
 pub struct DefenderApp {
     /// The state of the current or last scan.
     pub state: ScanState,
+    /// How much of the home folder the current or last scan covers.
+    pub mode: ScanMode,
     /// One row per scanned file that matters (detections always; a bounded
     /// sample of clean files while scanning).
     pub rows: Vec<ThreatRow>,
@@ -1440,6 +1523,13 @@ pub struct DefenderApp {
 }
 
 impl DefenderApp {
+    /// Begin a scan in a chosen mode: clears the last scan's rows and records
+    /// the coverage the window will claim when the run finishes.
+    pub fn begin(&mut self, mode: ScanMode, total: usize) {
+        self.mode = mode;
+        self.start(total);
+    }
+
     /// Begin a scan: clears the last scan's rows.
     pub fn start(&mut self, total: usize) {
         self.state = ScanState::Scanning { done: 0, total };
@@ -1853,8 +1943,10 @@ pub enum MenuAction {
     SortModified,
     /// Toggle the details pane (Files).
     ToggleDetails,
-    /// Scan the home folders with the Defender.
+    /// Scan the folders people keep documents in.
     ScanNow,
+    /// Scan every folder in the home directory.
+    DeepScan,
     /// Start the browser engine session.
     BrowserStart,
     /// Reload the focused browser tab.
@@ -1931,7 +2023,8 @@ impl ContextMenu {
             MenuSurface::Desktop => vec![
                 MenuItem::Item("New folder", MenuAction::NewFolder),
                 MenuItem::Separator,
-                MenuItem::Item("Scan now", MenuAction::ScanNow),
+                MenuItem::Item("Fast scan", MenuAction::ScanNow),
+                MenuItem::Item("Deep scan", MenuAction::DeepScan),
                 MenuItem::Item("Open Trash", MenuAction::OpenTrash),
                 MenuItem::Separator,
                 MenuItem::Item("Next wallpaper", MenuAction::NextWallpaper),
@@ -2897,5 +2990,33 @@ mod tests {
         ));
         assert!(matches!(target(2), Some(IconTarget::Folder(path)) if path == "/Documents"));
         assert!(matches!(target(3), Some(IconTarget::Folder(path)) if path == "/Downloads"));
+    }
+}
+
+#[cfg(test)]
+mod scan_mode_tests {
+    use super::ScanMode;
+
+    /// The two buttons are two promises. If they ever cover the same ground,
+    /// one of them is a lie and the window should not offer it.
+    #[test]
+    fn the_two_modes_promise_different_coverage() {
+        assert!(ScanMode::Deep.depth() > ScanMode::Fast.depth());
+        assert!(ScanMode::Deep.file_cap() > ScanMode::Fast.file_cap());
+        assert_eq!(ScanMode::Fast.roots().len(), 6);
+        assert_eq!(ScanMode::Deep.roots(), &["/"][..]);
+        assert_ne!(ScanMode::Fast.coverage(), ScanMode::Deep.coverage());
+        assert_ne!(ScanMode::Fast.label(), ScanMode::Deep.label());
+        assert_eq!(ScanMode::default(), ScanMode::Fast);
+    }
+
+    /// The queue caps are memory bounds as much as time bounds, so they are
+    /// asserted by value: raising one has to be a deliberate edit here, not a
+    /// silent change to how much a scan may hold.
+    #[test]
+    fn the_scan_queue_caps_are_pinned() {
+        assert_eq!(ScanMode::Fast.file_cap(), 2_000);
+        assert_eq!(ScanMode::Deep.file_cap(), 40_000);
+        assert!(ScanMode::Fast.depth() <= ScanMode::Deep.depth());
     }
 }

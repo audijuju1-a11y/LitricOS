@@ -4294,19 +4294,42 @@ fn draw_defender(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     // Scan button. While a scan runs it is a Loading control: motion
     // marker, no click that could double-start the engine.
     let row = col.row(t.px(30.0));
-    let (scan_label, scan_state) = if shell.defender.running {
-        ("Scanning", ui::State::Loading)
-    } else {
-        ("Scan now", ui::State::Normal)
-    };
-    let bw = t.px(110.0);
-    let br = Rect::new(row.x, row.y, bw, row.h);
-    ui::button(canvas, &t, br, scan_label, scan_state, Tone::Accent);
-    if !shell.defender.running {
-        shell
-            .hotspots_mut()
-            .push(br, Hot::MenuRow(crate::apps::MenuAction::ScanNow));
+    let gap = t.px(8.0);
+    let bw = t.px(96.0);
+    let mut bx = row.x;
+    for mode in crate::apps::ScanMode::ALL {
+        let br = Rect::new(bx, row.y, bw, row.h);
+        let state = if shell.defender.running {
+            ui::State::Loading
+        } else {
+            ui::State::Normal
+        };
+        let tone = if mode == d.mode {
+            Tone::Accent
+        } else {
+            Tone::Neutral
+        };
+        ui::button(canvas, &t, br, mode.label(), state, tone);
+        if !shell.defender.running {
+            let action = match mode {
+                crate::apps::ScanMode::Fast => crate::apps::MenuAction::ScanNow,
+                crate::apps::ScanMode::Deep => crate::apps::MenuAction::DeepScan,
+            };
+            shell.hotspots_mut().push(br, Hot::MenuRow(action));
+        }
+        bx += bw + gap;
     }
+    // What the selected mode covers, in a sentence: a scan whose scope the
+    // user has to guess at is a scan whose result they cannot judge.
+    let hint = col.row(t.px(30.0));
+    let s_hint = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    font::draw(
+        canvas,
+        &ui::elide(d.mode.coverage(), &s_hint, hint.w),
+        hint.x,
+        hint.y + t.px(14.0),
+        &s_hint,
+    );
 
     // Progress bar while scanning.
     if let crate::apps::ScanState::Scanning { done, total } = d.state {

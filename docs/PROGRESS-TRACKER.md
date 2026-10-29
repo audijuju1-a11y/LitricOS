@@ -2848,3 +2848,79 @@ from 2 GiB to 1 GiB — is a product decision, and the number is now written whe
 that decision can be made against it rather than guessed at.
 
 The golden-frame gate remains **BLOCKED** on the missing Latin font fixture.
+## 34. Batch: Defender offers two scans that really cover different folders (verified)
+
+### 34.1 What was wrong
+
+The Defender had one button, "Scan now", and one hard-coded walk in
+`start_scan`: the six document folders, depth 8, a 2,000-file cap. There was no
+way to ask for a whole-home scan, and no code path that would walk one — so the
+application could not do the thing a scan window exists to offer. The brief asks
+for **Fast scan / Deep scan** as usable features, not as labels.
+
+### 34.2 What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/apps.rs` | `ScanMode` (`Fast`, `Deep`) owns the promise: `roots()`, `depth()`, `file_cap()`, `label()` and a `coverage()` sentence written in user words. `DefenderApp` records the mode it is running in; `begin(mode, total)` starts a run and records it. `MenuAction::DeepScan` added; the desktop menu now offers "Fast scan" and "Deep scan". |
+| `src/litric-shell/src/shell.rs` | `start_scan()` is the fast scan; `start_scan_mode(mode)` is the one implementation both modes use. `collect_for_mode(bridge, mode)` walks the mode's roots with the mode's depth and file caps and returns the entries the caps refused, so the result sentence can still say what was not looked at. `collect_files` takes `max_depth`/`max_files` instead of their old constants, so no cap is duplicated in two places. |
+| `src/litric-shell/src/views.rs` | Two buttons, "Fast scan" and "Deep scan", the running one accented, both inert while a scan runs; a line under them states what the selected mode covers. |
+| `ci/lint-file-safety.py` | the new journey's fixture-root removal is a reviewed entry with its reason, as the gate requires. |
+
+The bounds are unchanged in kind and explicit in value: fast = 6 roots, depth 8,
+2,000 files (exactly the old behaviour); deep = home root, depth 24, 40,000
+files. Both are path lists, not file contents, and `MAX_SCAN_FILE_BYTES` (64 MiB)
+still caps each read, so a scan still cannot grow without a bound.
+
+### 34.3 Tests that ran, by name
+
+| Test | Proves |
+|---|---|
+| `apps::scan_mode_tests::the_two_modes_promise_different_coverage` | the modes differ in roots, depth, cap, label and coverage sentence |
+| `apps::scan_mode_tests::the_scan_queue_caps_are_pinned` | the caps are 2,000 / 40,000 by value, so raising one is a deliberate edit |
+| `e2e::journey_defender_fast_and_deep_scans_cover_different_folders` | on a real temp tree, the fast walk does **not** reach a threat nested eleven folders down and the deep walk does; the engine denies that file; clicking the real "Deep scan" button starts the deep mode and the worker finishes with `scanned: 2, threats: 1` |
+
+Measured output:
+
+```text
+cargo test -p litric-shell --lib   614 passed; 0 failed
+cargo test --workspace            passed=1678 failed=0   (was 1,675)
+```
+
+### 34.4 Gates (exit status enforced)
+
+```text
+cargo fmt --check                                         0
+cargo clippy --workspace --all-targets -- -D warnings      0
+cargo clippy -p litric-browser --features broker ... -D     0
+cargo test --workspace                                     0 (1,678 passed, 0 failed)
+cargo test -p litric-browser --features broker --bin litric-browserd  0 (12 passed)
+python3 ci/check-python-syntax.py                          0
+ci/lint-line-endings.py                                    0
+ci/lint-doc-refs.py                                        0
+ci/lint-file-safety.py                                     0 (72 sites reviewed)
+ci/lint-unit-sockets.py (+ --self-test)                     0 / 0
+ci/lint-socket-connection-limits.py (+ --self-test)         0 / 0
+ci/check-memory-budget.py (+ --self-test)                   0 / 0
+bash ci/verify.sh                                          31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the known absent `keys/dev/` material. No gate was
+relaxed, no test deleted, no dependency added.
+
+### 34.5 Limits, recorded rather than glossed
+
+There is no display, GPU, QEMU or second uid in this environment, so nothing
+here claims a rendered screenshot or a booted image. The window evidence is what
+a headless frame can prove: both buttons are drawn, register distinct hotspots,
+and clicking the deep one runs the deep scan over the real files of a fixture
+root. No RAM number is claimed for the deep scan; its memory is bounded by the
+path-queue cap and the existing 64 MiB per-file read ceiling, which are the
+numbers that were actually changed and asserted.
+
+Next evidence-based non-UI/UX gap, left for a decision rather than guessed at:
+the storage surfaces still print the raw filesystem token (`erofs`) beside a
+volume. `docs/DESIGN-SYSTEM-v3/06-APP-REDESIGN.md` argues for naming it **and**
+explaining it; the brief says the word should not reach the user at all. That is
+a copy/design decision with tests on both sides, so it is recorded here instead
+of being changed unilaterally.

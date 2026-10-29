@@ -1449,38 +1449,29 @@ impl Shell {
     /// Queue the standard scan: the home folders a user actually keeps
     /// documents in. Depth and count caps live in the walker, not here.
     pub fn start_scan(&mut self) -> Vec<Effect> {
+        self.start_scan_mode(crate::apps::ScanMode::Fast)
+    }
+
+    /// Queue a scan with the coverage `mode` promises.
+    ///
+    /// Both modes run through the same walker, worker and engine; only the
+    /// roots and the depth cap differ. Two scan paths would be two places for
+    /// a bound to be forgotten.
+    pub fn start_scan_mode(&mut self, mode: crate::apps::ScanMode) -> Vec<Effect> {
         if self.defender.running {
             return Vec::new();
         }
         let zone = self.regional.zone.clone();
-        let mut queue = Vec::new();
-        let mut skipped = 0usize;
         let jobs: Vec<(String, std::path::PathBuf)>;
+        let skipped;
         {
             let Ok(bridge) = self.try_files_bridge(zone) else {
                 self.defender.app.message =
                     "the file service is not available on this platform".to_owned();
                 return Vec::new();
             };
-            for dir in [
-                "/Documents",
-                "/Downloads",
-                "/Pictures",
-                "/Music",
-                "/Videos",
-                "/Projects",
-            ] {
-                if let Ok(entries) = bridge.list_dir(dir) {
-                    for e in entries {
-                        let p = format!("{}/{}", dir.trim_end_matches('/'), e.name);
-                        if e.kind == crate::apps::FileKind::Dir {
-                            collect_files(&bridge, &p, &mut queue, 0, &mut skipped);
-                        } else if e.kind == crate::apps::FileKind::File {
-                            queue.push(p);
-                        }
-                    }
-                }
-            }
+            let (queue, refused) = collect_for_mode(&bridge, mode);
+            skipped = refused;
             // Host paths are resolved here, on the thread that owns the bridge,
             // so the worker needs nothing but std::fs and cannot reach through
             // the file layer at all.
@@ -1490,7 +1481,7 @@ impl Shell {
                 .collect();
         }
         let total = jobs.len();
-        self.defender.app.start(total);
+        self.defender.app.begin(mode, total);
         if skipped > 0 {
             self.defender.app.message = format!(
                 "Scanning {total} files · {skipped} entries not walked (count or depth cap)"
@@ -2507,6 +2498,7 @@ impl Shell {
             MA::SortModified => self.files.toggle_sort(crate::apps::SortKey::Modified),
             MA::ToggleDetails => self.files.details = !self.files.details,
             MA::ScanNow => return self.start_scan(),
+            MA::DeepScan => return self.start_scan_mode(crate::apps::ScanMode::Deep),
             MA::BrowserStart => return self.browser_start_session(),
             MA::BrowserReload => {
                 let i = self.menu_tab();
@@ -7072,18 +7064,59 @@ fn engine_key(key: Key) -> (String, String, i64, String) {
 /// caller can say how much of the folder tree was not looked at. A cap that
 /// is applied silently turns "we scanned your Documents" into a claim about
 /// files nobody opened.
+pub(crate) fn collect_for_mode(
+    bridge: &crate::fsbridge::FsBridge,
+    mode: crate::apps::ScanMode,
+) -> (Vec<String>, usize) {
+    let mut out = Vec::new();
+    let mut skipped = 0usize;
+    for root in mode.roots() {
+        let Ok(entries) = bridge.list_dir(root) else {
+            continue;
+        };
+        for e in entries {
+            if out.len() >= mode.file_cap() {
+                skipped = skipped.saturating_add(1);
+                break;
+            }
+            // The home root is `/`, so joining it blindly would make `//name`.
+            let p = if *root == "/" {
+                format!("/{}", e.name)
+            } else {
+                format!("{root}/{}", e.name)
+            };
+            match e.kind {
+                crate::apps::FileKind::Dir => collect_files(
+                    bridge,
+                    &p,
+                    &mut out,
+                    0,
+                    mode.depth(),
+                    mode.file_cap(),
+                    &mut skipped,
+                ),
+                crate::apps::FileKind::File => out.push(p),
+                _ => {}
+            }
+        }
+    }
+    (out, skipped)
+}
+
 fn collect_files(
     bridge: &crate::fsbridge::FsBridge,
     dir: &str,
     out: &mut Vec<String>,
     depth: usize,
+    max_depth: usize,
+    max_files: usize,
     skipped: &mut usize,
 ) {
-    if out.len() >= 2_000 {
+    if out.len() >= max_files {
         *skipped = skipped.saturating_add(1);
         return;
     }
-    if depth > 8 {
+    if depth > max_depth {
         *skipped = skipped.saturating_add(1);
         return;
     }
@@ -7091,15 +7124,21 @@ fn collect_files(
         return;
     };
     for e in entries {
-        if out.len() >= 2_000 {
+        if out.len() >= max_files {
             *skipped = skipped.saturating_add(1);
             return;
         }
         let p = format!("{dir}/{}", e.name);
         match e.kind {
-            crate::apps::FileKind::Dir => {
-                collect_files(bridge, &p, out, depth.saturating_add(1), skipped);
-            }
+            crate::apps::FileKind::Dir => collect_files(
+                bridge,
+                &p,
+                out,
+                depth.saturating_add(1),
+                max_depth,
+                max_files,
+                skipped,
+            ),
             crate::apps::FileKind::File => out.push(p),
             _ => {}
         }
