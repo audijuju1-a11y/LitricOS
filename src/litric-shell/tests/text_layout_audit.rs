@@ -285,8 +285,8 @@ fn the_activity_window_shows_a_process_table_without_drawing_text_over_text() {
         views::draw(&mut canvas, &mut shell);
         let text: Vec<String> = canvas.text_runs().iter().map(|r| r.text.clone()).collect();
         assert!(
-            text.iter().any(|r| r == "litric-shell"),
-            "the process table is drawn at {w}x{h}: {text:?}"
+            text.iter().any(|r| r == "Desktop"),
+            "the process table is drawn with the plain name at {w}x{h}: {text:?}"
         );
         assert!(
             text.iter().any(|r| r == "25.0"),

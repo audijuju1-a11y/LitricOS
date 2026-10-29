@@ -2651,8 +2651,13 @@ fn draw_settings(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let facts = shell.facts.clone();
     let mut rows: Vec<(String, String)> =
         vec![("Version".to_owned(), env!("CARGO_PKG_VERSION").to_owned())];
-    if let Some(fs) = &facts.root_fs {
-        rows.push(("Root filesystem".to_owned(), fs.clone()));
+    if facts.root_fs.is_some() {
+        // The system volume's access, in words. The token the kernel reported
+        // stays out of the row a person reads.
+        rows.push((
+            "System storage".to_owned(),
+            crate::copy::volume_access(true).to_owned(),
+        ));
     }
     if let Some(model) = &facts.cpu_model {
         rows.push(("Processor".to_owned(), model.clone()));
@@ -2677,7 +2682,7 @@ fn draw_settings(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         font::draw(canvas, &shown, row.right() - w, row.y + t.px(16.0), &vs);
     }
 
-    // --- Storage: the answer to "what is EROFS" -----------------------
+    // --- Storage: what it is for, in words, without the machine's token --
     c.space(t.px(12.0));
     ui::section_label(canvas, &t, (c.x, c.cursor + t.px(10.0)), "STORAGE");
     c.space(t.px(20.0));
@@ -3041,28 +3046,27 @@ fn draw_settings_page(
             settings_rows(canvas, t, pane, &rows);
         }
         Page::Network => {
-            let network = facts
-                .network
-                .clone()
-                .unwrap_or_else(|| "Unavailable".to_owned());
-            let mut rows = vec![("Connection".to_owned(), network)];
+            let primary = facts
+                .net_ifaces
+                .iter()
+                .find(|i| i.name != "lo" && i.state == "up")
+                .or_else(|| facts.net_ifaces.iter().find(|i| i.name != "lo"));
+            let mut rows = Vec::new();
             if facts.net_ifaces.is_empty() {
                 rows.push((
-                    "Interfaces".to_owned(),
-                    "No interface reported by the kernel".to_owned(),
+                    "Connection".to_owned(),
+                    "This machine reports no network connection".to_owned(),
                 ));
             } else {
+                let state = primary.map_or("unknown", |i| i.state.as_str());
+                rows.push((
+                    "Connection".to_owned(),
+                    crate::copy::connection(state).to_owned(),
+                ));
                 for iface in &facts.net_ifaces {
-                    let kind = if iface.wireless {
-                        "Wi-Fi"
-                    } else if iface.name == "lo" {
-                        "Loopback"
-                    } else {
-                        "Ethernet"
-                    };
                     rows.push((
-                        iface.name.clone(),
-                        format!("{kind} · {} · {}", iface.state, iface.mac),
+                        crate::copy::interface_kind(&iface.name, iface.wireless).to_owned(),
+                        crate::copy::connection(&iface.state).to_owned(),
                     ));
                 }
             }
@@ -5259,12 +5263,12 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
     label_at(canvas, net, net_label);
     {
         let row = row_of(net, label_h, t.px(38.0));
-        let iface = shell.primary_iface().map(|i| i.name.clone());
+        let has_iface = shell.primary_iface().is_some();
         let up = shell.primary_iface().is_some_and(|i| i.state == "up");
         let summary = shell.net_summary();
         // The label yields to the state line, which is the part that says which
         // interface this row is about.
-        let room = if iface.is_some() {
+        let room = if has_iface {
             row.w - t.px(160.0)
         } else {
             row.w - t.px(56.0)
@@ -5289,7 +5293,7 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
             t.px(40.0),
             t.px(22.0),
         );
-        if iface.is_some() {
+        if has_iface {
             let re = Rect::new(sw.x - t.px(80.0), sw.y, t.px(74.0), t.px(22.0));
             ui::button(
                 canvas,

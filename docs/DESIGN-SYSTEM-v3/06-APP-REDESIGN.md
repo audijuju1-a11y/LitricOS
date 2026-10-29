@@ -179,3 +179,33 @@ uninstall) · Updates & About (version, image hash, verified boot state).
 - Window snapping grids, multiple Spaces, third-party app store.
 - Replacing the token system: this plan consumes `litric-design`, it does not add
   a second source of truth for colour, type or spacing.
+
+## Shipped copy rule (2026-10-29)
+
+The direction above is kept, with one change decided against the running shell:
+the *concept* is explained, the *token* is not printed. Storage rows read
+"Read-only" or "Read and write", and the sentence beside a protected volume says
+the system storage cannot change while Litric runs and that every block is
+checked as it is read; the filesystem's own name no longer appears in any frame.
+Network rows read "Connected", "Not connected" or "Connecting" -- interface
+names, hardware addresses and `/dev` paths stay out of the default rows.
+
+The vocabulary lives in `src/litric-shell/src/copy.rs`; `copy::BANNED_TOKENS` is
+the single forbidden list, and the journey
+`journey_no_machine_token_reaches_the_system_surfaces` renders the real Tasks,
+Network and Diagnostics frames and fails if any of those tokens is drawn.
+
+## Shipped copy rule (2026-10-29)
+
+The direction above is kept, with one change decided against the running shell:
+the *concept* is explained, the *token* is not printed. Storage rows read
+"Read-only" or "Read and write", and the sentence beside a protected volume says
+the system storage cannot change while Litric runs and that every block is
+checked as it is read; the filesystem's own name no longer appears in any frame.
+Network rows read "Connected", "Not connected" or "Connecting" -- interface
+names, hardware addresses and `/dev` paths stay out of the default rows.
+
+The vocabulary lives in `src/litric-shell/src/copy.rs`; `copy::BANNED_TOKENS` is
+the single forbidden list, and the journey
+`journey_no_machine_token_reaches_the_system_surfaces` renders the real Tasks,
+Network and Diagnostics frames and fails if any of those tokens is drawn.

@@ -892,20 +892,20 @@ impl Shell {
         best
     }
 
-    /// What the network row says, as one line of prose.
+    /// What the network row says, as one line of prose: the state a person
+    /// needs, not the kernel's name for the device.
     #[must_use]
     pub fn net_summary(&self) -> String {
         let Some(iface) = self.primary_iface() else {
-            return "no network interface is reported by this machine".to_owned();
+            return "Not connected".to_owned();
         };
-        let kind = if iface.wireless { "Wi-Fi" } else { "wired" };
-        let name = &iface.name;
+        let kind = crate::copy::interface_kind(&iface.name, iface.wireless);
         match iface.state.as_str() {
-            "up" => format!("{name} ({kind}) is up"),
-            "down" => format!("{name} ({kind}) is down"),
+            "up" => format!("Connected over {kind}"),
+            "down" => "Not connected".to_owned(),
             // The platform writes `unknown` when the driver published no
             // operstate, which is not the same as a link that is down.
-            _ => format!("{name} ({kind}) did not report its state"),
+            _ => "Connecting".to_owned(),
         }
     }
 
@@ -8580,11 +8580,7 @@ mod tests {
         assert_eq!(s.primary_iface(), None);
         assert!(s.activate(Hot::QuickLinkToggle).is_empty());
         assert!(s.activate(Hot::QuickLinkReconnect).is_empty());
-        assert!(
-            s.net_summary().contains("no network interface"),
-            "{}",
-            s.net_summary()
-        );
+        assert_eq!(s.net_summary(), "Not connected");
 
         // An interface that is up: the switch asks for the state it is *not*
         // in, and the row names the interface the kernel gave.
@@ -8600,7 +8596,7 @@ mod tests {
             s.activate(Hot::QuickLinkReconnect),
             vec![Effect::ReconfigureLink("enp0s2".to_owned())]
         );
-        assert_eq!(s.net_summary(), "enp0s2 (wired) is up");
+        assert_eq!(s.net_summary(), "Connected over Wired network");
 
         // Loopback is not the network, and an instrument that is up wins over
         // one that is down: the tile must act on the cable that works.
@@ -8621,11 +8617,11 @@ mod tests {
                 up: true,
             }]
         );
-        assert_eq!(s.net_summary(), "wlan0 (Wi-Fi) is down");
+        assert_eq!(s.net_summary(), "Not connected");
 
         // A driver that published no operstate is not a link that is down.
         s.facts.net_ifaces = vec![an_iface("eth0", "unknown", false)];
-        assert_eq!(s.net_summary(), "eth0 (wired) did not report its state");
+        assert_eq!(s.net_summary(), "Connecting");
     }
 
     #[test]

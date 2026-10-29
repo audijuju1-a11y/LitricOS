@@ -257,7 +257,12 @@ pub fn table(canvas: &mut Canvas, t: &Tokens, m: &TaskManager, body: Rect) -> Re
                 }
                 let mut x = rect.x;
                 for (c, w) in &cols {
-                    let text = c.cell(&p, &m.prefs, m.total_mb);
+                    let raw = c.cell(&p, &m.prefs, m.total_mb);
+                    let text = if *c == Column::Name {
+                        crate::copy::process_label(&raw)
+                    } else {
+                        raw
+                    };
                     cell(
                         canvas,
                         &text,

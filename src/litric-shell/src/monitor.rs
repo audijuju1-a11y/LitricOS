@@ -40,22 +40,8 @@ use crate::ui::{self, Tokens};
 /// read-only filesystem checked by dm-verity, which is why that volume shows no
 /// free space and accepts no writes.
 #[must_use]
-pub fn readonly_volume_note(fs: &str, read_only: bool) -> Option<&'static str> {
-    if !read_only {
-        return None;
-    }
-    match fs {
-        "erofs" => Some(
-            "Read-only compressed system image (EROFS): nothing can change it while \
-             running, and dm-verity checks every block read against a hash tree.",
-        ),
-        "squashfs" => Some(
-            "Read-only compressed image: nothing on it can be changed while the \
-             system is running.",
-        ),
-        "iso9660" => Some("Optical media: readable only, by definition."),
-        _ => Some("Mounted read-only: nothing can be written here."),
-    }
+pub fn readonly_volume_note(_fs: &str, read_only: bool) -> Option<&'static str> {
+    crate::copy::readonly_note(read_only)
 }
 
 /// A percentage string, or nothing when there is no measurement.
@@ -132,7 +118,7 @@ pub fn system_rows(f: &SystemFacts) -> Vec<(String, String)> {
         rows.push(("Load".to_owned(), format!("{load:.2}{tasks}")));
     }
     if let Some(rss) = f.sysd_rss_mb {
-        rows.push(("litric-sysd".to_owned(), format!("{rss} MB")));
+        rows.push(("System services".to_owned(), format!("{rss} MB")));
     }
     if let Some(v) = f.verity {
         rows.push((
@@ -142,8 +128,8 @@ pub fn system_rows(f: &SystemFacts) -> Vec<(String, String)> {
     }
     if let Some(m) = f.mglru {
         rows.push((
-            "MGLRU".to_owned(),
-            if m { "active" } else { "off" }.to_owned(),
+            "Memory handling".to_owned(),
+            if m { "Automatic" } else { "Standard" }.to_owned(),
         ));
     }
     if let Some((n, b)) = f.trash {
@@ -164,11 +150,7 @@ pub fn storage_rows(f: &SystemFacts) -> Vec<(String, String, Option<&'static str
         .iter()
         .filter(|(_, fs, _)| is_storage_volume(fs))
         .map(|(mount, fs, ro)| {
-            let detail = if *ro {
-                format!("{fs} · read-only")
-            } else {
-                fs.clone()
-            };
+            let detail = crate::copy::volume_access(*ro).to_owned();
             (mount.clone(), detail, readonly_volume_note(fs, *ro))
         })
         .collect()
@@ -694,10 +676,13 @@ mod tests {
     #[test]
     fn a_read_only_image_explains_itself_and_a_writable_volume_does_not() {
         let note = readonly_volume_note("erofs", true).unwrap_or_default();
-        assert!(note.contains("EROFS"), "the name has to appear: {note}");
         assert!(
-            note.contains("read-only") || note.contains("nothing can change"),
+            note.contains("protected system storage"),
             "the note has to say what read-only means: {note}"
+        );
+        assert!(
+            crate::copy::is_plain(note),
+            "the machine's token must not reach the note: {note}"
         );
         assert!(readonly_volume_note("erofs", false).is_none());
         assert!(readonly_volume_note("ext4", false).is_none());

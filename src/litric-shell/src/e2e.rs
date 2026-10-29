@@ -2481,3 +2481,58 @@ fn journey_defender_fast_and_deep_scans_cover_different_folders() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The machine's own vocabulary must not reach a surface a person reads. This
+/// journey drives the real frames -- Tasks, then the two Settings pages -- with
+/// the tokens set on the facts, and inspects every text run the canvas drew.
+#[test]
+fn journey_no_machine_token_reaches_the_system_surfaces() {
+    use crate::copy::BANNED_TOKENS;
+    use crate::settings::Page;
+
+    let mut s = shell();
+    s.facts.net_ifaces = vec![crate::shell::NetIface {
+        name: "wlan0".to_owned(),
+        state: "up".to_owned(),
+        mac: "00:11:22:33:44:55".to_owned(),
+        wireless: true,
+    }];
+    s.facts.network = Some("online".to_owned());
+    s.facts.root_fs = Some("erofs".to_owned());
+    s.facts.volumes = vec![
+        ("/".to_owned(), "erofs".to_owned(), true),
+        ("/home".to_owned(), "btrfs".to_owned(), false),
+    ];
+
+    let mut seen: Vec<String> = Vec::new();
+    s.open_app(App::Activity);
+    let canvas = draw_frame_at(&mut s, 1280, 800);
+    seen.extend(canvas.text_runs().iter().map(|r| r.text.clone()));
+
+    s.open_app(App::Settings);
+    s.settings.page = Page::Network;
+    let canvas = draw_frame_at(&mut s, 1280, 800);
+    seen.extend(canvas.text_runs().iter().map(|r| r.text.clone()));
+    assert!(
+        seen.iter().any(|t| t == "Connected"),
+        "the network row reads as the plain state: {seen:?}"
+    );
+
+    // Every page, in the sidebar's own order: the storage list is drawn by the
+    // page that owns it, and the guard must not care which one that is.
+    for page in Page::ALL {
+        s.settings.page = page;
+        let canvas = draw_frame_at(&mut s, 1280, 800);
+        seen.extend(canvas.text_runs().iter().map(|r| r.text.clone()));
+    }
+    assert!(
+        seen.iter().any(|t| t == "Read-only"),
+        "storage says what can be done: {seen:?}"
+    );
+
+    for token in BANNED_TOKENS {
+        if let Some(hit) = seen.iter().find(|t| t.to_ascii_lowercase().contains(token)) {
+            panic!("the frame printed {token:?}: {hit:?}");
+        }
+    }
+}

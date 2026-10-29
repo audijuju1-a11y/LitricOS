@@ -44,6 +44,7 @@ pub mod apps;
 pub mod canvas;
 pub mod chrome;
 pub mod clients;
+pub mod copy;
 pub mod desktop;
 pub mod domkey;
 pub mod drm;
