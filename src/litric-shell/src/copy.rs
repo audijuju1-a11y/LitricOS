@@ -79,6 +79,20 @@ pub fn process_label(comm: &str) -> String {
     .to_owned()
 }
 
+/// The name a person reads for a place or an item: the last path segment,
+/// with the home root named the way the Files pane names it.
+#[must_use]
+pub fn place_name(path: &str) -> String {
+    if path.is_empty() || path == "/" {
+        return "This Litric".to_owned();
+    }
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_owned()
+}
+
 /// True when `text` carries no banned token.
 #[must_use]
 pub fn is_plain(text: &str) -> bool {
@@ -131,6 +145,14 @@ mod tests {
         for comm in ["litric-shell", "litric-sysd", "litric-defender"] {
             assert!(is_plain(&process_label(comm)));
         }
+    }
+
+    #[test]
+    fn places_are_named_the_way_the_window_names_them() {
+        assert_eq!(place_name("/"), "This Litric");
+        assert_eq!(place_name("/Documents"), "Documents");
+        assert_eq!(place_name("/Documents/Journey"), "Journey");
+        assert_eq!(place_name("Journey"), "Journey");
     }
 
     #[test]

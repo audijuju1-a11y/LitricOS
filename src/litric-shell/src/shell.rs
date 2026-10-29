@@ -2316,6 +2316,29 @@ impl Shell {
         }
     }
 
+    /// Paste the clipboard into the folder on screen, asking first.
+    ///
+    /// One function for the toolbar button, the row menu, the keyboard shortcut
+    /// and the action list: the previous split left the button unhandled, so a
+    /// click did nothing while Ctrl+V worked. The dialog names the item and the
+    /// destination in the words the window uses, never their internal paths.
+    pub fn paste_clipboard(&mut self) {
+        let Some((cut, path)) = self.files.clipboard.clone() else {
+            return;
+        };
+        let op = if cut {
+            crate::apps::FilesOp::PasteCut
+        } else {
+            crate::apps::FilesOp::PasteCopy
+        };
+        let what = if cut { "Move" } else { "Copy" };
+        let name = crate::copy::place_name(&path);
+        let dest = crate::copy::place_name(&self.files.path);
+        self.files
+            .ask_confirm(what, &format!("{what} “{name}” into “{dest}”?"), op);
+        self.request_full_redraw();
+    }
+
     /// Execute one filesystem operation from a confirmed dialog.
     fn perform_file_op(&mut self, op: crate::apps::FilesOp) {
         use crate::apps::FilesOp;
@@ -2466,11 +2489,7 @@ impl Shell {
         match action {
             MA::NewFolder => self.new_folder_from_menu(),
             MA::NewFile => self.files.ask_new_file(),
-            MA::Paste => {
-                let op = crate::apps::FilesOp::PasteCopy;
-                self.files
-                    .ask_confirm("Paste", "Paste the clipboard here?", op);
-            }
+            MA::Paste => self.paste_clipboard(),
             MA::Rename => self.files.ask_rename(),
             MA::Copy => {
                 self.files.copy_selection();
@@ -5249,20 +5268,7 @@ impl Shell {
                     Some(Vec::new())
                 }
                 Key::Char('v') if mods.ctrl => {
-                    if let Some((cut, p)) = self.files.clipboard.clone() {
-                        let op = if cut {
-                            crate::apps::FilesOp::PasteCut
-                        } else {
-                            crate::apps::FilesOp::PasteCopy
-                        };
-                        let what = if cut { "Move" } else { "Copy" };
-                        self.files.ask_confirm(
-                            what,
-                            &format!("{what} {p} into {}?", self.files.path),
-                            op,
-                        );
-                        self.request_full_redraw();
-                    }
+                    self.paste_clipboard();
                     Some(Vec::new())
                 }
                 Key::Char('f') if mods.ctrl => {
@@ -6207,7 +6213,14 @@ impl Shell {
             // Files clicks mutate the model; the view refreshes the listing
             // when it sees `listed` lag `path`.
             Hot::Files(h) => {
-                let _ = crate::apps::files_action(&mut self.files, h);
+                // Paste is an operation with a target, not navigation: the
+                // model leaves it to the shell because the source is the
+                // clipboard and the destination is the folder on screen.
+                if h == crate::apps::FilesHot::Paste {
+                    self.paste_clipboard();
+                } else {
+                    let _ = crate::apps::files_action(&mut self.files, h);
+                }
                 Vec::new()
             }
             Hot::NotificationItem(i) => {
@@ -6578,20 +6591,7 @@ impl Shell {
                 Vec::new()
             }
             Action::FilesPaste => {
-                if let Some((cut, p)) = self.files.clipboard.clone() {
-                    let op = if cut {
-                        crate::apps::FilesOp::PasteCut
-                    } else {
-                        crate::apps::FilesOp::PasteCopy
-                    };
-                    let what = if cut { "Move" } else { "Copy" };
-                    self.files.ask_confirm(
-                        what,
-                        &format!("{what} {p} into {}?", self.files.path),
-                        op,
-                    );
-                    self.request_full_redraw();
-                }
+                self.paste_clipboard();
                 Vec::new()
             }
             Action::FilesTrash => {

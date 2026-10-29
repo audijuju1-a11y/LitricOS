@@ -113,7 +113,7 @@ ALLOWED = {
         "journey_files_selects_with_mouse_and_compresses_multiple_items": "removes the fixture root this journey made with `e2e_root` -- tagged with this process's id under the system temp directory -- after asserting the archive it asked for exists in it",
         "journey_defender_scans_and_reports_eicar_end_to_end": "removes the temporary root this journey created",
         "journey_defender_fast_and_deep_scans_cover_different_folders": "removes the temporary fixture root this journey created, tagged with its own pid",
-        "journey_this_litric_creates_and_renames_a_folder": "removes the temporary fixture root this journey created, tagged with its own pid",
+        "journey_this_litric_creates_renames_moves_and_trashes": "removes the temporary fixture root this journey created, tagged with its own pid",
         "journey_trash_window_restores_after_files_trash": "removes the temporary root this journey created",
         "journey_right_click_desktop_menu_creates_a_folder_via_dialog": "removes the temporary root this journey created",
         "journey_new_folder_from_the_files_menu_lands_in_the_open_folder": "removes the temporary root this journey created (BUG-0025: the row used to create in /Documents; the test asserts the folder landed in the open folder and that /Documents was untouched before cleaning up)",

@@ -2924,41 +2924,58 @@ volume. `docs/DESIGN-SYSTEM-v3/06-APP-REDESIGN.md` argues for naming it **and**
 explaining it; the brief says the word should not reach the user at all. That is
 a copy/design decision with tests on both sides, so it is recorded here instead
 of being changed unilaterally.
-## 36. Batch: Files gets a "This Litric" home place (partly verified)
+## 36. Batch: Files create → rename → move → trash, all through the window (verified)
 
-### 36.1 What changed
+### 36.1 What was broken, with the code that proves it
 
-`FilesApp::DEFAULT_PLACES` now starts with `("/", "This Litric")` — the home root
-as a place, the way Explorer starts at This PC. A person who does not yet know
-where a file lives has one row that lists every folder under the account, and the
-six document folders follow it. The place list is seven entries; the sidebar
-draws it with the same component and scrolling it already had.
+The toolbar Paste button did nothing. `Hot::Files(h)` in `shell.rs` sent every
+Files hotspot through `crate::apps::files_action`, and that function deliberately
+returns `None` for `FilesHot::Paste` (`apps.rs`, the
+`FilesHot::New | FilesHot::Filter | FilesHot::Paste => None` arm): paste needs the
+clipboard and the destination folder, which the model does not own. The button
+was drawn and registered, and the click was swallowed.
 
-A journey drives the real window: it clicks the "This Litric" row, creates a
-folder with the New-folder dialog, selects the created row and renames it in
-place, checking `/Trip` then `/Journey` on the fixture's disk. The existing place
-unit test now pins the root row by name and proves the following rows still
-navigate.
+The second defect was in the row menu: `MenuAction::Paste` always built
+`FilesOp::PasteCopy`, even when the clipboard held a **cut**. A cut followed by
+menu-paste would therefore try to copy and fail with `NotFound`, so "move" could
+never happen from the menu. Ctrl+V and the action list already chose correctly,
+which is why the same operation appeared to work from one surface and not another.
 
-### 36.2 Tests
+The trash row was not broken: `MenuAction::Trash` already asked for confirmation
+and `perform_file_op` moves the path through the bridge synchronously. The earlier
+headless attempt failed because it clicked a row before the listing had settled,
+so the selection was empty and no confirm dialog was ever raised.
+
+### 36.2 The fix
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/shell.rs` | one `Shell::paste_clipboard()` is now the only paste path: it reads `(cut, path)` from the clipboard, chooses `FilesOp::PasteCut` or `PasteCopy`, and asks for confirmation with the item and destination named in plain words. The toolbar `Hot::Files(FilesHot::Paste)`, the row-menu `MenuAction::Paste`, `Action::FilesPaste` and Ctrl+V all call it. |
+| `src/litric-shell/src/copy.rs` | `place_name()` names a place or item the way the window does (`/` → "This Litric", `/Documents/Journey` → "Journey"), so the confirmation reads `Move “Journey” into “Documents”?` instead of printing internal paths. |
+| `src/litric-shell/src/e2e.rs` | the journey is now `journey_this_litric_creates_renames_moves_and_trashes`: create → rename → cut → open Documents → paste → confirm → trash → confirm, each step a real click or key event. |
+| `ci/lint-file-safety.py` | the reviewed deletion entry follows the renamed journey. |
+
+No test-only hook, no fixture special case, no polling, no thread, no new
+per-frame work: paste is still the event-driven dialog → `perform_file_op` path,
+and the diff adds only two small strings per user action.
+
+### 36.3 Tests, with the state each assertion observed
+
+| Step | Assertion on the fixture's real disk, through `FsBridge` |
+|---|---|
+| create | `/Trip` exists |
+| rename | `/Journey` exists and `/Trip` does not |
+| cut → Documents → paste → confirm | `/Documents/Journey` exists and `/Journey` does not |
+| row menu → Move to trash → confirm | `/Documents/Journey` no longer exists, and `trash_list()` contains an entry named Journey |
 
 ```text
-apps::tests::a_files_place_click_navigates_and_pins     ok (root row pinned, /Pictures still reachable)
-e2e::journey_this_litric_creates_and_renames_a_folder   ok (create + rename through the window)
-cargo test --workspace                                  passed=1685 failed=0
-cargo clippy --workspace --all-targets -D warnings       exit 0
-bash ci/verify.sh                                       31 pass, 2 fail, 4 skipped
+e2e::journey_this_litric_creates_renames_moves_and_trashes   ok
+apps::tests::a_files_place_click_navigates_and_pins           ok (root row pinned by name)
+copy::tests::places_are_named_the_way_the_window_names_them    ok
+cargo test --workspace        passed=1686 failed=0   (was 1,685)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
 ```
 
-The new journey's fixture-root removal is a reviewed `ci/lint-file-safety.py`
-entry with its reason.
-
-### 36.3 Limitation recorded, not hidden
-
-Move and trash through this window were attempted in the same journey and are
-**not** proven by it: cut/paste did not land the folder in Documents, and the
-trash row did not remove it, in this headless pass. Those steps were removed from
-the journey rather than left asserting something false; the cut/paste and
-Trash-entry paths keep their own existing coverage, and this gap is the next
-Files item to close with the real op plumbing. No test was deleted: the journey
-below proves the part that does work.
+The two failures are the known absent `keys/dev/` material (mkosi config, dev key
+pairs). No gate relaxed, no test deleted, no dependency added.

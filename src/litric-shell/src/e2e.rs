@@ -2543,7 +2543,7 @@ fn journey_no_machine_token_reaches_the_system_surfaces() {
 /// fixture's disk.
 #[cfg(unix)]
 #[test]
-fn journey_this_litric_creates_and_renames_a_folder() {
+fn journey_this_litric_creates_renames_moves_and_trashes() {
     let mut s = shell();
     let root = e2e_root("this-litric");
     std::fs::create_dir_all(root.join("Documents")).unwrap();
@@ -2601,5 +2601,81 @@ fn journey_this_litric_creates_and_renames_a_folder() {
     assert!(bridge.exists("/Journey").unwrap(), "renamed in place");
     assert!(!bridge.exists("/Trip").unwrap(), "the old name is gone");
 
+    // Move: cut the folder, open Documents, paste, confirm the dialog.
+    s.files.listed = None;
+    s.files
+        .apply_list_reply("e name=%4aourney kind=dir size=0 mtime=0\n");
+    let _ = draw_frame(&mut s);
+    let index = s
+        .files
+        .rows
+        .iter()
+        .position(|r| r.name == "Journey")
+        .unwrap();
+    let row = s
+        .hotspots()
+        .rect_of(Hot::Files(FilesHot::Row(index)))
+        .unwrap();
+    click(&mut s, row.center().0, row.center().1);
+    assert_eq!(s.files.selected_paths(), vec!["/Journey".to_owned()]);
+    right_click(&mut s, row.center().0, row.center().1);
+    let _ = draw_frame(&mut s);
+    let cut = s.hotspots().rect_of(Hot::MenuRow(MenuAction::Cut)).unwrap();
+    click(&mut s, cut.center().0, cut.center().1);
+    let docs = s
+        .hotspots()
+        .rect_of(Hot::Files(FilesHot::Place(1)))
+        .unwrap();
+    click(&mut s, docs.center().0, docs.center().1);
+    let _ = draw_frame(&mut s);
+    let paste = s.hotspots().rect_of(Hot::Files(FilesHot::Paste)).unwrap();
+    click(&mut s, paste.center().0, paste.center().1);
+    let _ = draw_frame(&mut s);
+    let ok = s
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the paste asks first");
+    click(&mut s, ok.center().0, ok.center().1);
+    assert!(
+        bridge.exists("/Documents/Journey").unwrap(),
+        "moved into Documents"
+    );
+    assert!(!bridge.exists("/Journey").unwrap(), "the source is gone");
+
+    // Trash: select the moved folder and use the row menu.
+    s.files.listed = None;
+    s.files
+        .apply_list_reply("e name=%4aourney kind=dir size=0 mtime=0\n");
+    let _ = draw_frame(&mut s);
+    let index = s
+        .files
+        .rows
+        .iter()
+        .position(|r| r.name == "Journey")
+        .unwrap();
+    let row = s
+        .hotspots()
+        .rect_of(Hot::Files(FilesHot::Row(index)))
+        .unwrap();
+    click(&mut s, row.center().0, row.center().1);
+    right_click(&mut s, row.center().0, row.center().1);
+    let _ = draw_frame(&mut s);
+    let trash = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::Trash))
+        .unwrap();
+    click(&mut s, trash.center().0, trash.center().1);
+    let _ = draw_frame(&mut s);
+    let ok = s
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the trash asks first");
+    click(&mut s, ok.center().0, ok.center().1);
+    assert!(!bridge.exists("/Documents/Journey").unwrap(), "trashed");
+    let trashed = bridge.trash_list().unwrap_or_default();
+    assert!(
+        trashed.iter().any(|e| e.name.contains("Journey")),
+        "recoverable: {trashed:?}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
