@@ -700,8 +700,6 @@ pub struct Prefs {
     pub zebra: bool,
     /// How often the daemon is asked, in milliseconds.
     pub refresh_ms: u64,
-    /// Ask before ending a process.
-    pub confirm_end_task: bool,
     /// The colour a row is tinted when a process crosses a metric's warn band.
     pub warn_tone: Vec<(Metric, Tone)>,
     /// The colour for the critical band.
@@ -777,7 +775,6 @@ impl Default for Prefs {
             sticky_header: true,
             zebra: false,
             refresh_ms: 1_000,
-            confirm_end_task: true,
             warn_tone: Metric::ALL.iter().map(|m| (*m, Tone::Warning)).collect(),
             critical_tone: Metric::ALL.iter().map(|m| (*m, Tone::Bad)).collect(),
             short_headers: Column::ALL.iter().map(|c| (*c, false)).collect(),
@@ -1025,14 +1022,6 @@ pub enum Change {
     Zebra(bool),
     /// How often to ask the daemon.
     Refresh(u64),
-    /// Ask before ending a process.
-    ConfirmEndTask(bool),
-    /// End the selected process.
-    EndTask,
-    /// End the selected process and everything it started.
-    EndTree,
-    /// End every process in the selected group.
-    EndGroup,
     /// Copy the selected row as text.
     CopyRow,
     /// Copy the whole table as text.
@@ -1372,16 +1361,6 @@ pub fn features() -> Vec<Feature> {
             Change::Refresh(ms),
         );
     }
-    for (on, word) in [(true, "on"), (false, "off")] {
-        push(
-            Category::Behaviour,
-            format!("behaviour.confirm_end_task.{word}"),
-            format!("Confirm before ending a task: {word}"),
-            "Ending the wrong process loses the work in it, and the table only shows a name."
-                .to_owned(),
-            Change::ConfirmEndTask(on),
-        );
-    }
 
     // A heading has to survive a narrow window, and a shortened heading is how
     // the table keeps its columns instead of hiding them. A column whose short
@@ -1557,24 +1536,6 @@ pub fn features() -> Vec<Feature> {
 
     for (change, id, label, help) in [
         (
-            Change::EndTask,
-            "actions.end_task",
-            "End task",
-            "Ask the selected process to stop.",
-        ),
-        (
-            Change::EndTree,
-            "actions.end_tree",
-            "End process tree",
-            "Stop the selected process and everything it started.",
-        ),
-        (
-            Change::EndGroup,
-            "actions.end_group",
-            "End every process in the group",
-            "Stops every row under the selected group heading.",
-        ),
-        (
             Change::CopyRow,
             "actions.copy_row",
             "Copy the selected row",
@@ -1687,7 +1648,6 @@ pub fn apply(prefs: &mut Prefs, change: &Change) -> bool {
         Change::StickyHeader(on) => prefs.sticky_header = *on,
         Change::Zebra(on) => prefs.zebra = *on,
         Change::Refresh(ms) => prefs.refresh_ms = *ms,
-        Change::ConfirmEndTask(on) => prefs.confirm_end_task = *on,
         Change::Paused(on) => prefs.paused = *on,
         Change::ShortHeader(c, on) => {
             set(&mut prefs.short_headers, *c, *on);
@@ -1710,10 +1670,7 @@ pub fn apply(prefs: &mut Prefs, change: &Change) -> bool {
         }
         // Actions need a selection; they are not settings, and reporting that
         // they "changed" a preference would be a lie the caller then shows.
-        Change::EndTask
-        | Change::EndTree
-        | Change::EndGroup
-        | Change::CopyRow
+        Change::CopyRow
         | Change::CopyTable
         | Change::CopyColumn(..)
         | Change::Export(..)
@@ -1772,7 +1729,6 @@ pub fn reset_category(prefs: &mut Prefs, category: Category) -> bool {
         Category::Actions => return false,
         Category::Behaviour => {
             prefs.refresh_ms = defaults.refresh_ms;
-            prefs.confirm_end_task = defaults.confirm_end_task;
             prefs.paused = defaults.paused;
             prefs.delivery.clone_from(&defaults.delivery);
         }
@@ -2526,13 +2482,6 @@ impl TaskManager {
                 self.message = Some("Table copied".to_owned());
                 Some(self.table_text())
             }
-            Change::EndTask | Change::EndTree | Change::EndGroup => {
-                let pid = self.selected_pid()?;
-                // The shell performs the end; the model says what was asked for,
-                // so a model that has nothing selected cannot end anything.
-                self.message = Some(format!("Ending process {pid}"));
-                None
-            }
             Change::CopyColumn(c, all) => {
                 let text = self.column_text(*c, *all)?;
                 self.message = Some(format!("{} copied", c.label()));
@@ -3014,10 +2963,7 @@ mod tests {
         let is_action = |c: &Change| {
             matches!(
                 c,
-                Change::EndTask
-                    | Change::EndTree
-                    | Change::EndGroup
-                    | Change::CopyRow
+                Change::CopyRow
                     | Change::CopyTable
                     | Change::CopyColumn(..)
                     | Change::Export(..)
@@ -3133,10 +3079,9 @@ mod tests {
         let mut m = projection_manager();
         apply(&mut m.prefs, change);
         out.push_str(&format!(
-            "behaviour: paused={} refresh={} confirm={} delivery={:?} reset={:?}\n",
+            "behaviour: paused={} refresh={} delivery={:?} reset={:?}\n",
             m.prefs.paused,
             m.prefs.refresh_ms,
-            m.prefs.confirm_end_task,
             m.prefs.delivery,
             matches!(change, Change::Reset(_)),
         ));
@@ -3269,7 +3214,6 @@ mod tests {
             Change::Zebra(_) => "row shading",
             Change::Paused(_) => "sampling",
             Change::Refresh(_) => "refresh interval",
-            Change::ConfirmEndTask(_) => "end-task confirmation",
             Change::Reset(c) => match c {
                 Category::Columns => "reset columns",
                 Category::Sorting => "reset sorting",
@@ -3280,10 +3224,7 @@ mod tests {
                 Category::Actions => "reset actions",
                 Category::Behaviour => "reset behaviour",
             },
-            Change::EndTask
-            | Change::EndTree
-            | Change::EndGroup
-            | Change::CopyRow
+            Change::CopyRow
             | Change::CopyTable
             | Change::CopyColumn(..)
             | Change::Export(..)
@@ -3384,13 +3325,7 @@ mod tests {
         // `CopyTable` is not in this list on purpose: it copies the table, and a
         // table exists whether or not a row is selected. Every other action
         // names a process, so with none selected they have nothing to name.
-        for change in [
-            Change::EndTask,
-            Change::EndTree,
-            Change::EndGroup,
-            Change::CopyRow,
-            Change::CopyColumn(Column::Pid, false),
-        ] {
+        for change in [Change::CopyRow, Change::CopyColumn(Column::Pid, false)] {
             assert_eq!(
                 m.act(&change),
                 None,

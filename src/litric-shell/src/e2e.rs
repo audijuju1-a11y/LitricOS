@@ -3631,3 +3631,236 @@ fn journey_activity_ends_a_real_process_after_confirmation() {
         "the real child process survived the confirmed End task"
     );
 }
+
+/// The kernel's own child list for a live process, for the tree journey.
+#[cfg(unix)]
+fn live_children(pid: u32) -> Vec<u32> {
+    let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for task in tasks.flatten() {
+        let Ok(text) = std::fs::read_to_string(task.path().join("children")) else {
+            continue;
+        };
+        for field in text.split_whitespace() {
+            if let Ok(child) = field.parse::<u32>() {
+                if !out.contains(&child) {
+                    out.push(child);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A process has ended when it is gone or is a zombie waiting to be reaped.
+#[cfg(unix)]
+fn process_running(pid: u32) -> bool {
+    let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    text.rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .is_some_and(|state| state != "Z" && state != "X")
+}
+
+/// One Activity session against a real parent and its two real children:
+/// select the parent's row, click End tree once (a question, not a signal),
+/// click again, and watch every process in the tree actually stop. A process
+/// outside this session's scope (init) is refused in a second session.
+#[test]
+fn journey_activity_ends_a_real_process_tree_after_confirmation() {
+    let mut parent = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 30 & sleep 30 & wait")
+        .spawn()
+        .expect("a real parent process");
+    let pid = parent.id();
+    let started = std::time::Instant::now();
+    let mut kids = live_children(pid);
+    while started.elapsed() < std::time::Duration::from_secs(2) && kids.len() < 2 {
+        kids = live_children(pid);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        kids.len(),
+        2,
+        "the fixture must be one real parent with two real children"
+    );
+    let status =
+        std::fs::read_to_string(format!("/proc/{pid}/status")).expect("the parent's status");
+    let uid = litric_sysd::facts::parse_uid(&status);
+
+    let mut s = shell();
+    s.facts.mem_total_mb = Some(1024);
+    s.facts.processes.push(crate::shell::ProcRow {
+        pid,
+        name: "sh".to_owned(),
+        cmdline: "sh -c sleep 30 & sleep 30 & wait".to_owned(),
+        state: "sleeping".to_owned(),
+        ppid: 0,
+        threads: 1,
+        ticks: 0,
+        rss_mb: Some(1),
+        uid,
+        cpu: None,
+    });
+    s.activity.prefs.show_system_users = true;
+    s.activity.observe(&s.facts);
+    s.open_app(App::Activity);
+    let _ = draw_frame(&mut s);
+
+    let row = s
+        .hotspots()
+        .rect_of(Hot::ActivityRow(pid))
+        .expect("the parent's real row is a click target");
+    let _ = click(&mut s, row.center().0, row.center().1);
+    assert_eq!(s.activity.selected_pid(), Some(pid), "the row is selected");
+    let _ = draw_frame(&mut s);
+
+    let tree = s
+        .hotspots()
+        .rect_of(Hot::ActivityEndTree)
+        .expect("End tree is drawn once a row is selected");
+    let _ = click(&mut s, tree.center().0, tree.center().1);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.activity
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("Click End tree again")),
+        "the first click is a question: {:?}",
+        s.activity.message
+    );
+    assert!(
+        process_running(pid),
+        "the first click must not signal the parent"
+    );
+    for kid in &kids {
+        assert!(
+            process_running(*kid),
+            "the first click must not signal child {kid}"
+        );
+    }
+
+    let tree = s
+        .hotspots()
+        .rect_of(Hot::ActivityEndTree)
+        .expect("the confirming control is still there");
+    let _ = click(&mut s, tree.center().0, tree.center().1);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.activity
+            .message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Asked ") && m.contains("processes")),
+        "the window reports how many were asked: {:?}",
+        s.activity.message
+    );
+
+    let started = std::time::Instant::now();
+    let mut parent_ended = false;
+    while started.elapsed() < std::time::Duration::from_secs(3) {
+        if parent.try_wait().expect("try_wait").is_some() {
+            parent_ended = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    if !parent_ended {
+        let _ = parent.kill();
+    }
+    let _ = parent.wait();
+    assert!(
+        parent_ended,
+        "the real parent survived the confirmed End tree"
+    );
+
+    for kid in &kids {
+        let started = std::time::Instant::now();
+        let mut stopped = false;
+        while started.elapsed() < std::time::Duration::from_secs(3) {
+            if !process_running(*kid) {
+                stopped = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if !stopped {
+            let _ = std::process::Command::new("/bin/kill")
+                .arg("-KILL")
+                .arg(kid.to_string())
+                .status();
+        }
+        assert!(stopped, "real child {kid} survived the confirmed End tree");
+    }
+}
+
+/// A tree request aimed at a process outside this desktop's scope is refused
+/// with a real sentence, and the process is untouched.
+#[test]
+fn journey_activity_refuses_a_process_outside_its_scope() {
+    let status = std::fs::read_to_string("/proc/1/status").expect("init's status");
+    let uid = litric_sysd::facts::parse_uid(&status);
+
+    let mut s = shell();
+    s.facts.mem_total_mb = Some(1024);
+    s.facts.processes.push(crate::shell::ProcRow {
+        pid: 1,
+        name: "system".to_owned(),
+        cmdline: "system".to_owned(),
+        state: "sleeping".to_owned(),
+        ppid: 0,
+        threads: 1,
+        ticks: 0,
+        rss_mb: Some(1),
+        uid,
+        cpu: None,
+    });
+    s.activity.prefs.show_system_users = true;
+    s.activity.prefs.user_scope = crate::taskmgr::UserScope::All;
+    s.activity.observe(&s.facts);
+    s.open_app(App::Activity);
+    let _ = draw_frame(&mut s);
+
+    let row = s
+        .hotspots()
+        .rect_of(Hot::ActivityRow(1))
+        .expect("init has a real row");
+    let _ = click(&mut s, row.center().0, row.center().1);
+    let _ = draw_frame(&mut s);
+    let tree = s
+        .hotspots()
+        .rect_of(Hot::ActivityEndTree)
+        .expect("End tree is drawn for the selected row");
+    let _ = click(&mut s, tree.center().0, tree.center().1);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.activity
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("Click End tree again")),
+        "the first click only arms: {:?}",
+        s.activity.message
+    );
+
+    let tree = s
+        .hotspots()
+        .rect_of(Hot::ActivityEndTree)
+        .expect("the confirming control is still there");
+    let _ = click(&mut s, tree.center().0, tree.center().1);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.activity
+            .message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Could not end") && m.contains("does not let")),
+        "init is refused in plain language: {:?}",
+        s.activity.message
+    );
+    assert!(
+        std::path::Path::new("/proc/1/stat").is_file(),
+        "the refused process is untouched"
+    );
+}

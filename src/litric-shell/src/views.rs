@@ -2447,12 +2447,13 @@ fn draw_activity(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
 
     // Search stays above the clipped process table so it remains visible when
     // the window is short. Typing filters the actual TaskManager rows.
-    let end_w = t.px(112.0);
+    let end_w = t.px(96.0);
+    let tree_w = t.px(96.0);
     let toolbar_gap = t.sp(Space::Xs);
     let search = Rect::new(
         table_rect.x + t.sp(Space::Sm),
         table_rect.y + t.sp(Space::Xs),
-        (table_rect.w - t.sp(Space::Sm) * 2.0 - end_w - toolbar_gap)
+        (table_rect.w - t.sp(Space::Sm) * 2.0 - end_w - tree_w - toolbar_gap * 2.0)
             .clamp(t.px(110.0), t.px(300.0)),
         t.px(28.0),
     );
@@ -2467,34 +2468,62 @@ fn draw_activity(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     );
     shell.hotspots_mut().push(search, search_hot);
 
-    // The one action the process table has. Disabled until a row is selected,
-    // and armed for a second click before anything is signalled.
+    // The two process actions. Disabled until a row is selected, and each is
+    // armed for a second click before anything is signalled; arming one does
+    // not arm the other.
     let end_task = Rect::new(search.right() + toolbar_gap, search.y, end_w, search.h);
+    let end_tree = Rect::new(end_task.right() + toolbar_gap, search.y, tree_w, search.h);
     let selected_pid = shell.activity.selected_pid();
-    let confirming = selected_pid.is_some_and(|pid| shell.activity_end_confirm == Some(pid));
-    let end_label = if confirming {
-        "Confirm end"
+    let task_confirming = selected_pid.is_some_and(|pid| {
+        shell.activity_end_confirm == Some((pid, crate::process::EndTarget::Task))
+    });
+    let tree_confirming = selected_pid.is_some_and(|pid| {
+        shell.activity_end_confirm == Some((pid, crate::process::EndTarget::Tree))
+    });
+    let state = if selected_pid.is_some() {
+        ui::State::Normal
     } else {
-        "End task"
+        ui::State::Disabled
     };
     ui::button(
         canvas,
         &t,
         end_task,
-        end_label,
-        if selected_pid.is_some() {
-            ui::State::Normal
+        if task_confirming {
+            "Confirm end"
         } else {
-            ui::State::Disabled
+            "End task"
         },
-        if confirming { Tone::Bad } else { Tone::Neutral },
+        state,
+        if task_confirming {
+            Tone::Bad
+        } else {
+            Tone::Neutral
+        },
+    );
+    ui::button(
+        canvas,
+        &t,
+        end_tree,
+        if tree_confirming {
+            "Confirm tree"
+        } else {
+            "End tree"
+        },
+        state,
+        if tree_confirming {
+            Tone::Bad
+        } else {
+            Tone::Neutral
+        },
     );
     if selected_pid.is_some() {
         shell.hotspots_mut().push(end_task, Hot::ActivityEndTask);
+        shell.hotspots_mut().push(end_tree, Hot::ActivityEndTree);
     }
     if let Some(message) = &shell.activity.message {
         let s_message = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
-        let message_x = end_task.right() + toolbar_gap;
+        let message_x = end_tree.right() + toolbar_gap;
         let message_w = table_rect.right() - message_x - t.sp(Space::Sm);
         if message_w > t.px(60.0) {
             font::draw(

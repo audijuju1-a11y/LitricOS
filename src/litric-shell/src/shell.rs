@@ -394,6 +394,9 @@ pub enum Hot {
     ActivityRow(u32),
     /// End the selected process, after one confirmation click.
     ActivityEndTask,
+    /// End the selected process and everything it started, after one
+    /// confirmation click.
+    ActivityEndTree,
     /// The lock screen's full-surface catcher: a click wakes the password
     /// field.
     LockWake,
@@ -2950,8 +2953,9 @@ pub struct Shell {
     /// The Activity window's model: machine meters, the process table, and what
     /// a person has changed about both.
     pub activity: crate::taskmgr::TaskManager,
-    /// The pid whose End task button is waiting for its confirmation click.
-    pub activity_end_confirm: Option<u32>,
+    /// The pid and the promise whose button is waiting for its confirmation
+    /// click: one process, or the tree it started.
+    pub activity_end_confirm: Option<(u32, crate::process::EndTarget)>,
     /// The Files application model (Explorer-style places, history, table).
     pub files: crate::apps::FilesApp,
     /// The host root every file surface reads and writes through.
@@ -5959,7 +5963,8 @@ impl Shell {
                 self.request_full_redraw();
                 Vec::new()
             }
-            Hot::ActivityEndTask => self.end_selected_process(),
+            Hot::ActivityEndTask => self.end_selected_process(crate::process::EndTarget::Task),
+            Hot::ActivityEndTree => self.end_selected_process(crate::process::EndTarget::Tree),
             Hot::TrashFilter => Vec::new(),
             Hot::MenuWorkspace | Hot::StatusMetrics => self.perform(Action::Open(App::Activity)),
             Hot::MenuEnvironment => self.perform(Action::ToggleQuickSettings),
@@ -6907,14 +6912,16 @@ impl Shell {
         Vec::new()
     }
 
-    /// End the process selected in Activity after one confirming click.
+    /// End the process selected in Activity, or its tree, after one
+    /// confirming click.
     ///
     /// The signal is sent as this session's user, after [`crate::process`] has
-    /// checked the owner and the kernel session; a daemon is not asked because
-    /// no daemon owns the user's own processes. The window says the process was
-    /// *asked* to stop, never that it exited: the next facts sample is what
-    /// decides that.
-    fn end_selected_process(&mut self) -> Vec<Effect> {
+    /// checked the owner and the kernel session of every node; a daemon is not
+    /// asked because no daemon owns the user's own processes. The window says
+    /// the processes were *asked* to stop, never that they exited: the next
+    /// facts sample is what decides that. Arming one control disarms the other,
+    /// and selecting a different row disarms both.
+    fn end_selected_process(&mut self, target: crate::process::EndTarget) -> Vec<Effect> {
         let Some(pid) = self.activity.selected_pid() else {
             self.activity.message = Some("Select a process first.".to_owned());
             return Vec::new();
@@ -6925,16 +6932,35 @@ impl Shell {
             .iter()
             .find(|p| p.pid == pid)
             .map_or_else(|| format!("process {pid}"), |p| p.name.clone());
-        if self.activity_end_confirm != Some(pid) {
-            self.activity_end_confirm = Some(pid);
-            self.activity.message = Some(format!("End {name}? Click End task again to confirm."));
+        let button = match target {
+            crate::process::EndTarget::Task => "End task",
+            crate::process::EndTarget::Tree => "End tree",
+        };
+        if self.activity_end_confirm != Some((pid, target)) {
+            self.activity_end_confirm = Some((pid, target));
+            self.activity.message = Some(format!("End {name}? Click {button} again to confirm."));
             self.request_full_redraw();
             return Vec::new();
         }
         self.activity_end_confirm = None;
-        self.activity.message = Some(match crate::process::terminate(pid) {
-            Ok(()) => format!("Asked {name} to stop"),
-            Err(error) => format!("Could not end {name}: {error}"),
+        self.activity.message = Some(match target {
+            crate::process::EndTarget::Task => match crate::process::terminate(pid) {
+                Ok(()) => format!("Asked {name} to stop"),
+                Err(error) => format!("Could not end {name}: {error}"),
+            },
+            crate::process::EndTarget::Tree => match crate::process::terminate_tree(pid) {
+                Ok(done) => {
+                    let mut message = format!("Asked {} processes to stop", done.asked);
+                    if done.refused > 0 {
+                        message.push_str(&format!("; {} left alone", done.refused));
+                    }
+                    if done.failed > 0 {
+                        message.push_str(&format!("; {} could not be asked", done.failed));
+                    }
+                    message
+                }
+                Err(error) => format!("Could not end {name} and what it started: {error}"),
+            },
         });
         self.request_full_redraw();
         Vec::new()

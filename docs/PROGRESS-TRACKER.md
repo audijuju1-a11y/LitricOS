@@ -3410,10 +3410,10 @@ even when the shell itself runs as root, and refuses another logged-in user.
 never that it exited. If the process ignores the request, the next facts sample
 still shows it and the table is the truth.
 
-Ending a whole tree or a group is **not** exposed: the model still has
-`EndTree`/`EndGroup` variants, but no UI caller and no implementation, and this
-batch does not claim them. Privileged process control (another user, another
-session) remains unsupported.
+Ending a whole tree was **not** exposed in this batch; §43 supersedes this
+paragraph with a real, bounded tree action and removes the unused model
+variants. Privileged process control (another user, another session) remains
+unsupported.
 
 ### 42.4 Resources
 
@@ -3433,3 +3433,68 @@ bash ci/verify.sh             31 pass, 2 fail, 4 skipped
 
 The two failures are the unchanged absent `keys/dev/` material. No test deleted,
 no gate relaxed, no dependency added.
+
+
+## 43. Batch: Activity ends a real process tree (verified)
+
+### 43.1 What the audit found
+
+§42 gave the Activity window one real action and left the Task Manager model with
+three process-action variants (`EndTask`, `EndTree`, `EndGroup`). None had a UI
+consumer; `act()` returned a sentence and performed no work. `ConfirmEndTask` was
+a preference no window read, because the confirmation is unconditional. This
+batch implements the tree action, then removes every unused variant instead of
+leaving the model advertising capabilities the product does not have.
+
+Process-group termination was removed rather than guessed at: a kernel process
+group can contain processes started by another user or session, and signalling
+one as a shortcut would bypass the per-node rule below. There is no group button
+to press and no group implementation to trust.
+
+### 43.2 The wiring
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/process.rs` | Adds `EndTarget`, `TreeEnd`, a bounded post-order walk over `/proc/<pid>/task/*/children`, and `terminate_tree`. `terminate` and `terminate_tree` share one `standing` rule: same effective uid and the same kernel session as the desktop, never pid 0 or 1, never this desktop, never another user or session, never a zombie. The tree is signalled deepest first, then the selected process. |
+| `src/litric-shell/src/shell.rs` | `activity_end_confirm` now carries the pid **and** the promise (`EndTarget`), so arming End task cannot confirm End tree. `Hot::ActivityEndTree` dispatches through the same handler; selecting another row disarms both. The message reports the real count: asked, plus left alone and could-not-be-asked when they are non-zero. |
+| `src/litric-shell/src/views.rs` | A second real control, **End tree**, beside **End task**. Both are disabled with no selection, each shows **Confirm end** / **Confirm tree** while armed, and the message is drawn beside them. |
+| `src/litric-shell/src/taskmgr.rs` | Removes `Change::EndTask`, `EndTree`, `EndGroup` and the unconsumed `ConfirmEndTask` preference with their registry entries, `act`/`apply`/reset arms and test references. The model no longer claims process actions it cannot perform. |
+| `src/litric-shell/src/e2e.rs` | `journey_activity_ends_a_real_process_tree_after_confirmation`: spawns one real parent (`sh`) with two real `sleep` children, inserts the parent's real `/proc` identity, clicks its row, asserts the first click only arms and every process is still running, clicks again, then observes the parent exit and both children stop running. `journey_activity_refuses_a_process_outside_its_scope`: selects init and proves the tree request is refused in plain language with `/proc/1` untouched. |
+
+Unit coverage also gained `a_tree_is_terminated_from_the_leaves_up` and
+`a_tree_will_not_start_from_init`.
+
+### 43.3 The rule, the honest count and the bounds
+
+Every node is checked individually; there is no shortcut for “the tree of a
+process I was allowed to signal”. A setuid child, a child that changed session,
+or init appearing in a child list is counted and left running, never signalled.
+`SIGTERM` is requested, never `SIGKILL`; the window says the processes were
+*asked* to stop, not that they exited.
+
+The walk visits at most **256** processes, stops at depth **32**, and reads at
+most 256 entries from any one children file. A waiting parent can exit by itself
+once its children are stopped; in that case it is not counted as asked, because
+the window reports what the system accepted, not what the walk intended.
+
+### 43.4 Resources
+
+No polling, no thread and no background work. A tree read and its signals happen
+only after the second confirmation click, on the UI thread: bounded `/proc`
+reads, one absolute `kill -TERM` per node that is still there. A single-process
+end still reads two small `/proc` files and runs one `kill`. Nothing is computed
+while Activity is closed.
+
+### 43.5 Gates
+
+```text
+cargo test --workspace        passed=1716 failed=0   (was 1,712; +4)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the unchanged absent `keys/dev/` material. No test deleted,
+no gate relaxed, no dependency added, no privileged verb introduced. A process
+that ignores `SIGTERM` remains running and the next facts sample still shows it;
+there is no forced kill and no claim of one.
