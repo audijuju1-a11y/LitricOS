@@ -329,6 +329,15 @@ pub const MAX_THEME_LEAVES: usize = 64;
 /// [`WATCH_INTERVAL_MS`].
 pub const LEAVES_PER_SCAN: usize = 12;
 
+/// The most resolved files one check re-stamps.
+///
+/// The leaf scan notices a file *appearing*; this notices the file behind a
+/// name being *rewritten*, which the leaf cannot see because the entry count does
+/// not move. A `metadata` call per file, not a read: 32 of them cost less than
+/// one leaf `read_dir`. At the cap of [`MAX_ICON_NAMES`] names a full cycle takes
+/// sixteen checks.
+pub const FILES_PER_SCAN: usize = 32;
+
 /// The directories `find_in_theme` reads inside one theme, deepest first.
 ///
 /// # Why the theme's own stamp is not enough
@@ -383,6 +392,31 @@ fn theme_leaves(theme: &Path) -> Vec<PathBuf> {
     leaves
 }
 
+/// What one resolved icon file looked like: its length and modification time.
+///
+/// Length and mtime together, not a hash: this runs on every watched check, and
+/// a read per icon is the cost the image cache exists to avoid. Measured on this
+/// machine, rewriting a file in place leaves **its own mtime** byte-identical
+/// too, so length is what actually moves; the mtime is kept for filesystems that
+/// do report it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    mtime: Option<std::time::SystemTime>,
+}
+
+/// The stamp of the file `path`, or `None` when it is not a regular file.
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    Some(FileStamp {
+        len: meta.len(),
+        mtime: meta.modified().ok(),
+    })
+}
+
 /// One memoised `Icon=` answer.
 #[derive(Debug, Clone)]
 struct Cached {
@@ -393,6 +427,10 @@ struct Cached {
     witness: Option<usize>,
     /// That directory's stamp when it answered.
     stamp: Option<Stamp>,
+    /// The resolved file's own stamp when it answered. The image cache is keyed
+    /// by path, so a file rewritten in place keeps the same path and would
+    /// otherwise keep its old pixels.
+    file: Option<FileStamp>,
 }
 
 /// `Icon=` names resolved against the icon tree, validated per name.
@@ -442,6 +480,13 @@ pub struct IconNames {
     leaf_cursor: usize,
     leaf_scans: u64,
     leaves_moved: u64,
+    /// Names in the order they were resolved, for the round-robin file scan.
+    /// A `HashMap` has no order, and sorting it on every check would cost more
+    /// than the `stat` calls this exists to make.
+    slots: Vec<String>,
+    file_cursor: usize,
+    file_stats: u64,
+    files_changed: u64,
     resolved: u64,
     hits: u64,
     validated: u64,
@@ -515,6 +560,10 @@ impl IconNames {
             leaf_cursor: 0,
             leaf_scans: 0,
             leaves_moved: 0,
+            slots: Vec::new(),
+            file_cursor: 0,
+            file_stats: 0,
+            files_changed: 0,
             resolved: 0,
             hits: 0,
             validated: 0,
@@ -559,6 +608,8 @@ impl IconNames {
             // later, which this flat order cannot express. Dropping everything is
             // the safe direction.
             self.names.clear();
+            self.slots.clear();
+            self.file_cursor = 0;
             self.dirs = icon_dirs.to_vec();
             self.order = fresh;
             self.capture_leaves();
@@ -679,6 +730,88 @@ impl IconNames {
         self.names = kept;
     }
 
+    /// Remember a name for the round-robin file scan, rebuilding the list from
+    /// the map when it would grow past the map's own bound.
+    fn remember_slot(&mut self, name: &str) {
+        if self.slots.len() >= MAX_ICON_NAMES {
+            let mut keys: Vec<String> = self.names.keys().cloned().collect();
+            keys.sort();
+            self.slots = keys;
+            self.file_cursor = 0;
+        }
+        self.slots.push(name.to_owned());
+    }
+
+    /// Re-stamp the next slice of resolved files.
+    ///
+    /// Returns whether any of them changed. A file rewritten in place keeps its
+    /// path, so the answer a name has is still the right path -- what is stale is
+    /// the *pixels* cached against that path. The caller drops the decoded copies
+    /// and repaints; nothing is re-resolved, because the search answer did not
+    /// move.
+    ///
+    /// Bounded to [`FILES_PER_SCAN`] `metadata` calls, round-robin, so the cost
+    /// of a check does not grow with the number of applications.
+    pub fn scan_files(&mut self) -> bool {
+        if self.slots.is_empty() {
+            return false;
+        }
+        let total = self.slots.len();
+        let count = total.min(FILES_PER_SCAN);
+        let mut changed = false;
+        for _ in 0..count {
+            let index = if self.file_cursor < total {
+                self.file_cursor
+            } else {
+                0
+            };
+            self.file_cursor = index.saturating_add(1);
+            if self.file_cursor >= total {
+                self.file_cursor = 0;
+            }
+            let Some(name) = self.slots.get(index).map(String::as_str) else {
+                continue;
+            };
+            let Some(entry) = self.names.get_mut(name) else {
+                // Dropped by a theme change since its slot was written: the slot
+                // is stale and the next pass skips it.
+                continue;
+            };
+            let Some(path) = entry.path.as_deref() else {
+                // A remembered miss has no file to stamp.
+                continue;
+            };
+            self.file_stats = self.file_stats.saturating_add(1);
+            let fresh = file_stamp(path);
+            if fresh != entry.file {
+                entry.file = fresh;
+                changed = true;
+            }
+        }
+        if changed {
+            self.files_changed = self.files_changed.saturating_add(1);
+        }
+        changed
+    }
+
+    /// Resolved files re-stamped, across the life of this cache.
+    #[must_use]
+    pub fn file_stats(&self) -> u64 {
+        self.file_stats
+    }
+
+    /// Checks that found a rewritten file.
+    #[must_use]
+    pub fn files_changed(&self) -> u64 {
+        self.files_changed
+    }
+
+    /// Names the file scan walks, at most [`MAX_ICON_NAMES`].
+    #[must_use]
+    pub fn slot_count(&self) -> usize {
+        self.slots.len()
+    }
+
     /// The file `name` resolves to under `icon_dirs`.
     ///
     /// Private on purpose: [`Self::refresh`] must have run for the current state
@@ -695,6 +828,8 @@ impl IconNames {
             // resolve again, which is cheaper than tracking ages for a map this
             // small.
             self.names.clear();
+            self.slots.clear();
+            self.file_cursor = 0;
         }
         self.resolved = self.resolved.saturating_add(1);
         let path = crate::themeicons::find_in(icon_dirs, name, 48);
@@ -709,14 +844,17 @@ impl IconNames {
                 .map(|(index, _)| index)
         });
         let stamp = witness.and_then(|index| self.order.get(index).map(|(_, stamp)| *stamp));
+        let file = path.as_deref().and_then(file_stamp);
         self.names.insert(
             name.to_owned(),
             Cached {
                 path: path.clone(),
                 witness,
                 stamp,
+                file,
             },
         );
+        self.remember_slot(name);
         path
     }
 
@@ -789,6 +927,12 @@ impl IconNames {
                 .saturating_add(std::mem::size_of::<Cached>())
                 .saturating_add(std::mem::size_of::<usize>().saturating_mul(2));
         }
+        total = total.saturating_add(
+            self.slots
+                .iter()
+                .map(|name| name.len().saturating_add(std::mem::size_of::<String>()))
+                .fold(0usize, usize::saturating_add),
+        );
         for (leaf, theme, _) in &self.leaves {
             total = total
                 .saturating_add(leaf.as_os_str().len())
@@ -2089,6 +2233,137 @@ mod tests {
             names.leaf_count(),
             names.bytes(),
             names.len()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file rewritten in place is noticed by the file scan, and the name keeps
+    /// its answer: only the pixels were stale.
+    ///
+    /// The leaf scan cannot see this. Measured on this machine, rewriting a file
+    /// leaves the directory's entry count *and* the file's own mtime
+    /// byte-identical; only the length moves, which is what this compares.
+    #[cfg(unix)]
+    #[test]
+    fn a_rewritten_icon_file_is_noticed_by_the_file_scan() {
+        let root = scratch("icons-rewrite");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        let icon = icons.join("hicolor/scalable/apps/swap-icon.svg");
+        std::fs::write(&icon, "<svg/>").expect("icon");
+        let prog = program(&root, "run-me");
+        std::fs::write(
+            apps.join("Swap.desktop"),
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Swap\nIcon=swap-icon\nExec={}\n",
+                prog.display()
+            ),
+        )
+        .expect("entry");
+
+        let app_dirs = vec![apps.clone()];
+        let icon_dirs = vec![icons.clone()];
+        let mut names = IconNames::new(&icon_dirs);
+        let first = discover_with_cache(&app_dirs, &icon_dirs, &mut names);
+        assert_eq!(first.apps.len(), 1);
+        assert_eq!(names.slot_count(), 1, "one name to re-stat");
+        assert!(!names.scan_files(), "the file has not moved yet");
+        assert_eq!(names.file_stats(), 1, "one metadata call, not a read");
+        assert!(!names.scan_files(), "and still has not");
+
+        // A package upgrade rewrites the same path with different artwork.
+        std::fs::write(
+            &icon,
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 8 8\"><rect x=\"0\" y=\"0\" width=\"8\" height=\"8\" fill=\"#c02020\"/></svg>",
+        )
+        .expect("rewrite");
+        assert!(
+            names.scan_files(),
+            "a file rewritten in place must be noticed: the leaf count and the mtimes did not move"
+        );
+        assert_eq!(names.files_changed(), 1);
+        assert!(!names.scan_files(), "the new stamp is the baseline now");
+
+        // The answer is unchanged, so nothing is re-resolved: only the pixels
+        // cached against the path are stale.
+        let after = reload_with_cache(
+            &app_dirs,
+            &icon_dirs,
+            &first.apps,
+            &app_dirs,
+            true,
+            &mut names,
+        );
+        assert_eq!(
+            after.icons_resolved, 0,
+            "the search answer did not move, so no name is looked up again: {}",
+            after.icons_resolved
+        );
+        assert_eq!(
+            after.apps.first().and_then(|app| app.icon_path.as_ref()),
+            Some(&icon)
+        );
+        println!(
+            "file scan: {} names, {} bytes, cache entry {} bytes",
+            names.slot_count(),
+            names.bytes(),
+            std::mem::size_of::<Cached>()
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The file scan inspects a fixed slice per check, whatever the map holds.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_scan_inspects_only_its_budget() {
+        let root = scratch("icons-file-bound");
+        let apps = root.join("applications");
+        let icons = root.join("icons");
+        std::fs::create_dir_all(&apps).expect("apps");
+        std::fs::create_dir_all(icons.join("hicolor/scalable/apps")).expect("theme");
+        let prog = program(&root, "run-me");
+        let wanted = 40usize;
+        for index in 0..wanted {
+            std::fs::write(
+                icons.join(format!("hicolor/scalable/apps/icon-{index}.svg")),
+                "<svg/>",
+            )
+            .expect("icon");
+            std::fs::write(
+                apps.join(format!("app-{index}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName=App {index:02}\nIcon=icon-{index}\nExec={}\n",
+                    prog.display()
+                ),
+            )
+            .expect("entry");
+        }
+        let icon_dirs = vec![icons];
+        let mut names = IconNames::new(&icon_dirs);
+        let found = discover_with_cache(std::slice::from_ref(&apps), &icon_dirs, &mut names);
+        assert_eq!(found.apps.len(), wanted);
+        assert_eq!(names.slot_count(), wanted, "one slot per resolved name");
+        assert!(FILES_PER_SCAN < wanted, "the budget must bite");
+        let _ = names.scan_files();
+        assert_eq!(
+            names.file_stats(),
+            FILES_PER_SCAN as u64,
+            "one check re-stats one slice"
+        );
+
+        // Measured cost: 200 checks over the full map.
+        let started = std::time::Instant::now();
+        let rounds = 200u32;
+        for _ in 0..rounds {
+            let _ = names.scan_files();
+        }
+        let per_scan = started.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
+        println!(
+            "file scan: {per_scan:.1} us/check over {} slots ({FILES_PER_SCAN} metadata calls), cache {} bytes",
+            names.slot_count(),
+            names.bytes()
         );
         let _ = std::fs::remove_dir_all(&root);
     }

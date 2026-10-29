@@ -121,6 +121,7 @@ ALLOWED = {
         "e2e_root": "removes the temporary fixture root it is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
         "journey_files_selects_with_mouse_and_compresses_multiple_items": "removes the fixture root this journey made with `e2e_root` -- tagged with this process's id under the system temp directory -- after asserting the archive it asked for exists in it",
         "journey_defender_scans_and_reports_eicar_end_to_end": "removes the temporary root this journey created",
+        "journey_launcher_picks_up_a_rewritten_icon_file": "removes the temporary XDG applications and icon-theme root this journey created under the system temp directory, named with its own pid, after asserting a rewritten icon file repainted the tile with its new artwork",
         "journey_launcher_picks_up_an_icon_written_into_an_existing_theme": "removes the temporary XDG applications and icon-theme root this journey created under the system temp directory, named with its own pid, after asserting an icon written into an already-installed theme reached the launcher tile without a restart",
         "journey_launcher_re_resolves_only_the_name_a_new_theme_supplies": "removes the temporary XDG fixture root this launcher journey created with `e2e_root`, tagged with its own pid, after asserting the per-name resolve counts and the tiles' pixels",
         "journey_defender_fast_and_deep_scans_cover_different_folders": "removes the temporary fixture root this journey created, tagged with its own pid",

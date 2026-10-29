@@ -5316,3 +5316,173 @@ The two frames the journey saved were opened:
 
 Commit `HEAD` and `origin/main` are the same commit; `git status
 --porcelain --untracked-files=no` is empty.
+
+## 60. Batch: an icon rewritten in place repaints without a restart (verified)
+
+### 60.1 Requirement
+
+§59 closed with this blind spot, in its own words:
+
+> **A rename inside one directory is invisible.** The leaf stamp is the entry
+> count, because this filesystem moves no directory mtime; renaming `a.svg` to
+> `b.svg` keeps the count. A file *added* or *removed* is seen.
+
+A package upgrade that rewrites an icon file is the same shape of change: the
+path stays, the entry count stays, nothing the leaf scan watches moves. This
+batch notices it and repaints the tile with the new pixels.
+
+### 60.2 Audit, before the change
+
+Measured on this machine, on one file in one directory:
+
+| Moment | entries in the directory | directory mtime | file mtime | file length |
+| --- | --- | --- | --- | --- |
+| after the first write | 1 | 1793273352929382735 | 1793273352929382735 | 6 |
+| after rewriting the same path | 1 | 1793273352929382735 | 1793273352929382735 | 54 |
+
+So a rewrite moves **neither** mtime, and the entry count is unchanged: the
+§59 leaf stamp is blind to it by construction, exactly as its limits section
+said. The only thing that moved is the file's length.
+
+Also audited before touching anything:
+
+* `themeicons::scaled` caches decoded pixels in a thread-local keyed by
+  `(PathBuf, usize)`. A rewrite keeps the path, so even a correct `icon_path`
+  would be drawn from the stale copy unless the cache is dropped.
+* `IconNames::resolve` recorded the path, the witness directory and that
+  directory's stamp — nothing about the file itself, so there was nothing to
+  compare a rewrite against.
+* `shell.rs::refresh_desktop` treated `change.icons || leaves_moved` as "the icon
+  tree moved", which is what drops the decoded copies and forces a repaint.
+
+### 60.3 What the file scan stands on
+
+Each cached answer now records `FileStamp { len, mtime }` of the file it
+resolved to, taken **at resolve time**, not at the first scan: a file rewritten
+between arming the cache and the first check would otherwise become the
+baseline and never be reported.
+
+`scan_files` walks `slots` — the names in the order they were resolved, because
+a `HashMap` has no order and sorting it on every check would cost more than the
+`stat` calls it exists to make — and re-stamps `FILES_PER_SCAN = 32` of them per
+check, round-robin. A name whose stamp moved is reported once; the stored stamp
+becomes the new baseline. The cached answer is **not** dropped: the path is still
+the right answer, so nothing is re-resolved (`icons_resolved == 0` is asserted).
+What the shell does is `clear_cache()` and repaint, which is what makes the new
+pixels reach the tile.
+
+### 60.4 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `src/litric-shell/src/desktop_entry.rs` | 339 | `FILES_PER_SCAN = 32` — metadata calls per check |
+| `src/litric-shell/src/desktop_entry.rs` | 403 | `FileStamp { len, mtime }` — what a resolved file looked like |
+| `src/litric-shell/src/desktop_entry.rs` | 409 | `file_stamp` — one `metadata`, never a read |
+| `src/litric-shell/src/desktop_entry.rs` | 433 | `Cached::file` — the file's stamp when the name answered |
+| `src/litric-shell/src/desktop_entry.rs` | 486 | `IconNames::slots` — resolution order for the round-robin walk |
+| `src/litric-shell/src/desktop_entry.rs` | 735 | `remember_slot` — appends, rebuilds sorted at the cap |
+| `src/litric-shell/src/desktop_entry.rs` | 755 | `scan_files` — bounded re-stat, reports a rewritten file |
+| `src/litric-shell/src/desktop_entry.rs` | 799 | `file_stats()` / `files_changed()` / `slot_count()` counters |
+| `src/litric-shell/src/shell.rs` | 7318 | the file scan, once per check |
+| `src/litric-shell/src/shell.rs` | 7331 | a rewritten file drops the decoded copies and repaints |
+| `src/litric-shell/src/shell.rs` | 7351 | journal line carries both counters |
+| `src/litric-shell/src/e2e.rs` | 5436 | the e2e journey |
+| `src/litric-shell/src/desktop_entry.rs` | 2248 | unit: rewrite noticed, answer kept |
+| `src/litric-shell/src/desktop_entry.rs` | 2320 | unit: the budget bites, and the measured cost |
+
+### 60.5 Tests that fail without it
+
+| Test | Asserts |
+| --- | --- |
+| `desktop_entry::tests::a_rewritten_icon_file_is_noticed_by_the_file_scan` | a warm name: `scan_files()` is false, then the file is overwritten in place and it is true, `files_changed() == 1`, and the reload reports **0** names resolved with the same path |
+| `desktop_entry::tests::a_file_scan_inspects_only_its_budget` | 40 resolved names: one check re-stats exactly 32, and the cost is printed |
+| `e2e::journey_launcher_picks_up_a_rewritten_icon_file` | real temp XDG tree, launcher running: the tile carries the first artwork, the same path is rewritten with different artwork, eight watched checks pick it up, `desktop_icons_resolved == 0`, and the tile's pixels become the new artwork |
+
+The §53/§54 SVG and inheritance tests, the four §57/§58 tests and the two §59
+tests pass unchanged.
+
+### 60.6 Sensitivity
+
+With `scan_files` forced to return `false` on entry (the §59 behaviour), the new
+journey fails on its own assertion:
+
+```
+thread 'e2e::journey_launcher_picks_up_a_rewritten_icon_file' panicked at litric-shell/src/e2e.rs:5496:5:
+a file rewritten in place was not noticed in 8 watched checks (0 file re-stats of 1 slots)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 717 filtered out
+```
+
+Restored, the journey passes and the journal prints
+`icons true after 5 leaf scans of 5 and 1 file re-stats of 1`.
+
+### 60.7 Cost, measured on this machine
+
+| Figure | Value | How |
+| --- | --- | --- |
+| one check over 40 resolved names (32 `metadata` calls) | **113.9 µs** | printed by `a_file_scan_inspects_only_its_budget` (debug test build, 200 checks averaged) |
+| memory for those 40 names | **11 369 B** for the whole cache | `IconNames::bytes()` |
+| work per frame | **none** | reached only from `refresh_desktop`, behind `DesktopWatch::due`; §55's "30 frames, no stat" and §56's "poll only at period" tests still pass |
+| ceiling | 32 files per check, 512 slots → a full cycle in 16 checks | `FILES_PER_SCAN`, `MAX_ICON_NAMES` |
+| a `metadata` call, for scale | 1.83 µs | the `rustc -O` probe from §59 |
+
+### 60.8 Gates
+
+```
+$ cargo fmt --all --check
+FMT_EXIT=0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.31s
+CLIPPY_EXIT=0
+
+$ cargo test --workspace
+PASSED=1807 FAILED=0
+
+$ python3 ci/lint-doc-refs.py
+OK: 1077 citation(s) across 155 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+FILESAFETY_EXIT=0
+  (the new journey's fixture cleanup is registered with its reason)
+
+$ bash ci/verify.sh
+[1;32m32[0m pass, [1;31m2[0m fail, [1;33m3[0m skipped
+```
+
+The two failures are the pre-existing `keys/dev/` key material and the mkosi
+image check; the skips are QEMU-only checks. No gate, golden frame or key was
+added, weakened or generated. Three tests were added this turn (1804 → 1807).
+
+The two frames the journey saved were opened:
+
+* `artifacts/browser-shots/60-before-the-icon-is-rewritten.png` — the `Swap App`
+  tile on a blue field with an amber disc.
+* `artifacts/browser-shots/60-launcher-replaced-icon.png` — the same tile, same
+  position, now a red field with a white triangle: the replacement artwork, not
+  the copy the image cache held, and no restart between the two frames.
+
+### 60.9 Limits
+
+* **A same-length rewrite is invisible.** The fingerprint is length plus mtime,
+  and measured on this filesystem a rewrite moves neither mtime, so length is
+  the only signal. Rewriting a file with different bytes *of the same size*
+  would need a content digest, which costs a read per icon per check and is not
+  in this batch.
+* **Latency is a cycle.** At 512 names a full pass takes 16 checks, so up to
+  ~16 s; the launcher's own list is smaller in practice.
+* **A rename is still invisible in the same directory** (§59's limit): the leaf
+  count is unchanged and the file behind the old name is gone, so the name keeps
+  answering a path that no longer exists until something else moves that theme.
+  `refresh` does check `Path::is_file`, so the next validation drops it.
+* **The stamp is per name, not per file.** Two names that resolve to the same
+  file are re-statted separately.
+* **Stale slots are skipped, not compacted**, and `slots` is rebuilt sorted when
+  it reaches `MAX_ICON_NAMES`.
+* **Still a poll** — no inotify, one second floor from §55, `#![forbid(unsafe_code)]`
+  and no new dependency.
+* **`Inherits=` still clears the whole name map** on an order change (§58).
+
+### 60.10 Git
+
+Commit `HEAD` and `origin/main` are the same commit; `git status
+--porcelain --untracked-files=no` is empty.

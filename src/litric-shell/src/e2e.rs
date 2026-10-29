@@ -5424,6 +5424,99 @@ fn journey_launcher_picks_up_an_icon_written_into_an_existing_theme() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// An icon rewritten in place shows its new artwork without a restart.
+///
+/// This is the case §59 could not see: the file keeps its name and its
+/// directory keeps its entry count, and on this filesystem neither the directory
+/// nor the file reports a new mtime. Only a stamp of the resolved file itself
+/// notices, and the tile has to repaint with the new pixels rather than the
+/// copy the image cache still holds against that path.
+#[cfg(unix)]
+#[test]
+fn journey_launcher_picks_up_a_rewritten_icon_file() {
+    let root = e2e_root("desktop-icon-rewrite");
+    let apps = root.join("data/applications");
+    let icons = root.join("data/icons");
+    let theme = icons.join("hicolor/scalable/apps");
+    std::fs::create_dir_all(&apps).expect("applications");
+    std::fs::create_dir_all(&theme).expect("theme");
+    let icon = theme.join("swap-icon.svg");
+    std::fs::write(
+        &icon,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" fill="#2080c0"/>
+  <circle cx="12" cy="12" r="7" fill="#fabe28"/>
+</svg>"##,
+    )
+    .expect("the first artwork");
+    std::fs::write(
+        apps.join("Swap-App.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Swap App\nIcon=swap-icon\nExec=/bin/true\n",
+    )
+    .expect("entry");
+
+    let mut s = shell();
+    s.load_desktop_apps_from(std::slice::from_ref(&apps), std::slice::from_ref(&icons), 0);
+    assert_eq!(s.desktop_apps.len(), 1);
+    assert_eq!(
+        s.desktop_icon_names.slot_count(),
+        1,
+        "the resolved file is watched"
+    );
+    open_launcher(&mut s);
+    let before = draw_frame(&mut s);
+    save_shot(&before, "60-before-the-icon-is-rewritten");
+    let (before_blue, before_amber, before_red) = icon_chip_counts(&before, &s, 0);
+    assert!(
+        before_blue > 20 && before_amber > 5 && before_red < 5,
+        "the first artwork is on the tile: {before_blue} blue, {before_amber} amber, {before_red} red"
+    );
+
+    // A package upgrade rewrites the same path with different artwork. This
+    // string is a different length, which is the signal this filesystem gives.
+    std::fs::write(
+        &icon,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="1" y="1" width="22" height="22" fill="#c02020"/>
+  <path d="M 5 19 L 12 5 L 19 19 Z" fill="#f0f0f0"/>
+</svg>"##,
+    )
+    .expect("the replacement artwork");
+
+    let mut repainted = false;
+    for _ in 0..8 {
+        s.tick_after(1_010);
+        if s.desktop_icon_names.files_changed() > 0 {
+            repainted = true;
+            break;
+        }
+    }
+    let canvas = draw_frame(&mut s);
+    save_shot(&canvas, "60-launcher-replaced-icon");
+    assert!(
+        repainted,
+        "a file rewritten in place was not noticed in 8 watched checks ({} file re-stats of {} slots)",
+        s.desktop_icon_names.file_stats(),
+        s.desktop_icon_names.slot_count()
+    );
+    assert_eq!(
+        s.desktop_icons_resolved, 0,
+        "the path did not move, so no name should be looked up again: {}",
+        s.desktop_icons_resolved
+    );
+
+    let (blue, amber, red) = icon_chip_counts(&canvas, &s, 0);
+    assert!(
+        red > 20 && blue < before_blue,
+        "the tile is not the replacement artwork: {red} red now, {before_red} before; {blue} blue now, {before_blue} before"
+    );
+    assert!(
+        amber < before_amber,
+        "the old artwork is still on the tile: {amber} amber now, {before_amber} before"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A new application in one of two application directories re-reads only that
 /// directory, and the launcher still shows the entry that did not move.
 ///

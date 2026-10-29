@@ -7312,7 +7312,11 @@ impl Shell {
         // bounded deep scan looks one level further, a slice of leaves per
         // check.
         let leaves_moved = self.desktop_icon_names.scan_leaves();
-        if change.app_dirs.is_empty() && !change.icons && !leaves_moved {
+        // A file rewritten in place keeps its path and its directory's entry
+        // count, so neither stamp above can see it. Re-stat a slice of the files
+        // the names resolved to.
+        let files_changed = self.desktop_icon_names.scan_files();
+        if change.app_dirs.is_empty() && !change.icons && !leaves_moved && !files_changed {
             return false;
         }
         let (app_dirs, icon_dirs) = {
@@ -7324,7 +7328,7 @@ impl Shell {
             .iter()
             .filter_map(|index| app_dirs.get(*index).cloned())
             .collect();
-        let icons_moved = change.icons || leaves_moved;
+        let icons_moved = change.icons || leaves_moved || files_changed;
         if icons_moved {
             // A name that resolved a moment ago may resolve to a different file
             // now, so no decoded copy may outlive the change.
@@ -7344,7 +7348,7 @@ impl Shell {
         self.desktop_icons_resolved = found.icons_resolved;
         self.desktop_icons_validated = found.icons_validated;
         eprintln!(
-            "litric-shell: desktop: {} directories, {} entries, {} names resolved, {} names validated ({:?} reread, icons {} after {} leaf scans of {})",
+            "litric-shell: desktop: {} directories, {} entries, {} names resolved, {} names validated ({:?} reread, icons {} after {} leaf scans of {} and {} file re-stats of {})",
             found.dirs_read,
             found.files_read,
             found.icons_resolved,
@@ -7352,7 +7356,9 @@ impl Shell {
             reread,
             icons_moved,
             self.desktop_icon_names.leaf_scans(),
-            self.desktop_icon_names.leaf_count()
+            self.desktop_icon_names.leaf_count(),
+            self.desktop_icon_names.file_stats(),
+            self.desktop_icon_names.slot_count()
         );
         self.desktop_watch = Some(crate::desktop_entry::DesktopWatch::new(
             &app_dirs, &icon_dirs, now_ms,
