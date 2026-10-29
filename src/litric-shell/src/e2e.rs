@@ -3203,6 +3203,41 @@ fn journey_defender_quarantines_and_restores_a_real_threat() {
         "the clean file was not touched"
     );
 
+    // The record on disk carries the digest of the bytes that were taken.
+    // This is the published SHA-256 of the EICAR test string, computed here
+    // independently of the product's hasher.
+    let record = std::fs::read_to_string(root.join("Quarantine/eicar.com.quarantine"))
+        .expect("the record is on disk");
+    assert!(
+        record.lines().any(|line| {
+            line == "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
+        }),
+        "the record carries the digest of the contained bytes: {record}"
+    );
+
+    // Check is a real control, and it says what the bytes are.
+    let _ = draw_frame(&mut s);
+    let check = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::VerifyQuarantined(0)))
+        .expect("the contained entry has a real Check control");
+    let _ = click(&mut s, check.center().0, check.center().1);
+    let _ = draw_frame(&mut s);
+    assert_eq!(
+        s.defender
+            .app
+            .quarantined
+            .first()
+            .map(|entry| entry.integrity),
+        Some(crate::quarantine::Integrity::Verified),
+        "the contained bytes match the record"
+    );
+    assert!(
+        s.defender.app.message.starts_with("Verified"),
+        "the window says the check passed: {}",
+        s.defender.app.message
+    );
+
     // The list is on disk: a fresh shell opening Defender sees the entry.
     let mut restarted = shell();
     restarted.files_root = root.clone();
@@ -3331,6 +3366,167 @@ fn journey_defender_refuses_to_quarantine_a_file_that_is_gone() {
         docs.join("clean.txt").exists(),
         "the harmless file was not touched"
     );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A contained file whose bytes were changed inside the quarantine folder must
+/// not be restored. The window says so, the original path stays empty, and the
+/// tampered copy is kept for inspection.
+#[test]
+fn journey_defender_refuses_to_restore_a_tampered_quarantine_entry() {
+    let root = e2e_root("defender-quarantine-tampered");
+    let docs = root.join("Documents");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(docs.join("eicar.com"), EICAR).unwrap();
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Defender);
+    let _ = draw_frame(&mut s);
+    let fast = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::ScanNow))
+        .expect("the Fast scan button is drawn");
+    let _ = click(&mut s, fast.center().0, fast.center().1);
+    for _ in 0..600 {
+        let _ = draw_frame(&mut s);
+        if !s.defender.running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let index = s
+        .defender
+        .app
+        .rows
+        .iter()
+        .position(|row| row.path.ends_with("/eicar.com"))
+        .expect("the planted threat is listed");
+    let _ = draw_frame(&mut s);
+    let quarantine = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::QuarantineFinding(index)))
+        .expect("a finding row has a real Quarantine control");
+    let _ = click(&mut s, quarantine.center().0, quarantine.center().1);
+    let _ = draw_frame(&mut s);
+    assert_eq!(s.defender.app.quarantined.len(), 1);
+
+    // Something replaces the contained bytes. The record still describes the
+    // original file, so the two no longer agree.
+    std::fs::write(root.join("Quarantine/eicar.com"), b"swapped bytes").unwrap();
+
+    let restore = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::RestoreQuarantined(0)))
+        .expect("the contained entry has a real Restore control");
+    let _ = click(&mut s, restore.center().0, restore.center().1);
+    let _ = draw_frame(&mut s);
+
+    assert!(
+        s.defender.app.message.starts_with("Could not restore"),
+        "the refusal is shown: {}",
+        s.defender.app.message
+    );
+    assert!(
+        s.defender
+            .app
+            .message
+            .contains("no longer matches what was quarantined"),
+        "the reason is plain language: {}",
+        s.defender.app.message
+    );
+    assert!(
+        !docs.join("eicar.com").exists(),
+        "tampered bytes were not put back"
+    );
+    assert_eq!(
+        std::fs::read(root.join("Quarantine/eicar.com")).unwrap(),
+        b"swapped bytes",
+        "the tampered copy is kept for inspection"
+    );
+    assert_eq!(
+        s.defender.app.quarantined.len(),
+        1,
+        "the entry is still listed"
+    );
+
+    // The on-demand check reports the same conclusion from the bytes.
+    let check = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::VerifyQuarantined(0)))
+        .expect("the contained entry has a real Check control");
+    let _ = click(&mut s, check.center().0, check.center().1);
+    let _ = draw_frame(&mut s);
+    assert_eq!(
+        s.defender
+            .app
+            .quarantined
+            .first()
+            .map(|entry| entry.integrity),
+        Some(crate::quarantine::Integrity::Mismatch)
+    );
+    assert!(
+        s.defender.app.message.contains("does not match"),
+        "the window says the bytes do not match: {}",
+        s.defender.app.message
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A record written before integrity records existed still restores, and the
+/// window says it is unverified rather than implying a check that never
+/// happened.
+#[test]
+fn journey_defender_restores_a_legacy_quarantine_entry_unverified() {
+    let root = e2e_root("defender-quarantine-legacy");
+    std::fs::create_dir_all(root.join("Documents")).unwrap();
+    std::fs::create_dir_all(root.join("Quarantine")).unwrap();
+    std::fs::write(root.join("Quarantine/old.bin"), b"old bytes").unwrap();
+    std::fs::write(
+        root.join("Quarantine/old.bin.quarantine"),
+        "LITRIC-QUARANTINE 1\n9\n1\nThreat found\n/Documents/old.bin",
+    )
+    .unwrap();
+
+    let mut s = shell();
+    s.files_root = root.clone();
+    s.open_app(App::Defender);
+    let _ = draw_frame(&mut s);
+    assert_eq!(
+        s.defender
+            .app
+            .quarantined
+            .first()
+            .map(|entry| entry.integrity),
+        Some(crate::quarantine::Integrity::NotRecorded),
+        "a legacy record is reported as having no integrity record"
+    );
+
+    let restore = s
+        .hotspots()
+        .rect_of(Hot::MenuRow(MenuAction::RestoreQuarantined(0)))
+        .expect("the legacy entry has a real Restore control");
+    let _ = click(&mut s, restore.center().0, restore.center().1);
+    let _ = draw_frame(&mut s);
+
+    assert!(
+        s.defender.app.message.starts_with("Restored"),
+        "the restore happened: {}",
+        s.defender.app.message
+    );
+    assert!(
+        s.defender.app.message.contains("no integrity record"),
+        "the window does not pretend it verified the bytes: {}",
+        s.defender.app.message
+    );
+    assert_eq!(
+        std::fs::read(root.join("Documents/old.bin")).unwrap(),
+        b"old bytes"
+    );
+    assert!(!root.join("Quarantine/old.bin").exists());
+    assert!(s.defender.app.quarantined.is_empty());
 
     let _ = std::fs::remove_dir_all(&root);
 }

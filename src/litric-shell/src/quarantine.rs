@@ -17,11 +17,17 @@
 //!   rename-never-overwrite rules back that up.
 //! * Every entry has a record on disk, so the list survives a restart and a
 //!   restore still knows where the file came from.
+//! * Every new record carries the SHA-256 of the bytes that were contained, and
+//!   restore checks it before moving anything. Bytes that no longer match are
+//!   refused and the contained copy is left alone.
 //! * A failure leaves the source where it was, or says plainly that it could
 //!   not. No path in this module reports success it did not observe.
 
+use std::io::Read;
+
 use crate::apps::ScanMode;
 use crate::fsbridge::{FsBridge, FsError};
+use litric_defender::sha256;
 
 /// Where quarantined files and their records live, relative to the storage
 /// root. Deliberately outside every scan root so a scan never re-reports what
@@ -32,7 +38,42 @@ pub const DIR: &str = "/Quarantine";
 /// person looking at the folder can pair them without opening anything.
 pub const RECORD_SUFFIX: &str = ".quarantine";
 
-const HEADER: &str = "LITRIC-QUARANTINE 1";
+/// The current record format: header, digest, size, time, reason, original.
+const HEADER: &str = "LITRIC-QUARANTINE 2";
+
+/// Records written before integrity was recorded. They are still honoured, and
+/// the window says so rather than inventing a digest.
+const LEGACY_HEADER: &str = "LITRIC-QUARANTINE 1";
+
+/// Read buffer for hashing. Fixed, so peak memory per file is this, never the
+/// file size.
+const HASH_CHUNK: usize = 8192;
+
+/// Whether a contained file still matches the bytes that were quarantined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Integrity {
+    /// A digest is recorded but has not been checked in this session.
+    NotChecked,
+    /// The bytes hash to the recorded digest.
+    Verified,
+    /// The record predates integrity records, so there is nothing to compare.
+    NotRecorded,
+    /// The bytes no longer hash to the recorded digest.
+    Mismatch,
+}
+
+impl Integrity {
+    /// The words the window shows. Plain language, no digest and no code.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::NotChecked => "Not checked",
+            Self::Verified => "Verified",
+            Self::NotRecorded => "No integrity record",
+            Self::Mismatch => "Does not match",
+        }
+    }
+}
 
 /// One contained file, as the window shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +88,20 @@ pub struct Quarantined {
     pub time: u64,
     /// How large it was.
     pub size: u64,
+    /// The recorded SHA-256, lowercase hex. `None` for a legacy record.
+    pub hash: Option<String>,
+    /// What this session knows about the bytes. Set by [`verify`] and by a
+    /// restore; never guessed.
+    pub integrity: Integrity,
+}
+
+/// A record as it is read from disk.
+struct Record {
+    hash: Option<String>,
+    size: u64,
+    time: u64,
+    reason: String,
+    original: String,
 }
 
 /// Whether a logical path is inside a folder Defender protects.
@@ -94,6 +149,110 @@ fn sentence(error: &FsError) -> String {
     }
 }
 
+/// Parse one record, old format or new. `None` means the record is not one this
+/// build understands; the caller drops it rather than guessing.
+fn parse_record(text: &str) -> Option<Record> {
+    let mut lines = text.split('\n');
+    let header = lines.next()?;
+    let hash = match header {
+        HEADER => {
+            let line = lines.next()?;
+            let digest = line.trim();
+            if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            Some(digest.to_ascii_lowercase())
+        }
+        LEGACY_HEADER => None,
+        _ => return None,
+    };
+    let size = lines.next()?.parse::<u64>().ok()?;
+    let time = lines.next()?.parse::<u64>().ok()?;
+    let reason = lines.next()?.to_owned();
+    let original = lines.collect::<Vec<&str>>().join("\n");
+    if original.is_empty() {
+        return None;
+    }
+    Some(Record {
+        hash,
+        size,
+        time,
+        reason,
+        original,
+    })
+}
+
+/// Hash one host path in fixed-size chunks.
+///
+/// The buffer is on the stack and the digest is streamed, so a very large file
+/// costs time but not memory. This runs on the caller's thread; a click that
+/// hashes a multi-gigabyte file would occupy the UI thread for the duration,
+/// which is why the window only does it on an explicit action and on restore,
+/// never while drawing.
+fn hash_path(path: &std::path::Path) -> Result<[u8; 32], String> {
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|_| "the contained file could not be read".to_owned())?;
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return Err("the contained file could not be read".to_owned());
+    }
+    let mut file =
+        std::fs::File::open(path).map_err(|_| "the contained file could not be read".to_owned())?;
+    let mut hasher = sha256::Sha256::new();
+    let mut buffer = [0u8; HASH_CHUNK];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| "the contained file could not be read".to_owned())?;
+        if read == 0 {
+            break;
+        }
+        let chunk = buffer
+            .get(..read)
+            .ok_or_else(|| "the contained file could not be read".to_owned())?;
+        hasher.update(chunk);
+    }
+    Ok(hasher.finish())
+}
+
+/// The host path of one contained file.
+fn contained_path(bridge: &FsBridge, stored: &str) -> Result<std::path::PathBuf, String> {
+    bridge
+        .host_path(&format!("{DIR}/{stored}"))
+        .map_err(|e| sentence(&e))
+}
+
+/// Check one contained file against its record.
+///
+/// # Errors
+/// A sentence when the record cannot be read or the contained file cannot be
+/// opened. A legacy record is not an error: it reports [`Integrity::NotRecorded`].
+pub fn verify(bridge: &FsBridge, stored: &str) -> Result<Integrity, String> {
+    if stored.is_empty() || stored.contains('/') || stored.contains('\\') {
+        return Err("that quarantine entry could not be found".to_owned());
+    }
+    let text = bridge
+        .read_text(&format!("{DIR}/{stored}{RECORD_SUFFIX}"))
+        .map_err(|_| "that quarantine entry could not be found".to_owned())?;
+    let record =
+        parse_record(&text).ok_or_else(|| "that quarantine entry could not be read".to_owned())?;
+    let Some(expected) = record.hash else {
+        return Ok(Integrity::NotRecorded);
+    };
+    let path = contained_path(bridge, stored)?;
+    let Some(meta) = std::fs::symlink_metadata(&path).ok() else {
+        return Err("that quarantined file is no longer there".to_owned());
+    };
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return Ok(Integrity::Mismatch);
+    }
+    let actual = hash_path(&path)?;
+    if sha256::hex(&actual) == expected {
+        Ok(Integrity::Verified)
+    } else {
+        Ok(Integrity::Mismatch)
+    }
+}
+
 /// Take one file out of its folder and contain it.
 ///
 /// `now` is passed in rather than read here so the record is deterministic in
@@ -101,8 +260,8 @@ fn sentence(error: &FsError) -> String {
 ///
 /// # Errors
 /// A sentence for the window: the file is out of scope, is gone, is a link or
-/// folder, or the move or its record failed. On failure the source is left in
-/// place unless the sentence says otherwise.
+/// folder, cannot be read for its digest, or the move or its record failed. On
+/// failure the source is left in place unless the sentence says otherwise.
 pub fn quarantine(
     bridge: &FsBridge,
     path: &str,
@@ -137,6 +296,13 @@ pub fn quarantine(
     if !real.starts_with(&real_root) {
         return Err("that file is outside the folders Defender protects".to_owned());
     }
+
+    // Hash before the move: a file whose bytes cannot be read is not contained
+    // on a promise. The digest describes exactly what the move is about to take.
+    let digest = sha256::hex(
+        &hash_path(&host)
+            .map_err(|_| "the file could not be read, so it was not quarantined".to_owned())?,
+    );
 
     if bridge.mkdir("/", "Quarantine").is_err() && !bridge.exists(DIR).unwrap_or(false) {
         return Err("the quarantine folder could not be created".to_owned());
@@ -195,7 +361,7 @@ pub fn quarantine(
     }
 
     let record = format!(
-        "{HEADER}\n{}\n{now}\n{}\n{path}",
+        "{HEADER}\n{digest}\n{}\n{now}\n{}\n{path}",
         meta.len(),
         reason.replace('\n', " ")
     );
@@ -219,6 +385,8 @@ pub fn quarantine(
         reason: reason.to_owned(),
         time: now,
         size: meta.len(),
+        hash: Some(digest),
+        integrity: Integrity::NotChecked,
     })
 }
 
@@ -249,35 +417,41 @@ pub fn list(bridge: &FsBridge) -> Result<Vec<Quarantined>, String> {
         let Ok(text) = bridge.read_text(&format!("{DIR}/{}", entry.name)) else {
             continue;
         };
-        let mut lines = text.split('\n');
-        if lines.next() != Some(HEADER) {
-            continue;
-        }
-        let size = lines.next().and_then(|v| v.parse::<u64>().ok());
-        let time = lines.next().and_then(|v| v.parse::<u64>().ok());
-        let reason = lines.next();
-        let rest: Vec<&str> = lines.collect();
-        let original = rest.join("\n");
-        let (Some(size), Some(time), Some(reason)) = (size, time, reason) else {
+        let Some(record) = parse_record(&text) else {
             continue;
         };
-        if original.is_empty()
-            || !original.starts_with('/')
-            || !in_scope(&original)
+        if !record.original.starts_with('/')
+            || !in_scope(&record.original)
             || !bridge.exists(&format!("{DIR}/{stored}")).unwrap_or(false)
         {
             continue;
         }
+        let integrity = if record.hash.is_some() {
+            Integrity::NotChecked
+        } else {
+            Integrity::NotRecorded
+        };
         out.push(Quarantined {
             stored: stored.to_owned(),
-            original,
-            reason: reason.to_owned(),
-            time,
-            size,
+            original: record.original,
+            reason: record.reason,
+            time: record.time,
+            size: record.size,
+            hash: record.hash,
+            integrity,
         });
     }
     out.sort_by(|a, b| b.time.cmp(&a.time).then_with(|| a.stored.cmp(&b.stored)));
     Ok(out)
+}
+
+/// The result of putting a contained file back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Restored {
+    /// Where it went.
+    pub original: String,
+    /// Whether the bytes were checked against the record after the move.
+    pub integrity: Integrity,
 }
 
 /// Put one contained file back where it came from.
@@ -285,12 +459,14 @@ pub fn list(bridge: &FsBridge) -> Result<Vec<Quarantined>, String> {
 /// The record is the only source of the original path, and it is checked again
 /// before anything moves. Nothing is overwritten: an item already at the
 /// original path, or a missing folder, is refused and the quarantined copy
-/// stays intact.
+/// stays intact. When the record carries a digest, the contained bytes are
+/// hashed first; a mismatch refuses the restore and keeps the copy.
 ///
 /// # Errors
 /// A sentence for the window when the name is unknown, the original path is
-/// taken or its folder is gone, or the move fails.
-pub fn restore(bridge: &FsBridge, stored: &str) -> Result<String, String> {
+/// taken or its folder is gone, the contained bytes no longer match, or the
+/// move fails.
+pub fn restore(bridge: &FsBridge, stored: &str) -> Result<Restored, String> {
     if stored.is_empty() || stored.contains('/') || stored.contains('\\') {
         return Err("that quarantine entry could not be found".to_owned());
     }
@@ -298,28 +474,47 @@ pub fn restore(bridge: &FsBridge, stored: &str) -> Result<String, String> {
     let text = bridge
         .read_text(&record)
         .map_err(|_| "that quarantine entry could not be found".to_owned())?;
-    let mut lines = text.split('\n');
-    if lines.next() != Some(HEADER) {
-        return Err("that quarantine entry could not be read".to_owned());
-    }
-    let _size = lines.next();
-    let _time = lines.next();
-    let _reason = lines.next();
-    let original = lines.collect::<Vec<&str>>().join("\n");
-    if original.is_empty() || !in_scope(&original) {
+    let record =
+        parse_record(&text).ok_or_else(|| "that quarantine entry could not be read".to_owned())?;
+    if !record.original.starts_with('/') || !in_scope(&record.original) {
         return Err("that quarantine entry does not name a safe place".to_owned());
     }
     if !bridge.exists(&format!("{DIR}/{stored}")).unwrap_or(false) {
         return Err("that quarantined file is no longer there".to_owned());
     }
-    if bridge.exists(&original).unwrap_or(false) {
+    if bridge.exists(&record.original).unwrap_or(false) {
         return Err("something already exists at the original place".to_owned());
     }
-    let parent = parent_of(&original);
+    let parent = parent_of(&record.original);
     if !bridge.exists(parent).unwrap_or(false) {
         return Err("the folder it came from is gone".to_owned());
     }
-    let wanted = name_of(&original);
+
+    // Check the bytes before moving them. A digest that no longer matches is
+    // not restored over the user's folder, and the contained copy is kept so
+    // the user can inspect it or an administrator can.
+    let expected = record.hash.as_deref();
+    if let Some(expected) = expected {
+        let path = contained_path(bridge, stored)?;
+        let Some(meta) = std::fs::symlink_metadata(&path).ok() else {
+            return Err("that quarantined file is no longer there".to_owned());
+        };
+        if !meta.is_file() || meta.file_type().is_symlink() {
+            return Err(
+                "the contained file no longer matches what was quarantined, so it was not restored"
+                    .to_owned(),
+            );
+        }
+        let actual = hash_path(&path)?;
+        if sha256::hex(&actual) != expected {
+            return Err(
+                "the contained file no longer matches what was quarantined, so it was not restored"
+                    .to_owned(),
+            );
+        }
+    }
+
+    let wanted = name_of(&record.original);
     let moved = bridge
         .move_item(&format!("{DIR}/{stored}"), parent)
         .map_err(|e| format!("the file could not be put back: {}", sentence(&e)))?;
@@ -331,10 +526,29 @@ pub fn restore(bridge: &FsBridge, stored: &str) -> Result<String, String> {
         let _ = bridge.move_item(&format!("{parent}/{wanted}.restored"), DIR);
         return Err("something already exists at the original place".to_owned());
     }
+
+    // Re-check the bytes where they landed. A mismatch here means something
+    // changed them during the move; the file is back, but the window must not
+    // call that confirmed.
+    let integrity = if let Some(expected) = expected {
+        let restored = bridge
+            .host_path(&record.original)
+            .map_err(|e| sentence(&e))?;
+        match hash_path(&restored) {
+            Ok(actual) if sha256::hex(&actual) == expected => Integrity::Verified,
+            _ => Integrity::Mismatch,
+        }
+    } else {
+        Integrity::NotRecorded
+    };
+
     // The record is no longer needed. If it cannot be removed the file is still
     // back, and a later listing drops the record because its file has gone.
-    let _ = bridge.delete(&record);
-    Ok(original)
+    let _ = bridge.delete(&format!("{DIR}/{stored}{RECORD_SUFFIX}"));
+    Ok(Restored {
+        original: record.original,
+        integrity,
+    })
 }
 
 #[cfg(test)]
@@ -357,6 +571,12 @@ mod tests {
         std::fs::write(root.join("Documents/eicar.com"), b"test threat").unwrap();
         let entry = quarantine(&b, "/Documents/eicar.com", "Threat found", 42).unwrap();
         assert_eq!(entry.original, "/Documents/eicar.com");
+        let expected_hash = sha256::hex(&sha256::digest(b"test threat"));
+        assert_eq!(
+            entry.hash.as_deref(),
+            Some(expected_hash.as_str()),
+            "the record carries the digest of the contained bytes"
+        );
         assert!(!root.join("Documents/eicar.com").exists(), "source is gone");
         assert!(root.join("Quarantine/eicar.com").exists(), "contained");
         assert!(root.join("Quarantine/eicar.com.quarantine").exists());
@@ -365,8 +585,11 @@ mod tests {
         let found = listed.first().expect("one contained entry");
         assert_eq!(found.size, 11);
         assert_eq!(found.reason, "Threat found");
+        assert_eq!(found.integrity, Integrity::NotChecked);
+        assert_eq!(verify(&b, "eicar.com").unwrap(), Integrity::Verified);
         let back = restore(&b, "eicar.com").unwrap();
-        assert_eq!(back, "/Documents/eicar.com");
+        assert_eq!(back.original, "/Documents/eicar.com");
+        assert_eq!(back.integrity, Integrity::Verified);
         assert!(root.join("Documents/eicar.com").exists(), "back in place");
         assert!(!root.join("Quarantine/eicar.com").exists());
         assert!(list(&b).unwrap().is_empty());
@@ -412,11 +635,11 @@ mod tests {
         assert!(taken.contains("already exists"), "{taken}");
         assert!(root.join("Quarantine/evil.bin").exists(), "copy kept");
 
-        // A record that names a system folder is not followed on restore.
+        // A legacy record that names a system folder is not followed either.
         std::fs::write(root.join("Quarantine/system.bin"), b"payload").unwrap();
         std::fs::write(
             root.join("Quarantine/system.bin.quarantine"),
-            format!("{HEADER}\n7\n1\nThreat found\n/System/passwd"),
+            format!("{LEGACY_HEADER}\n7\n1\nThreat found\n/System/passwd"),
         )
         .unwrap();
         let tampered = restore(&b, "system.bin").unwrap_err();
@@ -425,6 +648,58 @@ mod tests {
             "{tampered}"
         );
         assert!(root.join("Quarantine/system.bin").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tampered_bytes_are_refused_and_kept() {
+        let (b, root) = bridge("tampered");
+        std::fs::write(root.join("Documents/evil.bin"), b"the original threat").unwrap();
+        quarantine(&b, "/Documents/evil.bin", "Threat found", 1).unwrap();
+        std::fs::write(root.join("Quarantine/evil.bin"), b"replaced bytes").unwrap();
+
+        assert_eq!(verify(&b, "evil.bin").unwrap(), Integrity::Mismatch);
+        let refused = restore(&b, "evil.bin").unwrap_err();
+        assert!(
+            refused.contains("no longer matches what was quarantined"),
+            "{refused}"
+        );
+        assert!(
+            !root.join("Documents/evil.bin").exists(),
+            "nothing was put back"
+        );
+        assert_eq!(
+            std::fs::read(root.join("Quarantine/evil.bin")).unwrap(),
+            b"replaced bytes",
+            "the tampered copy is intact for inspection"
+        );
+        let listed = list(&b).unwrap();
+        assert_eq!(listed.len(), 1, "the entry is still listed");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_legacy_record_restores_unverified() {
+        let (b, root) = bridge("legacy");
+        std::fs::create_dir_all(root.join("Quarantine")).unwrap();
+        std::fs::write(root.join("Quarantine/old.bin"), b"old bytes").unwrap();
+        std::fs::write(
+            root.join("Quarantine/old.bin.quarantine"),
+            format!("{LEGACY_HEADER}\n9\n1\nThreat found\n/Documents/old.bin"),
+        )
+        .unwrap();
+        let listed = list(&b).unwrap();
+        assert_eq!(
+            listed.first().map(|entry| entry.integrity),
+            Some(Integrity::NotRecorded)
+        );
+        let back = restore(&b, "old.bin").unwrap();
+        assert_eq!(back.original, "/Documents/old.bin");
+        assert_eq!(back.integrity, Integrity::NotRecorded);
+        assert_eq!(
+            std::fs::read(root.join("Documents/old.bin")).unwrap(),
+            b"old bytes"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

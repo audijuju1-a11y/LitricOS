@@ -4496,30 +4496,59 @@ fn draw_defender(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         if col.cursor > body.bottom() {
             break;
         }
-        let s = Style::new(t.text_px(TypeStep::Caption), t.text());
-        font::draw(
-            canvas,
-            &ui::elide(&entry.original, &s, row.w - t.px(104.0)),
-            row.x,
-            row.y + t.px(15.0),
-            &s,
-        );
-        let button = Rect::new(
+        let gap = t.px(6.0);
+        let restore = Rect::new(
             row.right() - t.px(84.0),
             row.y + t.px(1.0),
             t.px(84.0),
             t.px(22.0),
         );
+        let check = Rect::new(
+            restore.x - gap - t.px(64.0),
+            row.y + t.px(1.0),
+            t.px(64.0),
+            t.px(22.0),
+        );
+        let (label, tone) = match entry.integrity {
+            crate::quarantine::Integrity::Verified => ("Verified", Tone::Good),
+            crate::quarantine::Integrity::Mismatch => ("Does not match", Tone::Bad),
+            crate::quarantine::Integrity::NotRecorded => ("No integrity record", Tone::Neutral),
+            crate::quarantine::Integrity::NotChecked => ("Not checked", Tone::Neutral),
+        };
+        let s_state = Style::new(t.text_px(TypeStep::Footnote), t.tone(tone));
+        let state_w = font::measure(label, &s_state);
+        let state_right = check.x - gap;
+        font::draw(
+            canvas,
+            label,
+            state_right - state_w,
+            row.y + t.px(15.0),
+            &s_state,
+        );
+        let s = Style::new(t.text_px(TypeStep::Caption), t.text());
+        let name_w = (state_right - state_w - gap - row.x).max(t.px(48.0));
+        font::draw(
+            canvas,
+            &ui::elide(&entry.original, &s, name_w),
+            row.x,
+            row.y + t.px(15.0),
+            &s,
+        );
+        ui::button(canvas, &t, check, "Check", ui::State::Normal, Tone::Neutral);
+        shell.hotspots_mut().push(
+            check,
+            Hot::MenuRow(crate::apps::MenuAction::VerifyQuarantined(i)),
+        );
         ui::button(
             canvas,
             &t,
-            button,
+            restore,
             "Restore",
             ui::State::Normal,
             Tone::Neutral,
         );
         shell.hotspots_mut().push(
-            button,
+            restore,
             Hot::MenuRow(crate::apps::MenuAction::RestoreQuarantined(i)),
         );
     }

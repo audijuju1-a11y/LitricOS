@@ -1997,6 +1997,8 @@ pub enum MenuAction {
     QuarantineFinding(usize),
     /// Put one contained file back where it came from.
     RestoreQuarantined(usize),
+    /// Check one contained file against its recorded digest.
+    VerifyQuarantined(usize),
     /// Start the browser engine session.
     BrowserStart,
     /// Reload the focused browser tab.

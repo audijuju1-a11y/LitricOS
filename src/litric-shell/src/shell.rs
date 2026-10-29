@@ -2613,6 +2613,7 @@ impl Shell {
             }
             MA::QuarantineFinding(index) => return self.quarantine_finding(index),
             MA::RestoreQuarantined(index) => return self.restore_quarantined(index),
+            MA::VerifyQuarantined(index) => return self.verify_quarantined(index),
             MA::BrowserStart => return self.browser_start_session(),
             MA::BrowserReload => {
                 let i = self.menu_tab();
@@ -6828,13 +6829,67 @@ impl Shell {
             Err(_) => Err("the file service is not available".to_owned()),
         };
         match result {
-            Ok(original) => {
-                let name = original.rsplit('/').next().unwrap_or(&original).to_owned();
-                self.defender.app.message = format!("Restored {name}");
+            Ok(done) => {
+                let name = done
+                    .original
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&done.original)
+                    .to_owned();
+                self.defender.app.message = match done.integrity {
+                    crate::quarantine::Integrity::Verified => format!("Restored {name}"),
+                    crate::quarantine::Integrity::NotRecorded => {
+                        format!("Restored {name} (no integrity record)")
+                    }
+                    _ => format!("Put {name} back, but its contents could not be confirmed"),
+                };
             }
             Err(error) => self.defender.app.message = format!("Could not restore: {error}"),
         }
         self.refresh_quarantine();
+        Vec::new()
+    }
+
+    /// Check one contained file against its record. The hash runs only on this
+    /// explicit action, never while drawing.
+    fn verify_quarantined(&mut self, index: usize) -> Vec<Effect> {
+        let Some(entry) = self.defender.app.quarantined.get(index) else {
+            return Vec::new();
+        };
+        let stored = entry.stored.clone();
+        let name = entry
+            .original
+            .rsplit('/')
+            .next()
+            .unwrap_or(&entry.original)
+            .to_owned();
+        let zone = self.regional.zone.clone();
+        let result = match self.try_files_bridge(zone) {
+            Ok(bridge) => crate::quarantine::verify(&bridge, &stored),
+            Err(_) => Err("the file service is not available".to_owned()),
+        };
+        match result {
+            Ok(integrity) => {
+                if let Some(entry) = self.defender.app.quarantined.get_mut(index) {
+                    entry.integrity = integrity;
+                }
+                self.defender.app.message = match integrity {
+                    crate::quarantine::Integrity::Verified => format!("Verified {name}"),
+                    crate::quarantine::Integrity::Mismatch => {
+                        format!("{name} does not match its record")
+                    }
+                    crate::quarantine::Integrity::NotRecorded => {
+                        format!("{name} has no integrity record")
+                    }
+                    crate::quarantine::Integrity::NotChecked => {
+                        format!("{name} was not checked")
+                    }
+                };
+            }
+            Err(error) => {
+                self.defender.app.message = format!("Could not check {name}: {error}");
+            }
+        }
         Vec::new()
     }
 

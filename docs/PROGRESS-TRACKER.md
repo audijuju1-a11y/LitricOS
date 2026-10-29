@@ -3279,3 +3279,99 @@ This proves the local containment path with real files. It does not prove a
 network download being contained (no Chromium engine and no TLS stack in this
 image), and it does not quarantine system files found by Deep scan: those are
 reported only, by design.
+
+## 41. Batch: quarantine records are tamper-evident (verified)
+
+### 41.1 What was missing
+
+The v1 record held the original path, time, reason and size, but no digest.
+`restore` checked the name, scope, the original path and its folder, then moved
+the contained file back — so bytes altered or swapped inside `/Quarantine` would
+be put back silently. `list` rebuilt entries from the same record and had no
+concept of integrity.
+
+The workspace already had a hash implementation: `litric-defender`'s
+`sha256` module (streaming `Sha256::update`/`finish`, an 8 KiB read pattern, and
+FIPS known-answer vectors). No dependency was added; the shell uses that module.
+
+### 41.2 What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/quarantine.rs` | Record format 2 adds the file's SHA-256. `quarantine` hashes the real bytes before the move; `verify` hashes a contained file on demand; `restore` verifies before moving and again after, refuses a mismatch and keeps the contained copy, and reports a legacy record as unverified instead of pretending. |
+| `src/litric-shell/src/views.rs` | Each contained row shows its real state (`Verified`, `No integrity record`, `Does not match`, `Not checked`) and has a real `Check` control beside `Restore`. |
+| `src/litric-shell/src/shell.rs` | `MenuAction::VerifyQuarantined` runs one check and updates that entry; restore messages distinguish a verified restore from a legacy one and from a file put back but unconfirmed. |
+| `src/litric-shell/src/apps.rs` | `Quarantined` carries the digest and integrity state; the new action is in `MenuAction`. |
+| `src/litric-shell/src/e2e.rs` | The existing quarantine journey now also asserts the on-disk digest and clicks `Check`; two new journeys cover tampering and legacy records. |
+
+How the record is written (v2):
+
+```text
+LITRIC-QUARANTINE 2
+<64 lowercase hex characters>
+<size in bytes>
+<time in seconds>
+<reason, one line>
+<original path>
+```
+
+A v1 record (`LITRIC-QUARANTINE 1`, no digest line) is still parsed. It appears
+as `No integrity record`, restores successfully, and the window says
+"Restored <name> (no integrity record)" — it does not claim a check that never
+happened. A record with an unreadable digest line is dropped rather than
+guessed at.
+
+### 41.3 What the journeys observed
+
+* `journey_defender_quarantines_and_restores_a_real_threat` — after clicking
+  `Quarantine`, the record on disk contains
+  `275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f`, the
+  published SHA-256 of the EICAR test string and therefore independent of the
+  product's own hasher. Clicking `Check` shows `Verified`; `Restore` puts back
+  identical bytes and empties the list.
+* `journey_defender_refuses_to_restore_a_tampered_quarantine_entry` — after
+  quarantining EICAR, the test replaces the contained bytes with
+  `swapped bytes`. `Restore` shows "Could not restore: the contained file no
+  longer matches what was quarantined, so it was not restored"; the original
+  path stays empty; the tampered copy is still in `/Quarantine` with its bytes
+  intact; the entry stays listed. Clicking `Check` then shows `Does not match`.
+* `journey_defender_restores_a_legacy_quarantine_entry_unverified` — a v1 record
+  lists as `No integrity record`, restores the file, and shows "Restored old.bin
+  (no integrity record)".
+
+The new unit tests cover the same rules without a window: a correct digest
+round-trips and verifies, tampered bytes are refused and kept, a legacy record
+restores unverified, and the existing refusal tests still pass (the tampered
+record in the overwrite test is now explicitly a legacy record).
+
+```text
+cargo test --workspace        passed=1708 failed=0   (was 1,704; +4)
+cargo clippy --workspace --all-targets -- -D warnings   exit 0
+cargo fmt --all --check       exit 0
+bash ci/verify.sh             31 pass, 2 fail, 4 skipped
+```
+
+The two failures are the unchanged absent `keys/dev/` material (the mkosi key
+layout and the dev key pairs). No test deleted, no gate relaxed, no dependency
+added.
+
+### 41.4 Hashing: where, on which thread, and the honest cost
+
+Hashing happens in exactly two places: `quarantine` before it moves a file, and
+`verify` / `restore` on the same thread as the click. It is never in the draw
+path, never a poll and never a background task. `hash_path` streams the file
+through a fixed 8 KiB stack buffer with `Sha256::update`, so peak memory is the
+buffer, not the file size. Time is O(file size): a very large contained file
+would occupy the UI thread for the duration of the check or restore. That is a
+real limit, not a measurement claim; no worker thread was added for it.
+
+Integrity is recorded for new entries only. Files and records are still stored
+in plain form — this batch adds detection of tampering, not encryption.
+
+### 41.5 Limits
+
+Unchanged and stated plainly: no Chromium engine and no TLS stack, so a network
+download still cannot be exercised here; no QEMU/display, so the proof is the
+headless frame and the real filesystem; Deep-scan findings in system folders
+remain report-only. A v1 record cannot be retroactively verified; it is reported
+as unverified rather than upgraded with a digest.

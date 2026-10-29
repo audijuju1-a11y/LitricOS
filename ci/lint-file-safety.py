@@ -114,6 +114,8 @@ ALLOWED = {
         "out_of_scope_and_missing_files_are_refused_without_moving_anything": "removes the scratch root this test created under the system temp directory, after asserting the refused source was untouched",
         "restore_refuses_to_overwrite_or_to_use_a_tampered_record": "removes the scratch root this test created under the system temp directory, after asserting the contained copy was kept",
         "a_link_is_refused_and_its_target_is_left_alone": "removes the scratch root this test created under the system temp directory, after asserting the link and its target were untouched",
+        "tampered_bytes_are_refused_and_kept": "removes the scratch root this test created under the system temp directory, after asserting the tampered contained copy was kept",
+        "a_legacy_record_restores_unverified": "removes the scratch root this test created under the system temp directory, after asserting the legacy entry was restored",
     },
     "src/litric-shell/src/e2e.rs": {
         "e2e_root": "removes the temporary fixture root it is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
@@ -132,6 +134,8 @@ ALLOWED = {
         "journey_viewer_opens_text_files_with_scrolling": "removes the temporary root this journey created",
         "journey_defender_quarantines_and_restores_a_real_threat": "removes the temporary fixture root this Defender containment journey created, tagged with its own pid, after asserting the file was contained and restored",
         "journey_defender_refuses_to_quarantine_a_file_that_is_gone": "removes the temporary fixture root this refusal journey created, tagged with its own pid, after asserting no quarantine entry was invented",
+        "journey_defender_refuses_to_restore_a_tampered_quarantine_entry": "removes the temporary fixture root this tamper journey created, tagged with its own pid, after asserting the tampered copy was kept",
+        "journey_defender_restores_a_legacy_quarantine_entry_unverified": "removes the temporary fixture root this legacy-record journey created, tagged with its own pid, after asserting the file was restored",
     },
     "src/litric-sysd/src/providers.rs": {
         "apply_file": "removes one Wi-Fi credential; the path is refused unless it is a direct child of iwd's state directory under the daemon root, and the network name was validated by `valid_ssid` before the path was built",
