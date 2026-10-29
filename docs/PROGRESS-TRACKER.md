@@ -6456,3 +6456,198 @@ edited.
 
 Base `369d78a`. The batch is committed on `main` and pushed; `HEAD ==
 origin/main` and the tracked worktree is empty at the end of the turn.
+
+## 66. Batch: the frame budget re-measured, and BUG-0015 priced rather than closed (verified)
+
+### 66.1 Requirement
+
+The improvement plan scopes this batch by its proof
+(`docs/master-plan/28-whole-system-improvement-plan.md`, batch 66):
+
+> Frame budget: named change, re-measured, BUG-0015 closed or costed |
+> `render_bench` before/after, n=15
+
+and `docs/bugs/BUG-0015-a-frame-with-a-window-costs-206ms.md` carries the claim it
+has to answer:
+
+> `render_bench`, medians over 15 runs, release, 1280x800: Full frame, two windows
+> open (`full_frame`) | **206.359 ms** | 196.926 ms
+
+The batch contract's rule 5 applies to the result
+(`docs/master-plan/28-whole-system-improvement-plan.md`):
+
+> **Measurement before optimisation.** No RAM, wakeup or frame claim without a
+> tool, a command, an environment and n. A saving must name the capability it
+> removed.
+
+### 66.2 Measured baseline, before any edit
+
+Command, run on this commit (`ce08ee8`) before touching a line of code:
+
+```bash
+cd src
+cargo build --release -p litric-shell --example render_bench
+./target/release/examples/render_bench        # RUNS = 15 per scene
+```
+
+| Scene | p50 | min | mean | sd |
+|---|---:|---:|---:|---:|
+| `full_frame` (two windows) | **6.832 ms** | 6.696 | 6.853 | 0.119 |
+| `pointer_move_frame` | 7.034 ms | — | — | — |
+| `open_window_frame` | 11.980 ms | — | — | — |
+| `lock_frame` | 4.423 ms | — | — | — |
+| `full_frame_live_blur` (fallback) | 29.936 ms | — | — | — |
+| `present_full` | 3.943 ms | — | — | — |
+| `present_pointer_damage` | 0.151 ms | — | — | — |
+
+The recorded 206.359 ms and 185.3 ms figures **do not reproduce** on this commit
+and host. That is the finding the batch had to start with, and it changes what
+"fix BUG-0015" can honestly mean here.
+
+The profile pass attributes the 15.182 ms it can time: `stroke_line` 4.234 ms
+(27.9 %, 2,325 calls), `soft_shadow` 3.993 ms (26.3 %, 3 calls),
+`stroke_line_attrib` 1.797 ms, `stroke_round_rect` 1.686 ms, `fill_round_rect`
+1.227 ms (358,198 px at 3.42 ns/px), `glass_backdrop` 0.534 ms.
+
+### 66.3 The named change: implemented, proved pixel-identical, measured, reverted
+
+The candidate the profile pointed at was the per-row walk in `stroke_line`: a
+capsule paints only where its distance is under `half + 0.5`, but the loop walked
+its whole inflated box. The clamp was written in the real path
+(`src/litric-shell/src/canvas.rs`, `stroke_line`) with the inflated box kept as
+the fallback for non-finite input.
+
+Correctness was not assumed. `the_stroke_line_equals_the_per_pixel_distance`
+compares the painter against `stroke_line_reference`, the pre-optimisation
+implementation verbatim, over 144 combinations — horizontal, vertical, diagonal,
+fractional, zero-length, off-canvas, hairline, thick, NaN start, four clips
+including an empty one, and opaque / translucent / zero-alpha colours. It passed,
+as did all 57 canvas tests, so the change painted the same pixels.
+
+It was then measured with the identical command and n=15:
+
+| Scene | before | after | delta |
+|---|---:|---:|---:|
+| `full_frame` | 6.832 ms | 6.817 ms | -0.2 % |
+| `pointer_move_frame` | 7.034 ms | 7.156 ms | **+1.7 %** |
+| `open_window_frame` | 11.980 ms | 12.081 ms | **+0.8 %** |
+| `lock_frame` | 4.423 ms | 4.557 ms | **+3.0 %** |
+| `full_frame_live_blur` | 29.936 ms | 28.504 ms | -4.8 % |
+| `profile.stroke_line.ms` | 4.234 ms | 4.491 ms | +6.1 % |
+
+The baseline's own second run moved between 3 % and 8 % on these rows
+(`full_frame` 6.614 ms, `pointer_move_frame` 6.457 ms, `open_window_frame`
+11.669 ms, `lock_frame` 4.326 ms), so single-run deltas of 1-3 % cannot be read as
+a result on their own. What *is* consistent across the two runs of each side:
+the pointer, open-window and lock frames are worse in **both** after-runs
+(7.156/7.201, 12.081/12.077, 4.557/4.552) than in **both** before-runs
+(7.034/6.457, 11.980/11.669, 4.423/4.326), while `full_frame` lands between the
+two baseline runs. Slower in three rows with no row repeatably faster is not a
+win. The scene's strokes are short and mostly axis-aligned, so the clamp saves a
+few corner pixels per call and charges per-row arithmetic for them. Per the batch
+contract's rule 5 — a saving must name what it removed — there was no saving to
+name, so the change was **reverted** (`git checkout -- src/litric-shell/src/canvas.rs`)
+instead of shipped.
+
+What the measurement did establish: `stroke_line`'s cost is per-call work and the
+blend, not the corner pixels of its bounding box; `soft_shadow` is 26 % of a
+frame for three calls; and the shipped glass path already avoids the live blur
+(`full_frame_live_blur` is the fallback a canvas with no backdrop takes, and it
+costs 4.4x the shipped frame).
+
+### 66.4 Outcome: BUG-0015 is priced, not closed
+
+`docs/bugs/BUG-0015-a-frame-with-a-window-costs-206ms.md` now records:
+
+* host, release, n=15: two-window full frame **6.83 ms**, open-window frame
+  **11.98 ms** — both inside the 16.67 ms gate (2.44x and 1.39x of headroom);
+* the historical 206 ms / 185 ms numbers do not reproduce on this commit, and the
+  record says so instead of leaving them as the current state;
+* the status changes from `OPEN — measured, not fixed` to **`PRICED (host)`**,
+  because the gate is a claim about a booted image on QEMU vCPUs and **no image
+  was built here** (mkosi and QEMU are absent). The frame-time gate therefore
+  stays unpassed, with the host number known.
+
+No production code ships from this batch. That is the batch's result, not an
+omission: the one candidate with a measured baseline behind it made the frame
+slower.
+
+### 66.5 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `docs/bugs/BUG-0015-a-frame-with-a-window-costs-206ms.md` | 12 | status: `PRICED (host)`, image number unmeasured |
+| `docs/bugs/BUG-0015-a-frame-with-a-window-costs-206ms.md` | 246 | the 2026-10-29 measurement, the reverted change and its before/after table |
+| `docs/PROGRESS-TRACKER.md` | 6460 | this entry |
+| `src/litric-shell/examples/render_bench.rs` | 53 | `RUNS = 15` — the n this batch used, unchanged |
+
+### 66.6 Tests
+
+No test was added, and none was weakened. The claim this batch makes is a
+measurement, and the tests that guard the pixels it measured already exist and
+were run: 57 canvas tests including the 144-case stroke matrix and the
+bit-identical shadow matrices. A wall-clock assertion was deliberately **not**
+added to the suite: this record's own variance section shows the same binary
+moving between 212 ms and 692 ms on a loaded host, so a millisecond test would be
+a flake, not a gate. The pixels stay guarded by the golden-frame check; the time
+claim stays with a booted image.
+
+### 66.7 Measured costs of this batch
+
+| Figure | Value |
+| --- | --- |
+| production code changed | **0 lines** (the candidate was reverted) |
+| per-frame work added | **0** |
+| heap added | **0 bytes** |
+| tests added / removed | 0 / 0 |
+| dependencies / `unsafe` | 0 / none |
+| bench runs taken | 2 before + 2 after, n=15 each |
+
+### 66.8 Gate
+
+```text
+$ cargo fmt --all --check
+exit 0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+exit 0
+
+$ cargo test --workspace
+1,837 passed; 0 failed   (unchanged: this batch adds no code)
+
+$ python3 ci/lint-doc-refs.py
+OK: 1,228 citation(s) across 156 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+OK: 116 deletion site(s), all inside reviewed functions
+
+$ bash ci/verify.sh
+summary: 32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the recorded baseline (`mkosi config…`, `dev key pairs…`)
+and the three skips are the image build, boot smoke test and idle measurement
+that need mkosi/QEMU. No gate, golden frame or key file was edited.
+
+### 66.9 Limits, stated
+
+* **The gate is still unpassed.** 6.83 ms is a host number on a fast machine. The
+  requirement is a booted image over QEMU vCPUs, and that measurement does not
+  exist in this environment.
+* **The variance is real.** The same record shows the identical binary between
+  212 ms and 692 ms on a loaded host. Only medians from one session are compared
+  here, and every number is labelled with its host.
+* **The 206 ms claim is retired, not disproved.** It was true of the build that
+  produced it; what this batch shows is that it is not true of `ce08ee8`, and it
+  says which commit the new number belongs to.
+* **One candidate was tried, not all of them.** `soft_shadow` (26 % for three
+  calls) and the per-pixel blend remain, and the profile in this entry is the
+  measured starting point for whichever batch takes them next.
+* **No image-level or QEMU evidence** is claimed; `docs/GATES.md` rows for the
+  boot and frame gates stay `NOT RUN`.
+
+### 66.10 Git
+
+Base `ce08ee8`. This entry and the bug record are committed on `main` and
+pushed; `HEAD == origin/main` and the tracked worktree is empty at the end of the
+turn.

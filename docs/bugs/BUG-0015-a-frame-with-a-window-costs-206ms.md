@@ -9,7 +9,7 @@ Subsystem     : src/litric-shell/src/main.rs (render loop), src/litric-shell/exa
                 src/litric-shell/examples/frame_dump.rs
 First Observed: 2026-10-09, first frame timings ever measured on the project's own
                 development host (release build, offline, 1280x800)
-Status        : OPEN — measured, not fixed
+Status        : PRICED (host) — 6.83 ms on this commit; the image number is unmeasured
 ```
 
 ## Reproducer
@@ -242,3 +242,81 @@ medians: full frame 133.7 -> 92.4 ms, pointer move 132.9 -> 95.8 ms, open window
 host figure, not a QEMU one. Remaining from the callgrind profile: the glass
 backdrop's `box_blur_pass`, per-pixel float `blend`, and
 `stroke_round_rect` walking the whole bounding box for an outline.
+
+## Update 2026-10-29 (commit `ce08ee8`): re-measured, and the number is not 206 ms
+
+`render_bench` rebuilt from this commit on this host, `RUNS = 15` per scene,
+release, 1280x800. Two consecutive runs; the table is run 1. Run 2 moved the
+same rows by 3-8 %: `full_frame` 6.614 ms, `pointer_move_frame` 6.457 ms,
+`open_window_frame` 11.669 ms, `lock_frame` 4.326 ms. That spread is stated here
+because it is the same order as the deltas discussed below, and only a
+consistent direction across both runs is treated as a result.
+
+| Scene | p50 | min | mean | sd |
+|---|---:|---:|---:|---:|
+| Full frame, two windows (`full_frame`) | **6.832 ms** | 6.696 | 6.853 | 0.119 |
+| Frame after one pointer move | **7.034 ms** | — | — | — |
+| Frame after opening a window | **11.980 ms** | — | — | — |
+| Lock frame | 4.423 ms | — | — | — |
+| Lock, password field out | 4.352 ms | — | — | — |
+| Lock, customize sheet | 7.623 ms | — | — | — |
+| Full frame, live-blur fallback | 29.936 ms | — | — | — |
+| Present full frame (`write_all`) | 3.943 ms | — | — | — |
+| Present one damage band | 0.151 ms | — | — | — |
+| Blur, full screen, r3 / r10 / r30, 2 passes | 35.157 / 37.192 / 37.721 ms | — | — | — |
+
+The same binary, with the call timers on for one frame, splits the 15.182 ms it
+could attribute: `stroke_line` 4.234 ms (27.9 %, 2,325 calls), `soft_shadow`
+3.993 ms (26.3 %, 3 calls), `stroke_line_attrib` 1.797 ms, `stroke_round_rect`
+1.686 ms (7 calls), `fill_round_rect` 1.227 ms (358,198 px at 3.42 ns/px),
+`glass_backdrop` 0.534 ms. The profile's own diagnostic pass is inside the
+`stroke_line` figure and is measured separately as `stroke_line_attrib`.
+
+**What this means, stated narrowly.** On this host and this commit the two-window
+full frame is 6.83 ms, which is **2.44x inside** the 16.67 ms gate and 7.3x
+inside the 50 ms software figure; the open-window frame at 11.98 ms is also
+inside 16.67 ms. The 206.359 ms and 185.3 ms figures recorded above were taken on
+older builds (the 2026-10-24 update already reported 92.4 ms after the one-pass
+shadow and integer-blend work), and neither reproduces here: a full frame is now
+6.83 ms.
+
+**What this does not mean.** It is not the release number. The target image runs
+this rasteriser on QEMU vCPUs, no image was built in this environment (mkosi and
+QEMU are absent), and the earlier rows of this record show the same binary moving
+between 212 ms and 692 ms on a loaded host. The gate is a QEMU-frame claim on a
+booted desktop (`litric-shell.status` over-budget counter), and that measurement
+still does not exist. The bug therefore moves from **OPEN, measured, not fixed**
+to **PRICED on the host**: the host number is known, the image number is not, and
+this record does not claim the gate is passed.
+
+### The change that was tried, measured, and reverted
+
+The remaining candidate named above was the per-row walk: a capsule paints only
+where its distance is under `half + 0.5`, yet `stroke_line` walks its whole
+inflated box. A row-clamped version (the segment's x-window for that row, grown
+by the pen, with the inflated box kept as the fallback for non-finite input) was
+implemented and proved **pixel-identical** to the old loop over the existing
+144-case matrix (`the_stroke_line_equals_the_per_pixel_distance`, including NaN,
+fractional geometry, thick pens and each of four clips) plus the other 56 canvas
+tests. It was then measured with the identical command and n=15:
+
+| Scene | before | after | delta |
+|---|---:|---:|---:|
+| `full_frame` | 6.832 ms | 6.817 ms | -0.2 % |
+| `pointer_move_frame` | 7.034 ms | 7.156 ms | **+1.7 %** |
+| `open_window_frame` | 11.980 ms | 12.081 ms | **+0.8 %** |
+| `lock_frame` | 4.423 ms | 4.557 ms | **+3.0 %** |
+| `full_frame_live_blur` | 29.936 ms | 28.504 ms | -4.8 % |
+
+No repeatable gain, two rows worse: the scene's strokes are short and mostly
+axis-aligned, so the clamp saves a few skipped pixels per call and pays per-row
+arithmetic for them. It was reverted rather than shipped as an unmeasured
+"improvement". The conclusion worth keeping is the attribution, not the code:
+`stroke_line`'s cost is per-call work and blending, not the corner pixels of its
+bounding box.
+
+A wall-clock budget test was also considered and **not** added: on a shared host
+the same binary moves by 3x between runs (this record's own variance section),
+so a millisecond assertion in the suite would be a flake generator, not a gate.
+The golden-frame check already holds the pixels; the frame-time claim stays where
+the evidence can be reproducible — a booted image.
