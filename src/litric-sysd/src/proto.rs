@@ -146,7 +146,12 @@ pub enum Request {
     },
     /// Read the update generation state. A question: it changes nothing and
     /// needs no capability.
-    UpdateStatus,
+    UpdateStatus {
+        /// The status schema the caller understands, if it said so. `None` is
+        /// the schema-1 spelling; a client that understands the lock fields
+        /// asks for schema 2 explicitly.
+        schema: Option<u8>,
+    },
     /// Stage a downloaded tree from the service's `incoming` directory.
     UpdateStage {
         /// The generation version being staged.
@@ -687,8 +692,23 @@ impl Request {
             }
             "update" => match arg(0).to_ascii_lowercase().as_str() {
                 "status" => {
-                    arity("UPDATE STATUS", 1)?;
-                    Ok(Self::UpdateStatus)
+                    if args.len() > 2 {
+                        return Err(ProtoError::BadArity {
+                            verb: "UPDATE STATUS",
+                            expected: 2,
+                            got: args.len(),
+                        });
+                    }
+                    let schema = match args.get(1) {
+                        None => None,
+                        Some(raw) => {
+                            Some(raw.parse::<u8>().map_err(|_| ProtoError::BadArgument {
+                                name: "update schema",
+                                value: (*raw).to_owned(),
+                            })?)
+                        }
+                    };
+                    Ok(Self::UpdateStatus { schema })
                 }
                 "stage" => {
                     arity("UPDATE STAGE", 4)?;
@@ -1361,7 +1381,27 @@ mod tests {
 
     #[test]
     fn update_requests_parse_with_an_explicit_health_and_confirmation() {
-        assert_eq!(Request::parse("UPDATE STATUS"), Ok(Request::UpdateStatus));
+        assert_eq!(
+            Request::parse("UPDATE STATUS"),
+            Ok(Request::UpdateStatus { schema: None })
+        );
+        assert_eq!(
+            Request::parse("UPDATE STATUS 2"),
+            Ok(Request::UpdateStatus { schema: Some(2) })
+        );
+        assert_eq!(
+            Request::parse("UPDATE STATUS 999")
+                .expect_err("not a u8")
+                .kind(),
+            "bad-argument"
+        );
+        // 255 is a valid u8; whether this daemon speaks it is a version
+        // question, answered by `state` as `schema-unsupported`, not a parse
+        // error.
+        assert_eq!(
+            Request::parse("UPDATE STATUS 255"),
+            Ok(Request::UpdateStatus { schema: Some(255) })
+        );
         assert_eq!(
             Request::parse("update stage 1.1.0 release CONFIRM"),
             Ok(Request::UpdateStage {

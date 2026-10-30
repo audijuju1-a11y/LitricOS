@@ -447,7 +447,7 @@ impl Sysd {
             Request::Action { action, consent } => self.action(action, *consent, now),
             Request::Resolve { app, uri, access } => self.resolve(app, uri, *access, now),
             Request::LaunchApp { argv } => self.launch_app(argv),
-            Request::UpdateStatus => Response::ok(self.updates.status()),
+            Request::UpdateStatus { schema } => self.update_status(*schema, now),
             Request::UpdateStage {
                 version,
                 source,
@@ -598,6 +598,28 @@ impl Sysd {
             ));
         }
         None
+    }
+
+    /// Answer a status question, refusing a schema this daemon cannot speak.
+    ///
+    /// Schema 0 has never existed and a schema above [`crate::update::SCHEMA`]
+    /// asks for fields this build does not have; both are typed refusals rather
+    /// than a truncated answer a newer client could mistake for schema 2. A
+    /// schema-1 client is served the schema-2 answer: the extra lines are
+    /// additive and a client that ignores unknown fields still works.
+    fn update_status(&self, requested: Option<u8>, now: Timestamp) -> Response {
+        if let Some(schema) = requested {
+            if schema == 0 || schema > crate::update::SCHEMA {
+                return Response::err(
+                    "schema-unsupported",
+                    format!(
+                        "requested schema {schema}; this daemon speaks 1..={}",
+                        crate::update::SCHEMA
+                    ),
+                );
+            }
+        }
+        Response::ok(self.updates.status(now, requested))
     }
 
     fn update_stage(
@@ -2453,7 +2475,7 @@ mod tests {
             denied.encode()
         );
 
-        let status = s.handle(&Request::UpdateStatus, NOW + 4);
+        let status = s.handle(&Request::UpdateStatus { schema: Some(2) }, NOW + 4);
         assert!(status.is_ok(), "{}", status.encode());
         assert!(
             line(&status, "active_slot=A").is_some(),

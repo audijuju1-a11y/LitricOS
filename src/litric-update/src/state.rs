@@ -614,6 +614,14 @@ impl Store {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)
             .map_err(|error| io_error("read generation state", &path, error))?;
+        // The metadata check above is the fast refusal; this one closes the
+        // race where the file grows between `metadata` and the read.
+        if bytes.len() as u64 > MAX_STATE_BYTES {
+            return Err(UpdateError::InvalidState(format!(
+                "{} grew past the {MAX_STATE_BYTES}-byte ceiling while being read",
+                path.display()
+            )));
+        }
         let text = std::str::from_utf8(&bytes)
             .map_err(|_| UpdateError::InvalidState(format!("{} is not UTF-8", path.display())))?;
         UpdateState::decode(text).map_err(UpdateError::InvalidState)

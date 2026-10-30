@@ -7801,3 +7801,63 @@ existing capability broker gates staging, commit and rollback. It does not start
 Base `278639b`; this batch is committed on `main` with the service, its tests,
 the design note, scope/plan/tracker/GATES updates. The final hash and
 `HEAD == origin/main` check are recorded in the delivery report after the push.
+
+## 76. Batch: crash-consistent update state and one writer per root (verified)
+
+### 76.1 Requirement
+
+§75 made the generation engine reachable from `litric-sysd --boot` and the socket, but left two gaps: a transition was not written through a temporary+fsync+rename+directory-fsync sequence, and two processes could interleave a read-modify-write of one root. This batch owns only those gaps. It does not start §73 or any UI, and adds no bootloader, partition writer, image format, signature check or real health probe.
+
+### 76.2 The contract, and where it lives (file → item)
+
+* `src/litric-update/src/state.rs` — sibling temp `.state.tmp-<pid>` → `sync_all` → rename over `<system>/state` → directory fsync. The temp is never parsed; the post-read length check closes the metadata/read race. Zero, truncated and unknown records stay `InvalidState`.
+* `src/litric-sysd/src/update_lock.rs` — `update.lock` via `create_new`, mode `0600`, header `litric-update-lock\t1`, then `pid`/`at`/`reason`. Writers wait at most 2 s; status makes one non-blocking attempt. A dead PID is reclaimed; a malformed record younger than 2 s is initialising; a live PID is never evicted. `Drop` removes only the exact record it wrote.
+* `src/litric-sysd/src/update.rs` — `UpdateService` no longer caches an engine. Boot, stage, commit and rollback take the root lock and reopen the record under it; status reads under a non-blocking lock snapshot and reports `busy` instead of waiting. `UpdateFailure` adds typed `locked`/`lock-io`.
+* `src/litric-sysd/src/main.rs` — `--boot` exits `ExitCode::FAILURE` when the lock is unavailable; a corrupt record still exits 0 and reports it.
+* `src/litric-sysd/src/proto.rs` — `UPDATE STATUS [schema]`; schema 1 and 2 are served, 0 and >2 are `ERR schema-unsupported`, and schema 2 adds the busy/lock fields.
+* `src/litric-sysd/src/state.rs` — status authorises no mutation and forwards the optional schema; no `update.control` capability is needed to ask.
+* `ci/lint-file-safety.py` — records the two reviewed deletion sites: lock release and stale reclaim.
+* `src/litric-sysd/tests/update_service.rs` — real binary + socket tests for concurrent and interrupted writes.
+
+### 76.3 Behavior pinned by the tests
+
+* Two `--boot` processes started together both exit 0 and the candidate reaches `candidate_attempts=2`; no increment is lost.
+* A live PID's lock makes a second writer exit non-zero with `locked by pid`, while `UPDATE STATUS 2` answers `state=busy` with pid, reason, timestamp and `retry=lock` in under one second.
+* A dead-PID lock is reclaimed; the next boot prints `attempt=1` and removes the stale file.
+* A leftover `.state.tmp-*` is ignored (`state=ready`). Truncated and zero-length primaries answer `state=corrupt` over the socket; `--boot` reports `litric.update.state=corrupt` and exits 0.
+* The §75 stage → boot → commit → rollback path still passes with the `<root>/user` canary byte-identical.
+* Bare `UPDATE STATUS` still works; `UPDATE STATUS 2` echoes `requested_schema=2`; `UPDATE STATUS 99` is `ERR schema-unsupported`.
+* Read precedence: disabled → root absent → busy (live lock) → unavailable (lock I/O) → state absent → corrupt (symlink/oversize/non-UTF-8/zero/truncated) → incomplete (slot/marker missing) → ready. The design note records the full table.
+
+### 76.4 Tests added
+
+* `update_lock::tests::{a_live_lock_refuses_a_second_holder_and_releases_on_drop, a_dead_pid_is_reclaimed, a_malformed_young_lock_is_not_evicted_during_creation, the_wait_is_bounded}`
+* `litric-update::tests::{a_leftover_state_temporary_is_never_parsed_as_state, truncated_and_zero_length_state_is_refused_without_a_panic}`
+* `src/litric-sysd/tests/update_service.rs::{two_concurrent_boot_processes_each_count_one_attempt, a_live_writer_makes_status_busy_and_a_second_writer_fail_typed, a_stale_dead_pid_lock_is_reclaimed_by_the_next_boot, interrupted_writes_are_ignored_or_degrade_without_a_panic}`
+* Existing §75 tests were kept; only the schema assertion changed.
+
+### 76.5 Gates (real output, 2026-10-30)
+
+* `cargo fmt --all --check` → exit 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+* `cargo test -p litric-update` → **21 passed, 0 failed**.
+* `cargo test --workspace` → **1,927 passed, 0 failed** (62 test binaries).
+* `python3 ci/count-scope.py` → 1,165 rows: **9 D · 121 P · 289 S · 746 T**.
+* `docs/SYSTEM-SCOPE.md` row 769 moves `S` → `P` for the tested state-record ordering; the image/partition/bootloader stages it also names remain unimplemented, so it is partial, not done.
+* `python3 ci/lint-doc-refs.py` → 1,352 citations across 159 documents resolve.
+* `python3 ci/lint-line-endings.py` → 385 files, all LF.
+* `python3 ci/lint-file-safety.py` → 125 deletion sites, all reviewed.
+* `bash ci/verify.sh` → **34 pass, 0 fail, 3 skipped**. The skips are image build (mkosi absent), boot smoke (QEMU absent) and idle RAM/CPU/boot timing (same). No failed gate is hidden by the skips.
+
+### 76.6 Limits, stated plainly
+
+* No bootloader or partition integration: the state file is still not read by systemd-boot, a UKI or the ESP. The attempt is per `litric-sysd` start.
+* The atomic ordering covers the generation record, not slot trees, an EROFS image or verity. There is no power-cut matrix or actual power-cycle test; tests simulate a leftover temp and truncated/zero-length records.
+* `COMMIT PASSED` remains the caller's typed assertion. No session, storage, critical-service or real health probe exists; row 763 stays `S`.
+* No signature, hash, monotonic counter, EROFS/verity or ESP writer; rows 767, 768 and 770 stay `S`.
+* No UI consumes the status; §73 was not started. The Research-Deep-all corpus and the whole system are not finished.
+* On a platform without `/proc`, a complete lock record is fail-closed as live; Linux, the target, uses `/proc`.
+
+### 76.7 Git
+
+Base `1e9b64d`; this batch is committed on `main` with the lock module, service/protocol/state changes, tests, design note and scope/plan/tracker/GATES updates. The final hash and `HEAD == origin/main` check are recorded in the delivery report after the push.

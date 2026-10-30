@@ -2549,3 +2549,69 @@ being refused, and a corrupt state still answering.
 Revert this commit. The service module, four protocol requests, the capability,
 the boot `ExecStartPre`, tmpfiles root, tests and docs disappear; row 764
 returns to `S` and the engine is again a library with no running caller.
+
+## 2026-10-30 — crash-consistent update state and one writer per root
+
+`§76` closes the two gaps left by `§75`: the state record is now replaced through a temp+fsync+rename+directory-fsync sequence, and every writer serialises on an exclusive-create lock. It is still not a bootloader, partition writer, image format, signature verifier or real health probe.
+
+### What was found
+
+The engine already wrote `<system>/state` atomically in `Store::save`, but the service cached `Engine` for its lifetime and no process coordinated the read-modify-write. Two `--boot` processes could both read attempt 1 and both write attempt 2; a daemon commit could race a boot increment. `UPDATE STATUS` read five fields without a snapshot, and a second writer had no defined failure. A leftover state temporary was ignored by `Store::load`, but there was no test pinning that, and no post-read ceiling check.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-sysd/src/update_lock.rs` | exclusive-create `update.lock` (`0600`), pid/at/reason record, 2 s bounded writer wait, non-blocking status attempt, dead-PID and malformed-grace reclaim, exact-content release |
+| `src/litric-sysd/src/update.rs` | no cached engine; boot/stage/commit/rollback take the lock and reopen; status snapshots under a non-blocking lock; typed `UpdateFailure` (`locked`, `lock-io`) |
+| `src/litric-sysd/src/main.rs` | `--boot` returns non-zero on a lock failure; corrupt state still exits 0 |
+| `src/litric-sysd/src/proto.rs` | `UPDATE STATUS [schema]`; schema 1/2 served, 0/>2 `ERR schema-unsupported`; schema 2 adds lock fields |
+| `src/litric-sysd/src/state.rs` | forwards the optional schema and refuses unsupported versions before reading |
+| `src/litric-update/src/state.rs` | post-read length check closes the metadata/read race; the temp is still never parsed |
+| `src/litric-sysd/tests/update_service.rs` | concurrent boot, live-lock, stale-PID, interrupted-write and schema tests over the real binary/socket |
+| `docs/SYSTEM-SCOPE.md` | row 769 `S` → `P` (the state-record stage is now tested; image/partition stages are not) |
+| `docs/design/2026-10-30-update-service.md` | durability ordering, lock protocol, reclaim and read-degradation precedence |
+| `docs/PROGRESS-TRACKER.md` | §76 |
+| `ci/lint-file-safety.py` | two reviewed deletion sites for lock release/reclaim |
+
+### Evidence (commands run on this batch)
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-update` | **21 passed, 0 failed** |
+| `cargo test --workspace` | **1,927 passed, 0 failed** (62 test binaries) |
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D, 121 P, 289 S, 746 T |
+| `python3 ci/lint-doc-refs.py` | 1,352 citations across 159 documents resolve |
+| `python3 ci/lint-line-endings.py` | 385 files, all LF |
+| `python3 ci/lint-file-safety.py` | 125 deletion sites, all reviewed |
+| `bash ci/verify.sh` | **34 pass, 0 fail, 3 skipped** |
+
+The three skips are the image build (`mkosi` absent), the boot smoke test (QEMU absent) and idle RAM/CPU/boot timing (same). They are environmental skips, not evidence.
+
+The process tests start the real `litric-sysd` binary. Two concurrent `--boot` children both succeed and the socket reports `candidate_attempts=2`. A live PID's lock makes `UPDATE STATUS 2` answer `state=busy` within the asserted one-second bound, while a second writer exits non-zero with `locked by pid`. A dead PID is reclaimed and the next boot counts attempt 1. A leftover temp leaves `state=ready`; truncated and zero-length primaries answer `state=corrupt`; `--boot` reports the corruption and exits 0. The §75 stage → boot → commit → rollback test still passes with the `<root>/user` canary unchanged.
+
+### What this establishes
+
+* A state transition is observable only as the old complete record or the new complete record, with the rename itself synced.
+* A leftover state temporary is never parsed; truncated, zero-length and partial records degrade to `corrupt` without a panic.
+* Two writers cannot lose an increment: the second either waits and runs after the first or fails with `locked`.
+* `UPDATE STATUS` is non-blocking and returns a defined `busy` result with the owner's pid, reason and timestamp.
+* A dead owner is reclaimed; a live owner is not evicted; a stale release cannot delete a replacement lock.
+* Schema 1 clients still work; schema 2 adds lock fields; unsupported schema numbers are typed errors.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that a bootloader boots the candidate | no systemd-boot/UKI/ESP reader exists; attempts are per `litric-sysd` start |
+| that the A/B partition or EROFS/verity image is written | the engine copies slot directories; no image writer exists |
+| that every update stage is power-cut safe | only the record ordering is tested, by simulated interruption; no power-cut matrix ran |
+| that updates are authentic | no signature, hash or monotonic counter; rows 767/768 stay `S` |
+| that health checks pass | `PASSED` is the caller's typed assertion; row 763 stays `S` |
+| that a UI consumes this | no updater UI; §73 was not started |
+
+### Rollback
+
+Revert this commit. The lock module, service re-open/lock integration, schema-2 parser/state changes, concurrency tests, design sections and scope/tracker/GATES rows disappear; row 769 returns to `S`, and `§75`'s service again relies on systemd ordering with a cached engine. No user data, boot configuration or image is touched by this batch.

@@ -114,8 +114,8 @@ component, our UI and policy on top
 | Status | Count | Share |
 |---|---:|---:|
 | `D` done and tested | **9** | 0.8% |
-| `P` partial, real code with passing tests | **120** | 10.3% |
-| `S` specified, no code | **290** | 24.9% |
+| `P` partial, real code with passing tests | **121** | 10.4% |
+| `S` specified, no code | **289** | 24.8% |
 | `T` not started | **746** | 64.0% |
 | **Total** | **1165** | |
 
@@ -1129,7 +1129,7 @@ Treated as gate items, not wishes (Phase 06 §5).
 | 766 | "Undo update" for 7 days | O | S |
 | 767 | Signature verification before writing anything | O | S |
 | 768 | Anti-downgrade via monotonic counter | O | S |
-| 769 | Power-cut safe at every stage | O | S |
+| 769 | Power-cut safe at every stage | O | P |
 | 770 | ESP free-space check before staging | O | S |
 | 771 | Never interrupt a game or fullscreen application | O | S |
 | 772 | Active hours / deferral policy | O | T |

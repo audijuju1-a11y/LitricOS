@@ -232,10 +232,20 @@ fn run_boot(args: &Args) -> ExitCode {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs());
-    for line in litric_sysd::update::boot(&args.update_root, now) {
-        println!("{line}");
+    match litric_sysd::update::boot(&args.update_root, now) {
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            // A lock held by a live writer is not a state error: this boot must
+            // not count an attempt (or race a commit) and systemd should retry.
+            eprintln!("litric-sysd: boot: {error}");
+            ExitCode::FAILURE
+        }
     }
-    ExitCode::SUCCESS
 }
 
 #[cfg(unix)]

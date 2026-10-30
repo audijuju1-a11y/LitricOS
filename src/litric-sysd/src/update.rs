@@ -40,6 +40,7 @@
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use litric_core::Version;
 use litric_update::{
@@ -48,13 +49,14 @@ use litric_update::{
 };
 
 use crate::state::Timestamp;
+use crate::update_lock::{acquire, try_acquire, LockError};
 
 /// The update IPC schema reported by `UPDATE STATUS`.
 ///
 /// It is separate from `litric-update`'s on-disk state version: the wire may
 /// grow a field without changing the record on disk, and a client must not
 /// mistake the two.
-pub const SCHEMA: u8 = 1;
+pub const SCHEMA: u8 = 2;
 
 /// The root installed by the image. One root, one writer.
 pub const DEFAULT_ROOT: &str = "/var/lib/litric/update";
@@ -89,16 +91,60 @@ impl HealthSignal {
     }
 }
 
+/// Why a service operation failed.
+///
+/// Lock failures are deliberately separate from engine failures: a caller that
+/// got `locked` must retry the whole read-modify-write, while `invalid-state`
+/// means the record needs operator attention. Both are typed IPC errors.
+#[derive(Debug)]
+pub enum UpdateFailure {
+    /// The engine refused or could not complete the operation.
+    Update(UpdateError),
+    /// Another process owns the root.
+    Lock(LockError),
+}
+
+impl UpdateFailure {
+    /// The stable `ERR <kind>` token.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Update(error) => error.kind(),
+            Self::Lock(error) => error.kind(),
+        }
+    }
+}
+
+impl core::fmt::Display for UpdateFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Update(error) => error.fmt(f),
+            Self::Lock(error) => error.fmt(f),
+        }
+    }
+}
+
+impl From<UpdateError> for UpdateFailure {
+    fn from(error: UpdateError) -> Self {
+        Self::Update(error)
+    }
+}
+
+impl From<LockError> for UpdateFailure {
+    fn from(error: LockError) -> Self {
+        Self::Lock(error)
+    }
+}
+
 /// The daemon's updater service.
 ///
-/// `engine` is opened lazily so a daemon with no update root (tests, `--report`)
-/// does not touch `/var`, and so a root initialised while the daemon is running
-/// becomes visible on the next status query. Once opened it is the writer; the
-/// engine's single-writer assumption is the systemd unit's serialisation.
+/// The service holds no engine between requests. Every mutating request takes
+/// the cross-process root lock and re-opens the state under it, so a boot
+/// increment or a commit that happened in another process is never overwritten
+/// from a stale in-memory copy.
 #[derive(Debug)]
 pub struct UpdateService {
     root: Option<PathBuf>,
-    engine: Option<Engine>,
     last_error: Option<String>,
 }
 
@@ -109,7 +155,6 @@ impl UpdateService {
     pub const fn disabled() -> Self {
         Self {
             root: None,
-            engine: None,
             last_error: None,
         }
     }
@@ -119,7 +164,6 @@ impl UpdateService {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: Some(root.into()),
-            engine: None,
             last_error: None,
         }
     }
@@ -132,21 +176,60 @@ impl UpdateService {
 
     /// Read the current generation state as protocol lines.
     ///
-    /// This never returns an error: a status question must have an answer even
-    /// when the answer is "there is no state" or "the state is damaged".
-    pub fn status(&mut self) -> Vec<String> {
+    /// A status question never waits for a writer. It tries the root lock once:
+    /// a live owner produces `state=busy` with the owner's pid and reason; a
+    /// missing root is `uninitialized`; a damaged record is `corrupt`; a record
+    /// whose slots disagree with it is `incomplete`. Acquiring the lock for the
+    /// duration of the read is what makes the five fields a single snapshot.
+    pub fn status(&self, now: Timestamp, requested_schema: Option<u8>) -> Vec<String> {
         let last_error = self.last_error.clone();
         let mut lines = vec![format!("schema={SCHEMA}")];
+        if let Some(schema) = requested_schema {
+            lines.push(format!("requested_schema={schema}"));
+        }
         let Some(root) = self.root.clone() else {
             lines.push("state=disabled".to_owned());
             return lines;
         };
         lines.push(format!("root={}", root.display()));
 
-        // Read the record rather than reusing the mutating service's cached
-        // engine. The boot entrypoint is a separate process that writes this
-        // same root before `--serve`; a status query must show what is on disk,
-        // not what this process last remembered.
+        if !root.exists() {
+            lines.push("state=uninitialized".to_owned());
+            append_empty_state(&mut lines);
+            if let Some(error) = last_error {
+                lines.push(format!("last_error={error}"));
+            }
+            return lines;
+        }
+
+        let _lock = match try_acquire(&root, "status", now) {
+            Ok(lock) => lock,
+            Err(LockError::Locked(info)) => {
+                lines.push("state=busy".to_owned());
+                lines.push(format!("locked_pid={}", info.pid));
+                lines.push(format!("locked_reason={}", info.safe_reason()));
+                lines.push(format!("locked_at={}", info.at));
+                lines.push("retry=lock".to_owned());
+                return lines;
+            }
+            Err(LockError::Contended) => {
+                lines.push("state=busy".to_owned());
+                lines.push("locked_pid=0".to_owned());
+                lines.push("locked_reason=contended".to_owned());
+                lines.push("locked_at=0".to_owned());
+                lines.push("retry=lock".to_owned());
+                return lines;
+            }
+            Err(error) => {
+                lines.push("state=unavailable".to_owned());
+                lines.push(format!("reason={error}"));
+                return lines;
+            }
+        };
+
+        // Read under the lock. The boot entrypoint is a separate process that
+        // writes this same root; a status query must show what is on disk, not
+        // what this process last remembered.
         match Engine::open(&root) {
             Ok(engine) => {
                 let state = engine.state();
@@ -201,22 +284,32 @@ impl UpdateService {
     /// [`UpdateError::UnsafeSource`] for a path outside `incoming`, and every
     /// engine refusal (no state, downgrade, pending candidate, unsafe tree,
     /// staging bound).
-    pub fn stage(&mut self, version: Version, source: &str) -> Result<Vec<String>, UpdateError> {
+    pub fn stage(&mut self, version: Version, source: &str) -> Result<Vec<String>, UpdateFailure> {
         let Some(root) = self.root.clone() else {
-            let error = UpdateError::MissingState(PathBuf::from("<disabled>"));
+            let error =
+                UpdateFailure::Update(UpdateError::MissingState(PathBuf::from("<disabled>")));
             self.last_error = Some(format!("stage:{}", error.kind()));
             return Err(error);
+        };
+        let _lock = match acquire(&root, "stage", now_timestamp()) {
+            Ok(lock) => lock,
+            Err(error) => {
+                self.last_error = Some(format!("stage:{}", error.kind()));
+                return Err(UpdateFailure::Lock(error));
+            }
         };
         let source = match source_path(&root, source) {
             Ok(path) => path,
             Err(error) => {
                 self.last_error = Some(format!("stage:{}", error.kind()));
-                return Err(error);
+                return Err(UpdateFailure::Update(error));
             }
         };
-        let result = (|| {
-            let engine = self.engine()?;
-            engine.stage(&source, version)
+        let result = (|| -> Result<_, UpdateFailure> {
+            let mut engine = Engine::open(&root)?;
+            engine
+                .stage(&source, version)
+                .map_err(UpdateFailure::Update)
         })();
         match result {
             Ok(slot) => {
@@ -246,15 +339,28 @@ impl UpdateService {
         &mut self,
         health: HealthSignal,
         now: Timestamp,
-    ) -> Result<Vec<String>, UpdateError> {
+    ) -> Result<Vec<String>, UpdateFailure> {
         if health != HealthSignal::Passed {
-            let error = UpdateError::HealthNotPassed;
+            let error = UpdateFailure::Update(UpdateError::HealthNotPassed);
             self.last_error = Some(format!("commit:{}", error.kind()));
             return Err(error);
         }
-        let result = (|| {
-            let engine = self.engine()?;
-            engine.commit(now)
+        let Some(root) = self.root.clone() else {
+            let error =
+                UpdateFailure::Update(UpdateError::MissingState(PathBuf::from("<disabled>")));
+            self.last_error = Some(format!("commit:{}", error.kind()));
+            return Err(error);
+        };
+        let _lock = match acquire(&root, "commit", now) {
+            Ok(lock) => lock,
+            Err(error) => {
+                self.last_error = Some(format!("commit:{}", error.kind()));
+                return Err(UpdateFailure::Lock(error));
+            }
+        };
+        let result = (|| -> Result<_, UpdateFailure> {
+            let mut engine = Engine::open(&root)?;
+            engine.commit(now).map_err(UpdateFailure::Update)
         })();
         match result {
             Ok(event) => {
@@ -277,10 +383,23 @@ impl UpdateService {
         &mut self,
         reason: RollbackReason,
         now: Timestamp,
-    ) -> Result<Vec<String>, UpdateError> {
-        let result = (|| {
-            let engine = self.engine()?;
-            engine.rollback(reason, now)
+    ) -> Result<Vec<String>, UpdateFailure> {
+        let Some(root) = self.root.clone() else {
+            let error =
+                UpdateFailure::Update(UpdateError::MissingState(PathBuf::from("<disabled>")));
+            self.last_error = Some(format!("rollback:{}", error.kind()));
+            return Err(error);
+        };
+        let _lock = match acquire(&root, "rollback", now) {
+            Ok(lock) => lock,
+            Err(error) => {
+                self.last_error = Some(format!("rollback:{}", error.kind()));
+                return Err(UpdateFailure::Lock(error));
+            }
+        };
+        let result = (|| -> Result<_, UpdateFailure> {
+            let mut engine = Engine::open(&root)?;
+            engine.rollback(reason, now).map_err(UpdateFailure::Update)
         })();
         match result {
             Ok(event) => {
@@ -293,32 +412,35 @@ impl UpdateService {
             }
         }
     }
-
-    fn engine(&mut self) -> Result<&mut Engine, UpdateError> {
-        if self.engine.is_none() {
-            let root = self
-                .root
-                .clone()
-                .ok_or_else(|| UpdateError::MissingState(PathBuf::from("<disabled>")))?;
-            self.engine = Some(Engine::open(root)?);
-        }
-        self.engine
-            .as_mut()
-            .ok_or_else(|| UpdateError::MissingState(PathBuf::from("<disabled>")))
-    }
 }
 
-/// Run the boot entrypoint. It never returns an error: a machine whose update
-/// record is damaged must still boot and must still report the damage.
+fn now_timestamp() -> Timestamp {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+/// Run the boot entrypoint under the cross-process root lock.
+///
+/// A damaged record is not fatal: the machine still boots and the lines report
+/// the damage. A record another live process owns *is* fatal for this
+/// invocation, because counting a boot attempt without the lock could lose an
+/// increment or race a commit; the caller exits non-zero and systemd retries.
 ///
 /// The lines are prefixed `litric.update.` so the serial console, the journal
 /// and `tools/boot-test.sh` can find them without parsing prose.
-#[must_use]
-pub fn boot(root: &Path, now: Timestamp) -> Vec<String> {
+pub fn boot(root: &Path, now: Timestamp) -> Result<Vec<String>, UpdateFailure> {
     let mut lines = vec![
         format!("litric.update.root={}", root.display()),
         format!("litric.update.schema={SCHEMA}"),
     ];
+    if !root.exists() {
+        lines.push("litric.update.state=uninitialized".to_owned());
+        lines.push("litric.update.outcome=none".to_owned());
+        lines.push("litric.update.ready=1".to_owned());
+        return Ok(lines);
+    }
+    let _lock = acquire(root, "boot", now)?;
     match Engine::open(root) {
         Ok(mut engine) => {
             lines.push("litric.update.state=ready".to_owned());
@@ -344,6 +466,8 @@ pub fn boot(root: &Path, now: Timestamp) -> Vec<String> {
                 Err(error) => {
                     lines.push("litric.update.outcome=error".to_owned());
                     lines.push(format!("litric.update.reason={error}"));
+                    lines.push("litric.update.ready=0".to_owned());
+                    return Err(UpdateFailure::Update(error));
                 }
                 // BootOutcome is non-exhaustive. A future outcome must be
                 // reported as unrecognised rather than folded into a success.
@@ -371,7 +495,7 @@ pub fn boot(root: &Path, now: Timestamp) -> Vec<String> {
         }
     }
     lines.push("litric.update.ready=1".to_owned());
-    lines
+    Ok(lines)
 }
 
 fn source_path(root: &Path, raw: &str) -> Result<PathBuf, UpdateError> {
@@ -584,15 +708,15 @@ mod tests {
         lines.iter().find(|line| line.starts_with(prefix))
     }
 
-    fn status(s: &mut UpdateService) -> Vec<String> {
-        s.status()
+    fn status(s: &UpdateService) -> Vec<String> {
+        s.status(NOW, None)
     }
 
     #[test]
     fn status_before_any_state_is_uninitialized_and_actions_refuse() {
         let root = scratch("empty");
         let mut service = UpdateService::new(&root);
-        let lines = status(&mut service);
+        let lines = status(&service);
         assert_eq!(
             line(&lines, "state="),
             Some(&"state=uninitialized".to_owned())
@@ -614,13 +738,13 @@ mod tests {
         fs::create_dir_all(root.join("system")).expect("state dir");
         fs::write(root.join("system/state"), "not a generation record\n").expect("damage");
         let mut service = UpdateService::new(&root);
-        let lines = status(&mut service);
+        let lines = status(&service);
         assert_eq!(line(&lines, "state="), Some(&"state=corrupt".to_owned()));
         let error = service
             .rollback(RollbackReason::Manual, NOW)
             .expect_err("corrupt state");
         assert_eq!(error.kind(), "invalid-state");
-        assert!(line(&status(&mut service), "last_error=").is_some());
+        assert!(line(&status(&service), "last_error=").is_some());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -635,7 +759,7 @@ mod tests {
             .commit(HealthSignal::Failed, NOW + 1)
             .expect_err("failed health");
         assert_eq!(error.kind(), "health-not-passed");
-        let lines = status(&mut service);
+        let lines = status(&service);
         assert_eq!(
             line(&lines, "active_slot="),
             Some(&"active_slot=A".to_owned())
@@ -666,7 +790,7 @@ mod tests {
             .expect("rollback");
         assert_eq!(line(&lines, "event="), Some(&"event=rollback".to_owned()));
         assert_eq!(
-            line(&status(&mut service), "active_slot="),
+            line(&status(&service), "active_slot="),
             Some(&"active_slot=A".to_owned())
         );
         assert_eq!(
@@ -688,11 +812,11 @@ mod tests {
         service.stage(version("1.1.0"), "release").expect("stage");
 
         for _ in 0..3 {
-            let lines = boot(&root, NOW);
+            let lines = boot(&root, NOW).expect("boot");
             assert!(line(&lines, "litric.update.outcome=")
                 .is_some_and(|line| line == "litric.update.outcome=booting"));
         }
-        let lines = boot(&root, NOW);
+        let lines = boot(&root, NOW).expect("boot");
         assert_eq!(
             line(&lines, "litric.update.outcome="),
             Some(&"litric.update.outcome=rejected-budget".to_owned())
@@ -702,7 +826,7 @@ mod tests {
             Some(&"litric.update.active=A".to_owned())
         );
 
-        let state = status(&mut service);
+        let state = status(&service);
         assert_eq!(
             line(&state, "active_slot="),
             Some(&"active_slot=A".to_owned())
@@ -724,8 +848,8 @@ mod tests {
         let root = scratch("missing-slot");
         init(&root);
         fs::remove_dir_all(root.join("system/slots/A")).expect("remove active slot");
-        let mut service = UpdateService::new(&root);
-        let lines = status(&mut service);
+        let service = UpdateService::new(&root);
+        let lines = status(&service);
         assert_eq!(line(&lines, "state="), Some(&"state=incomplete".to_owned()));
         assert!(
             line(&lines, "reason=").is_some(),

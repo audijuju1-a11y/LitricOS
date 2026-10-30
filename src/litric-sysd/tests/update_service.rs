@@ -20,7 +20,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Output, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -49,20 +49,34 @@ fn init_and_stage(root: &Path) -> PathBuf {
     source
 }
 
-fn run_boot(root: &Path) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_litric-sysd"))
+fn boot_command(root: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_litric-sysd"));
+    command
         .arg("--boot")
         .arg("--update-root")
         .arg(root)
-        .env("TZ", "UTC")
+        .env("TZ", "UTC");
+    command
+}
+
+fn run_boot_output(root: &Path) -> Output {
+    boot_command(root)
         .output()
-        .expect("the boot entrypoint runs");
+        .expect("the boot entrypoint runs")
+}
+
+fn run_boot(root: &Path) -> String {
+    let out = run_boot_output(root);
     assert!(
         out.status.success(),
         "boot entrypoint failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn lock_body(pid: u32) -> String {
+    format!("litric-update-lock\t1\npid\t{pid}\nat\t1\nreason\tstage\n")
 }
 
 struct Daemon {
@@ -174,7 +188,7 @@ fn boot_status_commit_and_rollback_use_the_real_socket_and_keep_user_data() {
     let daemon = Daemon::start(&root, "commit");
     let (ok, status) = daemon.ask("UPDATE STATUS");
     assert!(ok, "{status}");
-    assert_eq!(line(&status, "schema="), Some("schema=1"));
+    assert_eq!(line(&status, "schema="), Some("schema=2"));
     assert_eq!(line(&status, "state="), Some("state=ready"));
     assert_eq!(line(&status, "active_slot="), Some("active_slot=A"));
     assert_eq!(line(&status, "candidate_slot="), Some("candidate_slot=B"));
@@ -182,6 +196,19 @@ fn boot_status_commit_and_rollback_use_the_real_socket_and_keep_user_data() {
         line(&status, "candidate_attempts="),
         Some("candidate_attempts=1")
     );
+
+    // A schema-2 client asks explicitly and gets the lock fields' schema. A
+    // schema-1 client (the bare verb above) gets the same additive answer. A
+    // newer schema is refused, rather than served fields it did not ask for.
+    let (ok, schema_two) = daemon.ask("UPDATE STATUS 2");
+    assert!(ok, "{schema_two}");
+    assert_eq!(
+        line(&schema_two, "requested_schema="),
+        Some("requested_schema=2")
+    );
+    let (ok, newer) = daemon.ask("UPDATE STATUS 99");
+    assert!(!ok, "schema 99 must be refused: {newer}");
+    assert!(newer.starts_with("ERR schema-unsupported"), "{newer}");
 
     let (ok, commit) = daemon.ask("UPDATE COMMIT PASSED CONFIRM");
     assert!(ok, "{commit}");
@@ -295,6 +322,148 @@ fn a_corrupt_generation_record_is_reported_and_does_not_stop_the_daemon() {
     let (ok, action) = daemon.ask("UPDATE ROLLBACK CONFIRM");
     assert!(!ok, "a mutating action must fail: {action}");
     assert!(action.starts_with("ERR invalid-state"), "{action}");
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn two_concurrent_boot_processes_each_count_one_attempt() {
+    let root = scratch("concurrent-boot");
+    init_and_stage(&root);
+
+    let first = boot_command(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("first boot process");
+    let second = boot_command(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("second boot process");
+    let first = first.wait_with_output().expect("first boot result");
+    let second = second.wait_with_output().expect("second boot result");
+    assert!(
+        first.status.success(),
+        "first boot failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        second.status.success(),
+        "second boot failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    for out in [&first, &second] {
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(
+            line(&text, "litric.update.outcome="),
+            Some("litric.update.outcome=booting"),
+            "{text}"
+        );
+    }
+
+    let daemon = Daemon::start(&root, "concurrent-boot");
+    let (ok, status) = daemon.ask("UPDATE STATUS 2");
+    assert!(ok, "{status}");
+    assert_eq!(
+        line(&status, "candidate_attempts="),
+        Some("candidate_attempts=2"),
+        "two serialised boots must both increment: {status}"
+    );
+    assert_eq!(line(&status, "state="), Some("state=ready"));
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn a_live_writer_makes_status_busy_and_a_second_writer_fail_typed() {
+    let root = scratch("locked");
+    init_and_stage(&root);
+    fs::write(root.join("update.lock"), lock_body(std::process::id())).expect("held lock");
+
+    let daemon = Daemon::start(&root, "locked");
+    let started = Instant::now();
+    let (ok, status) = daemon.ask("UPDATE STATUS 2");
+    let elapsed = started.elapsed();
+    assert!(ok, "status must answer while locked: {status}");
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "status must not block on the writer: {elapsed:?}"
+    );
+    assert_eq!(line(&status, "state="), Some("state=busy"), "{status}");
+    assert_eq!(
+        line(&status, "locked_pid="),
+        Some(format!("locked_pid={}", std::process::id()).as_str()),
+        "{status}"
+    );
+    assert_eq!(line(&status, "locked_reason="), Some("locked_reason=stage"));
+    assert_eq!(line(&status, "retry="), Some("retry=lock"));
+
+    let out = run_boot_output(&root);
+    assert!(
+        !out.status.success(),
+        "a held lock must fail the boot writer"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("locked by pid"),
+        "the failure must be the documented typed error: {stderr}"
+    );
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn a_stale_dead_pid_lock_is_reclaimed_by_the_next_boot() {
+    let root = scratch("stale-lock");
+    init_and_stage(&root);
+    fs::write(root.join("update.lock"), lock_body(u32::MAX - 1)).expect("stale lock");
+
+    let boot = run_boot(&root);
+    assert_eq!(
+        line(&boot, "litric.update.attempt="),
+        Some("litric.update.attempt=1"),
+        "the boot must run after reclaiming the dead owner: {boot}"
+    );
+    assert!(
+        !root.join("update.lock").exists(),
+        "the reclaimed lock must be released"
+    );
+    cleanup(&root);
+}
+
+#[test]
+fn interrupted_writes_are_ignored_or_degrade_without_a_panic() {
+    let root = scratch("interrupted");
+    init_and_stage(&root);
+    let state = root.join("system/state");
+
+    // A sibling temporary is not state. The live record still reads as ready.
+    fs::write(root.join("system/.state.tmp-999"), "half-written\n").expect("leftover temp");
+    let daemon = Daemon::start(&root, "interrupted");
+    let (ok, status) = daemon.ask("UPDATE STATUS 2");
+    assert!(ok, "{status}");
+    assert_eq!(line(&status, "state="), Some("state=ready"), "{status}");
+
+    // An interrupted rename leaves the old file or a truncated one; the latter
+    // must be a typed corrupt result, not a panic and not a guessed state.
+    fs::write(&state, "litric-generations\t1\n").expect("truncated state");
+    let (ok, truncated) = daemon.ask("UPDATE STATUS 2");
+    assert!(ok, "a truncated record must still answer: {truncated}");
+    assert_eq!(line(&truncated, "state="), Some("state=corrupt"));
+
+    // Zero length is the common result of a create that never wrote.
+    fs::write(&state, "").expect("empty state");
+    let (ok, empty) = daemon.ask("UPDATE STATUS 2");
+    assert!(ok, "an empty record must still answer: {empty}");
+    assert_eq!(line(&empty, "state="), Some("state=corrupt"));
+
+    // The boot entrypoint also degrades rather than aborting the machine.
+    let boot = run_boot(&root);
+    assert_eq!(
+        line(&boot, "litric.update.state="),
+        Some("litric.update.state=corrupt")
+    );
     daemon.stop();
     cleanup(&root);
 }

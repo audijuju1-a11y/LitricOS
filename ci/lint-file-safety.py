@@ -187,6 +187,10 @@ ALLOWED = {
         "a_corrupt_record_makes_a_restarted_daemon_grant_nothing": "removes this test's own stale socket before starting the first daemon, tagged with the process id under the system temp directory",
         "cleanup": "removes the temporary fixture root and the socket this restart test created under the system temp directory, after stopping both daemons and asserting a corrupt record granted nothing",
     },
+    "src/litric-sysd/src/update_lock.rs": {
+        "drop": "removes only the lock record this process wrote, after re-reading it and comparing the exact contents; a reclaimer never removes a live owner's file, so a mismatch means it is not ours",
+        "remove_stale": "removes the lock file only after `existing` classified it as stale (dead pid, or a malformed record past the initialising grace), under the configured update root, never a user path",
+    },
     "src/litric-sysd/tests/update_service.rs": {
         "scratch": "removes the temporary fixture root this process-level update-service test is about to recreate; the name is tagged with this process's id under the system temp directory",
         "start": "removes this test's own stale socket, tagged with the process id and test tag under the system temp directory, before the daemon binds it",

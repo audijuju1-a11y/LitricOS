@@ -356,6 +356,36 @@ fn limits_stop_a_candidate_before_it_is_published() {
 }
 
 #[test]
+fn a_leftover_state_temporary_is_never_parsed_as_state() {
+    let root = root("leftover-temp");
+    let _engine = init(&root);
+    fs::write(root.join("system/.state.tmp-999"), "half-written state\n")
+        .expect("leftover temporary");
+    let reopened = Engine::open(&root).expect("the primary record is still valid");
+    assert_eq!(reopened.state().active(), Slot::A);
+    cleanup(&root);
+}
+
+#[test]
+fn truncated_and_zero_length_state_is_refused_without_a_panic() {
+    for (name, body) in [
+        ("truncated", "litric-generations\t1\n"),
+        ("zero", ""),
+        ("partial-event", "litric-generations\t1\nactive\tA\n"),
+    ] {
+        let root = root(name);
+        fs::create_dir_all(root.join("system")).expect("state directory");
+        fs::write(root.join("system/state"), body).expect("damaged state");
+        let error = Engine::open(&root).expect_err("damaged state must be refused");
+        assert!(
+            matches!(error, UpdateError::InvalidState(_)),
+            "{name}: {error:?}"
+        );
+        cleanup(&root);
+    }
+}
+
+#[test]
 fn init_refuses_to_replace_an_existing_state() {
     let root = root("init");
     let _engine = init(&root);
