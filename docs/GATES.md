@@ -2688,6 +2688,8 @@ Revert this commit. The health module, schema-3 status fields, commit gate, serv
 
 `A2` makes the W9 acceptance sentence executable. `render_bench` was already printing medians; `ci/check-perf-regression.py` now compares a known-good run with a candidate and fails at the regression boundary. It is a comparator, not a new benchmark, and it does not claim any machine is fast enough.
 
+A1 remains open and is not part of this result: it requires a builder with `mkosi`, QEMU, a booted desktop and a real budget snapshot. A2 was the next feasible Stage A batch.
+
 ### What was found
 
 `src/litric-shell/examples/render_bench.rs` prints `*.median_ms` and `*.runs` for every scene, but no check read them. `docs/PERF-budget.md` rule 4 said CI fails on a regression over 10 %, and the master plan required a planted 15 % failure for W9, but neither statement had an executable comparison. A candidate could regress and every gate would still pass.

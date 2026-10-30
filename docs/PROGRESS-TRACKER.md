@@ -7924,6 +7924,8 @@ Base `df3a4e9`; this batch is committed on `main` with the health module, the se
 
 ## A2. Batch: the performance regression harness can fail (verified)
 
+The first Stage A row, **A1**, is still open: it needs a builder with `mkosi`, QEMU and a booted desktop plus a real budget snapshot, none of which exists in this environment. It was not attempted or marked landed. A2 is the next feasible Stage A batch, taken under the plan's feasibility rule.
+
 ### A2.1 Requirement
 
 The W9 acceptance sentence said a planted 15 % regression must fail the performance harness, but `render_bench` only printed medians; nothing compared runs. This batch owns that single gap. It does not add a new benchmark, change the renderer, measure a machine, or start zram/MGLRU/oomd work. It is the Stage A2 batch from the master plan, not a UI batch.
