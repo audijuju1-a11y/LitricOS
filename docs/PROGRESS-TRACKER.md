@@ -7495,7 +7495,7 @@ refuses before the backend is called.
 * `cargo fmt --all --check` → 0.
 * `cargo clippy --workspace --all-targets -- -D warnings` → 0.
 * `cargo test -p litric-sysd` → 232 passed, 0 failed (225 lib + 5 + 1 + 1).
-* `cargo test --workspace` → **1,868 passed, 0 failed**.
+* `cargo test --workspace` → **1,870 passed, 0 failed**.
 
 ### 72.6 Limits, stated plainly
 
@@ -7525,18 +7525,23 @@ refuses before the backend is called.
 
 * 5 failed verifications per account in 60 s locks that account for 60 s;
 * 20 failures across all accounts in 60 s locks the whole path for 30 s;
-* a locked request answers `ERR locked-out` with `retry in Ns` and never reaches
-  `unix_chkpwd`;
+* a locked request answers `ERR locked-out` with `retry_after=Ns`, never reaches
+  `unix_chkpwd`, and records `rate-limited` in the audit ring (authorisation
+  allowed, metering refused); the ring reaches disk on the next store save, not
+  inside the refusal path;
 * only `reason=exit` counts; spawn failures, timeouts and refusals do not;
 * a correct password clears that account's failures, not the global counter;
 * the account table is capped at 256 entries and never evicts a live entry to
   make room, so spraying names cannot shed a lockout; the global cap bounds
   guesses when it is full;
+* the lock screen parses `retry_after` and closes the field for that long, so a
+  one-minute daemon lockout is not cut short by the shell's one-second local
+  backoff; a reply without the field falls back to the old behaviour;
 * state is in memory, so a daemon restart clears it.
 
 ### 72.8 Git
 
 Base `79bbd58`; verification pass on `3628937`; rate limit on `acea817`. All are
 committed on `main` and pushed; `HEAD == origin/main` and the tracked worktree is
-empty at the end of the turn. The rate-limit batch records 232 package tests and
-1,868 workspace tests.
+empty at the end of the turn. The integrated lockout batch records 232 package
+tests and 1,870 workspace tests.

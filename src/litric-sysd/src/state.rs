@@ -555,9 +555,10 @@ impl Sysd {
         };
         if let Some(user) = verify_user {
             if let Some(wait) = self.attempts.retry_after(user, now) {
+                self.record_lockout(user, now);
                 return Response::err(
                     "locked-out",
-                    format!("too many failed attempts; retry in {wait}s"),
+                    format!("too many failed attempts; retry_after={wait}"),
                 );
             }
         }
@@ -627,6 +628,32 @@ impl Sysd {
             "action-failed"
         };
         Response::err(kind, detail)
+    }
+
+    /// Put a refused verification on the audit record.
+    ///
+    /// The broker has already recorded the authorisation decision as allowed;
+    /// this is the separate fact that the meter refused the attempt anyway. A
+    /// refusal is bounded by the audit ring like every other check, and it is
+    /// not written to disk here: the next `CAPS AUDIT` or store save does that,
+    /// so a caller cannot turn a locked retry loop into a disk-write loop.
+    fn record_lockout(&mut self, user: &str, now: Timestamp) {
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let Ok(scope) = Scope::parse_resource(&format!("lock://{user}")) else {
+            return;
+        };
+        let Some(capability) = Capability::new(CapabilityId::AuthSession, scope) else {
+            return;
+        };
+        self.caps.record_event(litric_caps::AuditEntry {
+            app: client,
+            request: capability,
+            allowed: false,
+            reason: litric_caps::Reason::RateLimited,
+            at: now,
+        });
     }
 
     /// Validate and execute one account creation or change.
@@ -1519,6 +1546,17 @@ mod tests {
             calls.load(std::sync::atomic::Ordering::Relaxed),
             5,
             "a locked account must not reach unix_chkpwd"
+        );
+        assert!(
+            reply.encode().contains("retry_after="),
+            "the client is told how long to wait: {}",
+            reply.encode()
+        );
+        assert!(
+            s.caps.audit_log().iter().any(|entry| !entry.allowed
+                && entry.reason.token() == "rate-limited"
+                && entry.request.to_string().ends_with("lock://alice")),
+            "the lockout is on the audit record"
         );
 
         // The window ends with the lockout: the next attempt reaches the

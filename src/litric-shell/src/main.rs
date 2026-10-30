@@ -239,6 +239,26 @@ fn reply_confirms_verification(reply: &str) -> bool {
     field(&lines, "applied") == Some("true") && field(&lines, "action") == Some("auth.verify")
 }
 
+/// The `retry_after=<seconds>` field of a lockout reply, if it carries one.
+///
+/// The daemon's detail is a sentence plus that one machine-readable field. A
+/// missing, empty or non-numeric field is `None`, and the caller falls back to
+/// showing the sentence and its own backoff rather than inventing a wait.
+fn lockout_seconds(reply: &str) -> Option<u64> {
+    reply
+        .split("retry_after=")
+        .nth(1)?
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// The readable part of a lockout reply, without the `retry_after` field.
+fn lockout_message(reply: &str) -> &str {
+    reply.split("; retry_after=").next().unwrap_or(reply)
+}
+
 /// Whether an account name can be placed in a request line unmodified.
 fn usable_lock_account(user: &str) -> bool {
     !user.is_empty()
@@ -772,6 +792,18 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
                 }
                 let request = format!("AUTH VERIFY {user} {} CONFIRM", secret.hex());
                 match ask(&args.socket, &request) {
+                    // The daemon's meter has an answer with a duration in it.
+                    // Its wait is what the field is closed for: the local
+                    // backoff starts at one second and would send the next
+                    // attempt long before a one-minute lockout is over.
+                    Some(reply) if reply.starts_with("ERR locked-out") => {
+                        match lockout_seconds(&reply) {
+                            Some(seconds) => {
+                                shell.lock_locked_out(lockout_message(&reply).trim(), seconds);
+                            }
+                            None => shell.lock_failed(reply.trim()),
+                        }
+                    }
                     Some(reply) if reply.starts_with("ERR ") => {
                         // The reply says which of "not authorised", "the helper
                         // refused" and "the helper is missing" happened, in its
@@ -2605,6 +2637,24 @@ mod tests {
             vec!["https://one.example/".to_owned()]
         );
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_lockout_reply_carries_the_wait_the_screen_uses() {
+        let reply = "ERR locked-out too many failed attempts; retry_after=60";
+        assert_eq!(lockout_seconds(reply), Some(60));
+        assert_eq!(
+            lockout_message(reply),
+            "ERR locked-out too many failed attempts"
+        );
+        assert_eq!(
+            lockout_seconds("ERR locked-out too many failed attempts"),
+            None
+        );
+        assert_eq!(
+            lockout_seconds("ERR action-failed exit retry_after=oops"),
+            None
+        );
     }
 
     #[test]

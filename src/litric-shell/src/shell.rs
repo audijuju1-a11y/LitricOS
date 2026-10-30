@@ -4398,6 +4398,13 @@ impl Shell {
         self.request_full_redraw();
     }
 
+    /// The daemon refused further attempts and said how long to wait. The lock
+    /// stays on and its countdown is the daemon's number, not a local guess.
+    pub fn lock_locked_out(&mut self, reason: &str, seconds: u64) {
+        self.lock.note_lockout(reason, seconds, self.now_ms);
+        self.request_full_redraw();
+    }
+
     /// The attempt to check: the account and the secret, taken out of the shell
     /// so the plain text exists in exactly one place for as long as it takes to
     /// hand it over.

@@ -870,6 +870,22 @@ impl LockState {
         wait
     }
 
+    /// The daemon refused further attempts for `seconds`.
+    ///
+    /// Its wait replaces the local backoff instead of being added to it: the
+    /// daemon is the one holding the counters, and a screen that re-enabled the
+    /// field after its own shorter wait would only send a request that is
+    /// refused again. The sentence is shown without the machine-readable
+    /// `retry_after` field; the countdown below is the readable form of it.
+    pub fn note_lockout(&mut self, reason: &str, seconds: u64, now_ms: u64) {
+        self.failures = self.failures.saturating_add(1);
+        let wait = seconds.saturating_mul(1_000);
+        self.blocked_until_ms = now_ms.saturating_add(wait);
+        self.refusal = reason.to_owned();
+        self.retry_in_s = Some(seconds.max(1));
+        self.verdict = Verdict::Failed(self.with_countdown());
+    }
+
     /// Move the countdown to `now_ms`. Returns whether anything changed, which
     /// is what lets the shell redraw once a second instead of every frame.
     ///
@@ -2737,6 +2753,22 @@ mod tests {
             Some("no"),
             "the reason stays after the countdown ends"
         );
+    }
+
+    #[test]
+    fn a_daemon_lockout_sets_the_wait_it_reports() {
+        let mut st = LockState::default();
+        st.note_lockout("too many failed attempts", 60, 5_000);
+        assert!(!st.can_attempt(64_999));
+        assert_eq!(st.retry_in_s, Some(60));
+        assert_eq!(
+            st.message(),
+            Some("too many failed attempts · Try again in 60s")
+        );
+        st.refresh_retry(65_000);
+        assert!(st.can_attempt(65_000));
+        assert_eq!(st.retry_in_s, None);
+        assert_eq!(st.message(), Some("too many failed attempts"));
     }
 
     #[test]

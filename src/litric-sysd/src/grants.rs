@@ -265,9 +265,10 @@ fn reason_fields(reason: &Reason) -> (&str, String, String) {
         Reason::Granted { issuer, scope } => (issuer.token(), "-".to_owned(), scope.to_string()),
         Reason::Revoked { at } | Reason::Expired { at } => ("-", at.to_string(), "-".to_owned()),
         Reason::OutOfScope { held } => ("-", "-".to_owned(), held.to_string()),
-        Reason::NoGrant | Reason::NeedsLiveConsent | Reason::UnknownApplication => {
-            ("-", "-".to_owned(), "-".to_owned())
-        }
+        Reason::NoGrant
+        | Reason::NeedsLiveConsent
+        | Reason::RateLimited
+        | Reason::UnknownApplication => ("-", "-".to_owned(), "-".to_owned()),
         // `Reason` is `#[non_exhaustive]`: a variant added later must not make
         // this store fail to compile, and must not be written as an unknown
         // token either. A reason this build cannot name is recorded as
@@ -424,6 +425,7 @@ fn parse_reason(
         },
         "no-grant" => Reason::NoGrant,
         "needs-live-consent" => Reason::NeedsLiveConsent,
+        "rate-limited" => Reason::RateLimited,
         "unknown-application" => Reason::UnknownApplication,
         _ => {
             return Err(format!(

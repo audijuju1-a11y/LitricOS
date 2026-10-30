@@ -228,6 +228,9 @@ pub enum Reason {
     },
     /// The capability requires consent in the moment and none was supplied.
     NeedsLiveConsent,
+    /// Too many recent attempts failed, so the daemon refused this one before
+    /// checking it. The request was authorised; the metering refused it.
+    RateLimited,
     /// The application is not known to the broker.
     UnknownApplication,
 }
@@ -243,6 +246,7 @@ impl Reason {
             Self::Revoked { .. } => "revoked",
             Self::Expired { .. } => "expired",
             Self::NeedsLiveConsent => "needs-live-consent",
+            Self::RateLimited => "rate-limited",
             Self::UnknownApplication => "unknown-application",
         }
     }
