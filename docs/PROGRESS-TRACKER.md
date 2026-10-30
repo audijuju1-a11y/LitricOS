@@ -7485,7 +7485,19 @@ refuses before the backend is called.
 * `auth::throttle_tests::{five_failures_lock_one_account_for_a_minute,
   a_correct_password_clears_the_failures,
   guessing_many_names_hits_the_daemon_wide_ceiling,
-  the_account_table_stays_bounded}` — the policy with a supplied clock, no sleep.
+  the_account_table_stays_bounded,
+  four_failures_export_and_the_next_attempt_locks_after_restore,
+  restore_clamps_a_deadline_and_drops_expired_entries}` — the policy with a
+  supplied clock, no sleep, and the clamp/restore rules.
+* `lockout::tests::{a_record_round_trips_through_the_atomic_file,
+  a_damaged_file_is_an_error_not_a_panic,
+  more_accounts_than_the_meter_holds_is_refused,
+  an_oversized_file_is_refused_before_it_is_read}` — the durable file's format,
+  atomic write, and bounds.
+* `state::tests::{a_lockout_survives_a_restart,
+  an_expired_lockout_is_dropped_when_it_is_loaded,
+  a_damaged_lockout_file_fails_open_and_leaves_the_daemon_alive}` — restart,
+  expiry, and fail-open through the real dispatch path.
 * `state::tests::failed_verifications_are_locked_out_before_the_helper_runs` —
   five rejections reach the runner, the sixth answers `ERR locked-out` without a
   sixth call, and the attempt after the window reaches the helper again.
@@ -7494,8 +7506,8 @@ refuses before the backend is called.
 
 * `cargo fmt --all --check` → 0.
 * `cargo clippy --workspace --all-targets -- -D warnings` → 0.
-* `cargo test -p litric-sysd` → 232 passed, 0 failed (225 lib + 5 + 1 + 1).
-* `cargo test --workspace` → **1,870 passed, 0 failed**.
+* `cargo test -p litric-sysd` → 241 passed, 0 failed (234 lib + 5 + 1 + 1).
+* `cargo test --workspace` → **1,879 passed, 0 failed**.
 
 ### 72.6 Limits, stated plainly
 
@@ -7537,11 +7549,23 @@ refuses before the backend is called.
 * the lock screen parses `retry_after` and closes the field for that long, so a
   one-minute daemon lockout is not cut short by the shell's one-second local
   backoff; a reply without the field falls back to the old behaviour;
-* state is in memory, so a daemon restart clears it.
+* the counters are durable in `<state>.lockout` beside the grant store, written
+  atomically (temp + `fsync` + `rename` + directory `fsync`) and at most once
+  every 2 s for ordinary failures; a lockout starting or a success clearing one
+  is written on that request, so a retry loop cannot become a disk-write loop;
+* a missing file starts empty; a damaged, oversized or invalid one is logged and
+  ignored (fail-open), never denying grants and never stopping the daemon;
+* on load the count is capped at the configured limit, a lockout deadline is
+  clamped to 60 s (account) or 30 s (global) from load time, a future window
+  start becomes now, and at most 256 accounts are accepted; the file is capped
+  at 64 KiB with 512-byte lines;
+* a daemon restart no longer resets the meter; the remaining limit is clock skew
+  (a forward jump expires a lockout early, a backward jump can extend it by the
+  skew, never past the configured maximum).
 
 ### 72.8 Git
 
-Base `79bbd58`; verification pass on `3628937`; rate limit on `acea817`. All are
-committed on `main` and pushed; `HEAD == origin/main` and the tracked worktree is
-empty at the end of the turn. The integrated lockout batch records 232 package
-tests and 1,870 workspace tests.
+Base `79bbd58`; verification pass on `3628937`; rate limit on `acea817`;
+integrated lockout on `4796a86`. All are committed on `main` and pushed;
+`HEAD == origin/main` and the tracked worktree is empty at the end of the turn.
+The durable-lockout batch records 241 package tests and 1,879 workspace tests.

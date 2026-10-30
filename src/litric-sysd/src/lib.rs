@@ -39,6 +39,7 @@ pub mod auth;
 pub mod facts;
 pub mod grants;
 pub mod launch;
+pub mod lockout;
 pub mod platform;
 pub mod proto;
 pub mod providers;

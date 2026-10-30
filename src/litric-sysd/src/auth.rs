@@ -174,6 +174,51 @@ struct Failures {
 }
 
 impl Failures {
+    /// What this entry contributes to the durable file, or `None` when it can
+    /// no longer affect a decision.
+    fn exported(&self, user: Option<String>, now: u64, limit: u32) -> Option<LockoutRecord> {
+        let locked = self.locked_until > now;
+        let window_alive = now.saturating_sub(self.window_start) < VERIFY_WINDOW_SECS;
+        if self.count == 0 || (!window_alive && !locked) {
+            return None;
+        }
+        Some(LockoutRecord {
+            user,
+            count: self.count.min(limit),
+            window_start: self.window_start,
+            locked_until: if locked { self.locked_until } else { 0 },
+        })
+    }
+
+    /// Rebuild an entry from a file, refusing values that would turn a damaged
+    /// record into a long denial.
+    ///
+    /// The deadline is clamped to `max_lockout` from *now*, a window start in
+    /// the future is treated as now (the clock moved backwards), an expired
+    /// window with no live lock is dropped, and a zero count is dropped rather
+    /// than locked.
+    fn restored(record: LockoutRecord, now: u64, limit: u32, max_lockout: u64) -> Option<Self> {
+        let count = record.count.min(limit);
+        if count == 0 {
+            return None;
+        }
+        let window_start = record.window_start.min(now);
+        let locked_until = if record.locked_until > now {
+            record.locked_until.min(now.saturating_add(max_lockout))
+        } else {
+            0
+        };
+        let window_alive = now.saturating_sub(window_start) < VERIFY_WINDOW_SECS;
+        if !window_alive && locked_until == 0 {
+            return None;
+        }
+        Some(Self {
+            count,
+            window_start,
+            locked_until,
+        })
+    }
+
     const fn new(now: u64) -> Self {
         Self {
             count: 0,
@@ -216,12 +261,29 @@ impl Failures {
 ///
 /// It holds counters only: no password, no hash and no account data beyond the
 /// name the caller sent. Time is supplied by the caller, like the rest of the
-/// daemon, so the whole policy is testable without sleeping. State is in
-/// memory: a restart clears it, which is recorded as a limit rather than hidden.
+/// daemon, so the whole policy is testable without sleeping. The daemon writes
+/// [`Throttle::export`] to disk and rebuilds it with [`Throttle::restore`], so a
+/// restart does not reset the meter; the file format lives in [`crate::lockout`].
 #[derive(Debug)]
 pub struct Throttle {
     accounts: HashMap<String, Failures>,
     global: Failures,
+}
+
+/// One counter as it is written to disk.
+///
+/// `user` is `None` for the daemon-wide counter. It is the only text in the
+/// file, and it is validated on the way back in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockoutRecord {
+    /// The account, or `None` for the daemon-wide counter.
+    pub user: Option<String>,
+    /// Failed attempts counted in the current window.
+    pub count: u32,
+    /// When the current window started, in seconds since the epoch.
+    pub window_start: u64,
+    /// When the lockout ends, or 0 when the entry is not locked.
+    pub locked_until: u64,
 }
 
 impl Default for Throttle {
@@ -271,6 +333,64 @@ impl Throttle {
             .entry(account.to_owned())
             .or_insert_with(|| Failures::new(now))
             .failed(now, VERIFY_FAILURE_LIMIT, VERIFY_LOCKOUT_SECS);
+    }
+
+    /// The counters worth writing down, global first and accounts sorted.
+    ///
+    /// Entries whose window has passed and whose lock has ended are omitted, so
+    /// the file shrinks as the meter forgets. The result is bounded by the
+    /// throttle's own table: at most one global record and
+    /// [`MAX_TRACKED_ACCOUNTS`] accounts.
+    #[must_use]
+    pub fn export(&self, now: u64) -> Vec<LockoutRecord> {
+        let mut out = Vec::new();
+        if let Some(global) = self.global.exported(None, now, VERIFY_GLOBAL_FAILURE_LIMIT) {
+            out.push(global);
+        }
+        let mut accounts: Vec<(&String, &Failures)> = self.accounts.iter().collect();
+        accounts.sort_by(|a, b| a.0.cmp(b.0));
+        for (user, failures) in accounts {
+            if let Some(record) = failures.exported(Some(user.clone()), now, VERIFY_FAILURE_LIMIT) {
+                out.push(record);
+            }
+        }
+        out
+    }
+
+    /// Rebuild a throttle from records read from disk.
+    ///
+    /// Every value is treated as untrusted: the count cannot exceed the
+    /// configured limit, a lockout cannot last longer than the configured one
+    /// from `now`, future window starts become `now`, invalid account names are
+    /// ignored, and only [`MAX_TRACKED_ACCOUNTS`] entries are accepted. A
+    /// damaged file therefore fails open at the first bad value instead of
+    /// producing a lockout nobody can clear.
+    #[must_use]
+    pub fn restore(records: Vec<LockoutRecord>, now: u64) -> Self {
+        let mut throttle = Self::new();
+        for record in records {
+            if let Some(user) = record.user.clone() {
+                if !valid_account_name(&user) {
+                    continue;
+                }
+                if throttle.accounts.len() >= MAX_TRACKED_ACCOUNTS {
+                    continue;
+                }
+                if let Some(failures) =
+                    Failures::restored(record, now, VERIFY_FAILURE_LIMIT, VERIFY_LOCKOUT_SECS)
+                {
+                    throttle.accounts.insert(user, failures);
+                }
+            } else if let Some(failures) = Failures::restored(
+                record,
+                now,
+                VERIFY_GLOBAL_FAILURE_LIMIT,
+                VERIFY_GLOBAL_LOCKOUT_SECS,
+            ) {
+                throttle.global = failures;
+            }
+        }
+        throttle
     }
 
     /// Forget `account`'s failures after a correct password.
@@ -924,6 +1044,72 @@ mod throttle_tests {
         assert_eq!(
             throttle.retry_after("alice", 2_000),
             Some(VERIFY_LOCKOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn four_failures_export_and_the_next_attempt_locks_after_restore() {
+        let mut throttle = Throttle::new();
+        for _ in 0..VERIFY_FAILURE_LIMIT.saturating_sub(1) {
+            throttle.record_failure("alice", 1_000);
+        }
+        assert_eq!(throttle.retry_after("alice", 1_000), None);
+        let mut restored = Throttle::restore(throttle.export(1_000), 1_000);
+        restored.record_failure("alice", 1_000);
+        assert_eq!(
+            restored.retry_after("alice", 1_000),
+            Some(VERIFY_LOCKOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn restore_clamps_a_deadline_and_drops_expired_entries() {
+        let now = 10_000;
+        let records = vec![
+            LockoutRecord {
+                user: Some("alice".to_owned()),
+                count: 999,
+                window_start: now,
+                locked_until: now.saturating_add(10_000_000),
+            },
+            LockoutRecord {
+                user: Some("bob".to_owned()),
+                count: 3,
+                window_start: now.saturating_sub(120),
+                locked_until: 0,
+            },
+            LockoutRecord {
+                user: Some("carol".to_owned()),
+                count: 5,
+                window_start: now,
+                locked_until: now.saturating_add(30),
+            },
+            LockoutRecord {
+                user: None,
+                count: 999,
+                window_start: now,
+                locked_until: now.saturating_add(10_000_000),
+            },
+        ];
+        let throttle = Throttle::restore(records, now);
+        assert_eq!(
+            throttle.retry_after("alice", now),
+            Some(VERIFY_LOCKOUT_SECS),
+            "a hostile deadline is clamped to the configured lockout"
+        );
+        assert_eq!(
+            throttle.retry_after("alice", now.saturating_add(VERIFY_LOCKOUT_SECS)),
+            None
+        );
+        assert_eq!(
+            throttle.retry_after("bob", now.saturating_add(VERIFY_GLOBAL_LOCKOUT_SECS)),
+            None,
+            "an expired entry is dropped once the global lock also ends"
+        );
+        assert_eq!(throttle.retry_after("carol", now), Some(30));
+        assert_eq!(
+            throttle.retry_after("stranger", now),
+            Some(VERIFY_GLOBAL_LOCKOUT_SECS)
         );
     }
 

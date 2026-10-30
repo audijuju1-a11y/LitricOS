@@ -120,6 +120,20 @@ pub struct Sysd {
     /// `loaded:<n>`, `seeded`, or `corrupt:<why>`. A corrupt record is a
     /// denial, and the user is entitled to see that it happened.
     grants_note: String,
+    /// Durable lockout counters, beside the grant store.
+    lockout_store: Option<crate::lockout::Store>,
+    /// Whether the lockout file has been read. Reading waits for the first
+    /// request so the constructor needs no clock.
+    lockout_loaded: bool,
+    /// Counters changed since the last write.
+    lockout_dirty: bool,
+    /// A lockout began or a success cleared one: write on this request rather
+    /// than waiting for the interval.
+    lockout_urgent: bool,
+    /// When the last write was attempted, for the interval.
+    lockout_written_at: Timestamp,
+    /// How the lockout file was read, for diagnostics and tests.
+    lockout_note: String,
 }
 
 impl Sysd {
@@ -148,6 +162,12 @@ impl Sysd {
             runner: Box::new(SystemRunner),
             auth: Box::new(crate::auth::SystemAuthProvider::system()),
             attempts: crate::auth::Throttle::new(),
+            lockout_store: None,
+            lockout_loaded: false,
+            lockout_dirty: false,
+            lockout_urgent: false,
+            lockout_written_at: 0,
+            lockout_note: "disabled".to_owned(),
         }
     }
 
@@ -183,6 +203,11 @@ impl Sysd {
     ///   permission record must not be a permission.
     #[must_use]
     pub fn with_grant_store(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        // A sibling file, not a record in the grant file: a damaged lockout
+        // meter must not deny grants, and an older daemon must not reject the
+        // grant file because it does not know this record type.
+        let lockout_store = crate::lockout::Store::new(path.with_extension("lockout"));
         let store = crate::grants::Store::new(path);
         match store.load() {
             Ok(Some(loaded)) => {
@@ -205,6 +230,8 @@ impl Sysd {
                 self.grants_store = Some(store);
             }
         }
+        self.lockout_store = Some(lockout_store);
+        self.lockout_note = "not-loaded".to_owned();
         self
     }
 
@@ -360,7 +387,8 @@ impl Sysd {
     /// `now` is supplied rather than read so that expiry, revocation and
     /// retention are all reachable from a test.
     pub fn handle(&mut self, req: &Request, now: Timestamp) -> Response {
-        match req {
+        self.ensure_lockout_loaded(now);
+        let reply = match req {
             Request::Ping => Response::ok(vec!["pong".to_owned()]),
             Request::Quit => Response::ok(Vec::new()),
             Request::Facts => {
@@ -399,7 +427,73 @@ impl Sysd {
             Request::Action { action, consent } => self.action(action, *consent, now),
             Request::Resolve { app, uri, access } => self.resolve(app, uri, *access, now),
             Request::LaunchApp { argv } => self.launch_app(argv),
+        };
+        self.flush_lockouts(now, false);
+        reply
+    }
+
+    /// Read the durable lockout counters once, at the first request.
+    ///
+    /// A file that cannot be read is logged and treated as empty. That is the
+    /// opposite of the grant store's rule on purpose: refusing every password
+    /// because a counter file is damaged would be a denial of service on the
+    /// only account that can fix it.
+    fn ensure_lockout_loaded(&mut self, now: Timestamp) {
+        if self.lockout_loaded {
+            return;
         }
+        self.lockout_loaded = true;
+        let Some(store) = self.lockout_store.clone() else {
+            return;
+        };
+        match store.load() {
+            Ok(None) => self.lockout_note = "seeded".to_owned(),
+            Ok(Some(records)) => {
+                let count = records.len();
+                self.attempts = crate::auth::Throttle::restore(records, now);
+                self.lockout_note = format!("loaded:{count}");
+            }
+            Err(error) => {
+                self.attempts = crate::auth::Throttle::new();
+                self.lockout_note = format!("corrupt:{error}");
+                eprintln!("litric-sysd: lockout state ignored: {error}");
+            }
+        }
+    }
+
+    /// Write the counters when they changed and the interval allows it.
+    ///
+    /// A lockout starting or ending writes immediately; a run of failures
+    /// writes at most once per [`crate::lockout::PERSIST_INTERVAL_SECS`], so the
+    /// meter cannot be turned into a disk-write loop.
+    fn flush_lockouts(&mut self, now: Timestamp, force: bool) {
+        if !self.lockout_dirty {
+            return;
+        }
+        let Some(store) = self.lockout_store.clone() else {
+            self.lockout_dirty = false;
+            return;
+        };
+        if !force
+            && !self.lockout_urgent
+            && now.saturating_sub(self.lockout_written_at) < crate::lockout::PERSIST_INTERVAL_SECS
+        {
+            return;
+        }
+        let records = self.attempts.export(now);
+        match store.save(&records) {
+            Ok(()) => {
+                self.lockout_dirty = false;
+                self.lockout_urgent = false;
+            }
+            Err(error) => {
+                // Keep the change for the next interval, but stop retrying on
+                // every request: a full disk must not become a log flood.
+                self.lockout_urgent = false;
+                eprintln!("litric-sysd: cannot write lockout state: {error}");
+            }
+        }
+        self.lockout_written_at = now;
     }
 
     /// Start a program the user chose, if the session client may ask.
@@ -580,8 +674,17 @@ impl Sysd {
         if let Some(user) = verify_user {
             if outcome.applied {
                 self.attempts.record_success(user);
+                self.lockout_dirty = true;
+                // A cleared meter is worth writing at once: the next restart
+                // must not bring back a lockout the user already answered.
+                self.lockout_urgent = true;
             } else if outcome.lines.iter().any(|line| line == "reason=exit") {
                 self.attempts.record_failure(user, now);
+                self.lockout_dirty = true;
+                if self.attempts.retry_after(user, now).is_some() {
+                    // The threshold is the meaningful change; write it now.
+                    self.lockout_urgent = true;
+                }
             }
         }
         if outcome.applied {
@@ -865,6 +968,7 @@ impl Sysd {
     fn caps_list(&self, now: Timestamp) -> Vec<String> {
         let mut out = vec![
             format!("store={}", self.grants_note),
+            format!("lockout={}", self.lockout_note),
             format!("grant_records={}", self.caps.grant_count()),
             format!("audit_records={}", self.caps.audit_log().len()),
         ];
@@ -1512,6 +1616,131 @@ mod tests {
                 "this test runner has no captured answer",
             ))
         }
+    }
+
+    fn lockout_dir(name: &str) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("litric-sysd-lockout-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        root
+    }
+
+    fn verify_line(attempt: u32) -> String {
+        format!(
+            "AUTH VERIFY alice {} CONFIRM",
+            as_hex(&format!("wrong password {attempt}"))
+        )
+    }
+
+    #[test]
+    fn a_lockout_survives_a_restart() {
+        let root = lockout_dir("restart");
+        std::fs::create_dir_all(&root).expect("test directory");
+        let path = root.join("grants.conf");
+
+        let first_runner = RejectingRunner::default();
+        let first_calls = std::sync::Arc::clone(&first_runner.calls);
+        let mut first = sysd()
+            .with_runner(Box::new(first_runner))
+            .with_grant_store(&path);
+        for attempt in 0..crate::auth::VERIFY_FAILURE_LIMIT {
+            let reply = first.handle(&Request::parse(&verify_line(attempt)).expect("verify"), NOW);
+            assert!(
+                reply.encode().starts_with("ERR action-failed"),
+                "{}",
+                reply.encode()
+            );
+        }
+        assert_eq!(first_calls.load(std::sync::atomic::Ordering::Relaxed), 5);
+        first.flush_lockouts(NOW, true);
+        assert!(
+            path.with_extension("lockout").is_file(),
+            "the meter was written beside the grant store"
+        );
+        drop(first);
+
+        let second_runner = RejectingRunner::default();
+        let second_calls = std::sync::Arc::clone(&second_runner.calls);
+        let mut second = sysd()
+            .with_runner(Box::new(second_runner))
+            .with_grant_store(&path);
+        let reply = second.handle(&Request::parse(&verify_line(99)).expect("verify"), NOW + 1);
+        assert!(
+            reply.encode().starts_with("ERR locked-out"),
+            "{}",
+            reply.encode()
+        );
+        assert!(
+            reply.encode().contains("retry_after=59"),
+            "{}",
+            reply.encode()
+        );
+        assert_eq!(
+            second_calls.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "a restart must not reset the meter"
+        );
+        assert_eq!(second.lockout_note, "loaded:2");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn an_expired_lockout_is_dropped_when_it_is_loaded() {
+        let root = lockout_dir("expired");
+        std::fs::create_dir_all(&root).expect("test directory");
+        let path = root.join("grants.conf");
+        let records = vec![crate::auth::LockoutRecord {
+            user: Some("alice".to_owned()),
+            count: 5,
+            window_start: NOW - 3_600,
+            locked_until: 0,
+        }];
+        crate::lockout::Store::new(path.with_extension("lockout"))
+            .save(&records)
+            .expect("writes the stale record");
+
+        let runner = RejectingRunner::default();
+        let calls = std::sync::Arc::clone(&runner.calls);
+        let mut state = sysd().with_runner(Box::new(runner)).with_grant_store(&path);
+        let reply = state.handle(&Request::parse(&verify_line(1)).expect("verify"), NOW);
+        assert!(
+            reply.encode().starts_with("ERR action-failed"),
+            "{}",
+            reply.encode()
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "an expired entry does not block the helper"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_damaged_lockout_file_fails_open_and_leaves_the_daemon_alive() {
+        let root = lockout_dir("damaged");
+        std::fs::create_dir_all(&root).expect("test directory");
+        let path = root.join("grants.conf");
+        std::fs::write(path.with_extension("lockout"), b"not a lockout record\n")
+            .expect("writes the damaged file");
+
+        let runner = RejectingRunner::default();
+        let calls = std::sync::Arc::clone(&runner.calls);
+        let mut state = sysd().with_runner(Box::new(runner)).with_grant_store(&path);
+        assert!(state.handle(&Request::Ping, NOW).is_ok());
+        let reply = state.handle(&Request::parse(&verify_line(1)).expect("verify"), NOW);
+        assert!(
+            reply.encode().starts_with("ERR action-failed"),
+            "{}",
+            reply.encode()
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert!(
+            state.lockout_note.starts_with("corrupt:"),
+            "{}",
+            state.lockout_note
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
