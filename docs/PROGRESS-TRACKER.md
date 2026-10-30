@@ -7978,3 +7978,91 @@ The W9 acceptance sentence said a planted 15 % regression must fail the performa
 ### A2.7 Git
 
 Base `8d704d0`; this batch is committed on `main` with the comparator, its CI negative control, the design note, PERF-budget and tracker/GATES/plan updates. The final hash and `HEAD == origin/main` check are recorded in the delivery report after the push.
+
+## A3. Batch: the absent-backend claims are retagged (verified)
+
+A1 remains open: it needs a builder with `mkosi`, QEMU, a booted desktop and a
+real budget snapshot, none of which exists here. A2 is landed. A3 is the next
+feasible Stage A batch. It changes no executable behavior; it removes five
+claims whose named execution backend is absent and records the evidence.
+
+### A3.1 Requirement
+
+The master plan's A3 scope is: every `P` row whose backend is absent is
+re-tagged, with the reason in the same commit. `P` is not a promise of
+completeness; it means partial, real code with passing tests. The audit
+therefore asks one question only: does the row name an execution backend that
+does not exist at all?
+
+### A3.2 Method and coverage
+
+* Enumerated all **122** `P` rows at base `ca4e7c1`.
+* Read each row's claim, then looked for its named binary, crate, unit, socket,
+  state transition or test in `src/`, `image/` and the crate test suites.
+* Multi-cluster review covered the shell, design, trash, capability, Winbridge,
+  environment, update, browser and Defender code.
+* A row stayed `P` when its model/library and tests exist and the remaining work
+  is a separate integration point. A row moved only when the claimed backend is
+  absent, not merely incomplete.
+* The full audit note is `docs/audit/2026-10-30-a3-claim-audit.md`.
+
+### A3.3 Rows retagged `P` → `S`
+
+| Row | Claim | What is actually absent | Evidence |
+|---:|---|---|---|
+| 476 | Capability broker daemon (`litric-capd`) | The daemon binary, crate and socket implementation; only parked unit files exist | `image/units-pending/litric-capd.service` names `/usr/bin/litric-capd`; no such binary or crate exists; ADR-0016 puts the broker in `litric-sysd` |
+| 843 | `.exe` double-click → installed, isolated, uninstallable app | The executor for the install plan | `src/litric-winbridge/src/lib.rs` says it does not execute, spawn or write; no `litric-compatd` exists |
+| 844 | Per-app disposable Windows environment | Create/start/reset/delete execution | `Bottle` and `Isolation` are typed models with tests; no bottle runtime exists |
+| 863 | Host CPU/memory reservation enforced against guests | VM/cgroup/KVM enforcement | `litric-env` checks budgets in its model; `litric-envd` is row 876, still `T` |
+| 947 | Demand-based memory sharing between environments | Any page-sharing/ballooning/KSM/zram/rebalancing path | No such code path exists; `litric-env` only tracks committed budgets and hibernation state |
+
+### A3.4 What deliberately did not move
+
+* Rows 760, 762, 763, 764 and 769 have real update staging, marker, boot-count,
+  health-evidence and atomic-record code with tests. Their bootloader,
+  partition, EROFS, verity and power-cut limits remain recorded gaps, not absent
+  code.
+* Row 551 has a real `browserd` that spawns Chromium and drives CDP; it reports
+  an honest unavailable state when Chromium is absent.
+* The capability rows other than 476 have real broker, grant, revocation and
+  traversal tests. The separate `capd` daemon is the absent part.
+* Rows 860–862 and 864–875 are the environment state model with tests; VM
+  lifecycle execution is already row 876 `T`.
+* Row 571 has real process/CPU/memory monitor code. Any missing columns are
+  incompleteness, not an absent backend.
+
+No row was promoted to `P`; A3 is audit-only.
+
+### A3.5 Verification (real output, 2026-10-30)
+
+* `python3 ci/count-scope.py` → 1,165 rows: **9 D · 117 P · 293 S · 746 T**.
+* `python3 ci/lint-doc-refs.py` → **1,408 citations across 161 documents** resolve.
+* `python3 ci/lint-line-endings.py` → **387 files, all LF**.
+* `python3 ci/lint-file-safety.py` → **125 deletion sites**, all reviewed.
+* `cargo fmt --all --check` → exit 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+* `cargo test -p litric-update` → **21 passed, 0 failed**.
+* `cargo test --workspace` → **1,939 passed, 0 failed** (62 test binaries).
+* `bash ci/verify.sh` → **35 pass, 0 fail, 3 skipped**. The skips are image
+  build (`mkosi` absent), boot smoke (QEMU absent) and idle RAM/CPU/boot timing
+  (same).
+
+A3 adds no Rust test and no new gate because it adds no executable behavior.
+The negative-control requirement does not apply: there is no new check that
+could pass on a planted violation. The existing A2 self-test still runs.
+
+### A3.6 Limits
+
+* This is a source/test audit, not a runtime proof. A module can exist and still
+  be wrong; the existing suites and gates remain the evidence for behavior.
+* It does not claim the remaining 117 `P` rows are complete. It only establishes
+  that their named backend is not wholly absent.
+* It does not close A1, W9, bootloader/UKI/partition/EROFS/verity/ESP/signature,
+  anti-downgrade, kernel/network/display/session probes or the UI/§73 work.
+* It does not complete the Research-Deep-all corpus.
+
+### A3.7 Git
+
+Base `ca4e7c1`. This batch changes the audit note, the ledger and its tally, the
+master-plan marker and the tracker/GATES entries. The final hash and
+`HEAD == origin/main` check are recorded in the delivery report after the push.

@@ -2744,3 +2744,80 @@ The three skips are the image build (`mkosi` absent), boot smoke (QEMU absent) a
 ### Rollback
 
 Revert this commit. `ci/check-perf-regression.py`, the `[3k]` check, the design note and the PERF-budget/plan/tracker/GATES rows disappear. `render_bench` and every renderer behavior remain unchanged; no baseline, image, user data or performance claim is touched.
+
+## 2026-10-30 — A3: the absent-backend claims are retagged
+
+`A3` is the claim audit from the master plan. It does not add a feature or an
+executable path. It re-tags the `P` rows whose named execution backend does not
+exist, so partial code with real tests is not confused with a capability that
+has a daemon behind it.
+
+A1 remains open and is not part of this result: it needs `mkosi`, QEMU, a booted
+desktop and a real budget snapshot. A2 is landed. A3 was the next feasible Stage
+A batch.
+
+### What was found
+
+Five rows were carrying `P` on a backend that is absent:
+
+| Row | Claim | Evidence |
+|---:|---|---|
+| 476 | `litric-capd` daemon | only `image/units-pending/litric-capd.service` and `.socket`; the service names `/usr/bin/litric-capd`, no crate or binary builds it, and ADR-0016 puts the broker inside `litric-sysd` |
+| 843 | `.exe` double-click → installed app | `litric-winbridge` explicitly does not execute, spawn or write; no `litric-compatd` exists |
+| 844 | Per-app disposable Windows environment | `Bottle`/`Isolation` are models only; no lifecycle executor |
+| 863 | Host reservation enforced against guests | `litric-env` checks budgets in memory; no VM/cgroup/KVM enforcement; `litric-envd` (row 876) is `T` |
+| 947 | Demand-based memory sharing | no sharing, ballooning, KSM, zram or rebalancing path |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `docs/SYSTEM-SCOPE.md` | rows 476, 843, 844, 863 and 947 moved `P` → `S`; tally now 9 D / 117 P / 293 S / 746 T; audit note added |
+| `docs/audit/2026-10-30-a3-claim-audit.md` | method, five row-by-row evidence entries, what stayed `P` and why, limits |
+| `docs/master-plan/28-whole-system-improvement-plan.md` | A3 marked landed |
+| `docs/PROGRESS-TRACKER.md` | A3 entry with coverage, rows and verification |
+| `docs/GATES.md` | this entry |
+
+No row was promoted to `P`, and no bootloader, UKI, partition, EROFS, verity,
+ESP, signature, anti-downgrade or UI row was touched.
+
+### Evidence (commands run on this batch)
+
+| Check | Result |
+|---|---|
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D, 117 P, 293 S, 746 T |
+| `python3 ci/lint-doc-refs.py` | 1,408 citations across 161 documents resolve |
+| `python3 ci/lint-line-endings.py` | 387 files, all LF |
+| `python3 ci/lint-file-safety.py` | 125 deletion sites, all reviewed |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-update` | 21 passed, 0 failed |
+| `cargo test --workspace` | 1,939 passed, 0 failed (62 test binaries) |
+| `bash ci/verify.sh` | 35 pass, 0 fail, 3 skipped |
+
+The three skips are the image build (`mkosi` absent), boot smoke (QEMU absent)
+and idle RAM/CPU/boot timing (same). They are environmental skips, not evidence.
+
+### What this establishes
+
+* The five claims no longer say `P` when the thing that would execute them does
+  not exist.
+* Every other `P` row has a real module and test evidence for its partial claim;
+  incompleteness alone did not demote a row.
+* The ledger arithmetic still balances: 9 + 117 + 293 + 746 = 1,165.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the remaining `P` rows are complete | `P` means partial; this audit only checked for wholly absent backends |
+| that `litric-capd`, `litric-compatd` or `litric-envd` now work | none was implemented; rows 476, 843, 844, 863, 947 and 876 remain open |
+| that a booted image or VM exists | no `mkosi`, QEMU, booted desktop or block devices here |
+| that A1 or W9 is closed | both still need the builder and real measurements |
+| that the corpus is complete | Research-Deep-all is still open |
+
+### Rollback
+
+Revert this commit. The five rows return to `P`, the tally returns to 122 P / 288
+S, and the audit note and tracker/GATES/master-plan markers disappear. No code,
+image, user data, update state or measured budget is touched.

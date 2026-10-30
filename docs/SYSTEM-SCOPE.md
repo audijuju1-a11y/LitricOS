@@ -109,23 +109,30 @@ component, our UI and policy on top
 > starting a virtual machine — the notification on screen says
 > `applied=state-only`, which is the daemon's own word for it.
 
+> **2026-10-30: A3 claim audit.** Five `P` rows named an execution backend that
+> does not exist: `litric-capd`, the `.exe` execution daemon, per-app bottle
+> execution, guest resource enforcement and demand-based memory sharing. They
+> moved to `S`; the audit and the source evidence are in
+> `docs/audit/2026-10-30-a3-claim-audit.md`. No remaining `P` row lost its
+> backend, and no row was promoted to `P`.
+
 ## TALLY
 
 | Status | Count | Share |
 |---|---:|---:|
 | `D` done and tested | **9** | 0.8% |
-| `P` partial, real code with passing tests | **122** | 10.5% |
-| `S` specified, no code | **288** | 24.7% |
+| `P` partial, real code with passing tests | **117** | 10.0% |
+| `S` specified, no code | **293** | 25.2% |
 | `T` not started | **746** | 64.0% |
 | **Total** | **1165** | |
 
 Nine rows are done: the boot chain, proved by `docs/evidence/gate01-boot.log`.
-A hundred and twenty-two are partial — real code with passing tests, most of it now
+A hundred and seventeen are partial — real code with passing tests, most of it now
 running inside the image: the capability engine, the storage broker, the
 manifest parser, the Windows compatibility planner and its known-software
 table, the environment manager, the design tokens, the trash policy, the input
 stack, the window manager, the localisation layer, the browser's model, and the
-shell that draws and drives the desktop. Some of those 104 are two views of one
+shell that draws and drives the desktop. Some of those 117 are two views of one
 crate, counted once in Part E or F and once in Part I.
 
 Counted honestly, **LitricOS is roughly 5% built**. The 9.3% above is generous
@@ -767,7 +774,7 @@ security cost, and a revert button.
 | 473 | Time-boxed grants with expiry | O | **P** |
 | 474 | Audit log of every allow and deny | O | **P** |
 | 475 | Confused-deputy defence (caller identity, never claimed) | O | **P** |
-| 476 | Capability broker daemon (`litric-capd`) | O | **P** |
+| 476 | Capability broker daemon (`litric-capd`) | O | **S** |
 | 477 | Camera permission | O+U | T |
 | 478 | Microphone permission | O+U | T |
 | 479 | Location permission | O+U | T |
@@ -1230,8 +1237,8 @@ switch, and none of them is a feature a competitor can add without rebuilding.
 | 840 | Zero-daemon idle: everything socket-activated | Requires designing for it from the start | S |
 | 841 | Every performance claim carries its command and variance | Vendors publish numbers, not methods | S |
 | 842 | RAM budget failure blocks the build | Requires wanting to be told no | S |
-| 843 | `.exe` double-click → installed, isolated, uninstallable app | Wine exists; nobody made it an OS subsystem | **P** |
-| 844 | Per-app disposable Windows environment | A shared prefix cannot be uninstalled | **P** |
+| 843 | `.exe` double-click → installed, isolated, uninstallable app | Wine exists; nobody made it an OS subsystem | **S** |
+| 844 | Per-app disposable Windows environment | A shared prefix cannot be uninstalled | **S** |
 | 845 | One capability broker for every permission decision | Windows and Linux each have several | **P** |
 | 846 | Runtime revocation effective on a running app | Windows needs a restart; Linux mostly cannot | **P** |
 | 847 | Every permission decision auditable by the user | — | **P** |
@@ -1274,7 +1281,7 @@ what may be promised here.
 | 860 | Environment model: states, health, budgets | O | **P** |
 | 861 | Lifecycle transitions validated, illegal ones refused | O | **P** |
 | 862 | **Host can never be suspended, hibernated or stopped** | O | **P** |
-| 863 | Host CPU/memory reservation enforced against guests | O | **P** |
+| 863 | Host CPU/memory reservation enforced against guests | O | **S** |
 | 864 | Guest budgets computed against each other, not independently | O | **P** |
 | 865 | Hibernate frees memory; suspend does not | O | **P** |
 | 866 | Switch reports mechanism and latency class, never just "ok" | O | **P** |
@@ -1373,7 +1380,7 @@ what may be promised here.
 | 944 | CRITICAL: suspend or hibernate inactive environments | O | T |
 | 945 | **Never blindly reclaim active user memory** | O | S |
 | 946 | **No memory operation may silently corrupt user data** | O | S |
-| 947 | Demand-based memory sharing between environments | O | **P** |
+| 947 | Demand-based memory sharing between environments | O | **S** |
 | 948 | Rebalance when an environment becomes memory-heavy | O | T |
 | 949 | Allocation observable and attributable | O | T |
 | 950 | MGLRU enabled and verified live | O+U | **D** |

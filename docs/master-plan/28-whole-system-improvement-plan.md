@@ -104,10 +104,10 @@ host (no `mkosi`, no QEMU, no GPU); "builder" means a Linux host with
 |---|---|---|
 | **A1** | One booted desktop measured: `budget-snapshot` taken, `ci/check-memory-snapshot.py` verdict recorded, GATE 02 rows re-tagged from `TARGET` to `MEASURED` or left failing | builder |
 | **A2** | The perf harness fails on a planted 15 % regression (its self-test proves it), so W9's acceptance is executable (**landed 2026-10-30**, see tracker A2) | here |
-| **A3** | Claim audit: every `P` row whose backend is absent is re-tagged, with the reason in the same commit | here |
+| **A3** | Claim audit: every `P` row whose backend is absent is re-tagged, with the reason in the same commit (**landed 2026-10-30**: five rows retagged `P`→`S`, 117 `P` / 293 `S`; see `docs/audit/2026-10-30-a3-claim-audit.md`) | here |
 
-A1 is the only batch that unblocks the image gates. A2 and A3 run in parallel
-because they are cheap and stop the project from lying to itself.
+A1 is the only batch that unblocks the image gates. A2 and A3 are landed; A1
+remains open because this host has no builder, QEMU or booted desktop.
 
 ### Stage B — Data safety and privilege (P0)
 
