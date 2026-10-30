@@ -444,6 +444,8 @@ pub enum Hot {
     /// The UI-scale control on the Display page: cycles the scale and arms the
     /// countdown that puts the old one back.
     DisplayScale,
+    /// Ask the update service for a fresh status snapshot.
+    SettingsUpdatesRefresh,
     /// Keep the scale that is on screen and let the countdown go.
     ScaleKeep,
     /// Put the previous scale back now, without waiting out the countdown.
@@ -1361,6 +1363,16 @@ impl Shell {
     pub fn refresh_facts(&mut self) {
         let fresh = crate::facts::gather(&self.sysd_socket, &self.facts_root);
         self.sample(fresh);
+    }
+
+    /// Ask the daemon for `UPDATE STATUS 3` once, for the Updates page.
+    ///
+    /// This is deliberately an action, not a timer: the status page is opened
+    /// by a person, and a generation record that changes without an update
+    /// operation is a fault the page should show, not paper over with polling.
+    pub fn refresh_update_status(&mut self) {
+        self.update_status = crate::updatestatus::read(&self.sysd_socket);
+        self.request_full_redraw();
     }
 }
 
@@ -3058,6 +3070,10 @@ pub struct Shell {
     base_scale: f32,
     /// The numbers on screen.
     pub facts: SystemFacts,
+    /// The updater's last answer, read only when the Updates page is opened or
+    /// the user asks again. It is a snapshot, never a live read in the paint
+    /// path.
+    pub update_status: crate::updatestatus::Status,
     /// The Activity window's model: machine meters, the process table, and what
     /// a person has changed about both.
     pub activity: crate::taskmgr::TaskManager,
@@ -3678,6 +3694,7 @@ impl Shell {
             scale_revert: None,
             base_scale,
             facts: SystemFacts::default(),
+            update_status: crate::updatestatus::Status::default(),
             activity: crate::taskmgr::TaskManager::new(),
             activity_end_confirm: None,
             files: crate::apps::FilesApp::default(),
@@ -6332,7 +6349,14 @@ impl Shell {
                     // user who navigates away has moved on, and a ring around a
                     // row they did not ask for is noise on the next page.
                     self.settings.focus = None;
+                    if page == crate::settings::Page::Updates {
+                        self.refresh_update_status();
+                    }
                 }
+                Vec::new()
+            }
+            Hot::SettingsUpdatesRefresh => {
+                self.refresh_update_status();
                 Vec::new()
             }
             // The pane itself is a scroll target, not a command: the wheel path

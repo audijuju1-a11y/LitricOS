@@ -8312,3 +8312,78 @@ Base `ea45353`. This batch changes the contract module, `state.rs`, the library
 export, the new boundary gate, the `[3m]` verifier section, the master plan,
 the beta matrix and the C1 design note. The final hash and
 `HEAD == origin/main` check are recorded in the delivery report.
+
+## 78. Batch: update status reaches Settings, from the real daemon (verified)
+
+### 78.1 Requirement
+
+The request was to connect status into the shell while continuing §73. The
+existing backend is `UPDATE STATUS 3` in `litric-sysd`; §77 made its health
+evidence system-written. The shell had no consumer for that answer.
+
+This batch adds a read-only **Updates** page. It does not claim an updater UI,
+an automatic update, a booted generation or a completed §73 wave.
+
+### 78.2 Audit
+
+`Request::UpdateStatus` and `UpdateService::status` existed and were exercised
+by §75–§77 tests. A repository search found no `UPDATE STATUS` call in
+`src/litric-shell`, and `settings::Page` had fourteen pages with no update
+surface. The daemon's status line was therefore reachable but unobserved.
+
+### 78.3 What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/updatestatus.rs` | typed `Status`, safe parser, one Unix-socket query |
+| `src/litric-shell/src/settings.rs` | `Page::Updates` appended after Diagnostics, preserving existing indices |
+| `src/litric-shell/src/shell.rs` | cached status; refresh method; sidebar and refresh hotspots |
+| `src/litric-shell/src/views.rs` | the Updates page |
+| `src/litric-shell/src/a11y.rs` | refresh control name |
+| `src/litric-shell/src/e2e.rs` | real daemon/socket/sidebar/paint journey |
+
+The query is issued only when the page is opened or **Check for changes** is
+pressed. No timer was added and the paint path performs no I/O.
+
+### 78.4 Tests and controls
+
+* `updatestatus` unit tests — **6 passed**: ready, uninitialized, typed
+  refusal, ignored path/unknown fields, missing state, invalid version.
+* `journey_settings_updates_reads_the_real_daemon_status` — **1 passed**: real
+  `litric-sysd`, real socket, absent update root, sidebar click, real canvas.
+  It asserts `state=uninitialized`, displays `No update record`, draws
+  `schema 3`, and never draws `Ready`.
+* The page's refresh row queries the same socket again; the second answer is
+  still `uninitialized`. The test therefore proves a real re-read, not a
+  hard-coded success.
+
+### 78.5 Verification (real output, 2026-10-30)
+
+* `cargo fmt --all --check` → exit 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+* `cargo test -p litric-update` → 21 passed, 0 failed.
+* `cargo test --workspace` → 1951 passed, 0 failed, 0 ignored.
+* `bash ci/verify.sh` → 39 pass, 0 fail, 3 skipped.
+* `python3 ci/lint-doc-refs.py` → 1468 citations across 165 documents.
+* `python3 ci/lint-line-endings.py` → 389 files, all LF.
+* `python3 ci/count-scope.py` → 1,165 rows: 9 D · 117 P · 293 S · 746 T.
+* `python3 ci/lint-file-safety.py` → 126 deletion sites reviewed.
+
+The three skips are unchanged environment skips: `mkosi` absent, QEMU absent,
+and the same absent platform for idle RAM/CPU/boot timing.
+
+### 78.6 Limits
+
+* No booted image, update unit or real generation switch.
+* No download/stage/commit/rollback control.
+* §73 is still open; this is one read-only page.
+* Auto-backup, Linux app installation and C2/KMS are not implemented by this
+  batch.
+* `SYSTEM-SCOPE` rows moved: **none**. A view of an existing daemon fact is not
+  a new machine capability.
+
+### 78.7 Git
+
+Base `e75a741`. The commit contains the updater status module, page, shell
+wiring, accessibility label, e2e journey, design note and this tracker entry.
+Final hash and `HEAD == origin/main` are recorded in the delivery report.

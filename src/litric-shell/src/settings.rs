@@ -265,11 +265,13 @@ pub enum Page {
     Accounts,
     /// Shell and daemon diagnostic facts.
     Diagnostics,
+    /// Update generations, health evidence and the daemon's status.
+    Updates,
 }
 
 impl Page {
     /// Pages shown by Settings in sidebar order.
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::Appearance,
         Self::Display,
         Self::Input,
@@ -284,6 +286,7 @@ impl Page {
         Self::Privacy,
         Self::Accounts,
         Self::Diagnostics,
+        Self::Updates,
     ];
 
     /// Stable user-facing English title (translated by the text catalog).
@@ -304,6 +307,7 @@ impl Page {
             Self::Privacy => "Privacy",
             Self::Accounts => "Accounts",
             Self::Diagnostics => "Diagnostics",
+            Self::Updates => "Updates",
         }
     }
 
@@ -335,6 +339,7 @@ impl Page {
             Self::Privacy => "privacy",
             Self::Accounts => "accounts",
             Self::Diagnostics => "diagnostics",
+            Self::Updates => "updates",
         }
     }
 
@@ -380,7 +385,7 @@ pub struct Model {
     pub focus: Option<&'static str>,
     /// How far the page list is scrolled, in device pixels.
     ///
-    /// Thirteen 30 px pages are 414 px of rows; a window shorter than that had
+    /// Fifteen 30 px pages are 450 px of rows; a window shorter than that had
     /// no way to reach the last ones. The view clamps this against the pane's
     /// real height, which is the only place the height is known.
     pub sidebar_scroll: f32,

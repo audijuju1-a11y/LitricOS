@@ -162,6 +162,7 @@ impl Tree {
 #[must_use]
 pub fn control_tooltip(hot: Hot) -> Option<&'static str> {
     match hot {
+        Hot::SettingsUpdatesRefresh => Some("Check again"),
         Hot::StatusNotifications => Some("Notifications"),
         Hot::StatusNetwork => Some("Network"),
         Hot::StatusAudio => Some("Sound"),

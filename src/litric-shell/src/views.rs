@@ -2701,7 +2701,7 @@ fn draw_environments(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
 fn draw_settings(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let t = shell.tokens.clone();
     // The same sidebar Files uses. Settings' pane used to be 36% of the window
-    // -- 504 px at 1400, well past libadwaita's 280sp maximum -- with thirteen
+    // -- 504 px at 1400, well past libadwaita's 280sp maximum -- with fifteen
     // undifferentiated 30 px rows and no scroll, so on a short window the last
     // pages could not be reached at all.
     let sidebar_w = ui::sidebar::width(body.w);
@@ -2923,6 +2923,7 @@ fn settings_icon(page: crate::settings::Page) -> Icon {
         Page::Privacy => Icon::Shield,
         Page::Accounts => Icon::User,
         Page::Diagnostics => Icon::Activity,
+        Page::Updates => Icon::Info,
     }
 }
 
@@ -3580,6 +3581,63 @@ fn draw_settings_page(
                 ("Text renderer".to_owned(), text_renderer_state()),
             ],
         ),
+        Page::Updates => {
+            // The button is the only action on this page. The status itself is
+            // a reading: the shell asks the daemon, and the page shows the
+            // answer rather than a remembered "up to date".
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SettingRow {
+                    key: "update_refresh",
+                    label: "Check for changes",
+                    hot: Hot::SettingsUpdatesRefresh,
+                },
+            );
+            let status = shell.update_status.clone();
+            let mut rows: Vec<(String, String)> = Vec::new();
+            if let Some(error) = &status.error {
+                rows.push(("Update status".to_owned(), "Unavailable".to_owned()));
+                rows.push(("Reason".to_owned(), error.clone()));
+            } else {
+                rows.push(("Update status".to_owned(), status.state_label().to_owned()));
+                rows.push((
+                    "Active system".to_owned(),
+                    status
+                        .active_generation()
+                        .unwrap_or_else(|| "No active generation".to_owned()),
+                ));
+                rows.push((
+                    "Rollback".to_owned(),
+                    status
+                        .rollback_generation()
+                        .unwrap_or_else(|| "Not available".to_owned()),
+                ));
+                rows.push((
+                    "Staged update".to_owned(),
+                    status
+                        .candidate_generation()
+                        .unwrap_or_else(|| "None".to_owned()),
+                ));
+                rows.push((
+                    "Health evidence".to_owned(),
+                    status.health_label().to_owned(),
+                ));
+                if let Some(error) = &status.last_error {
+                    rows.push(("Last error".to_owned(), error.clone()));
+                }
+                rows.push((
+                    "Status protocol".to_owned(),
+                    status
+                        .schema
+                        .map_or_else(|| "Unavailable".to_owned(), |s| format!("schema {s}")),
+                ));
+            }
+            settings_rows_from(canvas, t, pane, pane.y + t.px(98.0), &rows);
+        }
     }
     if matches!(
         page,

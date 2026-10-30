@@ -6450,3 +6450,73 @@ fn journey_launcher_picks_up_a_tail_only_rewrite() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// The Settings Updates page reads the real daemon's generation status.
+///
+/// The daemon is on a real socket and the page is opened by clicking its
+/// sidebar row. The update root is absent, which is the one state that must
+/// read "No update record" rather than an invented active generation. The text
+/// runs are collected from the real paint path, so a page that drew a stale
+/// snapshot cannot pass.
+#[cfg(unix)]
+#[test]
+fn journey_settings_updates_reads_the_real_daemon_status() {
+    use crate::settings::Page;
+
+    let root = e2e_root("update-status");
+    let socket = root.join("sysd.sock");
+    let update_root = root.join("update");
+    let listener = litric_sysd::server::bind(&socket).expect("bind sysd");
+    let state = litric_sysd::state::Sysd::new(2, 512, "/tmp", std::path::Path::new("/"))
+        .with_update_root(&update_root);
+    std::thread::spawn(move || {
+        let _ = litric_sysd::server::serve(&listener, state);
+    });
+
+    let mut s = shell();
+    s.sysd_socket = socket;
+    s.open_app(App::Settings);
+    let _ = draw_frame(&mut s);
+
+    // The page is reached by the same sidebar click a person uses.
+    let row = s
+        .hotspots()
+        .rect_of(Hot::SettingsCategory(14))
+        .expect("the Updates row is in the sidebar");
+    click(&mut s, row.center().0, row.center().1);
+    assert_eq!(s.settings.page, Page::Updates);
+    assert_eq!(
+        s.update_status.state, "uninitialized",
+        "the daemon's absent update root is reported as such"
+    );
+    assert!(s.update_status.error.is_none(), "{:?}", s.update_status);
+
+    let canvas = draw_frame_at(&mut s, 1280, 800);
+    let text: Vec<String> = canvas.text_runs().iter().map(|r| r.text.clone()).collect();
+    for expected in [
+        "Updates",
+        "No update record",
+        "No active generation",
+        "schema 3",
+    ] {
+        assert!(
+            text.iter().any(|t| t == expected),
+            "the page did not draw {expected:?}: {text:?}"
+        );
+    }
+    assert!(
+        !text.iter().any(|t| t == "Ready"),
+        "an absent record must not be drawn as Ready: {text:?}"
+    );
+
+    // The page's own action asks again, over the same real socket. The daemon
+    // still has no root, so it still has to say uninitialized — the button
+    // refreshes the reading, it does not manufacture a success.
+    let again = s
+        .hotspots()
+        .rect_of(Hot::SettingsUpdatesRefresh)
+        .expect("the refresh row is drawn");
+    click(&mut s, again.center().0, again.center().1);
+    assert_eq!(s.update_status.state, "uninitialized");
+    let _ = std::fs::remove_dir_all(&root);
+}

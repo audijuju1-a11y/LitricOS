@@ -118,6 +118,7 @@ ALLOWED = {
         "a_legacy_record_restores_unverified": "removes the scratch root this test created under the system temp directory, after asserting the legacy entry was restored",
     },
     "src/litric-shell/src/e2e.rs": {
+        "journey_settings_updates_reads_the_real_daemon_status": "removes the pid-tagged temporary fixture root this Settings journey created under the system temp directory, after asserting the real daemon reported an uninitialized update record and the page drew no Ready state",
         "e2e_root": "removes the temporary fixture root it is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
         "journey_files_selects_with_mouse_and_compresses_multiple_items": "removes the fixture root this journey made with `e2e_root` -- tagged with this process's id under the system temp directory -- after asserting the archive it asked for exists in it",
         "journey_defender_scans_and_reports_eicar_end_to_end": "removes the temporary root this journey created",

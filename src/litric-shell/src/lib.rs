@@ -80,6 +80,7 @@ pub mod textaudit;
 pub mod textedit;
 pub mod themeicons;
 pub mod ui;
+pub mod updatestatus;
 pub mod views;
 pub mod wordmark;
 

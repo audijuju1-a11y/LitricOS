@@ -3034,3 +3034,48 @@ the exact `wpctl` argument vector.
 Revert this commit. `Sysd` returns to direct `providers` calls, the fake and
 boundary checker disappear, and the master-plan C1 marker and this evidence
 revert. No tool, plan, protocol field or user file is touched.
+
+## 2026-10-30 — §78: real update status in Settings
+
+The daemon already answers `UPDATE STATUS 3`. This batch makes the shell read
+it from the real socket and draw a typed, read-only Updates page. It adds no
+update action and no invented generation.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-update` | 21 passed, 0 failed |
+| `cargo test --workspace` | 1951 passed, 0 failed, 0 ignored |
+| `cargo test -p litric-shell updatestatus` | 6 passed |
+| `cargo test -p litric-shell journey_settings_updates` | 1 passed |
+| `python3 ci/lint-doc-refs.py` | 1468 citations across 165 documents |
+| `python3 ci/lint-line-endings.py` | 389 files, all LF |
+| `python3 ci/lint-file-safety.py` | 126 deletion sites, all reviewed |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+
+### What the journey proves
+
+A real `litric-sysd` is bound to a temporary Unix socket. The update root has
+never been initialised, so the daemon answers `state=uninitialized`. The shell
+opens Settings, clicks the fifteenth sidebar row, and draws through the real
+paint path. The frame contains **Updates**, **No update record**, **No active
+generation** and **schema 3**, and does not contain **Ready**. Clicking **Check
+for changes** asks the same daemon again and still reports `uninitialized`.
+
+### What it does not prove
+
+| Claim | Why not |
+|---|---|
+| that an update can be installed from Settings | no stage/commit/rollback control exists |
+| that a generation switched or booted | no image, update unit or boot in this run |
+| that health evidence is healthy | the e2e record is intentionally uninitialized |
+| that §73 is complete | this is one page of the settings wave |
+| that auto-backup or Linux app install exists | separate, not implemented here |
+
+### Rollback
+
+Revert this commit. The page, module, hotspots and e2e journey disappear; the
+daemon's `UPDATE STATUS` contract and every prior update batch are unchanged.
