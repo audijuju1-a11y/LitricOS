@@ -103,7 +103,7 @@ host (no `mkosi`, no QEMU, no GPU); "builder" means a Linux host with
 | Batch | Outcome | Where |
 |---|---|---|
 | **A1** | One booted desktop measured: `budget-snapshot` taken, `ci/check-memory-snapshot.py` verdict recorded, GATE 02 rows re-tagged from `TARGET` to `MEASURED` or left failing | builder |
-| **A2** | The perf harness fails on a planted 15 % regression (its self-test proves it), so W9's acceptance is executable | here |
+| **A2** | The perf harness fails on a planted 15 % regression (its self-test proves it), so W9's acceptance is executable (**landed 2026-10-30**, see tracker A2) | here |
 | **A3** | Claim audit: every `P` row whose backend is absent is re-tagged, with the reason in the same commit | here |
 
 A1 is the only batch that unblocks the image gates. A2 and A3 run in parallel

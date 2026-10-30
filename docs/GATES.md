@@ -2683,3 +2683,62 @@ The process tests start the real `litric-sysd` binary. After boot the serve loop
 ### Rollback
 
 Revert this commit. The health module, schema-3 status fields, commit gate, serve attestation, boot evidence and eight process tests disappear; schema 2 and the caller-asserted `PASSED` path return, and row 763 returns to `S`. The state record, root lock and §75/§76 behaviour stay intact; no user data, boot configuration or image is touched.
+
+## 2026-10-30 — A2: a performance regression harness that can fail
+
+`A2` makes the W9 acceptance sentence executable. `render_bench` was already printing medians; `ci/check-perf-regression.py` now compares a known-good run with a candidate and fails at the regression boundary. It is a comparator, not a new benchmark, and it does not claim any machine is fast enough.
+
+### What was found
+
+`src/litric-shell/examples/render_bench.rs` prints `*.median_ms` and `*.runs` for every scene, but no check read them. `docs/PERF-budget.md` rule 4 said CI fails on a regression over 10 %, and the master plan required a planted 15 % failure for W9, but neither statement had an executable comparison. A candidate could regress and every gate would still pass.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `ci/check-perf-regression.py` | parses two real `render_bench` outputs; compares every `*.median_ms`; requires 15 runs; fails on missing scenes, duplicate/non-finite/negative metrics and regressions at/above the threshold; `--self-test` proves the exact 15.0 % boundary |
+| `ci/verify.sh` | adds `[3k]`, running the self-test only |
+| `docs/design/2026-10-30-performance-regression-harness.md` | input contract, precedence table, command, limits |
+| `docs/PERF-budget.md` | §8 records the comparator, the 10 % default and the 15 % W9 boundary |
+| `docs/master-plan/28-whole-system-improvement-plan.md` | A2 marked landed |
+
+### Evidence (commands run on this batch)
+
+| Check | Result |
+|---|---|
+| `python3 ci/check-perf-regression.py --self-test` | **PASS** — unchanged passes, +15.0 % fails, +14.9 % passes, missing/short/duplicate/bad metrics fail |
+| CLI fixture at +15.0 % | exit 1, `full_frame: 100.000 ms -> 115.000 ms (+15.00% >= 15.00%)` |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-update` | **21 passed, 0 failed** |
+| `cargo test --workspace` | **1,939 passed, 0 failed** (62 test binaries) |
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D, 122 P, 288 S, 746 T |
+| `python3 ci/lint-doc-refs.py` | 1,378 citations across 160 documents resolve |
+| `python3 ci/lint-line-endings.py` | 387 files, all LF |
+| `python3 ci/lint-file-safety.py` | 125 deletion sites, all reviewed |
+| `bash ci/verify.sh` | **35 pass, 0 fail, 3 skipped** |
+
+The three skips are the image build (`mkosi` absent), boot smoke (QEMU absent) and idle RAM/CPU/boot timing (same). They are environmental skips, not evidence.
+
+### What this establishes
+
+* A candidate run that is 15.0 % slower than a baseline fails the comparator, not just a hypothetical claim.
+* A missing scene, a short sample, a duplicate metric or a non-finite/negative value fails rather than shrinking the comparison silently.
+* The exact boundary is tested: +15.0 % fails and +14.9 % passes.
+* The comparator reads the benchmark that actually draws the desktop; it does not reimplement a scene.
+* The negative control runs in `ci/verify.sh` as `[3k]`.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that a real candidate passed | CI runs only the self-test; a real verdict needs two controlled benchmark runs |
+| that the machine is inside 16.67 ms | the comparator is relative and has no absolute budget check |
+| that a booted image, kernel, GPU or compositor was measured | the input is the host-side `render_bench` output |
+| that the baseline environment matches the candidate | the operator must keep host, build, canvas and workload identical; the script cannot check it |
+| that W9 is closed | zram/MGLRU/oomd, boot/idle measurements and a builder are still open |
+| that a new scene is covered | it is printed `NEW`; the baseline must be re-recorded deliberately |
+
+### Rollback
+
+Revert this commit. `ci/check-perf-regression.py`, the `[3k]` check, the design note and the PERF-budget/plan/tracker/GATES rows disappear. `render_bench` and every renderer behavior remain unchanged; no baseline, image, user data or performance claim is touched.

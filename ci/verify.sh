@@ -304,6 +304,22 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
+echo "[3k] Performance regression harness"
+# ---------------------------------------------------------------------------
+# The W9 acceptance sentence was not executable: `render_bench` printed
+# medians, but nothing compared two runs or failed on a regression. This is the
+# comparator's negative control. It uses no machine, image or baseline file of
+# its own; a PASS says a planted 15% regression is rejected, not that a real
+# candidate is fast enough.
+if [[ -n "$PY" ]]; then
+    check "perf harness fails a planted 15% regression" \
+        "$PY" ci/check-perf-regression.py --self-test
+else
+    skip "performance regression harness" "no python interpreter on PATH"
+fi
+
+# ---------------------------------------------------------------------------
+echo
 echo "[4] Development signing keys"
 # ---------------------------------------------------------------------------
 if have openssl; then

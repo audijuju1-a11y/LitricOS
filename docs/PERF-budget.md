@@ -442,3 +442,26 @@ week on sysctls before the shell is one process.
 4. **CI fails on any regression >10 %** in any line, absent an approved note.
 5. **`NOT RUN` is a valid, respectable value.** An estimate wearing a number's
    clothes is not.
+
+
+---
+
+## 8. REGRESSION COMPARATOR (A2)
+
+`render_bench` prints medians; `ci/check-perf-regression.py` compares two runs.
+The baseline and candidate must be the same host, release build, canvas and
+workload, and each scene must carry at least 15 runs. The default limit is 10 %
+(rule 4 above); an exact 15.0 % regression is the W9 acceptance case and fails.
+A missing scene, duplicate metric, non-finite value or short run fails rather
+than shrinking the comparison.
+
+```text
+cargo run --release -p litric-shell --example render_bench -- /tmp/perf/base > baseline.txt
+cargo run --release -p litric-shell --example render_bench -- /tmp/perf/candidate > candidate.txt
+python3 ci/check-perf-regression.py --baseline baseline.txt --actual candidate.txt
+```
+
+`ci/verify.sh` runs only `--self-test`: it proves an unchanged run passes, a
+planted +15.0 % regression fails, +14.9 % passes, and missing/short/duplicate/bad
+metrics fail. It does not prove a real machine is inside the absolute frame
+budget, and it does not run two real benchmarks on every CI pass.

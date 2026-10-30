@@ -7921,3 +7921,58 @@ Base `1e9b64d`; this batch is committed on `main` with the lock module, service/
 ### 77.7 Git
 
 Base `df3a4e9`; this batch is committed on `main` with the health module, the service/server/engine changes, the atomic-helper reuse, real-socket tests and the design/scope/plan/tracker/GATES updates. The final hash and `HEAD == origin/main` check are recorded in the delivery report after the push.
+
+## A2. Batch: the performance regression harness can fail (verified)
+
+### A2.1 Requirement
+
+The W9 acceptance sentence said a planted 15 % regression must fail the performance harness, but `render_bench` only printed medians; nothing compared runs. This batch owns that single gap. It does not add a new benchmark, change the renderer, measure a machine, or start zram/MGLRU/oomd work. It is the Stage A2 batch from the master plan, not a UI batch.
+
+### A2.2 The contract, and where it lives (file → item)
+
+* `ci/check-perf-regression.py` — parses the raw `key=value` output of two `render_bench` runs, takes every `*.median_ms` and matching `*.runs`, requires at least 15 runs, and fails at or above the threshold relative to the baseline. Missing scenes, duplicate/non-finite/negative metrics and short samples fail; a new candidate scene is printed as `NEW` without a comparison. The default threshold is the 10 % rule in `docs/PERF-budget.md`; `--threshold 15` is the W9 acceptance boundary.
+* `ci/verify.sh` — adds `[3k] Performance regression harness`, running only the self-test. The real comparison needs two controlled runs and is not run on every CI pass.
+* `docs/design/2026-10-30-performance-regression-harness.md` — input contract, read-precedence table, exact command, self-test cases and limits.
+* `docs/PERF-budget.md` §8 — the command and the 10 %/15 % distinction.
+* `docs/master-plan/28-whole-system-improvement-plan.md` — Stage A2 marked landed.
+
+### A2.3 Behavior pinned by the self-test
+
+* An unchanged run passes.
+* A planted **+15.0 %** regression fails, with both medians and the exact percentage printed.
+* **+14.9 %** passes, so the boundary is not a blanket rejection.
+* A scene present in the baseline but absent from the candidate fails.
+* A 14-run scene fails; the comparator does not silently compare a short sample.
+* A duplicate metric and a negative median fail.
+* The CLI was also run against temporary fixture files and exited 1 for the +15.0 % case, proving the file-reading path, not only the in-memory helper.
+
+### A2.4 Tests added
+
+* `ci/check-perf-regression.py --self-test` — seven fixture cases, including the exact 15 % boundary.
+* `ci/verify.sh` `[3k]` — the negative control runs in the repository gate.
+
+### A2.5 Gates (real output, 2026-10-30)
+
+* `cargo fmt --all --check` → exit 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+* `cargo test -p litric-update` → **21 passed, 0 failed**.
+* `cargo test --workspace` → **1,939 passed, 0 failed** (62 test binaries; no Rust behavior changed in A2).
+* `python3 ci/check-perf-regression.py --self-test` → **PASS**; the planted +15.0 % case exited 1 with `+15.00% >= 15.00%` when run through the CLI.
+* `bash ci/verify.sh` → **35 pass, 0 fail, 3 skipped**. The three skips are image build (`mkosi` absent), boot smoke (QEMU absent) and idle RAM/CPU/boot timing (same); no failure is hidden by a skip.
+* `python3 ci/count-scope.py` → 1,165 rows: **9 D · 122 P · 288 S · 746 T**; **no row moved** because A2 is a verification harness, not a user capability.
+* `python3 ci/lint-doc-refs.py` → 1395 citation(s) across 160 documents resolve.
+* `python3 ci/lint-line-endings.py` → 387 files, all LF.
+* `python3 ci/lint-file-safety.py` → 125 deletion sites, all inside reviewed functions.
+
+### A2.6 Limits, stated plainly
+
+* This does not close W9: no zram/MGLRU/oomd policy, no boot/idle measurement and no image were added.
+* It does not prove a real machine is inside the 16.67 ms frame budget. It compares a candidate run with a recorded baseline; an already-over-budget scene can pass if it did not regress.
+* The baseline and candidate must be produced on the same host, release build, canvas and workload. The script cannot verify those facts; that obligation is documented.
+* A self-test PASS proves the comparator can fail, not that any candidate is fast. CI runs only the self-test; two real benchmark runs are required for a real verdict.
+* No new scene is fail-closed: it is printed `NEW` because there is no baseline to compare. Re-record the baseline deliberately when coverage changes.
+* No UI/§73 work and no change to the renderer or paint path.
+
+### A2.7 Git
+
+Base `8d704d0`; this batch is committed on `main` with the comparator, its CI negative control, the design note, PERF-budget and tracker/GATES/plan updates. The final hash and `HEAD == origin/main` check are recorded in the delivery report after the push.
