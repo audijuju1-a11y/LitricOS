@@ -35,6 +35,7 @@
 #![forbid(unsafe_code)]
 
 pub mod action;
+pub mod auth;
 pub mod facts;
 pub mod grants;
 pub mod launch;
