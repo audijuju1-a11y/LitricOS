@@ -11544,4 +11544,62 @@ mod sidebar_scroll {
             .expect("the index came from the list");
         assert_eq!(s.files.path, expected);
     }
+
+    #[test]
+    fn the_idle_plan_asks_for_at_most_two_wakeups_a_second() {
+        // `docs/PERF-budget.md` §4 allows `litric-shell` two wakeups a second.
+        // The loop's own answer to "how long may I sleep" is the only thing
+        // that sets that number while nothing happens, so the budget is a
+        // property of `wake_after_ms` and this test holds it: walk ten seconds
+        // of an idle desktop, waking exactly where the plan says, and count.
+        // Any timer that starts polling faster shows up here as a number, not
+        // as a battery complaint.
+        let theme = Theme::of(ThemeKind::Dark);
+        let mut shell = Shell::new(
+            crate::ui::Tokens::new(theme, 1.0),
+            1280.0,
+            800.0,
+            litric_locale::Regional::fallback("idle-budget"),
+        );
+        shell.mode = DesktopMode::Ready;
+        let now = 1_800_000_000_000_u64;
+        // `wake_after_ms` answers 0 while there is a frame to draw, which is
+        // correct and would measure the renderer, not the idle plan. So each
+        // wake draws: take the damage and count the frame, exactly as the loop
+        // does after presenting, and only then ask how long it may sleep.
+        let draw = |shell: &mut Shell, now: u64| {
+            shell.tick(now);
+            if shell.is_dirty() {
+                let _ = shell.take_damage();
+                shell.counted_frame();
+            }
+        };
+        draw(&mut shell, now);
+        // The boot intro and any opening motion run first; the steady state is
+        // what the budget is about, so let them finish before counting.
+        let mut warm = now;
+        while warm < now.saturating_add(5_000) {
+            let gap = shell.wake_after_ms(warm).max(1);
+            warm = warm.saturating_add(gap.min(now.saturating_add(5_000) - warm));
+            draw(&mut shell, warm);
+        }
+        let mut wakes = 0_u32;
+        let start = warm;
+        let window_ms = 10_000_u64;
+        while start.saturating_add(0) < start.saturating_add(window_ms)
+            && warm < start.saturating_add(window_ms)
+        {
+            let gap = shell.wake_after_ms(warm).max(1);
+            warm = warm.saturating_add(gap.min(start.saturating_add(window_ms) - warm));
+            draw(&mut shell, warm);
+            wakes = wakes.saturating_add(1);
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let per_s = f64::from(wakes) / 10.0;
+        println!("idle_wakeups_per_s={per_s:.2} over {window_ms} ms ({wakes} wakes)");
+        assert!(
+            per_s <= 2.0,
+            "an idle shell asks for {per_s:.2} wakeups a second, over the 2/s budget"
+        );
+    }
 }

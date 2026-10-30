@@ -6829,3 +6829,174 @@ gate, golden frame or key file was edited.
 
 Base `f4b04da`. This batch is committed on `main` and pushed; `HEAD ==
 origin/main` and the tracked worktree is empty at the end of the turn.
+
+## 68. Batch: every shell timer named, and the idle plan held to 1.00/s (verified)
+
+### 68.1 Requirement
+
+The improvement plan names this batch and its proof
+(`docs/master-plan/28-whole-system-improvement-plan.md`, batch 68):
+
+> Idle wakeup audit: every shell timer named with a reason | timer table, ≤ 2/s
+> target
+
+and the budget it is measured against (`docs/PERF-budget.md` §4):
+
+> | Wakeups/second, `litric-shell` alone | **≤ 2 /s** | `powertop` |
+>
+> A shell that idles at ≤ 2 wakeups/second is only possible if it is **fully event
+> [driven]**
+
+The batch contract's rule 5 applies: no claim without a tool, a command, an
+environment and `n`.
+
+### 68.2 The inventory (file → line, verified with grep on this commit)
+
+| File:line | Timer | Period | Armed while idle? | Reason |
+| --- | --- | ---: | --- | --- |
+| `src/litric-shell/src/shell.rs` | 4138 | `IDLE_SLEEP_CAP_MS` = 1,000 ms | **yes** | Floor under the idle plan: the top bar's clock changes on the second, so a longer sleep shows a stale clock. This is the wake the 1.00/s figure comes from. |
+| `src/litric-shell/src/shell.rs` | 4176 | the wake plan | — | The plan itself: `min(until next clock change, until the idle state changes, the cap)`. It is the only thing that sets idle pacing. |
+| `src/litric-shell/src/main.rs` | 63 | `FACTS_INTERVAL_MS` = 2,000 ms | no (serviced on the next clock wake) | Re-sample facts, drain the notification inbox, re-query environments. Keeps a notification's worst case at 2 s. |
+| `src/litric-shell/src/main.rs` | 66 | `STATUS_INTERVAL_MS` = 5,000 ms | no | Rewrite the status file the regression CI reads. |
+| `src/litric-shell/src/main.rs` | 76 | `CURSOR_INTERVAL_MS` = 8 ms | **no** | Cursor step, armed only while a pointer step is pending. Not a frame and not idle. |
+| `src/litric-shell/src/shell.rs` | 2262 | `MIN_GAP_MS` = 50 ms | **no** | Minimum gap between animation frames, only while a spring is mid-flight. |
+| `src/litric-shell/src/shell.rs` | 3244, 3247, 3251 | `BOOT_INTRO_MS` 2,300 · `BOOT_WRITE_MS` 1,600 · `BOOT_COVER_MS` 1,950 | **no** | Boot intro staging, finished 2.3 s after start. |
+| `src/litric-shell/src/shell.rs` | 3526 | `REVERT_WINDOW_MS` = 15,000 ms | **no** | Deadline of the "revert" toast, armed only after a settings revert. |
+| `src/litric-shell/src/desktop_entry.rs` | 1264 | `WATCH_INTERVAL_MS` = 1,000 ms | only if the launcher is watching | Desktop-entry poll; `next_ms` is advanced per poll (1404, 1421), so it adds no wake the plan did not already ask for. |
+| `src/litric-shell/src/filewatch.rs` | 36 | `INTERVAL_MS` = 1,000 ms | only while a Files window watches | Outside-directory change poll for the open table. |
+
+Every entry has a reason, and the three that are armed while idle (the cap, the
+clock boundary, and — if a window is open — a 1 s watcher) are the ones the
+number below counts. Nothing in the list exists "because it was easy": the facts
+timer is the notification latency budget, the status timer is what CI reads, and
+the cap is the clock's seconds.
+
+### 68.3 Measured: the idle plan asks for 1.00 wakeups a second
+
+The measurement walks the shell's own answer to "how long may I sleep" for ten
+seconds of an idle desktop, waking exactly where the plan says and drawing each
+frame the way the loop does:
+
+```bash
+cd src
+cargo test -p litric-shell --lib the_idle_plan_asks_for_at_most -- --nocapture
+```
+
+```text
+idle_wakeups_per_s=1.00 over 10000 ms (10 wakes)
+test result: ok. 1 passed; 0 failed; ... finished in 0.00s
+```
+
+Ten wakes in ten seconds, against a budget of twenty. The first version of this
+harness reported **1000.00/s**, which was the harness and not the shell: it never
+drew, so `wake_after_ms` correctly answered "0, there is a frame to draw". The
+loop's draw step (`take_damage` + `counted_frame`) is part of the measurement, and
+the number above is what remains once the desktop is clean.
+
+**What this is and is not.** It is a measurement of the *plan the shipped loop
+follows*, not a kernel count. The kernel count was attempted first and is not
+available on this host: `litric-shell --presenter` accepts `auto`, `drm` and
+`fbdev` only, and there is no framebuffer or DRM node here, so the binary exits
+with its usage text instead of idling. The `rusage`-based `ctxt_switches` count
+therefore never ran, and no proxy is presented as a kernel figure.
+
+### 68.4 The change: the budget is now enforced, and the rejected candidate
+
+What ships is the audit table above plus one test,
+`the_idle_plan_asks_for_at_most_two_wakeups_a_second`
+(`src/litric-shell/src/shell.rs`, 11549), which fails the suite if the idle plan
+ever asks for more than two wakes a second. That is the difference between a
+budget in a document and a budget in the tree.
+
+The candidate that was considered and **rejected with a measurement**: raising
+`IDLE_SLEEP_CAP_MS` from 1,000 to 2,000 to halve the wakes. It cannot help,
+because the binding term is the clock boundary, which is at most one second away;
+the cap is a floor, not the cost. The measured figure would not move, so the
+constant keeps its reason and its value. There is no wakeup *reduction* to claim
+from this batch, and none is claimed.
+
+### 68.5 Sensitivity proof
+
+Forcing the idle plan to poll every 8 ms (`wake_after_ms` returning `8`) makes the
+test fail with its real message:
+
+```text
+idle_wakeups_per_s=125.00 over 10000 ms (1250 wakes)
+thread 'shell::sidebar_scroll::the_idle_plan_asks_for_at_most_two_wakeups_a_second' panicked at litric-shell/src/shell.rs:11599:9:
+an idle shell asks for 125.00 wakeups a second, over the 2/s budget
+test result: FAILED. 0 passed; 1 failed
+```
+
+Restored, it prints `1.00` and passes. The test is sensitive to exactly the
+regression it names (a timer that starts polling faster), which is the lesson
+§67 recorded when a test stayed green under its own probe.
+
+### 68.6 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `src/litric-shell/src/shell.rs` | 11549 | the test: ten seconds of idle, wakes counted, `≤ 2/s` asserted and printed |
+| `src/litric-shell/src/shell.rs` | 4138 | `IDLE_SLEEP_CAP_MS` — the floor, with its reason in the doc comment |
+| `src/litric-shell/src/shell.rs` | 4176 | `wake_after_ms` — the plan the test measures |
+| `src/litric-shell/src/main.rs` | 63, 66, 76 | facts · status · cursor timers, each with its reason |
+| `src/litric-shell/src/desktop_entry.rs` | 1264 | the desktop-entry watch interval |
+| `src/litric-shell/src/filewatch.rs` | 36 | the Files watch interval |
+| `docs/PERF-budget.md` | 302 | the budget row now carries the measured 1.00/s and the command |
+
+### 68.7 Gate
+
+```text
+$ cargo fmt --all --check
+exit 0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+exit 0
+
+$ cargo test --workspace
+1,838 passed; 0 failed   (was 1,837; +1 test)
+
+$ python3 ci/lint-doc-refs.py
+OK: 1,267 citation(s) across 156 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+OK: 116 deletion site(s), all inside reviewed functions
+
+$ bash ci/verify.sh
+summary: 32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the recorded baseline (`mkosi config…`, `dev key pairs…`);
+the three skips need mkosi/QEMU. The golden-frame check is among the 32 passes,
+so no frame changed. No gate, golden frame or key file was edited.
+
+### 68.8 Costs and limits, stated
+
+| Figure | Value |
+| --- | --- |
+| wakeups added per second | **0** (no timer changed) |
+| wakeups removed per second | **0** (none needed removing; the plan was already inside the budget) |
+| work added per frame | **0** |
+| heap added | **0 bytes** |
+| dependencies / `unsafe` | 0 / none |
+| tests added | 1 (sensitive, proved above) |
+
+* **The number is the plan, not the kernel.** No framebuffer or DRM node exists
+  here, so `litric-shell` cannot run its loop on this host and
+  `/proc/<pid>/status` cannot be sampled. `powertop`, which `PERF-budget` names,
+  is not installed either. The proxy is the loop's own sleep plan, and it is
+  labelled as such everywhere it appears.
+* **Watchers are conditional.** `WATCH_INTERVAL_MS` and `INTERVAL_MS` are armed
+  only while a launcher or Files watch exists, which the idle figure does not
+  include. A window left open adds one poll a second on top of the 1.00/s — still
+  inside 2/s, but it is a different steady state and is stated rather than
+  averaged in.
+* **The clock is the floor.** Reaching fewer than one wake a second means showing
+  the time to the minute instead of the second. That is a user-visible product
+  decision, not an optimisation, and it was not taken.
+* **No image-level evidence.** The idle figure is host-side; a booted image's
+  wakeups are still unmeasured (`docs/GATES.md` stays `NOT RUN`).
+
+### 68.9 Git
+
+Base `eacf5d1`. This batch is committed on `main` and pushed; `HEAD ==
+origin/main` and the tracked worktree is empty at the end of the turn.

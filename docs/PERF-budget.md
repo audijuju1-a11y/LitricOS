@@ -299,6 +299,7 @@ a curated Linux stack. LitricOS gates on it.
 | Aggregate CPU | **≤ 0.5 %** | `pidstat 1 60` |
 | Wakeups/second, whole system | **≤ 25 /s** | `powertop --time=60` |
 | Wakeups/second, `litric-shell` alone | **≤ 2 /s** | `powertop` |
+| Wakeups/second, the shell's own idle plan *(measured)* | **1.00 /s** | `cargo test -p litric-shell --lib the_idle_plan_asks_for_at_most -- --nocapture` (§68) |
 | Timer interrupts (idle) | ≤ 260 /s | `/proc/interrupts` delta |
 | Processes at idle | **≤ 32** | `ps -e --no-headers` |
 | Threads at idle | ≤ 220 | `ps -eLf --no-headers` |
