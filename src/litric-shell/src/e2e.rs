@@ -573,14 +573,22 @@ fn journey_activity_environment_and_settings_controls_change_real_state() {
     assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));
     s.finish_preferences_save(Ok(()));
     let _ = draw_frame(&mut s);
-    let accent = s.hotspots().rect_of(Hot::SettingsAccent).unwrap();
+    // The accent is a picker: clicking the third swatch chooses that accent,
+    // not whatever happens to follow the current one (§70).
+    let chosen = litric_design::Accent::all()
+        .get(3)
+        .copied()
+        .expect("an accent");
+    let accent = s
+        .hotspots()
+        .rect_of(Hot::SettingsAccentChoice(3))
+        .expect("the accent picker draws each choice");
     let effects = click(&mut s, accent.center().0, accent.center().1);
     assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));
     s.finish_preferences_save(Ok(()));
-    assert_ne!(
-        s.settings.preferences.accent,
-        litric_design::Accent::Default,
-        "the accent row must move the accent off the theme default"
+    assert_eq!(
+        s.settings.preferences.accent, chosen,
+        "the accent picker must select the choice that was clicked"
     );
     let _ = draw_frame(&mut s);
     let wallpaper = s.hotspots().rect_of(Hot::SettingsWallpaper).unwrap();
@@ -598,6 +606,145 @@ fn journey_activity_environment_and_settings_controls_change_real_state() {
     assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));
     s.finish_preferences_save(Ok(()));
     assert_ne!(s.settings.preferences.language, crate::i18n::Language::Thai);
+}
+
+/// Chapter F's components, wired to real surfaces rather than drawn in a
+/// gallery (batch §70).
+///
+/// Four claims, each about state a user could observe: the accent picker
+/// selects the value that was clicked; the launcher's arrow keys move like the
+/// four-column grid it draws; an empty folder offers the action that changes
+/// it; and a glyph-only status icon explains itself after the pointer rests on
+/// it. The shots are the frames the real paint path produced.
+#[cfg(unix)]
+#[test]
+fn journey_chapter_f_picker_empty_state_grid_and_tooltip() {
+    let root = e2e_root("chapter-f");
+    let folder = root.join("empty");
+    std::fs::create_dir_all(&folder).expect("an empty folder");
+
+    let mut s = shell();
+
+    // --- picker: a value, not a cycle -------------------------------------
+    s.open_app(App::Settings);
+    s.settings.page = crate::settings::Page::Appearance;
+    let before = s.settings.preferences.accent;
+    let chosen = litric_design::Accent::all()
+        .get(2)
+        .copied()
+        .expect("an accent");
+    assert_ne!(before, chosen, "the fixture must start on another accent");
+    let _ = draw_frame(&mut s);
+    let swatch = s
+        .hotspots()
+        .rect_of(Hot::SettingsAccentChoice(2))
+        .expect("the picker draws every accent");
+    let effects = click(&mut s, swatch.center().0, swatch.center().1);
+    assert!(effects.contains(&Effect::PersistPreferences(s.settings.preferences)));
+    s.finish_preferences_save(Ok(()));
+    assert_eq!(
+        s.settings.preferences.accent, chosen,
+        "a picker selects the value it shows, not the next one in a list"
+    );
+    let frame = draw_frame(&mut s);
+    save_shot(&frame, "70-picker-accent");
+
+    // --- grid: Down is a row, Right is a tile -----------------------------
+    open_launcher(&mut s);
+    let _ = draw_frame(&mut s);
+    let start = match &s.overlay {
+        Overlay::Launcher { selected, .. } => *selected,
+        _ => panic!("the launcher is open"),
+    };
+    let _ = key_press(&mut s, Key::Down, Modifiers::NONE);
+    let down = match &s.overlay {
+        Overlay::Launcher { selected, .. } => *selected,
+        _ => panic!("the launcher is open"),
+    };
+    assert_eq!(
+        down,
+        start + crate::views::LAUNCHER_COLUMNS,
+        "Down must move one row of the grid it draws"
+    );
+    let _ = key_press(&mut s, Key::Right, Modifiers::NONE);
+    let right = match &s.overlay {
+        Overlay::Launcher { selected, .. } => *selected,
+        _ => panic!("the launcher is open"),
+    };
+    assert_eq!(right, down + 1, "Right must move one tile");
+    let _ = key_press(&mut s, Key::Up, Modifiers::NONE);
+    let up = match &s.overlay {
+        Overlay::Launcher { selected, .. } => *selected,
+        _ => panic!("the launcher is open"),
+    };
+    assert_eq!(
+        up,
+        start + 1,
+        "Up must come back one row from the tile Right chose"
+    );
+    let frame = draw_frame(&mut s);
+    save_shot(&frame, "70-launcher-grid");
+
+    // --- empty state: a sentence and a way out ----------------------------
+    // Opening the Files window closes the launcher overlay; the morph spring
+    // still has to finish before the window is the surface on screen.
+    s.open_app(App::Files);
+    s.files.path = folder.to_string_lossy().into_owned();
+    s.files.listed = None;
+    for _ in 0..60 {
+        s.tick_after(16);
+    }
+    let frame = draw_frame(&mut s);
+    save_shot(&frame, "70-empty-state");
+    let action = s
+        .hotspots()
+        .rect_of(Hot::Files(crate::apps::FilesHot::EmptyNewFolder))
+        .expect("the empty folder offers a way out");
+    assert!(
+        s.files.dialog.is_none(),
+        "the dialog must open from the action, not before it"
+    );
+    click(&mut s, action.center().0, action.center().1);
+    assert!(
+        matches!(s.files.dialog, Some(crate::apps::DialogKind::NewFolder)),
+        "the empty state's action opens the new-folder dialog"
+    );
+    let frame = draw_frame(&mut s);
+    save_shot(&frame, "70-empty-state-action");
+
+    // --- tooltip: the glyph-only bell explains itself ---------------------
+    s.files.dialog = None;
+    let _ = draw_frame(&mut s);
+    let bell = s
+        .hotspots()
+        .rect_of(Hot::StatusNotifications)
+        .expect("the bell is on the status bar");
+    let before = draw_frame(&mut s);
+    let _ = s.handle(
+        &InputEvent::PointerMove {
+            at: Point::new(bell.center().0, bell.center().1),
+            delta: Point::new(1.0, 1.0),
+        },
+        5_000,
+    );
+    // One tick arms the delay at the current clock, the next advances past it:
+    // the state machine is driven by the clock, not by the paint.
+    s.tick_after(16);
+    s.tick_after(700);
+    assert!(
+        s.tooltip.visible_for(Hot::StatusNotifications),
+        "resting on the bell must arm its tooltip"
+    );
+    let after = draw_frame(&mut s);
+    save_shot(&after, "70-tooltip");
+    let changed = (0i64..120)
+        .flat_map(|y| (0i64..1280).map(move |x| (x, y)))
+        .filter(|(x, y)| before.get(*x, *y) != after.get(*x, *y))
+        .count();
+    assert!(
+        changed > 40,
+        "the tooltip must be painted, not only armed: {changed} pixels changed"
+    );
 }
 
 #[test]

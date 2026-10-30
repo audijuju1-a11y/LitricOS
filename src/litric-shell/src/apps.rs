@@ -1809,6 +1809,8 @@ pub enum FilesHot {
     Extract,
     /// Re-read the current folder from disk.
     Refresh,
+    /// The empty state's way out: open the new-folder dialog.
+    EmptyNewFolder,
 }
 
 /// Map a Files hotspot onto the model. Navigation returns the path to load,
@@ -1816,6 +1818,10 @@ pub enum FilesHot {
 #[must_use]
 pub fn files_action(app: &mut FilesApp, hot: FilesHot) -> Option<String> {
     match hot {
+        FilesHot::EmptyNewFolder => {
+            app.ask_new_folder();
+            None
+        }
         FilesHot::PlacesScroll => None,
         FilesHot::Place(i) => {
             let path = app.places.get(i).map(|(p, _)| p.clone())?;

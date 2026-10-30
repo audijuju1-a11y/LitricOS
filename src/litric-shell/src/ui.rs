@@ -1613,3 +1613,499 @@ mod tests {
         );
     }
 }
+
+// ===========================================================================
+// Chapter F components (batch §70)
+//
+// The corpus (Parts 16–18) asks for four things the shell did not have: a
+// tooltip, a picker whose value space is visible, one grid contract, and an
+// empty state with a way out. They live here, next to the state vocabulary they
+// reuse, so a control cannot grow a second definition on one surface.
+// ===========================================================================
+
+/// How long the pointer must rest on a control before its tooltip appears.
+///
+/// Windows 11 raises a tooltip automatically after a short hover and macOS
+/// does the same; 600 ms is long enough that sweeping the pointer across the
+/// bar does not flash a label, and short enough that resting on an unlabelled
+/// icon explains it. Keyboard focus does not wait: the user has already
+/// committed to the control.
+pub const TOOLTIP_DELAY_MS: u64 = 600;
+
+/// What a picker or a grid understands as one keyboard step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// One cell backwards, wrapping at the first.
+    Previous,
+    /// One cell forwards, wrapping at the last.
+    Next,
+    /// The first cell.
+    First,
+    /// The last cell.
+    Last,
+    /// One row up.
+    Up,
+    /// One row down.
+    Down,
+}
+
+/// One tooltip's visibility, as a state machine over the clock.
+///
+/// Nothing here runs in the paint path: [`Tooltip::sync`] and
+/// [`Tooltip::tick`] are O(1) comparisons over the shell's clock, and the
+/// brush only reads [`Tooltip::visible_for`]. A tooltip that is due is the one
+/// wake the idle plan has to honour, reported by [`Tooltip::next_wake_ms`].
+#[derive(Debug, Clone, Copy)]
+pub struct Tooltip<T> {
+    target: Option<T>,
+    due_ms: u64,
+    shown: bool,
+}
+
+impl<T> Default for Tooltip<T> {
+    fn default() -> Self {
+        Self {
+            target: None,
+            due_ms: 0,
+            shown: false,
+        }
+    }
+}
+
+impl<T: Copy + PartialEq> Tooltip<T> {
+    /// Point the tooltip at whatever the pointer or the keyboard is on.
+    ///
+    /// Focus wins over hover: a keyboard user is looking at the focused
+    /// control, and a pointer resting somewhere else must not label it.
+    pub fn sync(&mut self, hovered: Option<T>, focused: Option<T>, now_ms: u64) {
+        let (want, delay) = match focused {
+            Some(focused) => (Some(focused), 0),
+            None => (hovered, TOOLTIP_DELAY_MS),
+        };
+        if want != self.target {
+            self.target = want;
+            self.due_ms = now_ms.saturating_add(delay);
+            self.shown = false;
+        }
+    }
+
+    /// Advance the clock. Returns whether a tooltip is showing.
+    pub fn tick(&mut self, now_ms: u64) -> bool {
+        if self.target.is_some() && !self.shown && now_ms >= self.due_ms {
+            self.shown = true;
+        }
+        self.shown
+    }
+
+    /// Whether this control's tooltip is the one on screen.
+    #[must_use]
+    pub fn visible_for(&self, id: T) -> bool {
+        self.shown && self.target == Some(id)
+    }
+
+    /// What the tooltip is for, if anything.
+    #[must_use]
+    pub const fn target(&self) -> Option<T> {
+        self.target
+    }
+
+    /// When the tooltip becomes due, while it is still waiting.
+    #[must_use]
+    pub const fn next_wake_ms(&self) -> Option<u64> {
+        if self.target.is_some() && !self.shown {
+            Some(self.due_ms)
+        } else {
+            None
+        }
+    }
+
+    /// Forget the current target, e.g. when the surface under it closes.
+    pub fn clear(&mut self) {
+        self.target = None;
+        self.shown = false;
+    }
+}
+
+/// Draw a tooltip above its anchor, or below when there is no room above.
+///
+/// The label is supplementary, never the only place a control's name exists
+/// (GNOME's rule), and it is clamped to the canvas so a control at the edge of
+/// the screen still shows the whole sentence.
+pub fn tooltip(canvas: &mut Canvas, t: &Tokens, anchor: Rect, text: &str) -> Rect {
+    let style = Style::new(t.text_px(TypeStep::Caption), t.text());
+    let pad_x = t.px(8.0);
+    let pad_y = t.px(5.0);
+    let w = font::measure(text, &style) + pad_x * 2.0;
+    let h = t.line_px(TypeStep::Caption) + pad_y * 2.0;
+    let cw = canvas.width() as f32;
+    let x = (anchor.center().0 - w / 2.0).clamp(t.px(4.0), (cw - w - t.px(4.0)).max(t.px(4.0)));
+    let mut y = anchor.y - h - t.px(6.0);
+    if y < t.px(4.0) {
+        y = anchor.bottom() + t.px(6.0);
+    }
+    let r = Rect::new(x, y, w, h);
+    surface(canvas, t, r, t.radius(Radius::Sm), Material::Elevated);
+    canvas.stroke_round_rect(r, t.radius(Radius::Sm), 1.0, t.border());
+    font::draw(
+        canvas,
+        text,
+        r.x + pad_x,
+        r.y + r.h - pad_y - t.px(2.0),
+        &style,
+    );
+    r
+}
+
+/// One choice in a segmented picker.
+#[derive(Debug, Clone, Copy)]
+pub struct Segment<'a> {
+    /// The visible label. The value space is shown, not hidden behind a cycle.
+    pub label: &'a str,
+}
+
+/// The next choice a picker key asks for.
+///
+/// Returns `None` when the key would not move: a single-choice picker has no
+/// next, and a wrapped step back onto the same choice changes nothing.
+#[must_use]
+pub fn pick_step(selected: usize, len: usize, step: Step) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let last = len.saturating_sub(1);
+    let next = match step {
+        Step::Previous | Step::Up => selected.checked_sub(1).unwrap_or(last),
+        Step::Next | Step::Down => selected.saturating_add(1).checked_rem(len).unwrap_or(0),
+        Step::First => 0,
+        Step::Last => last,
+    };
+    (next != selected).then_some(next)
+}
+
+/// Draw a segmented picker and return one rect per drawn segment.
+///
+/// The segments are the value space: every choice is readable at once, which
+/// is the difference between a picker and the cycling row it replaces. The
+/// returned rects are what the caller registers as hotspots, so the keyboard
+/// path and the pointer path address the same controls.
+pub fn segmented(
+    canvas: &mut Canvas,
+    t: &Tokens,
+    r: Rect,
+    segments: &[Segment<'_>],
+    selected: usize,
+    focused: bool,
+) -> Vec<Rect> {
+    let mut out = Vec::new();
+    if segments.is_empty() || r.w <= 0.0 || r.h <= 0.0 {
+        return out;
+    }
+    let size = t.text_px(TypeStep::Footnote);
+    let pad = t.px(10.0);
+    let gap = t.px(6.0);
+    let mut x = r.x;
+    for (i, segment) in segments.iter().enumerate() {
+        let w = font::measure(segment.label, &Style::new(size, t.text())) + pad * 2.0;
+        if x + w > r.right() {
+            break;
+        }
+        let seg = Rect::new(x, r.y, w, r.h);
+        let on = i == selected;
+        if on {
+            canvas.fill_round_rect(seg, t.radius(Radius::Sm), with_alpha(t.accent(), 0.22));
+            canvas.stroke_round_rect(seg, t.radius(Radius::Sm), 1.0, t.accent());
+        } else {
+            canvas.fill_round_rect(seg, t.radius(Radius::Sm), with_alpha(t.text(), 0.06));
+        }
+        if on && focused {
+            focus_ring(canvas, t, seg, t.radius(Radius::Sm));
+        }
+        let style = Style::new(size, if on { t.text() } else { t.text_dim() });
+        font::draw(
+            canvas,
+            segment.label,
+            seg.x + pad,
+            seg.y + seg.h * 0.5 + size * 0.35,
+            &style,
+        );
+        out.push(seg);
+        x += w + gap;
+    }
+    out
+}
+
+/// Where one cell of a grid sits, or `None` when it would overflow the area.
+///
+/// A cell that does not fit is not drawn and not registered: returning a rect
+/// outside the grid's own box is how a tile ends up painted under the dock.
+#[must_use]
+pub fn grid_cell(
+    r: Rect,
+    columns: usize,
+    index: usize,
+    cell: (f32, f32),
+    gap: f32,
+) -> Option<Rect> {
+    if columns == 0 || cell.0 <= 0.0 || cell.1 <= 0.0 {
+        return None;
+    }
+    let col = index.checked_rem(columns)?;
+    let row = index.checked_div(columns)?;
+    let x = r.x + (col as f32) * (cell.0 + gap);
+    let y = r.y + (row as f32) * (cell.1 + gap);
+    let rect = Rect::new(x, y, cell.0, cell.1);
+    (rect.right() <= r.right() + 0.5 && rect.bottom() <= r.bottom() + 0.5).then_some(rect)
+}
+
+/// The next cell a grid key asks for, in reading order.
+///
+/// `Up` and `Down` move a whole row, which is the point of a grid: a list that
+/// steps by one on every arrow key cannot be navigated as the rows it draws.
+/// The move is clamped rather than wrapped, so holding `Down` on the last row
+/// does not teleport the selection back to the first tile.
+#[must_use]
+pub fn grid_step(selected: usize, count: usize, columns: usize, step: Step) -> Option<usize> {
+    if count == 0 || columns == 0 {
+        return None;
+    }
+    let cols = columns.min(count);
+    let next = match step {
+        Step::Previous | Step::Up => selected.checked_sub(1),
+        Step::Next | Step::Down => selected.checked_add(1),
+        Step::First => Some(0),
+        Step::Last => Some(count.saturating_sub(1)),
+    };
+    let next = match step {
+        Step::Up => selected.checked_sub(cols),
+        Step::Down => selected.checked_add(cols).filter(|next| *next < count),
+        other => {
+            let _ = other;
+            next
+        }
+    };
+    next.filter(|n| *n < count && *n != selected)
+}
+
+/// The contents of an empty state: a title, a sentence, and a way out.
+///
+/// This is the GNOME `AdwStatusPage` contract the corpus quotes: the shell's
+/// eight empty states were sentences with no action, so a folder with nothing
+/// in it did not offer to make anything.
+#[derive(Debug, Clone, Copy)]
+pub struct EmptyState<'a> {
+    /// What the state is, in the user's terms.
+    pub title: &'a str,
+    /// Why it is empty, or what to do about it.
+    pub description: &'a str,
+    /// The action's label, when there is one.
+    pub action: Option<&'a str>,
+}
+
+/// Draw an empty state centred in `r`, returning the action's rect.
+///
+/// A returned `None` means no action button was drawn, so the caller registers
+/// no hotspot: an empty state that cannot act offers nothing to press.
+pub fn empty_state(
+    canvas: &mut Canvas,
+    t: &Tokens,
+    r: Rect,
+    state: &EmptyState<'_>,
+) -> Option<Rect> {
+    if r.w <= 0.0 || r.h <= 0.0 {
+        return None;
+    }
+    let title_size = t.text_px(TypeStep::Footnote) * 1.15;
+    let title_style = Style::bold(title_size, t.text());
+    let body_style = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    let action_style = Style::new(t.text_px(TypeStep::Footnote), rgb(0xFFFFFF));
+    let cx = r.center().0;
+    let mut y = r.y + r.h * 0.38;
+    let title_w = font::measure(state.title, &title_style);
+    font::draw(
+        canvas,
+        state.title,
+        cx - title_w / 2.0,
+        y + title_size,
+        &title_style,
+    );
+    y += title_size + t.px(10.0);
+    let body_w = font::measure(state.description, &body_style);
+    font::draw(
+        canvas,
+        state.description,
+        cx - body_w / 2.0,
+        y + t.text_px(TypeStep::Footnote),
+        &body_style,
+    );
+    y += t.text_px(TypeStep::Footnote) + t.px(18.0);
+    let label = state.action?;
+    let pad = t.px(14.0);
+    let w = font::measure(label, &action_style) + pad * 2.0;
+    let h = t.px(30.0);
+    if y + h > r.bottom() {
+        return None;
+    }
+    let button = Rect::new(cx - w / 2.0, y, w, h);
+    canvas.fill_round_rect(button, t.radius(Radius::Sm), t.accent());
+    font::draw(
+        canvas,
+        label,
+        button.x + pad,
+        button.y + button.h * 0.5 + t.text_px(TypeStep::Footnote) * 0.35,
+        &action_style,
+    );
+    Some(button)
+}
+
+#[cfg(test)]
+mod chapter_f_tests {
+    use super::*;
+    use litric_design::ThemeKind;
+
+    fn tokens() -> Tokens {
+        Tokens::new(Theme::of(ThemeKind::Dark), 1.0)
+    }
+
+    #[test]
+    fn a_tooltip_waits_for_the_rest_and_focus_does_not() {
+        let mut tip: Tooltip<u8> = Tooltip::default();
+        tip.sync(Some(3), None, 1_000);
+        assert!(!tip.tick(1_599), "the pointer just arrived");
+        assert_eq!(tip.next_wake_ms(), Some(1_600));
+        assert!(tip.tick(1_600));
+        assert!(tip.visible_for(3));
+        assert_eq!(tip.next_wake_ms(), None, "a shown tooltip asks for no wake");
+        tip.sync(None, None, 2_000);
+        assert!(!tip.visible_for(3), "leaving clears the label");
+
+        tip.sync(None, Some(4), 3_000);
+        assert!(tip.tick(3_000), "focus is already a decision");
+        assert!(tip.visible_for(4));
+    }
+
+    #[test]
+    fn a_picker_step_never_leaves_the_list() {
+        assert_eq!(pick_step(0, 6, Step::Previous), Some(5));
+        assert_eq!(pick_step(0, 6, Step::Next), Some(1));
+        assert_eq!(pick_step(4, 6, Step::Last), Some(5));
+        assert_eq!(pick_step(3, 6, Step::First), Some(0));
+        assert_eq!(pick_step(0, 1, Step::Next), None, "one choice cannot move");
+        assert_eq!(pick_step(0, 0, Step::Next), None, "no choice, no step");
+    }
+
+    #[test]
+    fn a_segmented_picker_draws_each_choice_it_can_fit() {
+        let t = tokens();
+        let mut c = Canvas::new(320, 80, rgb(0x101010));
+        let segments = [
+            Segment { label: "Sky" },
+            Segment { label: "Teal" },
+            Segment { label: "Rose" },
+        ];
+        let rects = segmented(
+            &mut c,
+            &t,
+            Rect::new(8.0, 8.0, 300.0, 30.0),
+            &segments,
+            1,
+            true,
+        );
+        assert_eq!(rects.len(), 3, "every choice is its own control");
+        for r in &rects {
+            assert!(
+                r.x >= 8.0 && r.right() <= 308.0,
+                "a segment escaped the picker"
+            );
+        }
+        assert!(
+            rects
+                .windows(2)
+                .all(|pair| matches!(pair, [a, b] if a.right() <= b.x)),
+            "segments must not overlap"
+        );
+        let painted = (0i64..80)
+            .flat_map(|y| (0i64..320).map(move |x| (x, y)))
+            .filter(|(x, y)| c.get(*x, *y).unwrap_or(0) != rgb(0x101010))
+            .count();
+        assert!(painted > 200, "the picker painted {painted} pixels");
+    }
+
+    #[test]
+    fn a_grid_cell_is_inside_the_grid_or_not_at_all() {
+        let grid = Rect::new(10.0, 20.0, 200.0, 100.0);
+        let first = grid_cell(grid, 4, 0, (40.0, 30.0), 6.0).expect("first cell");
+        assert_eq!((first.x, first.y), (10.0, 20.0));
+        let second = grid_cell(grid, 4, 1, (40.0, 30.0), 6.0).expect("second cell");
+        assert_eq!(second.x, 56.0);
+        // Four columns of 40 + 6 gap exceed a 170-wide grid, so the fourth
+        // cell is refused rather than drawn under what sits beside the grid.
+        let narrow = Rect::new(10.0, 20.0, 170.0, 100.0);
+        assert!(grid_cell(narrow, 4, 3, (40.0, 30.0), 6.0).is_none());
+        assert!(grid_cell(grid, 0, 0, (40.0, 30.0), 6.0).is_none());
+    }
+
+    #[test]
+    fn a_grid_key_moves_a_row_at_a_time() {
+        assert_eq!(grid_step(0, 10, 4, Step::Down), Some(4));
+        assert_eq!(grid_step(4, 10, 4, Step::Up), Some(0));
+        assert_eq!(grid_step(0, 10, 4, Step::Next), Some(1));
+        assert_eq!(
+            grid_step(0, 10, 4, Step::Previous),
+            None,
+            "the first cell stays"
+        );
+        // The last row is partial: 8 + a row is 12, which does not exist.
+        assert_eq!(grid_step(8, 10, 4, Step::Down), None);
+        assert_eq!(
+            grid_step(9, 10, 4, Step::Last),
+            None,
+            "already the last cell"
+        );
+        assert_eq!(
+            grid_step(0, 10, 4, Step::First),
+            None,
+            "already the first cell"
+        );
+        assert_eq!(
+            grid_step(0, 0, 4, Step::Next),
+            None,
+            "an empty grid cannot move"
+        );
+    }
+
+    #[test]
+    fn an_empty_state_offers_its_action_and_none_when_it_has_none() {
+        let t = tokens();
+        let mut c = Canvas::new(400, 300, rgb(0x101010));
+        let state = EmptyState {
+            title: "Empty folder",
+            description: "Nothing in this folder yet.",
+            action: Some("New folder"),
+        };
+        let action = empty_state(&mut c, &t, Rect::new(0.0, 0.0, 400.0, 300.0), &state)
+            .expect("the action button");
+        assert!(action.w > 0.0 && action.h > 0.0);
+        assert!(
+            action.bottom() <= 300.0,
+            "the action stayed inside the pane"
+        );
+
+        let none = empty_state(
+            &mut c,
+            &t,
+            Rect::new(0.0, 0.0, 400.0, 300.0),
+            &EmptyState {
+                title: "A",
+                description: "B",
+                action: None,
+            },
+        );
+        assert!(none.is_none(), "no action means no hotspot");
+
+        let tight = empty_state(&mut c, &t, Rect::new(0.0, 0.0, 400.0, 60.0), &state);
+        assert!(
+            tight.is_none(),
+            "a pane too short must not draw a clipped button"
+        );
+    }
+}

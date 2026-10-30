@@ -642,6 +642,14 @@ fn draw_top_bar(canvas: &mut Canvas, shell: &mut Shell) {
         );
         icons::draw(canvas, *glyph, r, color, 1.0);
         shell.hotspots_mut().push(r.inflate(t.px(5.0)), *hot);
+        // The status icons are glyph-only, which is the case both platforms
+        // name as needing a tooltip; the label is drawn only while this
+        // control owns the one pending tooltip.
+        if shell.tooltip.visible_for(*hot) {
+            if let Some(label) = status_tooltip(*hot) {
+                ui::tooltip(canvas, &t, r, label);
+            }
+        }
         if *glyph == Icon::Notifications {
             bell = Some(r);
         }
@@ -1394,14 +1402,29 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         shell.hotspots_mut().push(check.inflate(t.px(3.0)), toggle);
     }
     if vis.is_empty() && app.error.is_none() {
-        let s = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
-        font::draw(
-            canvas,
-            "Empty folder",
-            table.x + t.px(8.0),
-            table.y + head_h + t.px(18.0),
-            &s,
+        // An empty state with a way out: the folder says what it is and
+        // offers the action that changes it (GNOME's status-page contract).
+        let area = Rect::new(
+            table.x,
+            table.y + head_h,
+            table.w,
+            (table.h - head_h).max(0.0),
         );
+        let action = ui::empty_state(
+            canvas,
+            &t,
+            area,
+            &ui::EmptyState {
+                title: "Empty folder",
+                description: "Nothing in this folder yet.",
+                action: Some("New folder"),
+            },
+        );
+        if let Some(button) = action {
+            shell
+                .hotspots_mut()
+                .push(button, Hot::Files(crate::apps::FilesHot::EmptyNewFolder));
+        }
     }
 
     // --- details pane ---
@@ -3006,28 +3029,49 @@ fn draw_settings_page(
             // The accent is a preference about decoration, never about
             // contrast: a high-contrast theme keeps its own accent and the row
             // says so instead of offering a control that would do nothing.
-            let accent_label = if shell.settings.preferences.theme.requires_aaa() {
-                "Accent · fixed in high contrast themes".to_owned()
+            if shell.settings.preferences.theme.requires_aaa() {
+                // Fixed by the theme, and said so: a control that cannot
+                // change anything is worse than no control.
+                settings_button(
+                    canvas,
+                    shell,
+                    t,
+                    pane,
+                    y,
+                    SettingRow {
+                        key: "accent",
+                        label: "Accent · fixed in high contrast themes",
+                        hot: Hot::SettingsAccent,
+                    },
+                );
+                y += t.px(40.0);
             } else {
-                format!(
-                    "{} · {}",
-                    "Change accent",
-                    accent_name(shell.settings.preferences.accent)
-                )
-            };
-            settings_button(
-                canvas,
-                shell,
-                t,
-                pane,
-                y,
-                SettingRow {
-                    key: "accent",
-                    label: &accent_label,
-                    hot: Hot::SettingsAccent,
-                },
-            );
-            y += t.px(40.0);
+                // A picker, not a cycle: every accent is its own control, so
+                // the value space is visible and Tab reaches each one (§70).
+                ui::section_label(canvas, t, (pane.x + t.px(28.0), y), "Accent");
+                y += t.px(24.0);
+                let accents = litric_design::Accent::all();
+                let selected = accents
+                    .iter()
+                    .position(|accent| *accent == shell.settings.preferences.accent)
+                    .unwrap_or(0);
+                let segments: Vec<ui::Segment<'_>> = accents
+                    .iter()
+                    .map(|accent| ui::Segment {
+                        label: accent_name(*accent),
+                    })
+                    .collect();
+                let focused = (0..segments.len())
+                    .any(|i| shell.keyboard_focus() == Some(Hot::SettingsAccentChoice(i as u8)));
+                let row = Rect::new(pane.x + t.px(24.0), y, pane.w - t.px(48.0), t.px(30.0));
+                let drawn = ui::segmented(canvas, t, row, &segments, selected, focused);
+                for (i, segment) in drawn.into_iter().enumerate() {
+                    shell
+                        .hotspots_mut()
+                        .push(segment, Hot::SettingsAccentChoice(i as u8));
+                }
+                y += t.px(40.0);
+            }
             let wallpaper_label = format!(
                 "{} · {}",
                 "Change wallpaper",
@@ -3591,6 +3635,24 @@ fn wallpaper_name(wallpaper: crate::desktop::Wallpaper) -> &'static str {
     }
 }
 
+/// The label a status-bar control shows when its tooltip is up.
+///
+/// These are the controls that carry no text (F14.03): the glyph is the only
+/// thing on screen, so the tooltip is where the control's name lives.
+fn status_tooltip(hot: Hot) -> Option<&'static str> {
+    match hot {
+        Hot::StatusNotifications => Some("Notifications"),
+        Hot::StatusNetwork => Some("Network"),
+        Hot::StatusAudio => Some("Sound"),
+        Hot::StatusBattery => Some("Battery"),
+        Hot::StatusPower => Some("Power mode"),
+        Hot::StatusMetrics => Some("CPU and memory"),
+        Hot::StatusClock => Some("Date and time"),
+        Hot::StatusUser => Some("Account"),
+        _ => None,
+    }
+}
+
 fn accent_name(accent: litric_design::Accent) -> &'static str {
     match accent {
         litric_design::Accent::Default => "Default",
@@ -3794,7 +3856,7 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
     let dock_h = t.px(chrome::DOCK_H);
 
     // The expanded panel.
-    let cols = 4usize;
+    let cols = LAUNCHER_COLUMNS;
     let rows = shell
         .launcher_len()
         .max(1)
@@ -4211,6 +4273,12 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
 
 /// The grid of application tiles: a rounded square carrying the application's
 /// own colour, and its name under it, as in `screens/desktop/b-dock-morph`.
+/// How many application tiles the launcher draws in one row.
+///
+/// The draw and the keyboard read this one number, so a grid key cannot move
+/// by a row the eye does not see.
+pub const LAUNCHER_COLUMNS: usize = 4;
+
 #[allow(clippy::too_many_arguments)]
 fn launcher_tiles(
     canvas: &mut Canvas,
@@ -4228,14 +4296,10 @@ fn launcher_tiles(
     // cannot disagree about which tile a slot names.
     let total = shell.launcher_len();
     for i in 0..total {
-        let col = i.checked_rem(cols).unwrap_or(0);
-        let row = i.checked_div(cols).unwrap_or(0);
-        let cell = Rect::new(
-            x0 + (col as f32) * tile,
-            body.y + (row as f32) * tile_h,
-            tile,
-            tile_h,
-        );
+        let grid = Rect::new(x0, body.y, tile * cols as f32, body.h);
+        let Some(cell) = ui::grid_cell(grid, cols, i, (tile, tile_h), 0.0) else {
+            continue;
+        };
         // During the opening spring, the last row may not have entered the
         // panel yet. Wait until the full tile and its label fit before drawing
         // them; clipping pixels while retaining out-of-frame text is not a

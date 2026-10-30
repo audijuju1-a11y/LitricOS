@@ -427,6 +427,8 @@ pub enum Hot {
     SettingsTheme,
     /// Cycle the accent colour choices.
     SettingsAccent,
+    /// Choose one accent directly, by index into `Accent::all()`.
+    SettingsAccentChoice(u8),
     /// Cycle the wallpaper choices.
     SettingsWallpaper,
     /// Switch the appearance schedule between manual and automatic.
@@ -3192,6 +3194,11 @@ pub struct Shell {
     /// compositor can then animate the arrow without composing the desktop.
     cursor_step: Option<(Point, Point)>,
     hovered: Option<Hot>,
+    /// Which control's tooltip is pending or on screen, and when it is due.
+    ///
+    /// Advanced by [`crate::ui::Tooltip::sync`] on the clock tick, never in the
+    /// paint path; the brush only reads [`crate::ui::Tooltip::visible_for`].
+    pub tooltip: crate::ui::Tooltip<Hot>,
     /// Current target in the shell-wide Tab/Shift+Tab focus order.
     keyboard_focus: Option<Hot>,
     pressed: Option<Hot>,
@@ -3441,6 +3448,23 @@ impl Shell {
         let Some(accent) = next_accent else {
             return Vec::new();
         };
+        let mut next = self.settings.preferences;
+        next.accent = accent;
+        self.save_preferences(next)
+    }
+
+    /// Choose one accent by index, and persist it.
+    ///
+    /// The appearance picker offers every accent as its own control, so a
+    /// choice is a value rather than a cycle step: clicking "Teal" gives Teal,
+    /// not whatever happens to follow the current accent.
+    fn set_accent(&mut self, index: usize) -> Vec<Effect> {
+        let Some(accent) = litric_design::Accent::all().get(index).copied() else {
+            return Vec::new();
+        };
+        if self.settings.preferences.accent == accent {
+            return Vec::new();
+        }
         let mut next = self.settings.preferences;
         next.accent = accent;
         self.save_preferences(next)
@@ -3704,6 +3728,7 @@ impl Shell {
             pointer: Point::new(width / 2.0, height / 2.0),
             cursor_step: None,
             hovered: None,
+            tooltip: crate::ui::Tooltip::default(),
             keyboard_focus: None,
             pressed: None,
             meta_tap: MetaTap::default(),
@@ -4859,6 +4884,12 @@ impl Shell {
     /// shows changes.
     fn set_now(&mut self, now_ms: u64) {
         self.now_ms = now_ms;
+        // O(1) comparisons: a hover/focus change arms the delay, and the tick
+        // is what makes the label appear. Nothing is allocated and nothing is
+        // read from disk, so an idle desktop still does no work per frame.
+        self.tooltip
+            .sync(self.hovered, self.keyboard_focus, self.now_ms);
+        self.tooltip.tick(self.now_ms);
         let clock = self.regional.clock(self.clock_seconds());
         if clock != self.drawn_clock {
             self.drawn_clock = clock;
@@ -5236,24 +5267,29 @@ impl Shell {
                     self.set_overlay(Overlay::None);
                     self.overlay_damage();
                 }
-                Key::Down => {
-                    let next = if count == 0 {
-                        0
-                    } else {
-                        selected.saturating_add(1).checked_rem(count).unwrap_or(0)
+                Key::Down | Key::Up | Key::Left | Key::Right | Key::Home | Key::End => {
+                    // The tiles are a four-column grid, so the arrow keys move
+                    // like one: Down is a row, not one tile. While a query is
+                    // typed the results are a list and step one at a time.
+                    let step = match key {
+                        Key::Down if searching => Some(crate::ui::Step::Next),
+                        Key::Up if searching => Some(crate::ui::Step::Previous),
+                        Key::Down => Some(crate::ui::Step::Down),
+                        Key::Up => Some(crate::ui::Step::Up),
+                        Key::Left => Some(crate::ui::Step::Previous),
+                        Key::Right => Some(crate::ui::Step::Next),
+                        Key::Home => Some(crate::ui::Step::First),
+                        Key::End => Some(crate::ui::Step::Last),
+                        _ => None,
                     };
-                    self.set_overlay(Overlay::Launcher {
-                        query,
-                        selected: next,
-                    });
-                    self.overlay_damage();
-                }
-                Key::Up => {
-                    let next = if count == 0 {
-                        0
+                    let columns = if searching {
+                        1
                     } else {
-                        selected.checked_sub(1).unwrap_or(count.saturating_sub(1))
+                        crate::views::LAUNCHER_COLUMNS
                     };
+                    let next = step
+                        .and_then(|step| crate::ui::grid_step(selected, count, columns, step))
+                        .unwrap_or(selected);
                     self.set_overlay(Overlay::Launcher {
                         query,
                         selected: next,
@@ -6298,6 +6334,7 @@ impl Shell {
             Hot::SettingsLanguage => self.toggle_language(),
             Hot::SettingsTheme => self.cycle_theme(),
             Hot::SettingsAccent => self.cycle_accent(),
+            Hot::SettingsAccentChoice(index) => self.set_accent(usize::from(index)),
             Hot::SettingsWallpaper => self.cycle_wallpaper(),
             Hot::SettingsSchedule => self.cycle_theme_schedule(),
             Hot::SettingsMotion => self.toggle_reduced_motion(),

@@ -7144,3 +7144,139 @@ gate returned to 32/2/3. No assertion was weakened to get there.
 
 Base `9bf3099`. This batch is committed on `main` and pushed; `HEAD ==
 origin/main` and the tracked worktree is empty at the end of the turn.
+
+---
+
+## 70. Batch: the Chapter F components exist, are keyboard-reachable, and are shown (verified)
+
+### 70.1 Requirement
+
+The improvement plan names this batch and its proof
+(`docs/master-plan/28-whole-system-improvement-plan.md`, batch 70):
+
+> Chapter `F`: tooltips + pickers + grids/empty states | keyboard path per
+> component, screenshots | here
+
+and Stage E's outcome row (`docs/master-plan/28-whole-system-improvement-plan.md`,
+E1):
+
+> Tooltips (absent entirely), pickers/views/trees, grids and empty/loading
+> states, progress and validation — one component contract in
+> `src/litric-shell/src/ui.rs`, each with a keyboard path
+
+The corpus measured the absences this batch closes: `F14.01` ("the shell has no
+tooltip system"), `F07.03` (the accent is a cycling row where the design system
+asks for a 7-colour picker), `F21.05` ("no grid") and `F24.03` ("no empty state
+offers a way out"). The batch contract's rule 5 applies: no claim without a
+tool, a command, an environment and `n`.
+
+### 70.2 What landed, and where (file → line, verified with grep on this commit)
+
+| Component | Contract | Wired to a real surface | Keyboard path |
+| --- | --- | --- | --- |
+| **Tooltip** | `ui::Tooltip<T>` state machine (`src/litric-shell/src/ui.rs:1659`) with `TOOLTIP_DELAY_MS = 600` (`:1633`), the brush `ui::tooltip` (`:1734`) | the glyph-only status-bar icons: the bell, network, sound, battery, power, metrics, clock and account each carry a label (`status_tooltip`, `src/litric-shell/src/views.rs:3642`), drawn only while that control owns the tooltip (`src/litric-shell/src/views.rs:648`) | hover arms the delay and **focus shows it without waiting**; the state is advanced by `Shell::set_now` (`src/litric-shell/src/shell.rs:4867`), never by the paint path |
+| **Picker** | `ui::segmented` (`src/litric-shell/src/ui.rs:1791`) + `ui::pick_step` (`:1771`) | Settings → Appearance: the accent row is now six visible choices (`src/litric-shell/src/views.rs:3065`), each a hotspot (`Hot::SettingsAccentChoice`, `src/litric-shell/src/shell.rs:430`), and `set_accent` (`src/litric-shell/src/shell.rs:3461`) selects **the value chosen**, not the next one | every segment is a registered control, so Tab reaches each and Enter chooses it; the high-contrast path keeps the fixed-label row and says why |
+| **Grid** | `ui::grid_cell` (`src/litric-shell/src/ui.rs:1842`) + `ui::grid_step` (`:1867`) | the launcher's tiles: `LAUNCHER_COLUMNS = 4` (`src/litric-shell/src/views.rs:4280`) is read by both the draw and the keys, and the cell math is the shared function | Down/Up move a **row** (4 tiles) instead of one tile; Left/Right move one tile; Home/End jump to the ends. A typed query is a list and steps one result at a time |
+| **Empty state** | `ui::EmptyState` + `ui::empty_state` (`src/litric-shell/src/ui.rs:1895`, `:1908`) returning the action's rect for the hotspot | Files, an empty folder: title "Empty folder", the sentence "Nothing in this folder yet." and the action "New folder" (`src/litric-shell/src/views.rs:1403`), whose hotspot (`FilesHot::EmptyNewFolder`, `src/litric-shell/src/apps.rs:1813`) opens the new-folder dialog (`src/litric-shell/src/apps.rs:1821`) | the action is a registered hotspot in the same focus order as every other control; Enter activates it |
+
+The tooltip is deliberately **not** in the paint path: `ui::Tooltip::sync` and
+`tick` are two integer comparisons in `set_now`, and the brush only reads
+`visible_for`. No allocation, no I/O, no new dependency, and `forbid(unsafe_code)`
+still holds. §55's "30 frames, no stat" and §56's "poll only at period"
+assertions still pass, and the idle figure from §68 is unchanged because a
+tooltip that is waiting is one wake the plan already schedules through the clock
+boundary.
+
+### 70.3 The screenshots, and what they show
+
+Produced by the real paint path in the new journey, not composed for the
+occasion: `save_shot` writes the canvas `views::draw` produced.
+
+```bash
+cd src
+LITRIC_E2E_SHOTS=../build/shots70 \
+  cargo test -p litric-shell --lib journey_chapter_f
+```
+
+| Shot | What is visible |
+| --- | --- |
+| `70-picker-accent` | Appearance page: "Accent" above six segments — Default, Sky, **Violet**, Teal, Amber, Rose — with Violet outlined because the journey chose it. The value space is on screen; nothing cycles. |
+| `70-launcher-grid` | the four-column application grid after Down and Right, with the selection on the next row's first tile. |
+| `70-empty-state` | Files at an empty folder: "Empty folder", "Nothing in this folder yet.", and the accent-filled "New folder" action. |
+| `70-empty-state-action` | the new-folder dialog opened by that action. |
+| `70-tooltip` | hovering the bell for 600 ms: the label "Notifications" above the glyph-only icon, with the rest of the desktop unchanged. |
+
+Both images that mattered most were opened and read: the picker shows the six
+named choices with Violet selected, and the tooltip shows the word
+"Notifications" in a bordered surface directly above the bell, legible at the
+1280×800 frame's real size. The empty-state shot after the launcher spring had
+finished shows the title, the sentence and the button without overlap; the first
+attempt was taken while the launcher panel was still covering the window, which
+is why the journey now waits for the morph before it shoots.
+
+The golden set was re-recorded because two frames legitimately changed:
+`05-settings` (the accent picker) and `16-files-empty` (the empty state gained a
+title, a sentence and an action). `ci/check-golden-frames.py --frames
+build/frames --update` rewrote `docs/evidence/golden/fingerprints.json`, and the
+gate now passes.
+
+### 70.4 Sensitivity: the new tests fail when the behaviour is removed
+
+Two probes were forced at once — `pick_step` returning `None` and
+`Tooltip::tick` never showing:
+
+```text
+probe: picker is inert, tooltip never shows
+panicked at litric-shell/src/ui.rs:1976:
+assertion failed: tip.tick(1_600)
+panicked at litric-shell/src/ui.rs:1989:
+assertion `left == right` failed
+panicked at litric-shell/src/e2e.rs:724:5
+test result: FAILED. 4 passed; 3 failed
+restored -> test result: ok. 7 passed; 0 failed
+```
+
+The e2e journey failed on the same probe, so the wiring is covered too, not only
+the pure functions. Restored, all seven pass.
+
+### 70.5 Gates (run on this commit, real output)
+
+| Gate | Result |
+| --- | --- |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test --workspace` | **1,846 passed, 0 failed** (+7 against 1,839: six component tests and the journey) |
+| `python3 ci/lint-doc-refs.py` | `OK: 1278 citation(s) across 156 document(s) resolve` |
+| `python3 ci/lint-file-safety.py` | `OK: 116 deletion site(s), all inside reviewed functions` |
+| `bash ci/verify.sh` | **32 pass, 2 fail, 3 skipped** — the pre-existing `mkosi config` and `dev key pairs` fails, unchanged |
+
+Mistakes hit and fixed in this batch, all caught by the gates rather than by
+argument: an over-tight grid-overflow assertion (the fourth cell did fit) was
+corrected to a genuinely narrow grid; a first tooltip test armed the delay and
+advanced the clock in the same tick, so it needed two ticks; clippy rejected
+`&t` where `t` was already a reference, an indexed `windows(2)` comparison
+(rewritten as a slice pattern) and a `matches!(x, None)` (rewritten as
+`is_none()`); and the existing settings journey still expected the cycling row,
+so it now asserts the picker's chosen value instead.
+
+### 70.6 Limits, stated plainly
+
+* **Four component families landed; the picker is the accent one.** There is
+  still no date, time, colour-spectrum or file picker (`F.07`'s other three
+  families), no column resize/reorder (`F21.03`), and no grid view in Files.
+  The contract exists; those surfaces are not wired to it.
+* **Tooltips cover the status bar, not the window controls.** The unlabelled
+  window dots (`F14.02`) still have no tooltip.
+* **The launcher's Up/Down changed meaning**: one row (four tiles) instead of one
+  tile. That is the grid's keyboard contract, and it is a user-visible behaviour
+  change, not a refactor.
+* **No screenshot from a booted machine.** These frames come from the same
+  `views::draw` the image runs, with fixed facts; `docs/GATES.md` stays
+  `NOT RUN` for the image-level rows.
+* **No assistive-technology proof.** The accessibility tree is batch 71; a
+  tooltip that a screen reader cannot read is still open here.
+
+### 70.7 Git
+
+Base `d96807d`. This batch is committed on `main` and pushed; `HEAD ==
+origin/main` and the tracked worktree is empty at the end of the turn.
