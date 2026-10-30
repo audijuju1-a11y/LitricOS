@@ -501,63 +501,105 @@ impl Request {
                     })
                 }
                 "create" => {
-                    // `AUTH CREATE <user> <password-hex> <confirm-hex> [CONFIRM]`.
-                    // The confirmation is a second field rather than a repeat of
-                    // the first, so the shared validator can reject a mismatch
-                    // before any helper is spawned.
-                    if args.len() < 4 || args.len() > 5 {
+                    // Two spellings, one parser:
+                    //   AUTH CREATE <user> <password-hex> [CONFIRM]
+                    //   AUTH CREATE <user> <password-hex> <confirm-hex> [CONFIRM]
+                    // The short form takes the confirmation to be the password
+                    // itself; the long form lets the shared validator reject a
+                    // mismatch before any helper is spawned. A fourth field that
+                    // is the literal `CONFIRM` is the consent word, not a hash.
+                    if args.len() < 3 || args.len() > 5 {
                         return Err(ProtoError::BadArity {
                             verb: "AUTH CREATE",
-                            expected: 4,
+                            expected: 3,
                             got: args.len(),
                         });
                     }
-                    let consent = match args.get(4) {
-                        None => false,
-                        Some(w) if w.eq_ignore_ascii_case("confirm") => true,
-                        Some(other) => {
-                            return Err(ProtoError::BadArgument {
-                                name: "auth confirmation",
-                                value: (*other).to_owned(),
-                            })
+                    let fourth = args.get(3).copied();
+                    let fifth = args.get(4).copied();
+                    let (confirm_hex, consent) = if args.len() == 3 {
+                        (None, false)
+                    } else if args.len() == 4 {
+                        match fourth {
+                            Some(w) if w.eq_ignore_ascii_case("confirm") => (None, true),
+                            Some(raw) => (Some(raw), false),
+                            None => (None, false),
                         }
+                    } else {
+                        match fifth {
+                            Some(w) if w.eq_ignore_ascii_case("confirm") => (fourth, true),
+                            Some(other) => {
+                                return Err(ProtoError::BadArgument {
+                                    name: "auth confirmation",
+                                    value: other.to_owned(),
+                                })
+                            }
+                            None => (None, false),
+                        }
+                    };
+                    let password = hex_text(arg(2), "password")?;
+                    let confirm = match confirm_hex {
+                        Some(raw) => hex_text(raw, "password confirmation")?,
+                        None => password.clone(),
                     };
                     Ok(Self::Action {
                         action: SystemAction::Auth(AuthAction::Create {
                             user: arg(1).to_owned(),
-                            password: hex_text(arg(2), "password")?,
-                            confirm: hex_text(arg(3), "password confirmation")?,
+                            password,
+                            confirm,
                         }),
                         consent,
                     })
                 }
                 "change" => {
-                    // `AUTH CHANGE <user> <current-hex> <new-hex> <confirm-hex>
-                    // [CONFIRM]`. The current password is only ever compared by
-                    // `unix_chkpwd`; it is not stored or echoed.
-                    if args.len() < 5 || args.len() > 6 {
+                    // Two spellings, one parser:
+                    //   AUTH CHANGE <user> <current-hex> <new-hex> [CONFIRM]
+                    //   AUTH CHANGE <user> <current-hex> <new-hex> <confirm-hex>
+                    //   [CONFIRM]
+                    // The short form takes the confirmation to be the new
+                    // password; the long form is checked for a mismatch. The
+                    // current password is only ever compared by `unix_chkpwd`.
+                    if args.len() < 4 || args.len() > 6 {
                         return Err(ProtoError::BadArity {
                             verb: "AUTH CHANGE",
-                            expected: 5,
+                            expected: 4,
                             got: args.len(),
                         });
                     }
-                    let consent = match args.get(5) {
-                        None => false,
-                        Some(w) if w.eq_ignore_ascii_case("confirm") => true,
-                        Some(other) => {
-                            return Err(ProtoError::BadArgument {
-                                name: "auth confirmation",
-                                value: (*other).to_owned(),
-                            })
+                    let fifth = args.get(4).copied();
+                    let sixth = args.get(5).copied();
+                    let (confirm_hex, consent) = if args.len() == 4 {
+                        (None, false)
+                    } else if args.len() == 5 {
+                        match fifth {
+                            Some(w) if w.eq_ignore_ascii_case("confirm") => (None, true),
+                            Some(raw) => (Some(raw), false),
+                            None => (None, false),
                         }
+                    } else {
+                        match sixth {
+                            Some(w) if w.eq_ignore_ascii_case("confirm") => (fifth, true),
+                            Some(other) => {
+                                return Err(ProtoError::BadArgument {
+                                    name: "auth confirmation",
+                                    value: other.to_owned(),
+                                })
+                            }
+                            None => (None, false),
+                        }
+                    };
+                    let current = hex_text(arg(2), "current password")?;
+                    let new_password = hex_text(arg(3), "new password")?;
+                    let confirm = match confirm_hex {
+                        Some(raw) => hex_text(raw, "password confirmation")?,
+                        None => new_password.clone(),
                     };
                     Ok(Self::Action {
                         action: SystemAction::Auth(AuthAction::Change {
                             user: arg(1).to_owned(),
-                            current: hex_text(arg(2), "current password")?,
-                            new_password: hex_text(arg(3), "new password")?,
-                            confirm: hex_text(arg(4), "password confirmation")?,
+                            current,
+                            new_password,
+                            confirm,
                         }),
                         consent,
                     })
@@ -958,6 +1000,102 @@ mod tests {
             !refused.to_string().contains("zzqq"),
             "the refusal echoed the payload: {refused}"
         );
+    }
+
+    /// Compose the canonical line for an auth action in the spelling this
+    /// build prefers: short form when the confirmation equals the password,
+    /// long form when it does not, and the legacy line for a verification.
+    fn compose(action: &SystemAction, consent: bool) -> String {
+        fn hex(text: &str) -> String {
+            text.bytes().map(|b| format!("{b:02x}")).collect()
+        }
+        let SystemAction::Auth(action) = action else {
+            panic!("not an auth action: {action:?}")
+        };
+        let mut line = match action {
+            AuthAction::Verify { user, password } => {
+                format!("AUTH VERIFY {user} {}", hex(password))
+            }
+            AuthAction::Create {
+                user,
+                password,
+                confirm,
+            } if password == confirm => format!("AUTH CREATE {user} {}", hex(password)),
+            AuthAction::Create {
+                user,
+                password,
+                confirm,
+            } => format!("AUTH CREATE {user} {} {}", hex(password), hex(confirm)),
+            AuthAction::Change {
+                user,
+                current,
+                new_password,
+                confirm,
+            } if new_password == confirm => {
+                format!("AUTH CHANGE {user} {} {}", hex(current), hex(new_password))
+            }
+            AuthAction::Change {
+                user,
+                current,
+                new_password,
+                confirm,
+            } => format!(
+                "AUTH CHANGE {user} {} {} {}",
+                hex(current),
+                hex(new_password),
+                hex(confirm)
+            ),
+        };
+        if consent {
+            line.push_str(" CONFIRM");
+        }
+        line
+    }
+
+    #[test]
+    fn auth_lines_are_stable_across_parse_and_recomposition() {
+        // The legacy verification line is byte-identical: the parser and the
+        // canonical composer agree on the same spelling it has always had.
+        let legacy = "AUTH VERIFY alice 77726f6e67 CONFIRM";
+        let parsed = Request::parse(legacy).expect("legacy verify");
+        match &parsed {
+            Request::Action { action, consent } => {
+                assert_eq!(compose(action, *consent), legacy);
+                assert_eq!(
+                    Request::parse(&compose(action, *consent)),
+                    Ok(parsed.clone()),
+                    "recomposing the legacy line changed it"
+                );
+            }
+            other => panic!("not an action: {other:?}"),
+        }
+
+        for line in [
+            // The short spec forms, with and without the consent word.
+            "AUTH CREATE alice 636f727265637420686f727365  CONFIRM",
+            "AUTH CREATE alice 636f727265637420686f727365",
+            "AUTH CHANGE alice 77726f6e67 616e6f7468657220686f727365 616e6f7468657220686f727365 CONFIRM",
+            // The long form, where the confirmation is its own field.
+            "AUTH CREATE bob 636f727265637420686f727365 616e6f7468657220686f727365 CONFIRM",
+            "AUTH CHANGE alice 77726f6e67 616e6f7468657220686f727365 736f6d657468696e6720656c7365 CONFIRM",
+        ] {
+            let parsed = Request::parse(line).expect(line);
+            match &parsed {
+                Request::Action { action, consent } => {
+                    let once = compose(action, *consent);
+                    let twice = Request::parse(&once).expect(&once);
+                    match &twice {
+                        Request::Action {
+                            action: again,
+                            consent: again_consent,
+                        } => assert_eq!(compose(again, *again_consent), once, "{line}"),
+                        other => panic!("not an action: {other:?}"),
+                    }
+                    assert_eq!(Request::parse(&once), Ok(parsed.clone()), "{line}");
+                }
+                other => panic!("not an action: {other:?}"),
+            }
+        }
     }
 
     #[test]

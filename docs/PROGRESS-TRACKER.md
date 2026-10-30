@@ -7450,8 +7450,10 @@ rendering or a reply. Decision A puts the privileged path in `litric-sysd`.
   `AuthSession` scoped `lock://<user>`), redacting `Debug`. `auth_plan` keeps the
   one-step verification and refuses Create/Change because they are two plans.
 * `src/litric-sysd/src/proto.rs` — `AUTH CREATE <user> <password-hex>
-  <confirm-hex> [CONFIRM]`, `AUTH CHANGE <user> <current-hex> <new-hex>
-  <confirm-hex> [CONFIRM]`; `AUTH VERIFY` parser untouched.
+  [CONFIRM]` and `AUTH CREATE <user> <password-hex> <confirm-hex> [CONFIRM]`;
+  `AUTH CHANGE <user> <current-hex> <new-hex> [CONFIRM]` and the four-field
+  form; `AUTH VERIFY` parser untouched. A field spelled `CONFIRM` at the
+  confirmation position is consent, never a hash.
 * `src/litric-sysd/src/state.rs` — `Sysd::auth` (`Box<dyn AuthProvider>`),
   `with_auth`, and `Sysd::account`, reached from `Sysd::action` only for Create
   and Change. Verification keeps the old plan path unchanged.
@@ -7468,6 +7470,9 @@ refuses before the backend is called.
 * `proto::tests::account_creation_and_change_parse_without_echoing_a_secret` —
   both verbs parse to the exact action, `Debug` redacts every password field, and
   a non-hex field is refused without echoing it.
+* `proto::tests::auth_lines_are_stable_across_parse_and_recomposition` — the
+  canonical composer → parser → composer round trip is byte-identical for the
+  legacy `AUTH VERIFY` line and for both spellings of create and change.
 * `state::tests::account_creation_and_change_cross_the_protocol_with_shared_validation`
   — `Request::parse` → `Sysd::handle` against `FakeAuth`: create succeeds; weak
   password and mismatched confirmation are refused with `weak-password` /
@@ -7482,25 +7487,28 @@ refuses before the backend is called.
 
 * `cargo fmt --all --check` → 0.
 * `cargo clippy --workspace --all-targets -- -D warnings` → 0.
-* `cargo test -p litric-sysd` → 226 passed, 0 failed (219 lib + 5 + 1 + 1).
-* `cargo test --workspace` → **1,862 passed, 0 failed**.
+* `cargo test -p litric-sysd` → 227 passed, 0 failed (220 lib + 5 + 1 + 1).
+* `cargo test --workspace` → **1,863 passed, 0 failed**.
 
 ### 72.6 Limits, stated plainly
 
 * CI has no root, so the tests never execute `useradd`, `chpasswd` or
   `unix_chkpwd`; construction and ordering are proven, the privileged run is not.
-* The confirmation is a second hex field, not the literal `<hex> [CONFIRM]`
-  shorthand in the batch note; without it the shared validator could not reject a
-  mismatch on the daemon side.
+* The confirmation may be omitted (short form, confirmation equals the password)
+  or carried as its own hex field (long form, mismatch rejected). The short form
+  cannot express a mismatch by construction, which is the point of allowing it.
 * `AuthSession` is reused rather than adding `AuthCreate`/`AuthChange`; the id is
   already live-consent and already granted for `lock://`, and a new id would
   churn every exhaustive match for no extra authority.
-* Requests have no serializer, so the round-trip tests assert parse → exact
-  action and redaction, not encode → parse.
+* Requests have no serializer by design: clients compose the line and the daemon
+  parses it, so no `Request::to_line` API was added. Stability is proven with a
+  test-local canonical composer (compose → parse → compose) instead.
 * No rate limiting or lockout: a caller that can reach the 0600 socket can retry
   a verification. That belongs with the login UI's throttling, not this batch.
 
 ### 72.7 Git
 
-Base `79bbd58`. This batch is committed on `main` and pushed; `HEAD ==
-origin/main` and the tracked worktree is empty at the end of the turn.
+Base `79bbd58`; verification pass on `3628937`. Both are committed on `main` and
+pushed; `HEAD == origin/main` and the tracked worktree is empty at the end of the
+turn. The verification pass accepts both wire spellings, adds the parser-boundary
+stability test, and records 227 package tests and 1,863 workspace tests.

@@ -1439,6 +1439,19 @@ mod tests {
         let reply = s.handle(&Request::parse(&line).expect("create"), NOW);
         assert!(reply.is_ok(), "{}", reply.encode());
 
+        // The short spec form defaults the confirmation to the password, so it
+        // passes the same validator rather than skipping it.
+        let short = format!("AUTH CREATE dave {} CONFIRM", as_hex(strong));
+        let reply = s.handle(&Request::parse(&short).expect("short create"), NOW);
+        assert!(reply.is_ok(), "{}", reply.encode());
+        let short_change = format!(
+            "AUTH CHANGE dave {} {} CONFIRM",
+            as_hex(strong),
+            as_hex(other)
+        );
+        let reply = s.handle(&Request::parse(&short_change).expect("short change"), NOW);
+        assert!(reply.is_ok(), "{}", reply.encode());
+
         // The shared validator runs on the daemon side: a short password, a
         // mismatched confirmation, and a password equal to the name are refused
         // before the backend is touched. No reply repeats the payload.
