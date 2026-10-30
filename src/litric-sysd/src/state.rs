@@ -27,7 +27,8 @@ use litric_trash::{Retention, Trash};
 use crate::action::{self, PowerAction, Runner, SystemRunner};
 use crate::facts::{read_facts, Facts};
 use crate::proto::{AccessWord, Request, Response};
-use crate::providers::{self, BtAction, SystemAction};
+use crate::provider_contract::{AudioLevel, Provider, ToolProvider};
+use crate::providers::{BtAction, SystemAction};
 use crate::update::{HealthSignal, UpdateService};
 
 /// The application the local session client is, for capability purposes.
@@ -100,6 +101,9 @@ pub struct Sysd {
     /// The privileged account backend. Real helpers in production, an
     /// in-memory fake in the state tests.
     auth: Box<dyn crate::auth::AuthProvider>,
+    /// The contract every audio, network, Bluetooth and authentication action
+    /// goes through. Production runs the base tools; a test substitutes a fake.
+    provider: Box<dyn Provider>,
     /// Failed verification attempts, in memory, so guessing a password over the
     /// socket is metered before a helper is spawned.
     attempts: crate::auth::Throttle,
@@ -167,6 +171,7 @@ impl Sysd {
             root: root.to_path_buf(),
             client,
             runner: Box::new(SystemRunner),
+            provider: Box::new(ToolProvider),
             auth: Box::new(crate::auth::SystemAuthProvider::system()),
             attempts: crate::auth::Throttle::new(),
             lockout_store: None,
@@ -194,6 +199,17 @@ impl Sysd {
     #[must_use]
     pub fn with_auth(mut self, auth: Box<dyn crate::auth::AuthProvider>) -> Self {
         self.auth = auth;
+        self
+    }
+
+    /// Replace the provider contract implementation.
+    ///
+    /// This is the C1 seam: a test can answer audio, network or Bluetooth from
+    /// [`crate::provider_contract::FakeProvider`] without a runner, while
+    /// production keeps [`ToolProvider`] and the same audited plans.
+    #[must_use]
+    pub fn with_provider(mut self, provider: Box<dyn Provider>) -> Self {
+        self.provider = provider;
         self
     }
 
@@ -682,8 +698,8 @@ impl Sysd {
     /// nothing, and the shell is the only client that can reach the socket at
     /// all (mode 0600, owner root).
     fn audio_level(&mut self) -> Response {
-        match providers::audio_level(self.runner.as_ref()) {
-            Ok((volume, muted)) => {
+        match self.provider.audio_level(self.runner.as_ref()) {
+            Ok(AudioLevel { volume, muted }) => {
                 self.audio = Some((volume, muted));
                 Response::ok(vec![format!(
                     "audio.level volume={volume} muted={}",
@@ -700,7 +716,7 @@ impl Sysd {
     /// [`Sysd::audio_level`] is: it is a question about the machine this process
     /// runs on, it changes nothing, and the socket is mode 0600 and owned by root.
     fn bt_status(&mut self) -> Response {
-        match providers::bt_powered(self.runner.as_ref()) {
+        match self.provider.bt_powered(self.runner.as_ref()) {
             Ok(powered) => {
                 self.bt = Some(powered);
                 Response::ok(vec![format!("bt.powered={}", u8::from(powered))])
@@ -809,7 +825,14 @@ impl Sysd {
         // The root is the daemon's own, never a request's: the same rule as the
         // facts reader. A caller that could choose the root could choose which
         // credential file `iwd` is told about.
-        let outcome = providers::perform(action, self.runner.as_ref(), &self.root);
+        let outcome = match action {
+            SystemAction::Audio(a) => self.provider.audio(a, self.runner.as_ref(), &self.root),
+            SystemAction::Net(n) => self.provider.network(n, self.runner.as_ref(), &self.root),
+            SystemAction::Bluetooth(b) => {
+                self.provider.bluetooth(b, self.runner.as_ref(), &self.root)
+            }
+            SystemAction::Auth(a) => self.provider.auth(a, self.runner.as_ref(), &self.root),
+        };
         // Only a helper that ran and rejected the password counts as a guess.
         // A missing tool, a timeout or a refusal is the daemon failing, and
         // counting those would lock an account out for the machine's fault.
@@ -836,8 +859,10 @@ impl Sysd {
             // machine. A failed readback leaves the previous measurement in
             // place instead of replacing it with a guess.
             if matches!(action, SystemAction::Audio(_)) {
-                if let Ok(level) = providers::audio_level(self.runner.as_ref()) {
-                    self.audio = Some(level);
+                if let Ok(AudioLevel { volume, muted }) =
+                    self.provider.audio_level(self.runner.as_ref())
+                {
+                    self.audio = Some((volume, muted));
                 }
             }
             // A radio that accepted the request is not the same as a radio that
@@ -845,7 +870,7 @@ impl Sysd {
             // and the property is what the panel must show. Only a power change
             // is re-read; a scan or a pairing says nothing about power.
             if matches!(action, SystemAction::Bluetooth(BtAction::Power(_))) {
-                if let Ok(powered) = providers::bt_powered(self.runner.as_ref()) {
+                if let Ok(powered) = self.provider.bt_powered(self.runner.as_ref()) {
                     self.bt = Some(powered);
                 }
             }
@@ -1433,6 +1458,46 @@ mod tests {
         // And no level appears in the facts either.
         let facts = s.handle(&Request::Facts, NOW);
         assert!(line(&facts, "audio.level").is_none());
+    }
+
+    #[test]
+    fn a_fake_provider_serves_the_contract_without_a_tool() {
+        use crate::provider_contract::FakeProvider;
+        use crate::providers::NetAction;
+
+        let fake = FakeProvider::new()
+            .with_audio_level(37, true)
+            .with_bt_powered(true);
+        let mut s = sysd().with_provider(Box::new(fake.clone()));
+
+        let audio = s.handle(&Request::AudioLevel, NOW);
+        assert!(audio.is_ok(), "{}", audio.encode());
+        assert_eq!(
+            line(&audio, "audio.level"),
+            Some(&"audio.level volume=37 muted=1".to_owned())
+        );
+        let bluetooth = s.handle(&Request::BtStatus, NOW);
+        assert!(bluetooth.is_ok(), "{}", bluetooth.encode());
+        assert_eq!(
+            line(&bluetooth, "bt.powered"),
+            Some(&"bt.powered=1".to_owned())
+        );
+
+        let network = s.handle(
+            &Request::Action {
+                action: SystemAction::Net(NetAction::Reconfigure("eth0".to_owned())),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(network.is_ok(), "{}", network.encode());
+        assert!(
+            fake.calls()
+                .iter()
+                .any(|call| call.contains("Reconfigure(\"eth0\")")),
+            "the fake did not receive the network action: {:?}",
+            fake.calls()
+        );
     }
 
     #[test]

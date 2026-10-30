@@ -2964,3 +2964,73 @@ existed, so either file could have been restored and read as a working feature.
 Revert this commit. The two parked files return, the `[3l]` check and self-test
 disappear, and the corrected current claims revert. No scanner behavior, user
 data, image or measurement is touched.
+
+## 2026-10-30 — C1: provider contract and shell boundary
+
+C1 puts the audio, network and Bluetooth provider actions behind one `Provider`
+trait. Production uses `ToolProvider` and the existing audited plans; tests use
+`FakeProvider` and spawn nothing. The shell keeps its socket path and gains a
+static boundary gate against a D-Bus client.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-sysd/src/provider_contract.rs` | `Provider`, `ToolProvider`, `FakeProvider`, `AudioLevel`, contract tests |
+| `src/litric-sysd/src/state.rs` | provider dispatch, `with_provider`, readbacks through the contract |
+| `ci/lint-provider-boundary.py` | no D-Bus dependency/import in the shell; trait/fake must exist |
+| `ci/verify.sh` | `[3m]` checker and negative control |
+
+### Evidence (commands run on this batch)
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-update` | 21 passed, 0 failed |
+| `cargo test --workspace` | 1,944 passed, 0 failed, 0 ignored (62 binaries) |
+| `python3 ci/lint-provider-boundary.py` | `OK: shell has no D-Bus dependency or client path; src/litric-sysd/src/provider_contract.rs exposes Provider and FakeProvider` |
+| `python3 ci/lint-provider-boundary.py --self-test` | `OK: checker rejects a planted zbus dependency and a planted zbus import` |
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D, 117 P, 293 S, 746 T |
+| `python3 ci/lint-doc-refs.py` | 1456 citations across 164 documents |
+| `python3 ci/lint-line-endings.py` | 388 files, all LF |
+| `python3 ci/lint-file-safety.py` | 125 deletion sites, all reviewed |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+
+The three skips are the image build (`mkosi` absent), boot smoke (QEMU absent)
+and idle RAM/CPU/boot timing (same). They are environmental skips, not evidence.
+
+### Negative control
+
+The boundary self-test builds a clean temporary shell and accepts it, then
+plants `zbus = "4"` in its manifest and requires rejection, then plants
+`use zbus::Connection` and requires rejection again. Before C1 no checker
+existed, so both planted states would have passed. The contract tests also show
+that `FakeProvider` never spawns a runner, while `ToolProvider` still produces
+the exact `wpctl` argument vector.
+
+### What this establishes
+
+* Audio, network, Bluetooth and single-plan authentication dispatch through one
+  named contract; production behaviour is delegated to the unchanged plans.
+* A test can answer those families without a sound server, radio or network.
+* `Sysd` can be given a fake provider through its Rust constructor; no
+  production request can choose one.
+* The shell has no D-Bus dependency or import, and restoring one fails `[3m]`.
+* A sentinel password in a provider call record is `<redacted>`, not plaintext.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that iwd, BlueZ or PipeWire integration works | no radio, sound server or booted image here |
+| that a built shell binary links no D-Bus | static check only; no runtime link inspection |
+| that Wi-Fi scanning or pairing exists | still explicitly absent |
+| that W9 or A1 is closed | separate batches; A1 still needs a builder |
+| that a new SYSTEM-SCOPE capability landed | no row moved: this is a seam, not a capability |
+
+### Rollback
+
+Revert this commit. `Sysd` returns to direct `providers` calls, the fake and
+boundary checker disappear, and the master-plan C1 marker and this evidence
+revert. No tool, plan, protocol field or user file is touched.

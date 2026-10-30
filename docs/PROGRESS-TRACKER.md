@@ -8214,3 +8214,101 @@ remain `P`.
 Base `0a1e357`. This batch changes the two removed parked files, the new gate,
 the `ci/verify.sh` `[3l]` entry, current claims/docs and tracker/GATES. The final
 hash and `HEAD == origin/main` check are recorded in the delivery report.
+
+## C1. Batch: the provider contract layer with a fake (verified)
+
+### C1.1 Requirement
+
+The master plan's C1 row: a provider contract layer (trait + fake) for network,
+Bluetooth and audio; the shell holds no D-Bus client; a sentinel password never
+reaches a log. This is the contract stage before real provider integration. It
+does not implement scanning, pairing or a sound-server protocol of our own.
+
+### C1.2 Audit, before the change
+
+`Sysd` called `providers::perform`, `providers::audio_level` and
+`providers::bt_powered` directly. The only test seam was `Runner`, which
+substitutes a process but not a provider: a test still had to construct the
+tool's reply. There was no trait and no fake for audio, network or Bluetooth.
+
+The shell contains no D-Bus client today. That was an unguarded fact, not an
+executable boundary. `litric-shell` is a platform crate, so the generic
+dependency linter does not cover it.
+
+§65 already added redacting `Debug` and the sentinel socket test. C1 keeps that
+work and adds a provider-call record at the new seam.
+
+### C1.3 What changed
+
+| File | Change |
+|---|---|
+| `src/litric-sysd/src/provider_contract.rs` | `Provider` trait, `ToolProvider`, `FakeProvider`, `AudioLevel`, four contract tests |
+| `src/litric-sysd/src/state.rs` | `Sysd` holds `Box<dyn Provider>`; `with_provider`; dispatch and readbacks through the contract; one state test |
+| `src/litric-sysd/src/lib.rs` | the contract module is public |
+| `ci/lint-provider-boundary.py` | new static gate: no D-Bus dependency/import in the shell, and the trait/fake must exist |
+| `ci/verify.sh` | `[3m]` runs the gate and a planted-dependency/import self-test |
+
+`ToolProvider` delegates to the existing `providers` functions. No argument
+vector, timeout, capability, reply line or secret path changed. The IPC schema
+and error codes are unchanged.
+
+No `SYSTEM-SCOPE` row moved. C1 creates no new machine capability; the rows for
+the existing audio, network and Bluetooth actions remain where they were.
+
+### C1.4 Tests and negative controls
+
+* `python3 ci/lint-provider-boundary.py` → `OK: shell has no D-Bus dependency or
+  client path; src/litric-sysd/src/provider_contract.rs exposes Provider and
+  FakeProvider`.
+* `python3 ci/lint-provider-boundary.py --self-test` → `OK: checker rejects a
+  planted zbus dependency and a planted zbus import`. The clean shell is also
+  checked in the same temporary tree, so the test proves both directions.
+* `provider_contract::tests::the_fake_answers_audio_and_bluetooth_without_running_anything`
+  — a fake must not spawn a tool.
+* `provider_contract::tests::the_fake_covers_the_three_c1_families` — audio,
+  network and Bluetooth outcomes.
+* `provider_contract::tests::a_provider_call_record_never_contains_a_password` —
+  sentinel password absent, `<redacted>` present.
+* `provider_contract::tests::the_tool_provider_still_runs_the_audited_plan` —
+  exact `wpctl` argv remains.
+* `state::tests::a_fake_provider_serves_the_contract_without_a_tool` — real
+  `Sysd` request handling over the fake, including `AUDIO LEVEL`, `BT STATUS`
+  and `NET RECONFIGURE`.
+* `python3 ci/check-memory-budget.py` → PASS (static policy only); `ci/lint-unit-binaries.py`
+  → 17 references, 9 resolvable, 8 skips, 0 broken.
+* `python3 ci/count-scope.py` → 1,165 rows: **9 D · 117 P · 293 S · 746 T**.
+
+### C1.5 Verification (real output, 2026-10-30)
+
+* `cargo fmt --all --check` → exit 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+* `cargo test -p litric-update` → **21 passed, 0 failed**.
+* `cargo test --workspace` → **1,944 passed, 0 failed, 0 ignored** (62 test
+  binaries). The increase from 1,939 is five contract tests: four in
+  `provider_contract.rs` and one in `state.rs`.
+* `bash ci/verify.sh` → **39 pass, 0 fail, 3 skipped**. The 39 includes `[3m]`
+  and its self-test. Skips remain image build (`mkosi` absent), boot smoke
+  (QEMU absent) and idle RAM/CPU/boot timing (same).
+* `python3 ci/lint-doc-refs.py` → 1456 citations across 164
+  documents resolve.
+* `python3 ci/lint-line-endings.py` → 388 files, all LF.
+* `python3 ci/lint-file-safety.py` → 125 deletion sites, all reviewed.
+
+### C1.6 Limits
+
+* No real iwd, BlueZ, sound server, radio, network or QEMU run. This proves the
+  contract and the boundary, not provider integration.
+* The fake is reachable through a Rust constructor; no request field
+  can select it in production.
+* The boundary checker is static: it does not inspect a linked binary.
+* Wi-Fi scanning, passkey pairing, default-sink switching and the secret-agent
+  design remain open. A1 and W9 remain open; `litric-capd`, `litric-compatd`
+  and `litric-envd` remain absent.
+* No SYSTEM-SCOPE rows moved, so the claim is a contract, not a new capability.
+
+### C1.7 Git
+
+Base `ea45353`. This batch changes the contract module, `state.rs`, the library
+export, the new boundary gate, the `[3m]` verifier section, the master plan,
+the beta matrix and the C1 design note. The final hash and
+`HEAD == origin/main` check are recorded in the delivery report.

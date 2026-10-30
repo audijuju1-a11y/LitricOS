@@ -123,7 +123,7 @@ remains open because this host has no builder, QEMU or booted desktop.
 
 | Batch | Outcome | Where |
 |---|---|---|
-| **C1** | A provider contract layer (trait + fake) for network, Bluetooth and audio; the shell holds no D-Bus client; a sentinel password never reaches a log | here (contract) |
+| **C1** | A provider contract layer (trait + fake) for network, Bluetooth and audio; the shell holds no D-Bus client; a sentinel password never reaches a log (**landed 2026-10-30**: `Provider`/`ToolProvider`/`FakeProvider`, `Sysd::with_provider`, `[3m]` boundary gate with planted `zbus` negative controls; real iwd/BlueZ integration remains absent) | here (contract) |
 | **C2** | The KMS output path from ADR-0026 runs: mode enumerated and set, `present=drm` in the status file | builder |
 
 ### Stage D — Shell correctness, RAM and idle discipline

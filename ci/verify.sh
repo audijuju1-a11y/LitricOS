@@ -336,6 +336,23 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
+echo "[3m] Provider contract boundary"
+# ---------------------------------------------------------------------------
+# C1 keeps the network, Bluetooth and audio providers behind the daemon's
+# contract. The shell must not grow a D-Bus client while doing it, and the
+# Provider/FakeProvider seam must stay in the tree; this check is the
+# source-level guard, not a runtime link inspection.
+if [[ -n "$PY" ]]; then
+    check "shell has no D-Bus client and the provider contract exists" \
+        "$PY" ci/lint-provider-boundary.py
+    check "provider-boundary linter detects a planted D-Bus client" \
+        "$PY" ci/lint-provider-boundary.py --self-test
+else
+    skip "provider contract boundary" "no python interpreter on PATH"
+fi
+
+# ---------------------------------------------------------------------------
+echo
 echo "[4] Development signing keys"
 # ---------------------------------------------------------------------------
 if have openssl; then

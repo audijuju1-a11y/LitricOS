@@ -16,6 +16,9 @@
 //!
 //! # What is real, and what is not
 //!
+//! * [`provider_contract`] is the C1 seam: a `Provider` trait with the production
+//!   `ToolProvider`, a `FakeProvider` for contract tests, and the audio,
+//!   network and Bluetooth dispatch the shell's socket path uses.
 //! * [`providers`] is the write half of audio, network, Bluetooth and
 //!   authentication: validated arguments, a base tool per provider, and a plan
 //!   that a test can read without running anything.
@@ -42,6 +45,7 @@ pub mod launch;
 pub mod lockout;
 pub mod platform;
 pub mod proto;
+pub mod provider_contract;
 pub mod providers;
 pub mod state;
 pub mod update;
