@@ -7427,3 +7427,80 @@ not in the shell.
 
 Base `3fb0125`. This batch is committed on `main` and pushed; `HEAD ==
 origin/main` and the tracked worktree is empty at the end of the turn.
+
+## 72. Batch: account creation and password change in the privileged daemon (verified)
+
+### 72.1 Requirement
+
+First-run setup must create the account and a later Settings action must change
+its password, without the shell spawning `useradd`/`chpasswd` and without a
+password ever reaching an argv, an environment block, a log line, a `Debug`
+rendering or a reply. Decision A puts the privileged path in `litric-sysd`.
+
+### 72.2 The contract, and where it lives (file → item, verified with grep)
+
+* `src/litric-sysd/src/auth.rs` — `validate_password` (one rule set: name shape,
+  ≥12 characters, confirmation equal, password not the name); `create_plans`
+  (`useradd` → `chpasswd`); `change_plans` (`unix_chkpwd` → `chpasswd`);
+  `AuthProvider` (`create`/`change`/`verify`); `SystemAuthProvider` runs the
+  steps through `action::Runner`, stops after a failed first step, maps a wrong
+  current password to `VerifyFailed`, scrubs stdin after each step; `FakeAuth`.
+* `src/litric-sysd/src/providers.rs` — `AuthAction::{Verify, Create, Change}`,
+  `token()` (`verify`/`create`/`change`), `user()`, `capability()` (all three:
+  `AuthSession` scoped `lock://<user>`), redacting `Debug`. `auth_plan` keeps the
+  one-step verification and refuses Create/Change because they are two plans.
+* `src/litric-sysd/src/proto.rs` — `AUTH CREATE <user> <password-hex>
+  <confirm-hex> [CONFIRM]`, `AUTH CHANGE <user> <current-hex> <new-hex>
+  <confirm-hex> [CONFIRM]`; `AUTH VERIFY` parser untouched.
+* `src/litric-sysd/src/state.rs` — `Sysd::auth` (`Box<dyn AuthProvider>`),
+  `with_auth`, and `Sysd::account`, reached from `Sysd::action` only for Create
+  and Change. Verification keeps the old plan path unchanged.
+
+### 72.3 Capability and consent
+
+No new `CapabilityId`: the vocabulary already has `AuthSession`, and the policy
+grant table already covers `lock://`. All three verbs therefore require the
+`AuthSession` grant plus the live `CONFIRM` word; without consent the broker
+refuses before the backend is called.
+
+### 72.4 Tests added
+
+* `proto::tests::account_creation_and_change_parse_without_echoing_a_secret` —
+  both verbs parse to the exact action, `Debug` redacts every password field, and
+  a non-hex field is refused without echoing it.
+* `state::tests::account_creation_and_change_cross_the_protocol_with_shared_validation`
+  — `Request::parse` → `Sysd::handle` against `FakeAuth`: create succeeds; weak
+  password and mismatched confirmation are refused with `weak-password` /
+  `password-mismatch`; a wrong current password gives `verify-failed` and writes
+  nothing; the right one lands and becomes the current password.
+* `auth::tests::{the_system_provider_creates_in_two_steps_without_a_password_in_argv,
+  a_failed_first_step_never_runs_the_second,
+  a_spawn_failure_and_a_bad_current_password_are_distinct}` — the two-step
+  executor, argv/stdin shape, and failure ordering.
+
+### 72.5 Gates (real output)
+
+* `cargo fmt --all --check` → 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → 0.
+* `cargo test -p litric-sysd` → 226 passed, 0 failed (219 lib + 5 + 1 + 1).
+* `cargo test --workspace` → **1,862 passed, 0 failed**.
+
+### 72.6 Limits, stated plainly
+
+* CI has no root, so the tests never execute `useradd`, `chpasswd` or
+  `unix_chkpwd`; construction and ordering are proven, the privileged run is not.
+* The confirmation is a second hex field, not the literal `<hex> [CONFIRM]`
+  shorthand in the batch note; without it the shared validator could not reject a
+  mismatch on the daemon side.
+* `AuthSession` is reused rather than adding `AuthCreate`/`AuthChange`; the id is
+  already live-consent and already granted for `lock://`, and a new id would
+  churn every exhaustive match for no extra authority.
+* Requests have no serializer, so the round-trip tests assert parse → exact
+  action and redaction, not encode → parse.
+* No rate limiting or lockout: a caller that can reach the 0600 socket can retry
+  a verification. That belongs with the login UI's throttling, not this batch.
+
+### 72.7 Git
+
+Base `79bbd58`. This batch is committed on `main` and pushed; `HEAD ==
+origin/main` and the tracked worktree is empty at the end of the turn.

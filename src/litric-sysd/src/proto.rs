@@ -500,6 +500,68 @@ impl Request {
                         consent,
                     })
                 }
+                "create" => {
+                    // `AUTH CREATE <user> <password-hex> <confirm-hex> [CONFIRM]`.
+                    // The confirmation is a second field rather than a repeat of
+                    // the first, so the shared validator can reject a mismatch
+                    // before any helper is spawned.
+                    if args.len() < 4 || args.len() > 5 {
+                        return Err(ProtoError::BadArity {
+                            verb: "AUTH CREATE",
+                            expected: 4,
+                            got: args.len(),
+                        });
+                    }
+                    let consent = match args.get(4) {
+                        None => false,
+                        Some(w) if w.eq_ignore_ascii_case("confirm") => true,
+                        Some(other) => {
+                            return Err(ProtoError::BadArgument {
+                                name: "auth confirmation",
+                                value: (*other).to_owned(),
+                            })
+                        }
+                    };
+                    Ok(Self::Action {
+                        action: SystemAction::Auth(AuthAction::Create {
+                            user: arg(1).to_owned(),
+                            password: hex_text(arg(2), "password")?,
+                            confirm: hex_text(arg(3), "password confirmation")?,
+                        }),
+                        consent,
+                    })
+                }
+                "change" => {
+                    // `AUTH CHANGE <user> <current-hex> <new-hex> <confirm-hex>
+                    // [CONFIRM]`. The current password is only ever compared by
+                    // `unix_chkpwd`; it is not stored or echoed.
+                    if args.len() < 5 || args.len() > 6 {
+                        return Err(ProtoError::BadArity {
+                            verb: "AUTH CHANGE",
+                            expected: 5,
+                            got: args.len(),
+                        });
+                    }
+                    let consent = match args.get(5) {
+                        None => false,
+                        Some(w) if w.eq_ignore_ascii_case("confirm") => true,
+                        Some(other) => {
+                            return Err(ProtoError::BadArgument {
+                                name: "auth confirmation",
+                                value: (*other).to_owned(),
+                            })
+                        }
+                    };
+                    Ok(Self::Action {
+                        action: SystemAction::Auth(AuthAction::Change {
+                            user: arg(1).to_owned(),
+                            current: hex_text(arg(2), "current password")?,
+                            new_password: hex_text(arg(3), "new password")?,
+                            confirm: hex_text(arg(4), "password confirmation")?,
+                        }),
+                        consent,
+                    })
+                }
                 other => Err(ProtoError::BadArgument {
                     name: "AUTH subcommand",
                     value: other.to_owned(),
@@ -838,6 +900,64 @@ mod tests {
         let refused =
             Request::parse("AUTH VERIFY alice 77726f6e67 CONFIRM CONFIRM").expect_err("too many");
         assert_eq!(refused.kind(), "bad-arity");
+    }
+
+    #[test]
+    fn account_creation_and_change_parse_without_echoing_a_secret() {
+        // `correct` in hex, twice: the password and its confirmation.
+        let hex = "636f7272656374";
+        match Request::parse(&format!("AUTH CREATE alice {hex} {hex} CONFIRM")) {
+            Ok(Request::Action {
+                action:
+                    SystemAction::Auth(AuthAction::Create {
+                        user,
+                        password,
+                        confirm,
+                    }),
+                consent,
+            }) => {
+                assert_eq!(user, "alice");
+                assert_eq!(password, "correct");
+                assert_eq!(confirm, "correct");
+                assert!(consent, "the word is the answer to the prompt");
+            }
+            other => panic!("did not parse: {other:?}"),
+        }
+        let change = Request::parse(&format!(
+            "AUTH CHANGE alice {hex} 616e6f74686572 616e6f74686572 CONFIRM"
+        ))
+        .expect("a change");
+        match &change {
+            Request::Action {
+                action:
+                    SystemAction::Auth(AuthAction::Change {
+                        user,
+                        current,
+                        new_password,
+                        confirm,
+                    }),
+                consent,
+            } => {
+                assert_eq!(user, "alice");
+                assert_eq!(current, "correct");
+                assert_eq!(new_password, "another");
+                assert_eq!(confirm, "another");
+                assert!(*consent);
+            }
+            other => panic!("did not parse: {other:?}"),
+        }
+        let rendered = format!("{change:?}");
+        assert!(!rendered.contains(hex), "Debug leaked the hex: {rendered}");
+        assert!(!rendered.contains("correct"), "Debug leaked the password");
+        assert!(rendered.contains("alice"), "the account is not a secret");
+
+        // A field that is not hex is refused without repeating it.
+        let refused = Request::parse("AUTH CREATE alice zzqq zzqq CONFIRM").expect_err("not hex");
+        assert_eq!(refused.kind(), "bad-argument");
+        assert!(
+            !refused.to_string().contains("zzqq"),
+            "the refusal echoed the payload: {refused}"
+        );
     }
 
     #[test]

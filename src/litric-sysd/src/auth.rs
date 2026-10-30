@@ -58,6 +58,22 @@ pub enum AuthError {
 }
 
 impl AuthError {
+    /// A sentence for the reply, with no secret in it.
+    #[must_use]
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::InvalidName => "the account name is not one this build accepts",
+            Self::WeakPassword => "the password is too short",
+            Self::PasswordMismatch => "the two passwords do not match",
+            Self::PasswordEqualsName => "the password is the account name",
+            Self::AlreadyExists => "the account already exists",
+            Self::VerifyFailed => "the current password was not accepted",
+            Self::SpawnFailed => "the helper could not be started",
+            Self::NonZeroExit(_) => "the helper exited with a failure status",
+            Self::InternalError => "the operation could not be completed",
+        }
+    }
+
     /// The stable word a reply carries for this refusal.
     #[must_use]
     pub const fn token(self) -> &'static str {
@@ -249,7 +265,7 @@ pub fn change_plans(name: &str, current: &str, new: &str) -> Result<ChangePlans,
 /// Production runs the distribution's helpers; tests use [`FakeAuth`], which
 /// keeps accounts in memory. The trait is deliberately free of UI types: the
 /// shell talks to the daemon over the protocol, not to this trait.
-pub trait AuthProvider {
+pub trait AuthProvider: std::fmt::Debug + Send {
     /// Create `name` with `password`.
     ///
     /// # Errors

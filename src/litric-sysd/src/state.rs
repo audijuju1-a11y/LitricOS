@@ -93,6 +93,9 @@ pub struct Sysd {
     client: Option<AppId>,
     /// How a program is run. Real spawning in production, a recorder in tests.
     runner: Box<dyn Runner>,
+    /// The privileged account backend. Real helpers in production, an
+    /// in-memory fake in the state tests.
+    auth: Box<dyn crate::auth::AuthProvider>,
     /// The default sink's volume and mute flag, as the sound server last
     /// answered, or `None` before it has been asked.
     ///
@@ -140,6 +143,7 @@ impl Sysd {
             root: root.to_path_buf(),
             client,
             runner: Box::new(SystemRunner),
+            auth: Box::new(crate::auth::SystemAuthProvider::system()),
         }
     }
 
@@ -150,6 +154,14 @@ impl Sysd {
     #[must_use]
     pub fn with_runner(mut self, runner: Box<dyn Runner>) -> Self {
         self.runner = runner;
+        self
+    }
+
+    /// Replace the account backend, the same seam [`Sysd::with_runner`] gives
+    /// the rest of the actions.
+    #[must_use]
+    pub fn with_auth(mut self, auth: Box<dyn crate::auth::AuthProvider>) -> Self {
+        self.auth = auth;
         self
     }
 
@@ -527,6 +539,14 @@ impl Sysd {
                 format!("{} {capability}", decision.reason().token()),
             );
         }
+        // Creation and change are two ordered helper invocations, so they go
+        // through the account backend rather than the single-plan path. A
+        // verification keeps its existing plan path byte for byte.
+        if let SystemAction::Auth(auth) = action {
+            if !matches!(auth, crate::providers::AuthAction::Verify { .. }) {
+                return self.account(auth);
+            }
+        }
         // The root is the daemon's own, never a request's: the same rule as the
         // facts reader. A caller that could choose the root could choose which
         // credential file `iwd` is told about.
@@ -575,6 +595,45 @@ impl Sysd {
             "action-failed"
         };
         Response::err(kind, detail)
+    }
+
+    /// Validate and execute one account creation or change.
+    ///
+    /// The rule set is [`crate::auth::validate_password`], the same one the
+    /// shell calls before sending: the daemon revalidates because the socket is
+    /// not a trust boundary. A refusal is answered with its stable token and a
+    /// fixed sentence, never with the request's own text.
+    fn account(&mut self, action: &crate::providers::AuthAction) -> Response {
+        use crate::providers::AuthAction;
+        let result = match action {
+            AuthAction::Create {
+                user,
+                password,
+                confirm,
+            } => match crate::auth::validate_password(user, password, confirm) {
+                Ok(()) => self.auth.create(user, password),
+                Err(error) => Err(error),
+            },
+            AuthAction::Change {
+                user,
+                current,
+                new_password,
+                confirm,
+            } => match crate::auth::validate_password(user, new_password, confirm) {
+                Ok(()) => self.auth.change(user, current, new_password),
+                Err(error) => Err(error),
+            },
+            AuthAction::Verify { .. } => {
+                return Response::err("internal-error", "verification is not a two-step action")
+            }
+        };
+        match result {
+            Ok(()) => Response::ok(vec![
+                format!("auth={}", action.token()),
+                format!("user={}", action.user()),
+            ]),
+            Err(error) => Response::err(error.token(), error.detail().to_owned()),
+        }
     }
 
     /// Grant the local session client the capabilities this build can honour.
@@ -1360,6 +1419,96 @@ mod tests {
     /// other.
     fn sysd_with(runner: &RecordingRunner) -> Sysd {
         sysd().with_runner(Box::new(runner.clone()))
+    }
+
+    fn as_hex(text: &str) -> String {
+        text.bytes().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn account_creation_and_change_cross_the_protocol_with_shared_validation() {
+        let strong = "correct horse battery";
+        let other = "another horse battery";
+        let mut s = sysd().with_auth(Box::new(crate::auth::FakeAuth::new()));
+
+        let line = format!(
+            "AUTH CREATE alice {} {} CONFIRM",
+            as_hex(strong),
+            as_hex(strong)
+        );
+        let reply = s.handle(&Request::parse(&line).expect("create"), NOW);
+        assert!(reply.is_ok(), "{}", reply.encode());
+
+        // The shared validator runs on the daemon side: a short password, a
+        // mismatched confirmation, and a password equal to the name are refused
+        // before the backend is touched. No reply repeats the payload.
+        for (line, token) in [
+            (
+                format!(
+                    "AUTH CREATE bob {} {} CONFIRM",
+                    as_hex("short"),
+                    as_hex("short")
+                ),
+                "weak-password",
+            ),
+            (
+                format!(
+                    "AUTH CREATE bob {} {} CONFIRM",
+                    as_hex(strong),
+                    as_hex(other)
+                ),
+                "password-mismatch",
+            ),
+            (
+                format!(
+                    "AUTH CREATE carol {} {} CONFIRM",
+                    as_hex("carol"),
+                    as_hex("carol")
+                ),
+                "weak-password",
+            ),
+        ] {
+            let reply = s.handle(&Request::parse(&line).expect("valid line"), NOW);
+            let encoded = reply.encode();
+            assert!(encoded.starts_with(&format!("ERR {token}")), "{encoded}");
+            assert!(!encoded.contains(&as_hex(strong)), "{encoded}");
+        }
+
+        // A wrong current password is answered about the attempt and writes
+        // nothing; the right one goes through and the new password verifies.
+        let wrong = format!(
+            "AUTH CHANGE alice {} {} {} CONFIRM",
+            as_hex("wrong password"),
+            as_hex(other),
+            as_hex(other)
+        );
+        let reply = s.handle(&Request::parse(&wrong).expect("change"), NOW);
+        assert!(
+            reply.encode().starts_with("ERR verify-failed"),
+            "{}",
+            reply.encode()
+        );
+
+        let right = format!(
+            "AUTH CHANGE alice {} {} {} CONFIRM",
+            as_hex(strong),
+            as_hex(other),
+            as_hex(other)
+        );
+        let reply = s.handle(&Request::parse(&right).expect("change"), NOW);
+        assert!(reply.is_ok(), "{}", reply.encode());
+
+        // The new password is now the current one: a second change that uses it
+        // as the current password succeeds, which the fake can only answer if
+        // the first write landed.
+        let again = format!(
+            "AUTH CHANGE alice {} {} {} CONFIRM",
+            as_hex(other),
+            as_hex(strong),
+            as_hex(strong)
+        );
+        let reply = s.handle(&Request::parse(&again).expect("change"), NOW);
+        assert!(reply.is_ok(), "{}", reply.encode());
     }
 
     #[test]

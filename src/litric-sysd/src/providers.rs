@@ -415,13 +415,47 @@ pub enum AuthAction {
         /// The password, which goes to the helper's stdin and nowhere else.
         password: String,
     },
+    /// Create an account and give it a password.
+    Create {
+        /// The account.
+        user: String,
+        /// The password, which goes to the helper's stdin and nowhere else.
+        password: String,
+        /// The same password again; the two must match.
+        confirm: String,
+    },
+    /// Change an account's password after checking the current one.
+    Change {
+        /// The account.
+        user: String,
+        /// The password in use now, checked before anything is written.
+        current: String,
+        /// The replacement, which goes to the helper's stdin and nowhere else.
+        new_password: String,
+        /// The replacement again; the two must match.
+        confirm: String,
+    },
 }
 
 impl AuthAction {
     /// The word the protocol and the reply use.
     #[must_use]
     pub const fn token(&self) -> &'static str {
-        "verify"
+        match self {
+            Self::Verify { .. } => "verify",
+            Self::Create { .. } => "create",
+            Self::Change { .. } => "change",
+        }
+    }
+
+    /// The account this action names.
+    #[must_use]
+    pub fn user(&self) -> &str {
+        match self {
+            Self::Verify { user, .. } | Self::Create { user, .. } | Self::Change { user, .. } => {
+                user
+            }
+        }
     }
 
     /// The capability that authorises it.
@@ -432,7 +466,11 @@ impl AuthAction {
     /// answered is not a login.
     #[must_use]
     pub fn capability(&self) -> Option<Capability> {
-        let Self::Verify { user, .. } = self;
+        let user = match self {
+            Self::Verify { user, .. } | Self::Create { user, .. } | Self::Change { user, .. } => {
+                user
+            }
+        };
         let scope = Scope::parse_resource(&format!("lock://{user}")).ok()?;
         Capability::new(CapabilityId::AuthSession, scope)
     }
@@ -543,6 +581,19 @@ impl fmt::Debug for AuthAction {
                 .debug_struct("Verify")
                 .field("user", user)
                 .field("password", &REDACTED)
+                .finish(),
+            Self::Create { user, .. } => f
+                .debug_struct("Create")
+                .field("user", user)
+                .field("password", &REDACTED)
+                .field("confirm", &REDACTED)
+                .finish(),
+            Self::Change { user, .. } => f
+                .debug_struct("Change")
+                .field("user", user)
+                .field("current", &REDACTED)
+                .field("new_password", &REDACTED)
+                .field("confirm", &REDACTED)
                 .finish(),
         }
     }
@@ -894,7 +945,15 @@ impl SystemAction {
     }
 
     fn auth_plan(action: &AuthAction) -> Result<Plan, Refusal> {
-        let AuthAction::Verify { user, password } = action;
+        let AuthAction::Verify { user, password } = action else {
+            // Creation and change are two steps and two plan objects. They are
+            // executed by `auth::SystemAuthProvider`, which owns the ordering;
+            // this single-plan path is for the one-step verification only.
+            return Err(Refusal::illegal(
+                "account change",
+                "takes two steps and is not a single plan",
+            ));
+        };
         if !valid_user(user) {
             return Err(Refusal::illegal(
                 "account name",
