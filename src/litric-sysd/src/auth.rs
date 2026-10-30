@@ -13,7 +13,7 @@
 //! `unsafe` `write_volatile`; both are tree-wide decisions, not ones this module
 //! can take on its own.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::action::{Runner, SystemRunner};
 
@@ -134,6 +134,173 @@ pub fn validate_password(name: &str, password: &str, confirm: &str) -> Result<()
         return Err(AuthError::PasswordEqualsName);
     }
     Ok(())
+}
+
+/// How many failed verifications one account may accumulate inside
+/// [`VERIFY_WINDOW_SECS`] before it is locked out.
+pub const VERIFY_FAILURE_LIMIT: u32 = 5;
+
+/// The window a failure stays counted in, in seconds.
+pub const VERIFY_WINDOW_SECS: u64 = 60;
+
+/// How long an account is refused after [`VERIFY_FAILURE_LIMIT`] failures.
+pub const VERIFY_LOCKOUT_SECS: u64 = 60;
+
+/// Failed verifications across every account inside one window before the
+/// whole verification path is refused.
+///
+/// The per-account limit alone can be dodged by spreading guesses over many
+/// account names. This ceiling bounds the total number of helpers the daemon
+/// will spawn for failed guesses, whatever names the caller uses.
+pub const VERIFY_GLOBAL_FAILURE_LIMIT: u32 = 20;
+
+/// How long the whole verification path is refused after the global limit.
+pub const VERIFY_GLOBAL_LOCKOUT_SECS: u64 = 30;
+
+/// The most account names one daemon remembers at once.
+///
+/// A caller can send any name it likes, so the table needs a ceiling. Reaching
+/// it cannot make the per-account limit disappear: the global ceiling above
+/// still applies, and an existing entry is never evicted to make room for a
+/// new one.
+pub const MAX_TRACKED_ACCOUNTS: usize = 256;
+
+/// Failures and the moment the lockout ends, for one account or for the daemon.
+#[derive(Debug, Clone, Copy)]
+struct Failures {
+    count: u32,
+    window_start: u64,
+    locked_until: u64,
+}
+
+impl Failures {
+    const fn new(now: u64) -> Self {
+        Self {
+            count: 0,
+            window_start: now,
+            locked_until: 0,
+        }
+    }
+
+    /// Seconds left before this entry is tried again, or `None`.
+    fn locked_for(&self, now: u64) -> Option<u64> {
+        if now < self.locked_until {
+            Some(self.locked_until.saturating_sub(now))
+        } else {
+            None
+        }
+    }
+
+    /// Count one failure, starting a fresh window if the previous one is over.
+    ///
+    /// A failure that arrives while the entry is locked does not extend the
+    /// lockout: the caller is refused before a helper runs, so there is nothing
+    /// new to count, and an attacker cannot keep an account locked forever by
+    /// retrying during the lock.
+    fn failed(&mut self, now: u64, limit: u32, lockout: u64) {
+        if self.locked_for(now).is_some() {
+            return;
+        }
+        let lock_just_ended = self.locked_until > 0 && now >= self.locked_until;
+        if lock_just_ended || now.saturating_sub(self.window_start) >= VERIFY_WINDOW_SECS {
+            *self = Self::new(now);
+        }
+        self.count = self.count.saturating_add(1);
+        if self.count >= limit {
+            self.locked_until = now.saturating_add(lockout);
+        }
+    }
+}
+
+/// Metering for password verification.
+///
+/// It holds counters only: no password, no hash and no account data beyond the
+/// name the caller sent. Time is supplied by the caller, like the rest of the
+/// daemon, so the whole policy is testable without sleeping. State is in
+/// memory: a restart clears it, which is recorded as a limit rather than hidden.
+#[derive(Debug)]
+pub struct Throttle {
+    accounts: HashMap<String, Failures>,
+    global: Failures,
+}
+
+impl Default for Throttle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Throttle {
+    /// A throttle with no failures recorded.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            accounts: HashMap::new(),
+            global: Failures::new(0),
+        }
+    }
+
+    /// Seconds the caller must wait before verifying `account`, or `None`.
+    ///
+    /// The larger of the account's remaining lockout and the daemon-wide one:
+    /// the caller is told one number, and it is always enough.
+    #[must_use]
+    pub fn retry_after(&self, account: &str, now: u64) -> Option<u64> {
+        let account_wait = self.accounts.get(account).and_then(|f| f.locked_for(now));
+        let global_wait = self.global.locked_for(now);
+        match (account_wait, global_wait) {
+            (Some(a), Some(g)) => Some(a.max(g)),
+            (a, g) => a.or(g),
+        }
+    }
+
+    /// Record one failed verification of `account`.
+    pub fn record_failure(&mut self, account: &str, now: u64) {
+        self.global
+            .failed(now, VERIFY_GLOBAL_FAILURE_LIMIT, VERIFY_GLOBAL_LOCKOUT_SECS);
+        if self.accounts.len() >= MAX_TRACKED_ACCOUNTS && !self.accounts.contains_key(account) {
+            self.prune(now);
+        }
+        if self.accounts.len() >= MAX_TRACKED_ACCOUNTS && !self.accounts.contains_key(account) {
+            // Full of live entries. The global limit still bounds guesses, and
+            // leaving the existing entries alone is what keeps an attacker from
+            // evicting an account's lockout by spraying new names.
+            return;
+        }
+        self.accounts
+            .entry(account.to_owned())
+            .or_insert_with(|| Failures::new(now))
+            .failed(now, VERIFY_FAILURE_LIMIT, VERIFY_LOCKOUT_SECS);
+    }
+
+    /// Forget `account`'s failures after a correct password.
+    ///
+    /// The daemon-wide counter is deliberately not cleared: one success says
+    /// nothing about the guesses that came before it from other names.
+    pub fn record_success(&mut self, account: &str) {
+        self.accounts.remove(account);
+    }
+
+    /// Drop entries that can no longer matter, then make room if needed.
+    fn prune(&mut self, now: u64) {
+        self.accounts.retain(|_, f| {
+            f.locked_for(now).is_some() || now.saturating_sub(f.window_start) < VERIFY_WINDOW_SECS
+        });
+        if self.accounts.len() < MAX_TRACKED_ACCOUNTS {
+            return;
+        }
+        let victim = self
+            .accounts
+            .iter()
+            .filter(|(_, f)| f.locked_for(now).is_none())
+            .min_by_key(|(_, f)| f.window_start)
+            .map(|(name, _)| name.clone());
+        // The table is full of live entries and none of them is safe to drop:
+        // dropping one is how a caller would evict an account's lockout by
+        // spraying names. The new name is simply not tracked; the global
+        // ceiling already bounds how many guesses can happen anyway.
+        let _ = victim;
+    }
 }
 
 /// One program invocation, with any secret on standard input only.
@@ -711,5 +878,78 @@ mod tests {
             assert_eq!(error.token(), word);
             assert!(!error.token().contains(STRONG));
         }
+    }
+}
+
+#[cfg(test)]
+mod throttle_tests {
+    use super::*;
+
+    #[test]
+    fn five_failures_lock_one_account_for_a_minute() {
+        let mut throttle = Throttle::new();
+        for attempt in 0..VERIFY_FAILURE_LIMIT {
+            assert_eq!(
+                throttle.retry_after("alice", 1_000),
+                None,
+                "attempt {attempt}"
+            );
+            throttle.record_failure("alice", 1_000);
+        }
+        assert_eq!(
+            throttle.retry_after("alice", 1_000),
+            Some(VERIFY_LOCKOUT_SECS)
+        );
+        assert_eq!(throttle.retry_after("alice", 1_059), Some(1));
+        assert_eq!(throttle.retry_after("alice", 1_060), None);
+        // Another account is unaffected by alice's lockout.
+        assert_eq!(throttle.retry_after("bob", 1_000), None);
+    }
+
+    #[test]
+    fn a_correct_password_clears_the_failures() {
+        let mut throttle = Throttle::new();
+        for _ in 0..VERIFY_FAILURE_LIMIT - 1 {
+            throttle.record_failure("alice", 2_000);
+        }
+        throttle.record_success("alice");
+        for attempt in 0..VERIFY_FAILURE_LIMIT {
+            assert_eq!(
+                throttle.retry_after("alice", 2_000),
+                None,
+                "attempt {attempt}"
+            );
+            throttle.record_failure("alice", 2_000);
+        }
+        assert_eq!(
+            throttle.retry_after("alice", 2_000),
+            Some(VERIFY_LOCKOUT_SECS)
+        );
+    }
+
+    #[test]
+    fn guessing_many_names_hits_the_daemon_wide_ceiling() {
+        let mut throttle = Throttle::new();
+        for i in 0..VERIFY_GLOBAL_FAILURE_LIMIT {
+            throttle.record_failure(&format!("user{i}"), 5_000);
+        }
+        assert_eq!(
+            throttle.retry_after("never-seen", 5_000),
+            Some(VERIFY_GLOBAL_LOCKOUT_SECS)
+        );
+        assert_eq!(throttle.retry_after("never-seen", 5_030), None);
+    }
+
+    #[test]
+    fn the_account_table_stays_bounded() {
+        let mut throttle = Throttle::new();
+        for i in 0..MAX_TRACKED_ACCOUNTS * 2 {
+            throttle.record_failure(&format!("user{i}"), 10);
+        }
+        assert!(throttle.accounts.len() <= MAX_TRACKED_ACCOUNTS);
+        // The newest name is refused tracking rather than evicting a live entry.
+        assert!(!throttle
+            .accounts
+            .contains_key(&format!("user{}", MAX_TRACKED_ACCOUNTS * 2 - 1)));
     }
 }

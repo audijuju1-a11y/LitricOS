@@ -7482,13 +7482,20 @@ refuses before the backend is called.
   a_failed_first_step_never_runs_the_second,
   a_spawn_failure_and_a_bad_current_password_are_distinct}` — the two-step
   executor, argv/stdin shape, and failure ordering.
+* `auth::throttle_tests::{five_failures_lock_one_account_for_a_minute,
+  a_correct_password_clears_the_failures,
+  guessing_many_names_hits_the_daemon_wide_ceiling,
+  the_account_table_stays_bounded}` — the policy with a supplied clock, no sleep.
+* `state::tests::failed_verifications_are_locked_out_before_the_helper_runs` —
+  five rejections reach the runner, the sixth answers `ERR locked-out` without a
+  sixth call, and the attempt after the window reaches the helper again.
 
 ### 72.5 Gates (real output)
 
 * `cargo fmt --all --check` → 0.
 * `cargo clippy --workspace --all-targets -- -D warnings` → 0.
-* `cargo test -p litric-sysd` → 227 passed, 0 failed (220 lib + 5 + 1 + 1).
-* `cargo test --workspace` → **1,863 passed, 0 failed**.
+* `cargo test -p litric-sysd` → 232 passed, 0 failed (225 lib + 5 + 1 + 1).
+* `cargo test --workspace` → **1,868 passed, 0 failed**.
 
 ### 72.6 Limits, stated plainly
 
@@ -7503,12 +7510,33 @@ refuses before the backend is called.
 * Requests have no serializer by design: clients compose the line and the daemon
   parses it, so no `Request::to_line` API was added. Stability is proven with a
   test-local canonical composer (compose → parse → compose) instead.
-* No rate limiting or lockout: a caller that can reach the 0600 socket can retry
-  a verification. That belongs with the login UI's throttling, not this batch.
+* Lockout counters are in memory: a daemon restart clears them, and they are not
+  written to the audit log. Persisting them needs a durable store and a decision
+  about surviving reboot, neither of which this batch takes.
+* The rate limit bounds guesses, not a compromised local account: a caller that
+  can already reach the 0600 socket as the daemon's user does not need to guess
+  a password to act as that user. Raising the socket's permissions is a separate
+  decision.
 
-### 72.7 Git
+### 72.7 Verification rate limit
 
-Base `79bbd58`; verification pass on `3628937`. Both are committed on `main` and
-pushed; `HEAD == origin/main` and the tracked worktree is empty at the end of the
-turn. The verification pass accepts both wire spellings, adds the parser-boundary
-stability test, and records 227 package tests and 1,863 workspace tests.
+`AUTH VERIFY` is metered after the capability check and before
+`providers::perform`, so a refused guess costs no process:
+
+* 5 failed verifications per account in 60 s locks that account for 60 s;
+* 20 failures across all accounts in 60 s locks the whole path for 30 s;
+* a locked request answers `ERR locked-out` with `retry in Ns` and never reaches
+  `unix_chkpwd`;
+* only `reason=exit` counts; spawn failures, timeouts and refusals do not;
+* a correct password clears that account's failures, not the global counter;
+* the account table is capped at 256 entries and never evicts a live entry to
+  make room, so spraying names cannot shed a lockout; the global cap bounds
+  guesses when it is full;
+* state is in memory, so a daemon restart clears it.
+
+### 72.8 Git
+
+Base `79bbd58`; verification pass on `3628937`; rate limit on `acea817`. All are
+committed on `main` and pushed; `HEAD == origin/main` and the tracked worktree is
+empty at the end of the turn. The rate-limit batch records 232 package tests and
+1,868 workspace tests.

@@ -96,6 +96,9 @@ pub struct Sysd {
     /// The privileged account backend. Real helpers in production, an
     /// in-memory fake in the state tests.
     auth: Box<dyn crate::auth::AuthProvider>,
+    /// Failed verification attempts, in memory, so guessing a password over the
+    /// socket is metered before a helper is spawned.
+    attempts: crate::auth::Throttle,
     /// The default sink's volume and mute flag, as the sound server last
     /// answered, or `None` before it has been asked.
     ///
@@ -144,6 +147,7 @@ impl Sysd {
             client,
             runner: Box::new(SystemRunner),
             auth: Box::new(crate::auth::SystemAuthProvider::system()),
+            attempts: crate::auth::Throttle::new(),
         }
     }
 
@@ -539,6 +543,24 @@ impl Sysd {
                 format!("{} {capability}", decision.reason().token()),
             );
         }
+        // A verification is the one action whose helper is meant to be guessed
+        // against. It is metered before the helper is spawned, so a locked
+        // account costs no process, and a refused attempt cannot be used to
+        // tell a wrong password from a missing account by timing the helper.
+        let verify_user = match action {
+            SystemAction::Auth(crate::providers::AuthAction::Verify { user, .. }) => {
+                Some(user.as_str())
+            }
+            _ => None,
+        };
+        if let Some(user) = verify_user {
+            if let Some(wait) = self.attempts.retry_after(user, now) {
+                return Response::err(
+                    "locked-out",
+                    format!("too many failed attempts; retry in {wait}s"),
+                );
+            }
+        }
         // Creation and change are two ordered helper invocations, so they go
         // through the account backend rather than the single-plan path. A
         // verification keeps its existing plan path byte for byte.
@@ -551,6 +573,16 @@ impl Sysd {
         // facts reader. A caller that could choose the root could choose which
         // credential file `iwd` is told about.
         let outcome = providers::perform(action, self.runner.as_ref(), &self.root);
+        // Only a helper that ran and rejected the password counts as a guess.
+        // A missing tool, a timeout or a refusal is the daemon failing, and
+        // counting those would lock an account out for the machine's fault.
+        if let Some(user) = verify_user {
+            if outcome.applied {
+                self.attempts.record_success(user);
+            } else if outcome.lines.iter().any(|line| line == "reason=exit") {
+                self.attempts.record_failure(user, now);
+            }
+        }
         if outcome.applied {
             // The level that was just set is read back rather than assumed: the
             // tool accepting a number is not the same as the sink taking it, and
@@ -1423,6 +1455,84 @@ mod tests {
 
     fn as_hex(text: &str) -> String {
         text.bytes().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[derive(Debug, Default)]
+    struct RejectingRunner {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl crate::action::Runner for RejectingRunner {
+        fn run(
+            &self,
+            _program: &str,
+            _args: &[&str],
+            _stdin: Option<&[u8]>,
+            _timeout_secs: u32,
+        ) -> std::io::Result<i32> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(1)
+        }
+
+        fn capture(
+            &self,
+            _program: &str,
+            _args: &[&str],
+            _timeout_secs: u32,
+        ) -> std::io::Result<(i32, String)> {
+            Err(std::io::Error::other(
+                "this test runner has no captured answer",
+            ))
+        }
+    }
+
+    #[test]
+    fn failed_verifications_are_locked_out_before_the_helper_runs() {
+        let runner = RejectingRunner::default();
+        let calls = std::sync::Arc::clone(&runner.calls);
+        let mut s = sysd().with_runner(Box::new(runner));
+        let line = |attempt: u32| {
+            format!(
+                "AUTH VERIFY alice {} CONFIRM",
+                as_hex(&format!("wrong password {attempt}"))
+            )
+        };
+
+        for attempt in 0..crate::auth::VERIFY_FAILURE_LIMIT {
+            let reply = s.handle(&Request::parse(&line(attempt)).expect("verify"), NOW);
+            assert!(
+                reply.encode().starts_with("ERR action-failed"),
+                "{}",
+                reply.encode()
+            );
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 5);
+
+        let reply = s.handle(&Request::parse(&line(99)).expect("verify"), NOW);
+        assert!(
+            reply.encode().starts_with("ERR locked-out"),
+            "{}",
+            reply.encode()
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            5,
+            "a locked account must not reach unix_chkpwd"
+        );
+
+        // The window ends with the lockout: the next attempt reaches the
+        // helper again, so a legitimate user is not locked out forever.
+        let reply = s.handle(
+            &Request::parse(&line(100)).expect("verify"),
+            NOW + crate::auth::VERIFY_LOCKOUT_SECS,
+        );
+        assert!(
+            reply.encode().starts_with("ERR action-failed"),
+            "{}",
+            reply.encode()
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 6);
     }
 
     #[test]
