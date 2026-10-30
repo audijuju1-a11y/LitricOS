@@ -11640,3 +11640,189 @@ mod sidebar_scroll {
         );
     }
 }
+
+impl Shell {
+    /// Build the accessibility tree for the frame that was last drawn.
+    ///
+    /// Projected from the hotspot table, which is the same table the pointer
+    /// hits and [`Self::move_keyboard_focus`] walks, so a node cannot describe a
+    /// control that is not on screen and the tree's order **is** the Tab order.
+    /// Built only when called: an idle desktop pays nothing for it.
+    #[must_use]
+    pub fn accessibility_tree(&self) -> crate::a11y::Tree {
+        use crate::a11y::{control_tooltip, Node, Role, Tree};
+        let mut tree = Tree::default();
+        let mut status_bar = false;
+        let mut grid = false;
+        let mut dialog = false;
+        for hot in self.hot.ids() {
+            let Some((role, name)) = self.a11y_name(hot) else {
+                tree.unnamed = tree.unnamed.saturating_add(1);
+                tree.unnamed_names.push(format!("{hot:?}"));
+                continue;
+            };
+            if role == Role::StatusBar && !status_bar {
+                status_bar = true;
+                tree.nodes.push(crate::a11y::container(
+                    Role::StatusBar,
+                    "Status bar",
+                    self.status_bar_rect(),
+                ));
+            }
+            if role == Role::GridCell && !grid {
+                grid = true;
+                tree.nodes.push(crate::a11y::container(
+                    Role::Grid,
+                    "All applications",
+                    self.hot_rect(hot),
+                ));
+            }
+            if role == Role::Dialog && !dialog {
+                dialog = true;
+                tree.nodes.push(crate::a11y::container(
+                    Role::Dialog,
+                    "Dialog",
+                    self.hot_rect(hot),
+                ));
+            }
+            let (row, col) = match hot {
+                Hot::LauncherItem(index) if role == Role::GridCell => (
+                    index.checked_div(crate::views::LAUNCHER_COLUMNS),
+                    index.checked_rem(crate::views::LAUNCHER_COLUMNS),
+                ),
+                _ => (None, None),
+            };
+            tree.nodes.push(Node {
+                role,
+                name,
+                rect: self.hot_rect(hot),
+                focused: self.keyboard_focus == Some(hot),
+                disabled: !hot.keyboard_focusable(),
+                tooltip: control_tooltip(hot),
+                row,
+                col,
+                container: false,
+            });
+        }
+        tree
+    }
+
+    fn hot_rect(&self, hot: Hot) -> Rect {
+        self.hot
+            .rect_of(hot)
+            .unwrap_or_else(|| Rect::new(0.0, 0.0, 0.0, 0.0))
+    }
+
+    /// The bar's extent: the top edge of the surface, as wide as what it draws.
+    fn status_bar_rect(&self) -> Rect {
+        let right = self
+            .hot
+            .rects()
+            .iter()
+            .map(|rect| rect.right())
+            .fold(0.0_f32, f32::max);
+        Rect::new(
+            0.0,
+            0.0,
+            right,
+            crate::chrome::TOP_BAR_H * self.tokens.scale,
+        )
+    }
+
+    /// Role and name for a hotspot, from the text the surface already draws.
+    fn a11y_name(&self, hot: Hot) -> Option<(crate::a11y::Role, String)> {
+        use crate::a11y::Role;
+        use crate::apps::FilesHot;
+        let literal = |role: Role, name: &str| Some((role, name.to_owned()));
+        match hot {
+            Hot::Logo | Hot::MenuApps | Hot::MenuWorkspace | Hot::MenuEnvironment => {
+                crate::a11y::control_tooltip(hot).map(|name| (Role::Button, name.to_owned()))
+            }
+            Hot::StatusNetwork
+            | Hot::StatusAudio
+            | Hot::StatusBattery
+            | Hot::StatusPower
+            | Hot::StatusMetrics
+            | Hot::StatusNotifications
+            | Hot::StatusClock
+            | Hot::StatusUser => {
+                crate::a11y::control_tooltip(hot).map(|name| (Role::StatusBar, name.to_owned()))
+            }
+            Hot::MenuRow(crate::apps::MenuAction::ScanNow) => literal(Role::Button, "Scan now"),
+            Hot::MenuRow(_) => None,
+            Hot::LauncherItem(index) => match self.launcher_item(index)? {
+                crate::seek::Hit::App(app) => Some((Role::GridCell, app.title().to_owned())),
+                crate::seek::Hit::Setting(page) => Some((Role::GridCell, page.title().to_owned())),
+                crate::seek::Hit::Desktop(index) => self
+                    .desktop_apps
+                    .get(index)
+                    .map(|app| (Role::GridCell, app.name.clone())),
+                _ => None,
+            },
+            Hot::LauncherSearch => literal(Role::Text, "Search applications"),
+            Hot::DockItem(index) => crate::views::DOCK_PINNED
+                .get(usize::from(index))
+                .and_then(|app| crate::shortcuts::App::ALL.get(*app))
+                .map(|app| (Role::Button, app.title().to_owned())),
+            Hot::DockToggle => literal(Role::Button, "Launcher"),
+            Hot::DockSearch => literal(Role::Text, "Search"),
+            Hot::DockLock => literal(Role::Button, "Lock screen"),
+            Hot::Desktop => literal(Role::Text, "Desktop"),
+            Hot::Window(id) => Some((Role::Window, format!("Window {id}"))),
+            Hot::Workspace(index) => Some((
+                Role::Button,
+                format!("Workspace {}", index.saturating_add(1)),
+            )),
+            Hot::SettingsSidebarScroll => literal(Role::Text, "Settings pages"),
+            Hot::Files(crate::apps::FilesHot::PlacesScroll) => literal(Role::Text, "Places"),
+            Hot::Files(crate::apps::FilesHot::Place(index)) => self
+                .files
+                .places
+                .get(index)
+                .map(|(_, name)| (Role::Button, name.clone())),
+            Hot::Files(crate::apps::FilesHot::ToggleRow(index)) => self
+                .files
+                .rows
+                .get(index)
+                .map(|row| (Role::Button, format!("Select {}", row.name))),
+            Hot::SettingsAccentChoice(index) => litric_design::Accent::all()
+                .get(usize::from(index))
+                .map(|accent| (Role::Segment, format!("{accent:?}"))),
+            Hot::SettingsAccent => literal(Role::Button, "Accent"),
+            Hot::SettingsTheme => literal(Role::Button, "Theme"),
+            Hot::SettingsLanguage => literal(Role::Button, "Language"),
+            Hot::SettingsWallpaper => literal(Role::Button, "Wallpaper"),
+            Hot::SettingsSchedule => literal(Role::Button, "Appearance schedule"),
+            Hot::SettingsMotion => literal(Role::Button, "Reduced motion"),
+            Hot::SettingsCategory(index) => crate::settings::Page::ALL
+                .get(usize::from(index))
+                .map(|page| (Role::Tab, page.title().to_owned())),
+            Hot::Files(hot) => match hot {
+                FilesHot::Back => literal(Role::Button, "Back"),
+                FilesHot::Forward => literal(Role::Button, "Forward"),
+                FilesHot::Up => literal(Role::Button, "Up"),
+                FilesHot::Details => literal(Role::Button, "Details"),
+                FilesHot::New => literal(Role::Button, "New"),
+                FilesHot::Filter => literal(Role::Text, "Search"),
+                FilesHot::Paste => literal(Role::Button, "Paste"),
+                FilesHot::Refresh => literal(Role::Button, "Refresh"),
+                FilesHot::Compress => literal(Role::Button, "Compress"),
+                FilesHot::Extract => literal(Role::Button, "Extract"),
+                FilesHot::EmptyNewFolder => literal(Role::Button, "New folder"),
+                FilesHot::Row(index) => self
+                    .files
+                    .rows
+                    .get(index)
+                    .map(|row| (Role::ListItem, row.name.clone())),
+                _ => None,
+            },
+            Hot::DialogCancel => literal(Role::Button, "Cancel"),
+            Hot::BrowserOmnibox => literal(Role::Text, "Address"),
+            Hot::BrowserBack => literal(Role::Button, "Back"),
+            Hot::BrowserForward => literal(Role::Button, "Forward"),
+            Hot::BrowserReload => literal(Role::Button, "Reload"),
+            Hot::TrashEmpty => literal(Role::Button, "Empty Trash"),
+            _ => None,
+        }
+    }
+}

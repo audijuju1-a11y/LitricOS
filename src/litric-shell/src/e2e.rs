@@ -747,6 +747,191 @@ fn journey_chapter_f_picker_empty_state_grid_and_tooltip() {
     );
 }
 
+/// The accessibility tree is a projection of what was drawn, and the keyboard
+/// walks the same order it reports (batch §71).
+#[cfg(unix)]
+#[test]
+fn journey_accessibility_tree_names_controls_and_matches_the_tab_order() {
+    use crate::a11y::Role;
+
+    let mut s = shell();
+    s.open_app(App::Settings);
+    s.settings.page = crate::settings::Page::Appearance;
+    let _ = draw_frame(&mut s);
+
+    let tree = s.accessibility_tree();
+    assert_eq!(
+        tree.unnamed,
+        0,
+        "every visible control on Appearance has a name; unnamed: {:?}\n{}",
+        tree.unnamed_names,
+        tree.dump()
+    );
+    assert!(
+        tree.nodes
+            .iter()
+            .any(|node| node.role == Role::Segment && node.name == "Violet"),
+        "the accent picker's choices are segments with their own names"
+    );
+    assert!(
+        tree.nodes
+            .iter()
+            .any(|node| node.role == Role::Tab && node.name == "Appearance"),
+        "the Settings sidebar is a row of tabs"
+    );
+    assert!(
+        tree.nodes
+            .iter()
+            .any(|node| node.role == Role::StatusBar && node.name == "Notifications"),
+        "the glyph-only bell is named by its tooltip"
+    );
+    assert!(
+        tree.dump().contains("segment \"Violet\""),
+        "the dump is a readable snapshot:\n{}",
+        tree.dump()
+    );
+
+    // Tab order is the tree's order: every step lands on the next focusable
+    // node, wrapping like `move_keyboard_focus` does.
+    let focusable: Vec<usize> = tree
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| !node.disabled && !node.container)
+        .map(|(index, _)| index)
+        .collect();
+    assert!(focusable.len() > 4, "Appearance has controls to walk");
+    let mut walked = Vec::new();
+    for _ in 0..focusable.len() {
+        let _ = key_press(&mut s, Key::Tab, Modifiers::NONE);
+        let _ = draw_frame(&mut s);
+        let tree = s.accessibility_tree();
+        assert_eq!(
+            tree.nodes.iter().filter(|node| node.focused).count(),
+            1,
+            "exactly one control owns the focus ring"
+        );
+        walked.push(tree.focused_index().expect("a focused node is in the tree"));
+    }
+    for pair in walked.windows(2) {
+        let [previous_node, next_node] = pair else {
+            continue;
+        };
+        let previous = focusable
+            .iter()
+            .position(|index| index == previous_node)
+            .expect("the focused node is focusable");
+        let next = focusable
+            .iter()
+            .position(|index| index == next_node)
+            .expect("the focused node is focusable");
+        assert_eq!(
+            next,
+            previous
+                .saturating_add(1)
+                .checked_rem(focusable.len())
+                .unwrap_or(0),
+            "Tab must follow the tree's paint order"
+        );
+    }
+}
+
+/// Keyboard only: no pointer event in this journey (batch §71).
+#[cfg(unix)]
+#[test]
+fn journey_every_surface_is_reachable_and_escapable_from_the_keyboard() {
+    use crate::a11y::Role;
+
+    let root = e2e_root("a11y-keyboard");
+    let folder = root.join("empty");
+    std::fs::create_dir_all(&folder).expect("an empty folder");
+
+    let mut s = shell();
+    let _ = draw_frame(&mut s);
+
+    // Tab to the Apps menu and open the launcher with Enter.
+    let mut reached = false;
+    for _ in 0..40 {
+        let _ = key_press(&mut s, Key::Tab, Modifiers::NONE);
+        let _ = draw_frame(&mut s);
+        if s.keyboard_focus() == Some(Hot::MenuApps) {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "the Apps menu is reachable with Tab alone");
+    let _ = key_press(&mut s, Key::Enter, Modifiers::NONE);
+    for _ in 0..30 {
+        s.tick_after(FRAME_MS);
+    }
+    let _ = draw_frame(&mut s);
+    assert!(
+        matches!(s.overlay, Overlay::Launcher { .. }),
+        "Enter on the Apps menu opens the launcher"
+    );
+    let tree = s.accessibility_tree();
+    assert!(
+        tree.nodes.iter().any(|node| node.role == Role::GridCell),
+        "the launcher's tiles are grid cells"
+    );
+    assert!(
+        tree.nodes
+            .iter()
+            .any(|node| node.row == Some(0) && node.col == Some(1)),
+        "a grid cell carries its row and column"
+    );
+    let before = match &s.overlay {
+        Overlay::Launcher { selected, .. } => *selected,
+        _ => 0,
+    };
+    let _ = key_press(&mut s, Key::Right, Modifiers::NONE);
+    let after = match &s.overlay {
+        Overlay::Launcher { selected, .. } => *selected,
+        _ => 0,
+    };
+    assert_eq!(after, before.saturating_add(1), "Right moves one grid cell");
+    let _ = key_press(&mut s, Key::Escape, Modifiers::NONE);
+    let _ = draw_frame(&mut s);
+    assert_eq!(s.overlay, Overlay::None, "Escape leaves the launcher");
+
+    // Files: the empty state's action is focusable and its dialog closes with
+    // Escape, so there is no focus trap.
+    s.open_app(App::Files);
+    s.files.path = folder.to_string_lossy().into_owned();
+    s.files.listed = None;
+    let _ = draw_frame(&mut s);
+    let mut on_action = false;
+    for _ in 0..160 {
+        let _ = key_press(&mut s, Key::Tab, Modifiers::NONE);
+        let _ = draw_frame(&mut s);
+        if s.keyboard_focus() == Some(Hot::Files(crate::apps::FilesHot::EmptyNewFolder)) {
+            on_action = true;
+            break;
+        }
+    }
+    assert!(
+        on_action,
+        "the empty state's New folder action is reachable by Tab"
+    );
+    let _ = key_press(&mut s, Key::Enter, Modifiers::NONE);
+    let _ = draw_frame(&mut s);
+    assert!(
+        matches!(s.files.dialog, Some(crate::apps::DialogKind::NewFolder)),
+        "Enter on the action opens the dialog"
+    );
+    let _ = key_press(&mut s, Key::Escape, Modifiers::NONE);
+    let _ = draw_frame(&mut s);
+    assert!(
+        s.files.dialog.is_none(),
+        "Escape closes the dialog instead of trapping focus"
+    );
+    let tree = s.accessibility_tree();
+    assert!(
+        tree.nodes.iter().any(|node| node.name == "New folder"),
+        "the empty state's action is in the tree with its label"
+    );
+}
+
 #[test]
 fn journey_browser_history_and_bookmarks_are_clickable_and_keep_visits() {
     let mut s = shell();

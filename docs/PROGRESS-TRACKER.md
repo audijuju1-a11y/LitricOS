@@ -7280,3 +7280,150 @@ so it now asserts the picker's chosen value instead.
 
 Base `d96807d`. This batch is committed on `main` and pushed; `HEAD ==
 origin/main` and the tracked worktree is empty at the end of the turn.
+
+---
+
+## 71. Batch: an accessibility tree built from what was drawn, and a keyboard that walks it (verified)
+
+### 71.1 Requirement
+
+The improvement plan names this batch and its proof
+(`docs/master-plan/28-whole-system-improvement-plan.md`, batch 71):
+
+> Accessibility tree: roles, names, focus order, keyboard-only proof | tree dump
+> test, e2e journey | here
+
+and the corpus item it closes (`Research-Deep-all/LitricOS UI UX Research Part 19 G
+Contrast Keyboard and Screen Readers.md`, `G` chapter): an interface that draws
+every control by hand must also be able to say what those controls are. §70 left
+this open in writing: "a tooltip that a screen reader cannot read is still open
+here". The batch contract's rule 5 applies: no claim without a tool, a command,
+an environment and `n`.
+
+### 71.2 The contract, and where it lives (file → line, verified with grep on this commit)
+
+| Piece | What it is | Line |
+| --- | --- | --- |
+| `Role` | the vocabulary: button, text, list, listitem, dialog, statusbar, tab, segment, grid, gridcell, window, progressbar | `src/litric-shell/src/a11y.rs:31` |
+| `Node` | one control: role, name, device-pixel rect, `focused`, `disabled`, `tooltip`, grid `row`/`col`, `container` | `src/litric-shell/src/a11y.rs:81` |
+| `Tree` | nodes in paint order, the `unnamed` count and the names of what could not be named, plus `dump()` | `src/litric-shell/src/a11y.rs:106`, `:121` |
+| `control_tooltip` | the one label a glyph-only control has — the §70 tooltip — used as its name | `src/litric-shell/src/a11y.rs:163` |
+| `Shell::accessibility_tree` | the projection: walks the frame's hotspot table (`Hotspots::ids()`) and builds nodes on demand | `src/litric-shell/src/shell.rs:11652` |
+| `Shell::a11y_name` | role and name per hotspot, from the text the surface already draws (labels, file names, page titles, accent names) | `src/litric-shell/src/shell.rs:11733` |
+| structural nodes | one `statusbar` container, one `grid` container and one `dialog` container, inserted before their first child | `src/litric-shell/src/shell.rs:11717` |
+
+The design is a **projection, not a second model**: the tree is built from the
+hotspot table the frame already produced, so a node cannot point at something
+that was not painted, and the Tab order *is* the tree order because
+`move_keyboard_focus` walks the same `Hotspots::ids()` filtered by
+`Hot::keyboard_focusable`. Names are the strings the surfaces already draw — the
+status controls' names are exactly the tooltips §70 added. A control whose label
+this build cannot know is **reported as unnamed**, never given a generic name:
+`Tree::unnamed` and `Tree::unnamed_names` exist so "Button" cannot stand in for a
+name and look accessible.
+
+### 71.3 Cost
+
+**0 work and 0 allocation per frame.** Nothing is constructed while painting; the
+tree is assembled once per call from the existing hotspot table
+(O(hotspots), a few dozen nodes), so an idle desktop with no assistive
+technology attached pays nothing. §55's "30 frames, no stat" and §56's "poll only
+at period" assertions still pass, and no golden frame changed: this batch draws
+no pixels.
+
+### 71.4 Keyboard-only proof, measured
+
+Two journeys, no pointer event in either:
+
+```bash
+cd src
+cargo test -p litric-shell --lib journey_accessibility_tree -- --nocapture
+cargo test -p litric-shell --lib journey_every_surface -- --nocapture
+```
+
+* `journey_accessibility_tree_names_controls_and_matches_the_tab_order`
+  (`src/litric-shell/src/e2e.rs:754`) draws Settings → Appearance and asserts:
+  `unnamed == 0` on that surface (the failure message prints the unnamed names
+  and the whole dump); the accent choices are `segment` nodes named Violet,
+  Teal, …; the sidebar is `tab` nodes named from `Page::title()`; the bell is a
+  `statusbar` node named by its tooltip; the dump contains
+  `segment "Violet"`; then it presses **Tab** once per focusable node and checks
+  that every step lands on the next node of the tree, wrapping like
+  `move_keyboard_focus`, and that exactly one node carries `focused`.
+* `journey_every_surface_is_reachable_and_escapable_from_the_keyboard`
+  (`src/litric-shell/src/e2e.rs:842`) Tab-reaches the Apps menu, opens the
+  launcher with Enter, asserts the tiles are `gridcell` nodes carrying
+  `row`/`col`, moves the selection with Right, leaves with Escape, then
+  Tab-reaches the Files empty state's "New folder" button, opens the dialog with
+  Enter and closes it with Escape — no trap.
+
+Both pass on this commit (`test result: ok`), and the tab-order journey is the
+one that proves the claim "focus order = tree order" rather than restating it.
+
+### 71.5 Sensitivity: removing the behaviour makes the tests fail
+
+Two probes, each run alone against the new tests:
+
+```text
+probe: every node reports focused=false
+panicked at litric-shell/src/e2e.rs:809:9:
+a focused node is in the tree
+test result: FAILED. 0 passed; 1 failed
+restored -> test result: ok. 1 passed
+
+probe: the accent choices stop being named
+panicked at litric-shell/src/e2e.rs:763:5:
+unnamed: ["Window(1)", "SettingsSidebarScroll", "Workspace(0)", ...]
+  left: 6
+  right: 0
+test result: FAILED. 0 passed; 1 failed
+restored -> test result: ok. 1 passed
+```
+
+The second probe is also the evidence for the naming rule: the shell reports the
+six hotspots it could not name by name, instead of inventing labels. (Those six
+were then mapped — window bodies, the Settings sidebar's scroll surface, and the
+workspace pips — which is why the committed test asserts zero.)
+
+### 71.6 Gates (run on this commit, real output)
+
+| Gate | Result |
+| --- | --- |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test --workspace` | **1,848 passed, 0 failed** (+2 against 1,846: the two journeys) |
+| `python3 ci/lint-doc-refs.py` | `OK: 1279 citation(s) across 156 document(s) resolve` |
+| `python3 ci/lint-file-safety.py` | `OK: 116 deletion site(s), all inside reviewed functions` |
+| `bash ci/verify.sh` | **32 pass, 2 fail, 3 skipped** — the pre-existing `mkosi config` and `dev key pairs` fails, unchanged |
+
+Mistakes hit and fixed: the first `unnamed == 0` attempt counted six structural
+hotspots as missing controls, which is how window bodies, the Settings
+sidebar's scroll surface and the workspace pips got names; the Tab-order check
+initially treated structural containers as stops, so `Node::container` now marks
+them and the check filters exactly the set `move_keyboard_focus` uses; clippy
+rejected `pair[0]`/`pair[1]` (rewritten as a slice pattern); and the new journeys
+are slow (≈36 s each) because they draw a frame per Tab — a cost in test time,
+not in the shell.
+
+### 71.7 Limits, stated plainly
+
+* **No assistive-technology integration.** This is a tree inside the process; no
+  AT-SPI/D-Bus endpoint, no screen-reader handshake and no announcement stream
+  exists yet. Nothing on a real desktop reads it.
+* **Coverage is not total.** Appearance asserts `unnamed == 0`, and the surfaces
+  the two journeys walk (status bar, launcher grid, Files empty state, dialog)
+  are named; the browser's tab strip, Trash rows, context menus, sort headers and
+  several scroll surfaces still contain hotspots with no name, and the tree
+  reports them rather than hiding them.
+* **Names are static or model strings, not localised at runtime** beyond what the
+  surfaces already print (the file rows and page titles are model strings; the
+  toolbar labels are the same literals the buttons draw).
+* **No accessibility for IME or high-contrast outside the existing theme gate**;
+  those remain settings/theme work, not tree work.
+* **A container's rectangle is the union of its children's extent** (the status
+  bar reports the width of what it draws), not a layout box of its own.
+
+### 71.8 Git
+
+Base `3fb0125`. This batch is committed on `main` and pushed; `HEAD ==
+origin/main` and the tracked worktree is empty at the end of the turn.

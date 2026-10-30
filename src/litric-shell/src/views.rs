@@ -3773,7 +3773,7 @@ fn draw_overlay(canvas: &mut Canvas, shell: &mut Shell, overlay: &Overlay) {
 /// applications and sends the other four through a launcher says that half the
 /// machine is somewhere else. [`Hot::DockItem`] keeps meaning an index into
 /// `App::ALL`, so nothing that clicks a dock item changes.
-const DOCK_PINNED: [usize; 8] = [3, 4, 5, 2, 0, 7, 1, 6];
+pub(crate) const DOCK_PINNED: [usize; 8] = [3, 4, 5, 2, 0, 7, 1, 6];
 
 /// The position in [`DOCK_PINNED`] of the first tile after the separator.
 const DOCK_SEPARATE_BEFORE: usize = 7;

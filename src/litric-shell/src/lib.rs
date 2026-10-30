@@ -37,6 +37,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod a11y;
 pub mod activity;
 pub mod anim;
 pub mod appicons;
