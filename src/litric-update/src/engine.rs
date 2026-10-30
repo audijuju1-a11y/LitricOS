@@ -400,11 +400,23 @@ impl Engine {
     /// # Errors
     /// [`UpdateError::NoPendingCandidate`] or an I/O failure.
     pub fn discard_pending(&mut self, now: Timestamp) -> Result<Event> {
+        self.reject_pending(RollbackReason::UserCancelled, now)
+    }
+
+    /// Reject the staged candidate with a named reason.
+    ///
+    /// The boot service uses this when the running system recorded a failed
+    /// health attempt: the active pointer never moves, the candidate is marked
+    /// bad and is no longer advertised as pending.
+    ///
+    /// # Errors
+    /// [`UpdateError::NoPendingCandidate`] or an I/O failure.
+    pub fn reject_pending(&mut self, reason: RollbackReason, now: Timestamp) -> Result<Event> {
         let pending = self
             .state
             .pending()
             .ok_or(UpdateError::NoPendingCandidate)?;
-        self.reject_candidate(pending, RollbackReason::UserCancelled, now)
+        self.reject_candidate(pending, reason, now)
     }
 
     /// Roll the active pointer back to the other committed generation.

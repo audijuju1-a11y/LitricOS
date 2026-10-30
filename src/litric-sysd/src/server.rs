@@ -142,6 +142,13 @@ impl Drop for ConnectionSlot {
 /// # Errors
 /// Any I/O error from `accept` that is not recoverable.
 pub fn serve(listener: &UnixListener, state: Sysd) -> io::Result<()> {
+    // The serve loop is the running-system side of the update health gate. The
+    // boot entrypoint recorded `booting` for one candidate attempt; only the
+    // loop that actually bound the socket can upgrade it to `healthy`. Failure
+    // here is logged, not fatal: a bad update root must not take down sysd.
+    if let Err(error) = state.attest_update_health(now()) {
+        eprintln!("litric-sysd: update health attestation failed: {error}");
+    }
     let shared = Arc::new(Mutex::new(state));
     let connections = Connections::new();
     for conn in listener.incoming() {

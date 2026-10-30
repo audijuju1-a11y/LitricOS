@@ -1,7 +1,8 @@
 # The update service: boot entrypoint, status, and the activation seam
 
 Status: implemented in §75; §76 adds crash-consistent state writes and a
-cross-process root lock. The engine from §74 is driven by the real
+cross-process root lock; §77 makes commit require health evidence written by
+the running system, not by the caller. The engine from §74 is driven by the real
 `litric-sysd` boot unit and exposed over the existing Unix socket. It is still
 not a bootloader, a partition writer or a signature verifier; those limits are
 listed at the end.
@@ -42,18 +43,24 @@ The entrypoint:
 
 1. opens `<root>/system/state`; a missing state prints
    `litric.update.state=uninitialized` and writes nothing;
-2. calls `Engine::note_boot`, which increments a staged candidate's attempt
-   count;
-3. prints `booting` with the attempt number, or `active` when no candidate is
+2. checks whether a `failed` health record names the exact pending
+   generation/attempt. If it does, the candidate is rejected under the root
+   lock (`outcome=rejected-health`, `last_result=reject:health-check`) and no
+   new attempt is counted;
+3. otherwise calls `Engine::note_boot`, which increments a staged candidate's
+   attempt count;
+4. when the result is `booting`, writes a `booting` health record for that
+   slot, version and attempt through the same atomic path as the state record;
+5. prints `booting` with the attempt number, or `active` when no candidate is
    staged;
-4. after the third recorded attempt, the fourth call makes the engine reject
+6. after the third recorded attempt, the fourth call makes the engine reject
    the candidate and clear it. The active pointer never moved, so the machine
    remains on the previously committed generation. The console says
    `outcome=rejected-budget` and `rollback=active-generation`;
-5. a damaged record prints `state=corrupt` and a reason, then the daemon still
+7. a damaged record prints `state=corrupt` and a reason, then the daemon still
    starts. A broken update record must not make a machine unbootable.
 
-Point 4 is deliberately not a call to `Engine::rollback`. A staged candidate
+Point 6 is deliberately not a call to `Engine::rollback`. A staged candidate
 is never the active pointer, so there is no other committed slot to switch to.
 The observable guarantee — the failed candidate is not advertised and the
 committed generation stays active — is the rollback that is possible at this
@@ -82,6 +89,12 @@ record in place; a crash after it leaves the new one. The temporary is never
 opened by `Store::load`: only `<system>/state` is. `Store::save` removes its own
 same-pid temporary before creating it, and removes it again if the write fails;
 temporaries left by an older process are ignored, not parsed.
+
+Health evidence (§77) uses that same primitive: its sibling temporary is
+`<system>/.health.tmp-<pid>`, it is fsynced before the rename, and the
+`system` directory is fsynced after it. It is a separate record from
+`<system>/state`; a commit reads both under the root lock. A leftover health
+temporary is never evidence.
 
 The state record is not the whole update. Slot trees and any future EROFS image
 are outside this ordering, and there is no power-cut matrix in CI.
@@ -136,6 +149,85 @@ tree may legitimately take minutes. `Drop` removes the lock only after
 re-reading it and matching the exact content this process wrote, so a reclaimed
 or replaced lock is never deleted by its old owner.
 
+## Boot-attested health evidence (§77)
+
+The state record can name a staged candidate and still say nothing about
+whether the running machine reached a usable serving state. §77 adds one
+record, `<system>/health`, written only by `litric-sysd`. It is bound to the
+candidate generation `(slot, version)` and to the exact attempt:
+
+```text
+litric-update-health\t1
+generation\tB
+version\t1.1.0
+attempt\t1
+at\t1800000000
+verdict\thealthy
+checks\troot,state,marker,serving
+```
+
+The record is at most 1 KiB, mode `0600`, and rejects a symlink, a non-regular
+file, a zero-length or overlong file, non-UTF-8 bytes, an unknown header, a
+missing/duplicate field, an attempt of zero, an unknown verdict or trailing
+records. `checks` is a bounded comma-separated diagnostic; it does not open the
+gate. `verdict` is `booting`, `healthy` or `failed`.
+
+The lifecycle is two-phase:
+
+1. `--boot` opens the engine, verifies the candidate marker and counts the
+   attempt. It then writes `verdict=booting` with
+   `checks=root,state,marker`. A write failure makes the boot entrypoint exit
+   non-zero (`health-io`); it does not pretend the attempt was attested.
+2. After the Unix socket is bound, the serve loop makes one non-blocking
+   attempt on the root lock. If the lock is free, the engine opens, the pending
+   generation still verifies, and the existing evidence names the same
+   slot/version/attempt with verdict `booting`, it replaces the record with
+   `verdict=healthy` and `checks=root,state,marker,serving`. If the lock is
+   busy, the state is absent/damaged, or the evidence does not match, it leaves
+the record alone and the commit gate stays closed. It does not wait for the
+lock and does not invent evidence for a manually started daemon.
+
+**What `healthy` means, concretely:** the boot entrypoint opened the generation
+record and verified the candidate slot/marker and counted this attempt; then
+the daemon bound its real Unix socket, entered the serve loop, reopened the same
+engine, and the candidate slot/marker and slot/version/attempt still matched.
+It does **not** mean the kernel booted from this slot, the network is up, the
+display works, a session exists, storage is mounted or a critical service is
+healthy. Those probes do not exist here.
+
+### Commit gate
+
+`UPDATE COMMIT` reopens the engine under the root lock, re-checks the pending
+candidate, and requires a valid record whose slot, version and attempt all
+match. The caller's `PASSED` word is only permission to ask.
+
+| Evidence for this candidate | Result | State |
+|---|---|---|
+| no record, or only a `.health.tmp-*` | `ERR health-missing` | unchanged |
+| zero-length, truncated, malformed, symlinked or unreadable | `ERR health-invalid` | unchanged |
+| candidate has `attempts=0` | `ERR health-not-booted` | unchanged |
+| valid record for another slot, version or attempt | `ERR health-stale` | unchanged |
+| matching `booting` (serve did not attest) | `ERR health-unattested` | unchanged |
+| matching `failed` | `ERR health-failed` | unchanged |
+| matching `healthy` | engine commit, which re-verifies the candidate | active pointer moves |
+
+There is no override flag. A malformed or stale record is refused before the
+engine's commit, so no partial activation is possible. A prior attempt's
+`healthy` record is not replayable: the attempt counter is part of the match.
+The record is read after the state, under the same lock, so a boot increment
+cannot land between the match and the commit.
+
+### Failed evidence and rollback coupling
+
+The next `--boot` reads `failed` evidence before counting a new attempt. If it
+names the exact pending generation/attempt, that boot calls
+`Engine::reject_pending(HealthCheck)` while holding the root lock: the candidate
+is cleared, the active pointer stays where it was, and the event says
+`reject:health-check`. This is the same observable return to the committed
+generation as the boot-budget path; it is not `Engine::rollback`, because the
+candidate was never active. A stale `failed` record for another generation or
+attempt is ignored.
+
 ## Read degradation precedence (§76)
 
 Status classifies what it observed in this order. The first matching row wins;
@@ -158,13 +250,33 @@ A leftover `.state.tmp-*` is not in this table because it is never a candidate
 for reading. Corruption in the primary record is never repaired by guessing
 which temporary was intended.
 
+Health evidence is a second dimension, considered after the state
+classification. A bad health record can close the commit gate but cannot turn
+`state=ready` into `state=corrupt`, and a missing health record is not a missing
+state record. The health reader's own precedence is:
+
+| # | Observation | Result |
+|---:|---|---|
+| H1 | `<system>/health` is absent (including a temp-only directory) | `health_evidence=absent`, `health_matches=0` |
+| H2 | path is a symlink/non-regular, unreadable, zero-length, over 1 KiB, non-UTF-8, unknown header, missing/duplicate field, bad number, unknown verdict or trailing record | `health_evidence=invalid` + `health_reason`, `health_matches=0` |
+| H3 | complete record | verdict/slot/version/attempt/at/checks; `health_matches=1` only for the exact pending slot/version/attempt |
+
+Status reads this under the same non-blocking snapshot lock as the state. A
+busy root reports `state=busy` and does not guess at health. Nothing in this
+reader writes, repairs or deletes the record; a damaged file stays damaged for
+an operator to inspect.
+
+The record is root-owned and mode `0600`, but it has no MAC or signature. A root
+process that can write the update root can forge it; this gate removes the
+ordinary IPC caller's ability to assert health, not a compromised root's.
+
 ## IPC schema
 
 `UPDATE STATUS` is read-only and needs no capability. It always answers, even
 when the answer is bad:
 
 ```text
-schema=2
+schema=3
 root=/var/lib/litric/update
 state=ready | uninitialized | corrupt | incomplete | disabled | busy | unavailable
 active_slot=A active_version=1.0.0 active_state=committed
@@ -175,6 +287,10 @@ can_rollback=0
 last_result=commit:health-check
 last_result_at=1800000000
 last_rollback_reason=manual
+health_evidence=healthy
+health_slot=B health_version=1.1.0 health_attempt=1
+health_at=1800000000 health_checks=root,state,marker,serving
+health_matches=1
 ```
 
 `state=incomplete` means the state file parsed but a slot directory or marker
@@ -183,13 +299,14 @@ it names is missing or mismatched. This is checked on every status query with
 `state=corrupt` means the record itself did not parse. `state=busy` is not a
 state error: a writer owns the root and the caller may retry.
 
-`UPDATE STATUS` is accepted bare (the schema-1 spelling), or with an explicit
-schema: `UPDATE STATUS 1` and `UPDATE STATUS 2` are served; the reply always
-states `schema=2` and echoes `requested_schema=<n>`. Schema 0 and schemas above
-2 are refused with `ERR schema-unsupported` rather than returning fields the
-caller did not ask for. Unknown fields are additive, so a schema-1 client that
-ignores them still works. The three mutating requests require the literal
-`CONFIRM` word:
+`UPDATE STATUS` is accepted bare (the current spelling), or with an explicit
+schema: `UPDATE STATUS 1`, `2` and `3` are served. The reply always states
+`schema=3` and echoes `requested_schema=<n>` when one was given. Schema 1 and 2
+answers omit the health fields; schema 3 (and bare) include them. Schema 0 and
+schemas above 3 are refused with `ERR schema-unsupported` rather than returning
+fields the caller did not ask for. Other fields are additive, so an older
+client that ignores unknown lines still works. The three mutating requests
+require the literal `CONFIRM` word:
 
 ```text
 UPDATE STAGE <version> <relative-path> CONFIRM
@@ -198,9 +315,11 @@ UPDATE ROLLBACK CONFIRM
 ```
 
 `STAGE` accepts only a relative path below `<root>/incoming`. Absolute paths,
-`.` and `..` are refused before the engine sees a source tree. `COMMIT` carries
-the caller's typed health result; the service does not probe anything. A
-`FAILED` signal is refused before the engine is called.
+`.` and `..` are refused before the engine sees a source tree. `COMMIT` still
+carries the caller's typed word, but that word is not evidence: `FAILED` is
+refused before the engine is called, and `PASSED` only permits the service to
+read the system-written record. Missing, stale, malformed, unattested or failed
+evidence is a typed `ERR health-*` and leaves the state byte-for-byte unchanged.
 
 ## Authorization
 
@@ -233,6 +352,12 @@ not a multi-user boundary.
 | state parses, slot/marker missing | `state=incomplete` + reason | operation-specific engine error |
 | candidate staged, marker absent | `state=incomplete` | `commit` refuses `incomplete` |
 | no pending candidate | `state=ready`, candidate `none` | `commit` refuses `no-pending` |
+| candidate never booted | `health_evidence=absent` | `commit` refuses `health-not-booted` |
+| no health record after a boot | `health_evidence=absent` | `commit` refuses `health-missing` |
+| health record malformed | `health_evidence=invalid` + reason | `commit` refuses `health-invalid` |
+| health record for another generation/attempt | health fields + `health_matches=0` | `commit` refuses `health-stale` |
+| boot record not upgraded by the serve loop | `health_evidence=booting` | `commit` refuses `health-unattested` |
+| running system recorded failure | `health_evidence=failed` | `commit` refuses `health-failed`; next boot rejects |
 | no other committed generation | `can_rollback=0` | `rollback` refuses `no-rollback-target` |
 
 No path panics. A status query is a question and must return a line even when
@@ -266,6 +391,21 @@ the real socket:
 * a leftover temporary plus truncated and zero-length primary files → the
   primary record degrades to `corrupt` and boot still exits 0.
 
+§77 adds real-binary/socket cases for:
+
+* boot → serve `healthy` → commit B, with the `<root>/user` canary unchanged;
+* no boot (`health-not-booted`) and a removed record with only a temp left
+  (`health-missing`), both with state bytes unchanged;
+* a wrong generation and a wrong attempt, each `health-stale` with state bytes
+  unchanged;
+* a system-written `failed` record → commit `health-failed`, then the next boot
+  rejects the candidate with `last_result=reject:health-check`;
+* zero-length, truncated and temp-only evidence → `invalid`/`absent`, typed
+  commit refusal, no panic, state unchanged;
+* replaying attempt 1's healthy record after boot attempt 2 → `health-stale`;
+* a boot and a commit started together → exactly one serialised outcome, and
+  status still answers with `state=ready`.
+
 ## What is still missing
 
 * **No bootloader integration.** The state file is not read by systemd-boot,
@@ -275,8 +415,11 @@ the real socket:
   dm-verity hash or signed boot entry is written.
 * **No signature, hash or monotonic counter.** `STAGE` trusts the tree already
   placed under `incoming`. Verification belongs before that placement.
-* **No real health checks.** `COMMIT PASSED` is the caller's assertion. Session,
-  storage and critical-service probes are still absent.
+* **No kernel/network/display/session/storage/critical-service probes.**
+  `healthy` means the boot entrypoint verified the candidate record and the
+  serve loop reached its accept loop on the real socket; it does not mean the
+  kernel came from this slot or that any service is healthy. Row 1147 (session,
+  storage, critical services) stays `S`.
 * **No power-cut test.** State writes are atomic and fsynced, but no power-cut
   matrix runs in CI.
 * **No power-cut test.** The state record uses the ordering above and simulated
@@ -290,4 +433,4 @@ the real socket:
 
 * [Update generations](2026-10-30-update-generations.md)
 * [ADR-0021](../adr/0021-deep-recovery-data-protection.md)
-* [whole-system plan §75 and §76](../master-plan/28-whole-system-improvement-plan.md)
+* [whole-system plan §75, §76 and §77](../master-plan/28-whole-system-improvement-plan.md)

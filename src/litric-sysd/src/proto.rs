@@ -148,8 +148,8 @@ pub enum Request {
     /// needs no capability.
     UpdateStatus {
         /// The status schema the caller understands, if it said so. `None` is
-        /// the schema-1 spelling; a client that understands the lock fields
-        /// asks for schema 2 explicitly.
+        /// the current spelling; schema 1 and 2 clients are still served, but
+        /// the system-written health fields are only returned for schema 3.
         schema: Option<u8>,
     },
     /// Stage a downloaded tree from the service's `incoming` directory.
@@ -163,7 +163,8 @@ pub enum Request {
     },
     /// Commit the staged candidate after the caller's health check.
     UpdateCommit {
-        /// The caller's health-check result; never a probe performed here.
+        /// The caller's permission to ask for activation. The system-written
+        /// health evidence, not this word, decides whether the commit happens.
         health: HealthSignal,
         /// Whether the caller confirmed the activation in the moment.
         consent: bool,

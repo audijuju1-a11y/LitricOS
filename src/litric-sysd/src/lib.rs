@@ -45,6 +45,7 @@ pub mod proto;
 pub mod providers;
 pub mod state;
 pub mod update;
+mod update_health;
 pub mod update_lock;
 
 #[cfg(unix)]

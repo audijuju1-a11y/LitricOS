@@ -209,6 +209,19 @@ impl Sysd {
         self
     }
 
+    /// Let the runnning serve loop attest the candidate booted by `--boot`.
+    ///
+    /// This is deliberately best-effort at the caller: a corrupt or absent
+    /// update root must not stop the daemon from serving the rest of the
+    /// machine. A failure is logged by the server, and the commit gate stays
+    /// closed until the evidence exists.
+    ///
+    /// # Errors
+    /// A root lock or I/O failure, or a health record that cannot be written.
+    pub fn attest_update_health(&self, now: Timestamp) -> Result<(), crate::update::UpdateFailure> {
+        self.updates.attest_serving(now).map(|_| ())
+    }
+
     /// Attach the durable grant record at `path`.
     ///
     /// Three outcomes, all deliberate:
@@ -604,9 +617,10 @@ impl Sysd {
     ///
     /// Schema 0 has never existed and a schema above [`crate::update::SCHEMA`]
     /// asks for fields this build does not have; both are typed refusals rather
-    /// than a truncated answer a newer client could mistake for schema 2. A
-    /// schema-1 client is served the schema-2 answer: the extra lines are
-    /// additive and a client that ignores unknown fields still works.
+    /// than a truncated answer a newer client could mistake for schema 3. A
+    /// schema-1 or schema-2 client is served the schema-3 answer with the
+    /// health fields omitted: the remaining lines are additive and a client
+    /// that ignores unknown fields still works.
     fn update_status(&self, requested: Option<u8>, now: Timestamp) -> Response {
         if let Some(schema) = requested {
             if schema == 0 || schema > crate::update::SCHEMA {

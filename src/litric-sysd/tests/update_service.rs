@@ -79,6 +79,27 @@ fn lock_body(pid: u32) -> String {
     format!("litric-update-lock\t1\npid\t{pid}\nat\t1\nreason\tstage\n")
 }
 
+fn health_path(root: &Path) -> PathBuf {
+    root.join("system/health")
+}
+
+fn health_body(slot: &str, version: &str, attempt: u8, verdict: &str) -> String {
+    format!(
+        "litric-update-health\t1\ngeneration\t{slot}\nversion\t{version}\nattempt\t{attempt}\nat\t1\nverdict\t{verdict}\nchecks\troot,state,marker,serving\n"
+    )
+}
+
+fn query_command(socket: &Path, request: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_litric-sysd"));
+    command
+        .arg("--query")
+        .arg(request)
+        .arg("--socket")
+        .arg(socket)
+        .env("TZ", "UTC");
+    command
+}
+
 struct Daemon {
     child: Child,
     socket: PathBuf,
@@ -167,6 +188,17 @@ fn line<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
     text.lines().find(|line| line.starts_with(prefix))
 }
 
+fn wait_for_healthy(daemon: &Daemon) -> String {
+    for _ in 0..100 {
+        let (ok, status) = daemon.ask("UPDATE STATUS 3");
+        if ok && line(&status, "health_evidence=") == Some("health_evidence=healthy") {
+            return status;
+        }
+        sleep(Duration::from_millis(5));
+    }
+    panic!("the serve loop did not attest healthy health evidence");
+}
+
 #[test]
 fn boot_status_commit_and_rollback_use_the_real_socket_and_keep_user_data() {
     let root = scratch("commit");
@@ -188,7 +220,7 @@ fn boot_status_commit_and_rollback_use_the_real_socket_and_keep_user_data() {
     let daemon = Daemon::start(&root, "commit");
     let (ok, status) = daemon.ask("UPDATE STATUS");
     assert!(ok, "{status}");
-    assert_eq!(line(&status, "schema="), Some("schema=2"));
+    assert_eq!(line(&status, "schema="), Some("schema=3"));
     assert_eq!(line(&status, "state="), Some("state=ready"));
     assert_eq!(line(&status, "active_slot="), Some("active_slot=A"));
     assert_eq!(line(&status, "candidate_slot="), Some("candidate_slot=B"));
@@ -196,6 +228,13 @@ fn boot_status_commit_and_rollback_use_the_real_socket_and_keep_user_data() {
         line(&status, "candidate_attempts="),
         Some("candidate_attempts=1")
     );
+    assert_eq!(
+        line(&status, "health_evidence="),
+        Some("health_evidence=healthy")
+    );
+    assert_eq!(line(&status, "health_slot="), Some("health_slot=B"));
+    assert_eq!(line(&status, "health_attempt="), Some("health_attempt=1"));
+    assert_eq!(line(&status, "health_matches="), Some("health_matches=1"));
 
     // A schema-2 client asks explicitly and gets the lock fields' schema. A
     // schema-1 client (the bare verb above) gets the same additive answer. A
@@ -464,6 +503,296 @@ fn interrupted_writes_are_ignored_or_degrade_without_a_panic() {
         line(&boot, "litric.update.state="),
         Some("litric.update.state=corrupt")
     );
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn commit_without_a_boot_attempt_is_refused_before_any_state_change() {
+    let root = scratch("health-not-booted");
+    init_and_stage(&root);
+    let daemon = Daemon::start(&root, "health-not-booted");
+    let (ok, status) = daemon.ask("UPDATE STATUS 3");
+    assert!(ok, "{status}");
+    assert_eq!(
+        line(&status, "health_evidence="),
+        Some("health_evidence=absent")
+    );
+    let before = fs::read(root.join("system/state")).expect("state before");
+    let (ok, reply) = daemon.ask("UPDATE COMMIT PASSED CONFIRM");
+    assert!(!ok, "no boot, no commit: {reply}");
+    assert!(reply.starts_with("ERR health-not-booted"), "{reply}");
+    assert_eq!(
+        fs::read(root.join("system/state")).expect("state after"),
+        before
+    );
+    let (_, status) = daemon.ask("UPDATE STATUS 3");
+    assert_eq!(line(&status, "active_slot="), Some("active_slot=A"));
+    assert_eq!(line(&status, "candidate_slot="), Some("candidate_slot=B"));
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn missing_evidence_after_a_boot_is_refused_and_the_temporary_is_not_evidence() {
+    let root = scratch("health-missing");
+    init_and_stage(&root);
+    run_boot(&root);
+    let daemon = Daemon::start(&root, "health-missing");
+    let healthy = wait_for_healthy(&daemon);
+    assert_eq!(
+        line(&healthy, "health_evidence="),
+        Some("health_evidence=healthy")
+    );
+    // Move the live record aside as if the atomic write had not published it.
+    fs::rename(health_path(&root), root.join("system/.health.tmp-999"))
+        .expect("make health missing");
+    let before = fs::read(root.join("system/state")).expect("state before");
+    let (ok, reply) = daemon.ask("UPDATE COMMIT PASSED CONFIRM");
+    assert!(!ok, "{reply}");
+    assert!(reply.starts_with("ERR health-missing"), "{reply}");
+    assert_eq!(
+        fs::read(root.join("system/state")).expect("state after"),
+        before
+    );
+    let (_, status) = daemon.ask("UPDATE STATUS 3");
+    assert_eq!(
+        line(&status, "health_evidence="),
+        Some("health_evidence=absent")
+    );
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn evidence_for_the_other_generation_is_stale_and_cannot_commit() {
+    let root = scratch("health-stale-generation");
+    init_and_stage(&root);
+    run_boot(&root);
+    let daemon = Daemon::start(&root, "health-stale-generation");
+    wait_for_healthy(&daemon);
+    fs::write(health_path(&root), health_body("A", "1.1.0", 1, "healthy"))
+        .expect("stale generation evidence");
+    let before = fs::read(root.join("system/state")).expect("state before");
+    let (ok, reply) = daemon.ask("UPDATE COMMIT PASSED CONFIRM");
+    assert!(!ok, "{reply}");
+    assert!(reply.starts_with("ERR health-stale"), "{reply}");
+    assert!(reply.contains("slot A"), "{reply}");
+    assert_eq!(
+        fs::read(root.join("system/state")).expect("state after"),
+        before
+    );
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn evidence_for_another_attempt_is_stale_and_cannot_commit() {
+    let root = scratch("health-stale-attempt");
+    init_and_stage(&root);
+    run_boot(&root);
+    let daemon = Daemon::start(&root, "health-stale-attempt");
+    wait_for_healthy(&daemon);
+    fs::write(health_path(&root), health_body("B", "1.1.0", 2, "healthy"))
+        .expect("stale attempt evidence");
+    let before = fs::read(root.join("system/state")).expect("state before");
+    let (ok, reply) = daemon.ask("UPDATE COMMIT PASSED CONFIRM");
+    assert!(!ok, "{reply}");
+    assert!(reply.starts_with("ERR health-stale"), "{reply}");
+    assert!(reply.contains("attempt 1"), "{reply}");
+    assert_eq!(
+        fs::read(root.join("system/state")).expect("state after"),
+        before
+    );
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn failed_evidence_refuses_commit_and_the_next_boot_rejects_the_candidate() {
+    let root = scratch("health-failed");
+    init_and_stage(&root);
+    run_boot(&root);
+    let daemon = Daemon::start(&root, "health-failed");
+    wait_for_healthy(&daemon);
+    fs::write(health_path(&root), health_body("B", "1.1.0", 1, "failed")).expect("failed evidence");
+    let before = fs::read(root.join("system/state")).expect("state before");
+    let (ok, reply) = daemon.ask("UPDATE COMMIT PASSED CONFIRM");
+    assert!(!ok, "{reply}");
+    assert!(reply.starts_with("ERR health-failed"), "{reply}");
+    assert_eq!(
+        fs::read(root.join("system/state")).expect("state after"),
+        before
+    );
+
+    let boot = run_boot(&root);
+    assert_eq!(
+        line(&boot, "litric.update.outcome="),
+        Some("litric.update.outcome=rejected-health"),
+        "{boot}"
+    );
+    assert_eq!(
+        line(&boot, "litric.update.rollback="),
+        Some("litric.update.rollback=active-generation")
+    );
+    let (_, status) = daemon.ask("UPDATE STATUS 3");
+    assert_eq!(line(&status, "active_slot="), Some("active_slot=A"));
+    assert_eq!(
+        line(&status, "candidate_slot="),
+        Some("candidate_slot=none")
+    );
+    assert_eq!(
+        line(&status, "last_result="),
+        Some("last_result=reject:health-check")
+    );
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn truncated_zero_and_temp_only_health_evidence_degrade_without_a_panic() {
+    let root = scratch("health-corrupt");
+    init_and_stage(&root);
+    run_boot(&root);
+    let daemon = Daemon::start(&root, "health-corrupt");
+    wait_for_healthy(&daemon);
+    let state = root.join("system/state");
+    let before = fs::read(&state).expect("state before");
+
+    fs::write(health_path(&root), "").expect("zero-length health");
+    let (_, status) = daemon.ask("UPDATE STATUS 3");
+    assert_eq!(
+        line(&status, "health_evidence="),
+        Some("health_evidence=invalid")
+    );
+    let (ok, reply) = daemon.ask("UPDATE COMMIT PASSED CONFIRM");
+    assert!(!ok, "{reply}");
+    assert!(reply.starts_with("ERR health-invalid"), "{reply}");
+    assert_eq!(fs::read(&state).expect("state after zero"), before);
+
+    fs::write(health_path(&root), "litric-update-health\t1\n").expect("truncated health");
+    let (_, status) = daemon.ask("UPDATE STATUS 3");
+    assert_eq!(
+        line(&status, "health_evidence="),
+        Some("health_evidence=invalid")
+    );
+    let (ok, reply) = daemon.ask("UPDATE COMMIT PASSED CONFIRM");
+    assert!(!ok, "{reply}");
+    assert!(reply.starts_with("ERR health-invalid"), "{reply}");
+    assert_eq!(fs::read(&state).expect("state after truncated"), before);
+
+    fs::rename(health_path(&root), root.join("system/.health.tmp-999"))
+        .expect("leave only a temporary");
+    let (_, status) = daemon.ask("UPDATE STATUS 3");
+    assert_eq!(
+        line(&status, "health_evidence="),
+        Some("health_evidence=absent")
+    );
+    let (ok, reply) = daemon.ask("UPDATE COMMIT PASSED CONFIRM");
+    assert!(!ok, "{reply}");
+    assert!(reply.starts_with("ERR health-missing"), "{reply}");
+    assert_eq!(fs::read(&state).expect("state after temp-only"), before);
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn a_prior_attempts_healthy_evidence_cannot_be_replayed_for_a_new_attempt() {
+    let root = scratch("health-replay");
+    init_and_stage(&root);
+    run_boot(&root);
+    let daemon = Daemon::start(&root, "health-replay");
+    wait_for_healthy(&daemon);
+    let healthy = fs::read(health_path(&root)).expect("healthy evidence");
+    let boot = run_boot(&root);
+    assert_eq!(
+        line(&boot, "litric.update.attempt="),
+        Some("litric.update.attempt=2")
+    );
+    fs::write(health_path(&root), healthy).expect("replay attempt 1");
+    let before = fs::read(root.join("system/state")).expect("state before");
+    let (ok, reply) = daemon.ask("UPDATE COMMIT PASSED CONFIRM");
+    assert!(!ok, "{reply}");
+    assert!(reply.starts_with("ERR health-stale"), "{reply}");
+    assert_eq!(
+        fs::read(root.join("system/state")).expect("state after"),
+        before
+    );
+    let (_, status) = daemon.ask("UPDATE STATUS 3");
+    assert_eq!(
+        line(&status, "candidate_attempts="),
+        Some("candidate_attempts=2")
+    );
+    daemon.stop();
+    cleanup(&root);
+}
+
+#[test]
+fn a_boot_and_a_commit_cannot_interleave_under_the_root_lock() {
+    let root = scratch("health-concurrent");
+    init_and_stage(&root);
+    run_boot(&root);
+    let daemon = Daemon::start(&root, "health-concurrent");
+    wait_for_healthy(&daemon);
+
+    let boot = boot_command(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("boot process");
+    let commit = query_command(&daemon.socket, "UPDATE COMMIT PASSED CONFIRM")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("commit process");
+    let boot = boot.wait_with_output().expect("boot result");
+    let commit = commit.wait_with_output().expect("commit result");
+    assert!(
+        boot.status.success(),
+        "boot failed: {}",
+        String::from_utf8_lossy(&boot.stderr)
+    );
+    let commit_text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&commit.stdout),
+        String::from_utf8_lossy(&commit.stderr)
+    );
+    let (ok, status) = daemon.ask("UPDATE STATUS 3");
+    assert!(ok, "{status}");
+    assert_eq!(line(&status, "state="), Some("state=ready"));
+    if commit.status.success() {
+        assert_eq!(
+            line(&status, "active_slot="),
+            Some("active_slot=B"),
+            "{status}"
+        );
+        assert_eq!(
+            line(&status, "candidate_slot="),
+            Some("candidate_slot=none"),
+            "{status}"
+        );
+    } else {
+        assert!(
+            commit_text.contains("ERR health-unattested")
+                || commit_text.contains("ERR health-stale"),
+            "the serialised loser must be a typed health refusal: {commit_text}"
+        );
+        assert_eq!(
+            line(&status, "active_slot="),
+            Some("active_slot=A"),
+            "{status}"
+        );
+        assert_eq!(
+            line(&status, "candidate_slot="),
+            Some("candidate_slot=B"),
+            "{status}"
+        );
+        assert_eq!(
+            line(&status, "candidate_attempts="),
+            Some("candidate_attempts=2"),
+            "{status}"
+        );
+    }
     daemon.stop();
     cleanup(&root);
 }

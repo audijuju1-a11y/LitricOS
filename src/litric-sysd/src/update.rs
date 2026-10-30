@@ -7,7 +7,8 @@
 //! * resolve one configured root, never a path from a request;
 //! * turn the engine's typed results into the daemon's line protocol;
 //! * keep the boot entrypoint (`litric-sysd --boot`) separate from the socket
-//!   service, so a boot attempt is counted before any client can ask questions.
+//!   service, so a boot attempt is counted and attested before any client can
+//!   ask to commit.
 //!
 //! # What the status is allowed to say
 //!
@@ -18,14 +19,15 @@
 //! cases. No status line is a guess: `none` means the engine has no record, and
 //! `attempts=0` always means zero recorded attempts rather than "unknown".
 //!
-//! # Health is a signal, not a probe
+//! # Health is boot-attested evidence
 //!
-//! `commit` accepts [`HealthSignal`] from the caller. This module does not run
-//! a session, mount a storage domain or ask a service whether it is healthy;
-//! the engine's original contract is that those checks happen before the commit
-//! seam. The signal is explicit and typed so a failed check cannot be
-//! accidental, and the protocol requires the confirmation word so a single
-//! malformed line cannot activate a generation.
+//! [`HealthSignal`] from the caller is only permission to ask for a commit. The
+//! running system writes `<system>/health`: `--boot` records `booting` after it
+//! has opened the record and verified the candidate marker, and the serve loop
+//! upgrades that exact slot/version/attempt to `healthy` once it is ready. A
+//! commit requires a matching `healthy` record; a caller cannot manufacture the
+//! evidence. This still does not run a session, mount a storage domain or ask a
+//! critical service whether it is healthy, and the design note says so plainly.
 //!
 //! # The boot budget and "rollback"
 //!
@@ -44,11 +46,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use litric_core::Version;
 use litric_update::{
-    BootOutcome, Engine, Event, EventKind, GenerationState, RollbackReason, UpdateError,
+    BootOutcome, Engine, Event, EventKind, GenerationState, RollbackReason, Slot, UpdateError,
     UpdateState,
 };
 
 use crate::state::Timestamp;
+use crate::update_health::{self, HealthEvidence, HealthRead, HealthVerdict};
 use crate::update_lock::{acquire, try_acquire, LockError};
 
 /// The update IPC schema reported by `UPDATE STATUS`.
@@ -56,15 +59,19 @@ use crate::update_lock::{acquire, try_acquire, LockError};
 /// It is separate from `litric-update`'s on-disk state version: the wire may
 /// grow a field without changing the record on disk, and a client must not
 /// mistake the two.
-pub const SCHEMA: u8 = 2;
+pub const SCHEMA: u8 = 3;
 
 /// The root installed by the image. One root, one writer.
 pub const DEFAULT_ROOT: &str = "/var/lib/litric/update";
 
 /// What the caller says its health check concluded.
+///
+/// `Passed` is only permission to ask for a commit. The service still requires
+/// a system-written `healthy` evidence record for the exact candidate
+/// generation and attempt; a caller cannot satisfy the gate by assertion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealthSignal {
-    /// The caller's checks passed. The engine still verifies the marker.
+    /// The caller believes its checks passed. Evidence still decides.
     Passed,
     /// The caller's checks failed. No commit is attempted.
     Failed,
@@ -91,17 +98,84 @@ impl HealthSignal {
     }
 }
 
+/// Why health evidence cannot authorise this commit.
+///
+/// These are service-level refusals, not generation-engine errors: the candidate
+/// may be perfectly staged and the caller may have sent `PASSED`, but the
+/// running system did not attest this exact attempt.
+#[derive(Debug)]
+pub enum HealthError {
+    /// No health record exists under the update root.
+    Missing,
+    /// The candidate has never booted, so no attempt exists to attest.
+    NotBooted,
+    /// Evidence exists but names another slot, version or attempt.
+    Stale {
+        /// The candidate attempt the commit is for.
+        expected: String,
+        /// The attempt the evidence names.
+        found: String,
+    },
+    /// Evidence exists but is truncated, zero-length, malformed or unreadable.
+    Invalid(String),
+    /// The running system recorded that the attempt failed.
+    Failed,
+    /// The boot entrypoint recorded the attempt but the serve loop did not
+    /// upgrade it to healthy.
+    Unattested,
+    /// The evidence record could not be written.
+    Io(String),
+}
+
+impl HealthError {
+    /// The stable `ERR <kind>` token.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Missing => "health-missing",
+            Self::NotBooted => "health-not-booted",
+            Self::Stale { .. } => "health-stale",
+            Self::Invalid(_) => "health-invalid",
+            Self::Failed => "health-failed",
+            Self::Unattested => "health-unattested",
+            Self::Io(_) => "health-io",
+        }
+    }
+}
+
+impl core::fmt::Display for HealthError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Missing => f.write_str("no health evidence for this update root"),
+            Self::NotBooted => f.write_str("the candidate has not booted yet"),
+            Self::Stale { expected, found } => write!(
+                f,
+                "health evidence is for {found}, but commit is for {expected}"
+            ),
+            Self::Invalid(reason) => write!(f, "health evidence is invalid: {reason}"),
+            Self::Failed => f.write_str("the running system recorded a failed health attempt"),
+            Self::Unattested => {
+                f.write_str("the candidate booted but the serve loop has not attested it")
+            }
+            Self::Io(reason) => write!(f, "health evidence could not be written: {reason}"),
+        }
+    }
+}
+
 /// Why a service operation failed.
 ///
 /// Lock failures are deliberately separate from engine failures: a caller that
 /// got `locked` must retry the whole read-modify-write, while `invalid-state`
-/// means the record needs operator attention. Both are typed IPC errors.
+/// means the record needs operator attention. Health refusals are separate
+/// again so a caller can tell "boot the candidate" from "stage is incomplete".
 #[derive(Debug)]
 pub enum UpdateFailure {
     /// The engine refused or could not complete the operation.
     Update(UpdateError),
     /// Another process owns the root.
     Lock(LockError),
+    /// The system-written health evidence does not authorise this attempt.
+    Health(HealthError),
 }
 
 impl UpdateFailure {
@@ -111,6 +185,7 @@ impl UpdateFailure {
         match self {
             Self::Update(error) => error.kind(),
             Self::Lock(error) => error.kind(),
+            Self::Health(error) => error.kind(),
         }
     }
 }
@@ -120,6 +195,7 @@ impl core::fmt::Display for UpdateFailure {
         match self {
             Self::Update(error) => error.fmt(f),
             Self::Lock(error) => error.fmt(f),
+            Self::Health(error) => error.fmt(f),
         }
     }
 }
@@ -133,6 +209,12 @@ impl From<UpdateError> for UpdateFailure {
 impl From<LockError> for UpdateFailure {
     fn from(error: LockError) -> Self {
         Self::Lock(error)
+    }
+}
+
+impl From<HealthError> for UpdateFailure {
+    fn from(error: HealthError) -> Self {
+        Self::Health(error)
     }
 }
 
@@ -187,6 +269,7 @@ impl UpdateService {
         if let Some(schema) = requested_schema {
             lines.push(format!("requested_schema={schema}"));
         }
+        let health_visible = requested_schema.is_none() || requested_schema == Some(SCHEMA);
         let Some(root) = self.root.clone() else {
             lines.push("state=disabled".to_owned());
             return lines;
@@ -230,6 +313,7 @@ impl UpdateService {
         // Read under the lock. The boot entrypoint is a separate process that
         // writes this same root; a status query must show what is on disk, not
         // what this process last remembered.
+        let mut health_target: Option<(Slot, Version, u8)> = None;
         match Engine::open(&root) {
             Ok(engine) => {
                 let state = engine.state();
@@ -256,6 +340,12 @@ impl UpdateService {
                         lines.push(format!("reason={error}"));
                     }
                 }
+                if let Some(pending) = state.pending() {
+                    if let Some(generation) = state.generation(pending) {
+                        health_target =
+                            Some((pending, generation.version.clone(), generation.attempts));
+                    }
+                }
                 append_state(&mut lines, state);
             }
             Err(UpdateError::MissingState(_)) => {
@@ -266,6 +356,9 @@ impl UpdateService {
                 lines.push("state=corrupt".to_owned());
                 lines.push(format!("reason={error}"));
             }
+        }
+        if health_visible {
+            append_health(&mut lines, &root, health_target.as_ref());
         }
         if let Some(error) = last_error {
             lines.push(format!("last_error={error}"));
@@ -360,7 +453,45 @@ impl UpdateService {
         };
         let result = (|| -> Result<_, UpdateFailure> {
             let mut engine = Engine::open(&root)?;
-            engine.commit(now).map_err(UpdateFailure::Update)
+            let pending = engine
+                .state()
+                .pending()
+                .ok_or(UpdateError::NoPendingCandidate)?;
+            let generation = engine
+                .state()
+                .generation(pending)
+                .ok_or(UpdateError::NoPendingCandidate)?;
+            let version = generation.version.clone();
+            let attempt = generation.attempts;
+            if attempt == 0 {
+                return Err(HealthError::NotBooted.into());
+            }
+            match update_health::read(&root) {
+                HealthRead::Missing => Err(HealthError::Missing.into()),
+                HealthRead::Invalid(reason) => Err(HealthError::Invalid(reason).into()),
+                HealthRead::Valid(evidence) => {
+                    if !evidence.matches(pending, &version, attempt) {
+                        return Err(HealthError::Stale {
+                            expected: format!(
+                                "slot {}/version {version}/attempt {attempt}",
+                                pending.as_str()
+                            ),
+                            found: format!(
+                                "slot {}/version {}/attempt {}",
+                                evidence.slot.as_str(),
+                                evidence.version,
+                                evidence.attempt
+                            ),
+                        }
+                        .into());
+                    }
+                    match evidence.verdict {
+                        HealthVerdict::Healthy => engine.commit(now).map_err(UpdateFailure::Update),
+                        HealthVerdict::Booting => Err(HealthError::Unattested.into()),
+                        HealthVerdict::Failed => Err(HealthError::Failed.into()),
+                    }
+                }
+            }
         })();
         match result {
             Ok(event) => {
@@ -412,6 +543,63 @@ impl UpdateService {
             }
         }
     }
+
+    /// Upgrade the boot entrypoint's evidence once the serve loop is ready.
+    ///
+    /// The evidence must already name the current candidate slot, version and
+    /// attempt with verdict `booting`. This method does not invent evidence for
+    /// a manual daemon start: if there is no matching boot record, it leaves the
+    /// root alone and the commit gate stays closed. It uses a single
+    /// non-blocking lock attempt so a live writer delays serving by nothing.
+    pub fn attest_serving(&self, now: Timestamp) -> Result<bool, UpdateFailure> {
+        let Some(root) = self.root.clone() else {
+            return Ok(false);
+        };
+        let _lock = match try_acquire(&root, "serve", now) {
+            Ok(lock) => lock,
+            Err(LockError::Locked(_)) | Err(LockError::Contended) => return Ok(false),
+            Err(error) => return Err(UpdateFailure::Lock(error)),
+        };
+        let engine = match Engine::open(&root) {
+            Ok(engine) => engine,
+            Err(UpdateError::MissingState(_)) => return Ok(false),
+            Err(error) => return Err(UpdateFailure::Update(error)),
+        };
+        let Some(pending) = engine.state().pending() else {
+            return Ok(false);
+        };
+        let Some(generation) = engine.state().generation(pending) else {
+            return Ok(false);
+        };
+        if generation.attempts == 0 || engine.verify_generation(pending).is_err() {
+            return Ok(false);
+        }
+        match update_health::read(&root) {
+            HealthRead::Valid(evidence)
+                if evidence.matches(pending, &generation.version, generation.attempts)
+                    && evidence.verdict == HealthVerdict::Booting =>
+            {
+                let healthy = HealthEvidence::new(
+                    pending,
+                    generation.version.clone(),
+                    generation.attempts,
+                    now,
+                    HealthVerdict::Healthy,
+                    "root,state,marker,serving",
+                );
+                update_health::save(&root, &healthy)
+                    .map_err(|error| UpdateFailure::Health(HealthError::Io(error.to_string())))?;
+                Ok(true)
+            }
+            HealthRead::Valid(evidence)
+                if evidence.matches(pending, &generation.version, generation.attempts)
+                    && evidence.verdict == HealthVerdict::Healthy =>
+            {
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
 }
 
 fn now_timestamp() -> Timestamp {
@@ -444,34 +632,58 @@ pub fn boot(root: &Path, now: Timestamp) -> Result<Vec<String>, UpdateFailure> {
     match Engine::open(root) {
         Ok(mut engine) => {
             lines.push("litric.update.state=ready".to_owned());
-            match engine.note_boot(now) {
-                Ok(BootOutcome::Active { slot }) => {
-                    lines.push("litric.update.outcome=active".to_owned());
-                    lines.push(format!("litric.update.slot={}", slot.as_str()));
-                }
-                Ok(BootOutcome::Booting { slot, attempt }) => {
-                    lines.push("litric.update.outcome=booting".to_owned());
-                    lines.push(format!("litric.update.slot={}", slot.as_str()));
-                    lines.push(format!("litric.update.attempt={attempt}"));
-                }
-                Ok(BootOutcome::CandidateRejected { slot, attempts }) => {
-                    // The active pointer never moved. This is the engine's
-                    // automatic return to the committed generation: the failed
-                    // candidate is cleared, not activated and then switched.
-                    lines.push("litric.update.outcome=rejected-budget".to_owned());
-                    lines.push(format!("litric.update.slot={}", slot.as_str()));
-                    lines.push(format!("litric.update.attempts={attempts}"));
-                    lines.push("litric.update.rollback=active-generation".to_owned());
-                }
-                Err(error) => {
+            if failed_health_for_pending(&engine, root) {
+                let slot = engine
+                    .state()
+                    .pending()
+                    .ok_or(UpdateError::NoPendingCandidate)?;
+                let attempts = engine
+                    .state()
+                    .generation(slot)
+                    .map_or(0, |generation| generation.attempts);
+                if let Err(error) = engine.reject_pending(RollbackReason::HealthCheck, now) {
                     lines.push("litric.update.outcome=error".to_owned());
                     lines.push(format!("litric.update.reason={error}"));
                     lines.push("litric.update.ready=0".to_owned());
                     return Err(UpdateFailure::Update(error));
                 }
-                // BootOutcome is non-exhaustive. A future outcome must be
-                // reported as unrecognised rather than folded into a success.
-                Ok(_) => lines.push("litric.update.outcome=unrecognised".to_owned()),
+                lines.push("litric.update.outcome=rejected-health".to_owned());
+                lines.push(format!("litric.update.slot={}", slot.as_str()));
+                lines.push(format!("litric.update.attempts={attempts}"));
+                lines.push("litric.update.rollback=active-generation".to_owned());
+                lines.push("litric.update.health=failed".to_owned());
+            } else {
+                match engine.note_boot(now) {
+                    Ok(BootOutcome::Active { slot }) => {
+                        lines.push("litric.update.outcome=active".to_owned());
+                        lines.push(format!("litric.update.slot={}", slot.as_str()));
+                    }
+                    Ok(BootOutcome::Booting { slot, attempt }) => {
+                        write_boot_health(root, &engine, slot, attempt, now)?;
+                        lines.push("litric.update.outcome=booting".to_owned());
+                        lines.push(format!("litric.update.slot={}", slot.as_str()));
+                        lines.push(format!("litric.update.attempt={attempt}"));
+                        lines.push("litric.update.health=booting".to_owned());
+                    }
+                    Ok(BootOutcome::CandidateRejected { slot, attempts }) => {
+                        // The active pointer never moved. This is the engine's
+                        // automatic return to the committed generation: the failed
+                        // candidate is cleared, not activated and then switched.
+                        lines.push("litric.update.outcome=rejected-budget".to_owned());
+                        lines.push(format!("litric.update.slot={}", slot.as_str()));
+                        lines.push(format!("litric.update.attempts={attempts}"));
+                        lines.push("litric.update.rollback=active-generation".to_owned());
+                    }
+                    Err(error) => {
+                        lines.push("litric.update.outcome=error".to_owned());
+                        lines.push(format!("litric.update.reason={error}"));
+                        lines.push("litric.update.ready=0".to_owned());
+                        return Err(UpdateFailure::Update(error));
+                    }
+                    // BootOutcome is non-exhaustive. A future outcome must be
+                    // reported as unrecognised rather than folded into a success.
+                    Ok(_) => lines.push("litric.update.outcome=unrecognised".to_owned()),
+                }
             }
             lines.push(format!(
                 "litric.update.active={}",
@@ -496,6 +708,72 @@ pub fn boot(root: &Path, now: Timestamp) -> Result<Vec<String>, UpdateFailure> {
     }
     lines.push("litric.update.ready=1".to_owned());
     Ok(lines)
+}
+
+/// A failed record is only actionable for the exact slot/version/attempt it
+/// names. A stale failed record is evidence for a previous candidate and must
+/// not reject the current one.
+fn failed_health_for_pending(engine: &Engine, root: &Path) -> bool {
+    let Some(pending) = engine.state().pending() else {
+        return false;
+    };
+    let Some(generation) = engine.state().generation(pending) else {
+        return false;
+    };
+    matches!(
+        update_health::read(root),
+        HealthRead::Valid(evidence)
+            if evidence.verdict == HealthVerdict::Failed
+                && evidence.matches(pending, &generation.version, generation.attempts)
+    )
+}
+
+fn write_boot_health(
+    root: &Path,
+    engine: &Engine,
+    slot: Slot,
+    attempt: u8,
+    now: Timestamp,
+) -> Result<(), UpdateFailure> {
+    let generation = engine
+        .state()
+        .generation(slot)
+        .ok_or(UpdateError::NoPendingCandidate)?;
+    let evidence = HealthEvidence::new(
+        slot,
+        generation.version.clone(),
+        attempt,
+        now,
+        HealthVerdict::Booting,
+        "root,state,marker",
+    );
+    update_health::save(root, &evidence)
+        .map_err(|error| UpdateFailure::Health(HealthError::Io(error.to_string())))
+}
+
+fn append_health(lines: &mut Vec<String>, root: &Path, target: Option<&(Slot, Version, u8)>) {
+    match update_health::read(root) {
+        HealthRead::Missing => {
+            lines.push("health_evidence=absent".to_owned());
+            lines.push("health_matches=0".to_owned());
+        }
+        HealthRead::Invalid(reason) => {
+            lines.push("health_evidence=invalid".to_owned());
+            lines.push(format!("health_reason={reason}"));
+            lines.push("health_matches=0".to_owned());
+        }
+        HealthRead::Valid(evidence) => {
+            lines.push(format!("health_evidence={}", evidence.verdict.token()));
+            lines.push(format!("health_slot={}", evidence.slot.as_str()));
+            lines.push(format!("health_version={}", evidence.version));
+            lines.push(format!("health_attempt={}", evidence.attempt));
+            lines.push(format!("health_at={}", evidence.at));
+            lines.push(format!("health_checks={}", evidence.checks));
+            let matches = target
+                .is_some_and(|(slot, version, attempt)| evidence.matches(*slot, version, *attempt));
+            lines.push(format!("health_matches={}", u8::from(matches)));
+        }
+    }
 }
 
 fn source_path(root: &Path, raw: &str) -> Result<PathBuf, UpdateError> {
@@ -782,6 +1060,11 @@ mod tests {
 
         let mut service = UpdateService::new(&root);
         service.stage(version("1.1.0"), "release").expect("stage");
+        boot(&root, NOW).expect("boot candidate");
+        assert!(
+            service.attest_serving(NOW + 1).expect("serve attestation"),
+            "the booting evidence must be upgraded"
+        );
         service
             .commit(HealthSignal::Passed, NOW + 1)
             .expect("commit");

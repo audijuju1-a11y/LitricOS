@@ -19,11 +19,11 @@
 //! the recovery environment can still choose a known slot; this engine refuses
 //! to guess which one that is.
 
-use crate::fsutil::{ensure_private_dir, remove_any, sync_dir, sync_file};
-use crate::{io_error, Result, Timestamp, UpdateError};
+use crate::fsutil::sync_file;
+use crate::{io_error, write_atomic, Result, Timestamp, UpdateError};
 use litric_core::Version;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// The first line of every state record.
@@ -629,43 +629,7 @@ impl Store {
 
     pub(crate) fn save(&self, state: &UpdateState) -> Result<()> {
         state.validate().map_err(UpdateError::InvalidState)?;
-        let path = self.state_path();
-        let parent = path
-            .parent()
-            .ok_or_else(|| UpdateError::InvalidState("state path has no parent".to_owned()))?;
-        ensure_private_dir(parent)
-            .map_err(|error| io_error("create generation directory", parent, error))?;
-
-        let temp = parent.join(format!(".state.tmp-{}", std::process::id()));
-        remove_any(&temp)
-            .map_err(|error| io_error("remove stale state temporary", &temp, error))?;
-
-        let result = (|| -> Result<()> {
-            let mut options = fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options
-                .open(&temp)
-                .map_err(|error| io_error("create state temporary", &temp, error))?;
-            file.write_all(state.encode().as_bytes())
-                .map_err(|error| io_error("write generation state", &temp, error))?;
-            file.sync_all()
-                .map_err(|error| io_error("sync generation state", &temp, error))?;
-            fs::rename(&temp, &path)
-                .map_err(|error| io_error("commit generation state", &path, error))?;
-            sync_dir(parent)
-                .map_err(|error| io_error("sync generation directory", parent, error))?;
-            Ok(())
-        })();
-
-        if result.is_err() {
-            let _ = remove_any(&temp);
-        }
-        result
+        write_atomic(&self.state_path(), state.encode().as_bytes())
     }
 
     pub(crate) fn write_marker(&self, slot_path: &Path, version: &Version) -> Result<()> {

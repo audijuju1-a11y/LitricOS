@@ -2615,3 +2615,71 @@ The process tests start the real `litric-sysd` binary. Two concurrent `--boot` c
 ### Rollback
 
 Revert this commit. The lock module, service re-open/lock integration, schema-2 parser/state changes, concurrency tests, design sections and scope/tracker/GATES rows disappear; row 769 returns to `S`, and `§75`'s service again relies on systemd ordering with a cached engine. No user data, boot configuration or image is touched by this batch.
+
+## 2026-10-30 — boot-attested health evidence and a real commit gate
+
+`§77` replaces "the caller said `PASSED`" with evidence the running system wrote: `litric-sysd --boot` records `booting`, the serve loop upgrades the exact candidate slot/version/attempt to `healthy`, and `UPDATE COMMIT` refuses any missing, stale, malformed or failed record. It is still not a bootloader, partition writer, image format, signature verifier or kernel/service health probe.
+
+### What was found
+
+The §75/§76 commit path checked the caller's `HealthSignal`, then called `Engine::commit`. A caller could send `COMMIT PASSED CONFIRM` for a candidate that had never booted; the word was treated as the health result. The state record was crash-consistent and locked, but there was no system-written record tying an attempt to a slot and version, no distinction between "booted but not serving" and "healthy", and no status field for the evidence.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-sysd/src/update_health.rs` | typed record (`generation`/`version`/`attempt`/`at`/`verdict`/`checks`), bounded parser, total degraded read, atomic save, temp never parsed |
+| `src/litric-update/src/fsutil.rs`, `lib.rs` | shared `write_atomic` (temp + fsync + rename + directory fsync) exposed and reused by state and health |
+| `src/litric-sysd/src/update.rs` | schema 3; `HealthError`; commit requires exact `healthy`; boot writes `booting`; serve upgrades to `healthy`; failed evidence rejects the next boot; status health summary |
+| `src/litric-sysd/src/server.rs` | attest the serve loop after binding, before accepting; failure logs and does not take sysd down |
+| `src/litric-sysd/src/state.rs` | pass-through attestation; schema handling remains 1..=3, 0/>3 refused |
+| `src/litric-update/src/engine.rs` | `reject_pending(HealthCheck)` under the caller's lock |
+| `src/litric-sysd/tests/update_service.rs` | eight health cases over the real binary/socket, with raw records and a healthy-attestation wait |
+| `docs/SYSTEM-SCOPE.md` | row 763 `S` → `P`; row 1147 stays `S` (no session/storage/critical-service probes) |
+| `docs/design/2026-10-30-update-service.md` | health format, two-phase lifecycle, concrete meaning of healthy, gating and rollback coupling, extended precedence |
+| `docs/PROGRESS-TRACKER.md` | §77 |
+| `docs/master-plan/28-whole-system-improvement-plan.md` | §77 marked landed |
+
+### Evidence (commands run on this batch)
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-update` | **21 passed, 0 failed** |
+| `cargo test -p litric-sysd` | **279 passed, 0 failed** (16 `update_service` cases) |
+| `cargo test --workspace` | **1,939 passed, 0 failed** (62 test binaries) |
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D, 122 P, 288 S, 746 T |
+| `python3 ci/lint-doc-refs.py` | 1371 citation(s) across 159 document(s) resolve |
+| `python3 ci/lint-line-endings.py` | 386 files, all LF |
+| `python3 ci/lint-file-safety.py` | 125 deletion site(s), all inside reviewed functions |
+| `bash ci/verify.sh` | **34 pass, 0 fail, 3 skipped** |
+
+The three skips are the image build (`mkosi` absent), boot smoke (QEMU absent) and idle RAM/CPU/boot timing (same). They are environmental skips, not evidence.
+
+The process tests start the real `litric-sysd` binary. After boot the serve loop writes `healthy`; status reports `health_slot=B`, `health_version=1.1.0`, `health_attempt=1`, `health_matches=1`, and the commit succeeds with the user-data canary unchanged. Missing/temp-only, wrong generation, wrong attempt, replay, zero/truncated and failed records each produce the documented typed refusal with identical state bytes. The failed record makes the next boot clear the candidate with `last_result=reject:health-check`. A boot and a commit started together serialise on the root lock: one outcome is valid and status remains `ready`.
+
+### What this establishes
+
+* The running system, not the IPC caller, owns the evidence that opens the commit gate.
+* Evidence is bound to slot, version and attempt; an old `healthy` record cannot be replayed.
+* Missing, malformed, stale and failed records leave the generation state unchanged and return stable typed errors.
+* A failed attempt is reported and rejected on the next boot under the same cross-process lock; the active pointer never moves.
+* `UPDATE STATUS` stays non-mutating/non-blocking and exposes a bounded health summary for schema 3 only.
+* The health file uses the tested atomic ordering; a leftover temporary is ignored and corrupt input degrades without a panic.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that a bootloader boots the candidate | no systemd-boot/UKI/ESP reader exists; the attempt is per `litric-sysd` start |
+| that the A/B partition or EROFS/verity image is written | the engine copies slot directories; no image writer exists |
+| that the kernel, network, display, session, storage or critical services are healthy | no such probes exist; `healthy` only means the record/marker matched and the serve loop was reached |
+| that updates are authentic | no signature, hash or monotonic counter; rows 767/768 stay `S` |
+| that every stage is power-cut safe | the health record is atomic; no power-cut matrix ran |
+| that the health record is not forgeable | root-owned `0600` and written by sysd in normal operation, but no MAC/signature; a root process can write it |
+| that a UI consumes this | no updater UI; §73 was not started |
+
+### Rollback
+
+Revert this commit. The health module, schema-3 status fields, commit gate, serve attestation, boot evidence and eight process tests disappear; schema 2 and the caller-asserted `PASSED` path return, and row 763 returns to `S`. The state record, root lock and §75/§76 behaviour stay intact; no user data, boot configuration or image is touched.

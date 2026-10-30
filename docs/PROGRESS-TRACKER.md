@@ -7861,3 +7861,63 @@ the design note, scope/plan/tracker/GATES updates. The final hash and
 ### 76.7 Git
 
 Base `1e9b64d`; this batch is committed on `main` with the lock module, service/protocol/state changes, tests, design note and scope/plan/tracker/GATES updates. The final hash and `HEAD == origin/main` check are recorded in the delivery report after the push.
+
+## 77. Batch: boot-attested health evidence and a commit gate (verified)
+
+### 77.1 Requirement
+
+§76 made the state record crash-consistent and serialised writers, but a commit still accepted the caller's `COMMIT PASSED` word as if it were health evidence. This batch owns one outcome: the running system writes a durable health record bound to the candidate generation and attempt, and `UPDATE COMMIT` refuses to activate without a matching `healthy` record. It does not start §73/UI, and adds no bootloader, partition, EROFS, verity, ESP, signature or anti-downgrade work.
+
+### 77.2 The contract, and where it lives (file → item)
+
+* `src/litric-sysd/src/update_health.rs` — typed `HealthEvidence` (`generation`, `version`, `attempt`, `at`, `verdict`, `checks`), a 1 KiB bounded parser, total `read` (`Missing`/`Valid`/`Invalid`) and an atomic write through `litric_update::write_atomic`. Symlinks, non-regular files, zero/oversized/non-UTF-8/malformed records and trailing lines are invalid, never a panic. A `.health.tmp-*` is never read.
+* `src/litric-update/src/fsutil.rs` / `lib.rs` — the §76 sibling-temp + `sync_all` + rename + directory-fsync primitive is now public as `litric_update::write_atomic`; `Store::save` uses the same helper.
+* `src/litric-sysd/src/update.rs` — `SCHEMA=3`; `HealthError` kinds `health-missing`, `health-not-booted`, `health-stale`, `health-invalid`, `health-failed`, `health-unattested`, `health-io`; `commit` opens the engine under the root lock, requires `healthy` evidence for the exact pending slot/version/attempt, and calls `Engine::commit` only then; `boot` writes `booting` after `note_boot`; `attest_serving` upgrades only a matching `booting` record; status reports the health summary for schema 3.
+* `src/litric-sysd/src/server.rs` — after binding the socket, the serve loop calls attestation once before accepting. A failure is logged, not fatal, and the gate stays closed.
+* `src/litric-sysd/src/state.rs` — `attest_update_health`; status passes the optional schema through and still authorises no mutation.
+* `src/litric-update/src/engine.rs` — `reject_pending(reason, now)` for the failed-evidence path; it clears the candidate without moving the active pointer.
+* `src/litric-sysd/tests/update_service.rs` — real binary/socket tests and a raw health-record helper; no struct-level shortcut for IPC cases.
+
+### 77.3 Behavior pinned by the tests
+
+* Boot attempt 1 writes `booting`; once the real serve loop is up, status says `health_evidence=healthy`, `health_slot=B`, `health_version=1.1.0`, `health_attempt=1`, `health_matches=1`. `COMMIT PASSED CONFIRM` then activates B and the `<root>/user` canary is byte-identical.
+* No boot → `ERR health-not-booted`; a removed record with only a temp present → `ERR health-missing`. State bytes are unchanged in both cases.
+* Evidence for slot A and evidence for attempt 2 are each `ERR health-stale`; the error names the found and expected attempts. State bytes are unchanged.
+* A system-written `failed` record refuses the commit with `ERR health-failed`; the next `--boot` reports `outcome=rejected-health`, `rollback=active-generation`, clears the candidate and records `last_result=reject:health-check`.
+* Zero-length, truncated and temp-only evidence degrade to `invalid`/`absent` and typed commit refusals without a panic; state bytes stay unchanged.
+* Replaying attempt 1's healthy record after boot attempt 2 is `ERR health-stale`; the attempt counter is part of the evidence identity.
+* A boot and a commit started together produce exactly one valid serialised outcome, and status still reports `state=ready`. Boot and commit share the §76 root lock; serve attestation uses one non-blocking attempt so it cannot delay startup.
+* Schema 3 adds the health fields; schema 2 answers omit them; schema 0 and >3 remain `ERR schema-unsupported`.
+
+### 77.4 Tests added
+
+* `update_health::tests::{evidence_round_trips_and_is_bound_to_all_three_fields, a_truncated_empty_or_overlong_record_is_invalid_not_a_panic, a_temporary_is_never_read_as_evidence, save_is_atomic_owner_only_and_visible_to_read}`
+* `src/litric-sysd/tests/update_service.rs::{commit_without_a_boot_attempt_is_refused_before_any_state_change, missing_evidence_after_a_boot_is_refused_and_the_temporary_is_not_evidence, evidence_for_the_other_generation_is_stale_and_cannot_commit, evidence_for_another_attempt_is_stale_and_cannot_commit, failed_evidence_refuses_commit_and_the_next_boot_rejects_the_candidate, truncated_zero_and_temp_only_health_evidence_degrade_without_a_panic, a_prior_attempts_healthy_evidence_cannot_be_replayed_for_a_new_attempt, a_boot_and_a_commit_cannot_interleave_under_the_root_lock}`
+* The existing §75/§76 tests remain; the only assertion changed is the schema number and the added healthy-summary check in the real stage → boot → commit → rollback test.
+
+### 77.5 Gates (real output, 2026-10-30)
+
+* `cargo fmt --all --check` → exit 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+* `cargo test -p litric-update` → **21 passed, 0 failed**.
+* `cargo test -p litric-sysd` → **279 passed, 0 failed** across its unit/integration binaries (16 in `update_service`).
+* `cargo test --workspace` → **1,939 passed, 0 failed** (62 test binaries).
+* `python3 ci/count-scope.py` → 1,165 rows: **9 D · 122 P · 288 S · 746 T**.
+* `docs/SYSTEM-SCOPE.md` row 763 moves `S` → `P`. Row 1147 stays `S`: session, storage and critical-service probes do not exist.
+* `python3 ci/lint-doc-refs.py` → 1371 citation(s) across 159 document(s) resolve.
+* `python3 ci/lint-line-endings.py` → 386 files, all LF.
+* `python3 ci/lint-file-safety.py` → 125 deletion site(s), all inside reviewed functions.
+* `bash ci/verify.sh` → **34 pass, 0 fail, 3 skipped**. Skips: image build (mkosi absent), boot smoke (QEMU absent), idle RAM/CPU/boot timing (same). No failure is hidden by a skip.
+
+### 77.6 Limits, stated plainly
+
+* No bootloader/UKI/ESP integration and no partition/EROFS/verity/signature/anti-downgrade writer. The attempt is still per `litric-sysd` start, not a kernel boot.
+* `healthy` is not a kernel/network/display/session/storage/critical-service probe. It means the boot entrypoint opened the record and verified the candidate marker, then the daemon bound the real socket and re-verified the same slot/version/attempt in its serve loop.
+* Attestation is one non-blocking attempt; if a writer owns the root at that instant, the gate stays closed until a later boot/attestation. It never waits on the lock during startup.
+* No power-cut matrix; the health record uses the tested atomic ordering, and corrupt/temp-only inputs are simulated tests.
+* No cryptographic authentication of the health record: it lives in the root-owned update root and only `litric-sysd` writes it in normal operation, but a root process can write the file. The gate stops a caller assertion; it is not a defence against a compromised root.
+* No UI consumes the status; §73 was not started. The Research-Deep-all corpus and the whole system are not finished.
+
+### 77.7 Git
+
+Base `df3a4e9`; this batch is committed on `main` with the health module, the service/server/engine changes, the atomic-helper reuse, real-socket tests and the design/scope/plan/tracker/GATES updates. The final hash and `HEAD == origin/main` check are recorded in the delivery report after the push.

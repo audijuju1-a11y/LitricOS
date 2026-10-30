@@ -251,6 +251,7 @@ end to end rather than half-built.
 | 74 | Recovery/update generation engine core with a demonstrated rollback | temp-root generation swap + revert (**landed 2026-10-30**, 19 tests; see tracker §74) | here |
 | 75 | Update service: boot-attempt entrypoint and status/actions over the real socket | `--boot` + socket integration tests on a temp root (**landed 2026-10-30**, 1,917 workspace tests; see tracker §75) | here |
 | 76 | Update state crash consistency and one writer per root | atomic record ordering + simulated interruption + concurrent boot/live-lock/reclaim tests (**landed 2026-10-30**, 1,927 workspace tests; see tracker §76) | here |
+| 77 | Boot-attested update health evidence and a real commit gate | system-written `booting`/`healthy` record bound to slot/version/attempt + real-socket missing/stale/malformed/failed/replay/concurrency tests (**landed 2026-10-30**, 1,939 workspace tests; see tracker §77) | here |
 
 Image-level rows (A1, C2, and every `VM E2E` claim) stay in `docs/GATES.md` as
 `NOT RUN` until a builder exists. That is a scheduling fact, not an excuse: the

@@ -73,6 +73,19 @@ use std::path::PathBuf;
 /// without sleeping and a replay has stable timestamps.
 pub type Timestamp = u64;
 
+/// Atomically replace one small record with `bytes`.
+///
+/// This is the same sibling-temp/fsync/rename/directory-fsync primitive the
+/// generation state uses. The update service also uses it for the health
+/// evidence record, so there is one durability mechanism rather than two.
+///
+/// # Errors
+/// [`UpdateError::Io`] with the failing action and path, or
+/// [`UpdateError::InvalidState`] if the path has no parent or file name.
+pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    fsutil::write_atomic(path, bytes)
+}
+
 /// Why a generation operation was refused.
 #[derive(Debug)]
 #[non_exhaustive]
