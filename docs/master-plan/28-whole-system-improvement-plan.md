@@ -248,12 +248,13 @@ end to end rather than half-built.
 | 70 | Chapter `F`: tooltips + pickers + grids/empty states | keyboard path per component, screenshots | here |
 | 71 | Accessibility tree: roles, names, focus order, keyboard-only proof | tree dump test, e2e journey | here |
 | 72 | OOBE account + password change, with no dismiss path around the lock | e2e journey over a temp root | here |
-| 73 | Settings family wave (research order `WB` → `MD`), ledger-first | one store key + backend + test per row (**in progress 2026-10-30**: §78 adds the read-only Updates page; the wave is not closed) | here |
+| 73 | Settings family wave (research order `WB` → `MD`), ledger-first | one store key + backend + test per row (**in progress 2026-10-30**: §78 adds the read-only Updates page and §80 adds its backup rows; the wave is not closed) | here |
 | 74 | Recovery/update generation engine core with a demonstrated rollback | temp-root generation swap + revert (**landed 2026-10-30**, 19 tests; see tracker §74) | here |
 | 75 | Update service: boot-attempt entrypoint and status/actions over the real socket | `--boot` + socket integration tests on a temp root (**landed 2026-10-30**, 1,917 workspace tests; see tracker §75) | here |
 | 76 | Update state crash consistency and one writer per root | atomic record ordering + simulated interruption + concurrent boot/live-lock/reclaim tests (**landed 2026-10-30**, 1,927 workspace tests; see tracker §76) | here |
 | 77 | Boot-attested update health evidence and a real commit gate | system-written `booting`/`healthy` record bound to slot/version/attempt + real-socket missing/stale/malformed/failed/replay/concurrency tests (**landed 2026-10-30**, 1,939 workspace tests; see tracker §77) | here |
 | 79 | Linux application bundle install, launch and uninstall over the real socket | validated local bundle, generated `.desktop`, real installed program writes a marker, uninstall removes files and discovery entry (**landed 2026-10-30**, 1,958 workspace tests; see tracker §79) | here |
+| 80 | Automatic local backup with a checksummed manifest and verification | real timer-created snapshot, independent hashes, retention, source mutation, tamper refusal, `BACKUP LIST` and shell status over a real socket (**landed 2026-10-30**, 1,974 workspace tests; see tracker §80) | here |
 
 Image-level rows (A1, C2, and every `VM E2E` claim) stay in `docs/GATES.md` as
 `NOT RUN` until a builder exists. That is a scheduling fact, not an excuse: the

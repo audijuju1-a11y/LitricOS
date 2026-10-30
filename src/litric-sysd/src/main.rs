@@ -84,6 +84,7 @@ struct Args {
     root: PathBuf,
     state: PathBuf,
     update_root: PathBuf,
+    backup_root: Option<PathBuf>,
 }
 
 fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
@@ -94,6 +95,7 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
         root: PathBuf::from("/"),
         state: PathBuf::from(DEFAULT_STATE),
         update_root: PathBuf::from(DEFAULT_UPDATE_ROOT),
+        backup_root: None,
     };
     let mut saw_mode = false;
     while let Some(a) = it.next() {
@@ -122,6 +124,7 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
             "--root" => args.root = PathBuf::from(need("--root")?),
             "--state" => args.state = PathBuf::from(need("--state")?),
             "--update-root" => args.update_root = PathBuf::from(need("--update-root")?),
+            "--backup-root" => args.backup_root = Some(PathBuf::from(need("--backup-root")?)),
             "--help" | "-h" => {
                 return Ok(Args {
                     mode: Mode::Help,
@@ -150,7 +153,7 @@ USAGE:
     litric-sysd [--report] [--root DIR]
     litric-sysd --boot [--update-root DIR]
     litric-sysd --serve [--socket PATH] [--home DIR] [--root DIR] [--state PATH]
-                       [--update-root DIR]
+                       [--update-root DIR] [--backup-root DIR]
     litric-sysd --query REQUEST [--socket PATH]
 
 OPTIONS:
@@ -166,6 +169,8 @@ OPTIONS:
                       /var/lib/litric-sysd/grants.conf.
     --update-root DIR The generation record and incoming trees. Default
                       /var/lib/litric/update.
+    --backup-root DIR Local backup directory. Default
+                      HOME/.local/state/litric/backups.
     -h, --help        This text.
     -V, --version     Version.
 ";
@@ -190,9 +195,14 @@ fn report(root: &Path, home: &str) -> ExitCode {
 
 #[cfg(unix)]
 fn run_server(args: &Args) -> ExitCode {
+    let backup_root = args
+        .backup_root
+        .clone()
+        .unwrap_or_else(|| Path::new(&args.home).join(".local/state/litric/backups"));
     let state = state::Sysd::from_system(&args.home, &args.root)
         .with_grant_store(&args.state)
-        .with_update_root(&args.update_root);
+        .with_update_root(&args.update_root)
+        .with_backup_root(backup_root);
     let listener = match server::bind(&args.socket) {
         Ok(l) => l,
         Err(e) => {
@@ -343,6 +353,9 @@ mod tests {
 
         let b = args(&["--boot", "--update-root", "/tmp/updates"]).expect("parses");
         assert_eq!(b.update_root, PathBuf::from("/tmp/updates"));
+
+        let c = args(&["--serve", "--backup-root", "/tmp/backups"]).expect("parses");
+        assert_eq!(c.backup_root, Some(PathBuf::from("/tmp/backups")));
     }
 
     #[test]

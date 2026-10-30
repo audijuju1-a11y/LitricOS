@@ -20,7 +20,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs, io, thread};
 
 use crate::proto::{ProtoError, Request, Response, MAX_LINE};
@@ -149,7 +149,11 @@ pub fn serve(listener: &UnixListener, state: Sysd) -> io::Result<()> {
     if let Err(error) = state.attest_update_health(now()) {
         eprintln!("litric-sysd: update health attestation failed: {error}");
     }
+    let interval = state.backup_interval_secs();
     let shared = Arc::new(Mutex::new(state));
+    if interval > 0 {
+        spawn_backup_scheduler(Arc::clone(&shared), interval);
+    }
     let connections = Connections::new();
     for conn in listener.incoming() {
         match conn {
@@ -183,6 +187,36 @@ pub fn serve(listener: &UnixListener, state: Sysd) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Run the automatic backup on the daemon's clock.
+///
+/// The first tick happens immediately and later ticks are checked every minute
+/// (or at the interval, when it is shorter). The thread does no request work
+/// and shares the same [`Sysd`] lock, so a snapshot cannot observe a half-applied
+/// install or update. It is deliberately detached: a backup failure is recorded
+/// in `BACKUP STATUS` and must not stop the socket serving the machine.
+fn spawn_backup_scheduler(shared: Arc<Mutex<Sysd>>, interval: u64) {
+    let wake = interval.clamp(1, 60);
+    let spawned = thread::Builder::new()
+        .name("litric-sysd-backup".to_owned())
+        .spawn(move || loop {
+            let now = now();
+            let result = {
+                let mut guard = match shared.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                guard.backup_tick(now)
+            };
+            if let Some(Err(error)) = result {
+                eprintln!("litric-sysd: automatic backup failed: {error}");
+            }
+            thread::sleep(Duration::from_secs(wake));
+        });
+    if let Err(error) = spawned {
+        eprintln!("litric-sysd: could not start the backup scheduler: {error}");
+    }
 }
 
 /// Serve one connection to completion.

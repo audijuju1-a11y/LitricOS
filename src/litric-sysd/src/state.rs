@@ -25,6 +25,7 @@ use litric_storage::{Access, Layout, StorageBroker, StorageUri};
 use litric_trash::{Retention, Trash};
 
 use crate::action::{self, PowerAction, Runner, SystemRunner};
+use crate::backup::{BackupError, BackupService, Summary};
 use crate::facts::{read_facts, Facts};
 use crate::install::{self, Installed};
 use crate::proto::{AccessWord, Request, Response};
@@ -73,7 +74,7 @@ pub type Timestamp = u64;
 /// read. `iface://` and `wifi://` are two grants of one capability: a link and a
 /// network are different resources with different consequences, and a single
 /// grant covering both would make narrowing one impossible later.
-pub const PROVIDER_GRANTS: [(CapabilityId, &str); 9] = [
+pub const PROVIDER_GRANTS: [(CapabilityId, &str); 10] = [
     (CapabilityId::AudioSet, "audio://"),
     (CapabilityId::NetConfigure, "iface://"),
     (CapabilityId::NetConfigure, "wifi://"),
@@ -83,6 +84,7 @@ pub const PROVIDER_GRANTS: [(CapabilityId, &str); 9] = [
     (CapabilityId::UpdateControl, "update://stage"),
     (CapabilityId::UpdateControl, "update://commit"),
     (CapabilityId::UpdateControl, "update://rollback"),
+    (CapabilityId::BackupControl, "backup://create"),
 ];
 
 /// The whole daemon, minus its transport.
@@ -150,6 +152,9 @@ pub struct Sysd {
     /// configuration, not a request field: a request that could name a root
     /// could name `/`.
     applications_root: PathBuf,
+    /// The local backup service. Disabled until the daemon is given the one
+    /// directory it may copy into; a request cannot choose that directory.
+    backup: BackupService,
 }
 
 impl Sysd {
@@ -187,6 +192,7 @@ impl Sysd {
             lockout_note: "disabled".to_owned(),
             updates: UpdateService::disabled(),
             applications_root: Path::new(home).join(".local/share"),
+            backup: BackupService::disabled(),
         }
     }
 
@@ -239,6 +245,44 @@ impl Sysd {
     pub fn with_application_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.applications_root = root.into();
         self
+    }
+
+    /// Attach the backup directory and enable the daily schedule.
+    ///
+    /// The path is configuration, never a request field. Without it `BACKUP`
+    /// status is `disabled` and no scheduler is started, which keeps unit tests
+    /// and `--report` from writing a backup into the development host's home.
+    #[must_use]
+    pub fn with_backup_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.backup = BackupService::new(root);
+        self
+    }
+
+    /// Set the automatic backup interval. Zero disables the scheduler but
+    /// leaves manual `BACKUP CREATE` available.
+    #[must_use]
+    pub fn with_backup_interval(mut self, secs: u64) -> Self {
+        self.backup = self.backup.with_interval(secs);
+        self
+    }
+
+    /// The configured interval, or zero when backups are disabled.
+    #[must_use]
+    pub fn backup_interval_secs(&self) -> u64 {
+        if self.backup.root().is_none() {
+            0
+        } else {
+            self.backup.interval_secs()
+        }
+    }
+
+    /// Run the automatic backup if the interval says it is due.
+    ///
+    /// This is the only entrypoint the serve loop's timer uses. It performs the
+    /// same snapshot as `BACKUP CREATE`; the scheduler is not a second
+    /// implementation.
+    pub fn backup_tick(&mut self, now: Timestamp) -> Option<Result<Summary, BackupError>> {
+        self.backup.tick(&self.applications_root, now)
     }
 
     /// Let the runnning serve loop attest the candidate booted by `--boot`.
@@ -502,6 +546,10 @@ impl Sysd {
             } => self.update_stage(version, source, *consent, now),
             Request::UpdateCommit { health, consent } => self.update_commit(*health, *consent, now),
             Request::UpdateRollback { consent } => self.update_rollback(*consent, now),
+            Request::BackupStatus => Response::ok(self.backup.status(now)),
+            Request::BackupList => self.backup_list(),
+            Request::BackupCreate { consent } => self.backup_create(*consent, now),
+            Request::BackupVerify { id } => self.backup_verify(id),
         };
         self.flush_lockouts(now, false);
         reply
@@ -766,6 +814,80 @@ impl Sysd {
         {
             Ok(lines) => Response::ok(lines),
             Err(error) => Response::err(error.kind(), error.to_string()),
+        }
+    }
+
+    /// Authorise one manual backup. The automatic scheduler does not call the
+    /// broker: it is the daemon acting on configuration, not a client request.
+    fn backup_authorised(&mut self, consent: bool, now: Timestamp) -> Option<Response> {
+        let Some(client) = self.client.clone() else {
+            return Some(Response::err(
+                "refused",
+                "this build has no local client identity",
+            ));
+        };
+        let Ok(scope) = Scope::parse_resource("backup://create") else {
+            return Some(Response::err("bad-argument", "no scope for this action"));
+        };
+        let Some(capability) = Capability::new(CapabilityId::BackupControl, scope) else {
+            return Some(Response::err(
+                "bad-argument",
+                "no capability for this action",
+            ));
+        };
+        let decision = self
+            .caps
+            .check_with_consent(&client, &capability, consent, now);
+        if !decision.is_allowed() {
+            return Some(Response::err(
+                "refused",
+                format!("{} {capability}", decision.reason().token()),
+            ));
+        }
+        None
+    }
+
+    fn backup_lines(summary: &Summary, state: &str) -> Vec<String> {
+        vec![
+            format!("id={}", summary.id),
+            format!("created={}", summary.created),
+            format!("entries={}", summary.entries),
+            format!("bytes={}", summary.bytes),
+            format!("state={state}"),
+        ]
+    }
+
+    fn backup_create(&mut self, consent: bool, now: Timestamp) -> Response {
+        if let Some(refused) = self.backup_authorised(consent, now) {
+            return refused;
+        }
+        match self.backup.create(&self.applications_root, now) {
+            Ok(summary) => Response::ok(Self::backup_lines(&summary, "created")),
+            Err(error) => Response::err(error.kind(), error.detail()),
+        }
+    }
+
+    fn backup_list(&self) -> Response {
+        match self.backup.list() {
+            Ok(summaries) => Response::ok(
+                summaries
+                    .iter()
+                    .map(|summary| {
+                        format!(
+                            "id={} created={} entries={} bytes={}",
+                            summary.id, summary.created, summary.entries, summary.bytes
+                        )
+                    })
+                    .collect(),
+            ),
+            Err(error) => Response::err(error.kind(), error.detail()),
+        }
+    }
+
+    fn backup_verify(&self, id: &str) -> Response {
+        match self.backup.verify(id) {
+            Ok(summary) => Response::ok(Self::backup_lines(&summary, "verified")),
+            Err(error) => Response::err(error.kind(), error.detail()),
         }
     }
 

@@ -109,6 +109,13 @@ pub enum CapabilityId {
     /// operation (`update://stage`, `update://commit`, `update://rollback`) so
     /// an installer that may stage a verified candidate cannot activate it.
     UpdateControl,
+    /// Create a local backup of the user's application state.
+    ///
+    /// Distinct from update control: a backup copies user state, while an
+    /// update changes the system tree the machine boots. The scope names the
+    /// operation (`backup://create`) so a future restore or prune grant cannot
+    /// be inherited from this one.
+    BackupControl,
 }
 
 impl CapabilityId {
@@ -149,6 +156,7 @@ impl CapabilityId {
             Self::BluetoothAdmin => "device.bluetooth.admin",
             Self::ProcessSpawn => "process.spawn",
             Self::UpdateControl => "update.control",
+            Self::BackupControl => "backup.control",
         }
     }
 
@@ -189,6 +197,7 @@ impl CapabilityId {
             "device.bluetooth.admin" => Self::BluetoothAdmin,
             "process.spawn" => Self::ProcessSpawn,
             "update.control" => Self::UpdateControl,
+            "backup.control" => Self::BackupControl,
             _ => return None,
         })
     }
@@ -230,6 +239,7 @@ impl CapabilityId {
             Self::BluetoothAdmin,
             Self::ProcessSpawn,
             Self::UpdateControl,
+            Self::BackupControl,
         ]
     }
 
@@ -256,6 +266,7 @@ impl CapabilityId {
                 | Self::SystemSettings
                 | Self::AuthSession
                 | Self::UpdateControl
+                | Self::BackupControl
         )
     }
 
@@ -304,7 +315,8 @@ impl CapabilityId {
             | Self::AuthSession
             | Self::BluetoothAdmin
             | Self::ProcessSpawn
-            | Self::UpdateControl => Scoping::Optional,
+            | Self::UpdateControl
+            | Self::BackupControl => Scoping::Optional,
             _ => Scoping::Never,
         }
     }
@@ -349,6 +361,7 @@ impl CapabilityId {
             Self::BluetoothAdmin => "pair and manage Bluetooth devices",
             Self::ProcessSpawn => "start a program for you",
             Self::UpdateControl => "install a system update or roll it back",
+            Self::BackupControl => "create a backup of your application state",
         }
     }
 
@@ -367,7 +380,8 @@ impl CapabilityId {
             | Self::NetConfigure
             | Self::AuthSession
             | Self::ProcessSpawn
-            | Self::UpdateControl => Risk::High,
+            | Self::UpdateControl
+            | Self::BackupControl => Risk::High,
             Self::FsRead
             | Self::FsList
             | Self::NetServer
@@ -506,6 +520,7 @@ const RESOURCE_SCHEMES: &[&str] = &[
     "power://",
     "app://",
     "update://",
+    "backup://",
 ];
 
 /// Storage URI schemes, from RUNTIME section 17.

@@ -8472,3 +8472,135 @@ needed for idle RAM/CPU/boot timing absent.
 Base `dbb881c`. The commit contains the installer module, protocol variants,
 state wiring, focused tests, real-socket e2e, design note and this evidence.
 Final hash and `HEAD == origin/main` are recorded in the delivery report.
+
+## 80. Batch: automatic local backup, verification and shell status (verified)
+
+### 80.1 Requirement
+
+The system had an update-generation service and a real Linux app install path,
+but no copy of the application state those operations produce. A damaged or
+deleted install had no independent record. This batch adds a local, periodic
+backup owned by `litric-sysd`, a checksummed manifest, bounded retention, a
+real-socket verification path, and read-only status on the existing Updates
+page.
+
+It does **not** add restore, an off-machine backup, encryption, a filesystem
+snapshot, a byte quota, a booted-image run, C2/KMS, or the rest of §73.
+
+### 80.2 Contract
+
+The source is the daemon's application root:
+
+```text
+<application-root>/applications/      desktop entries
+<application-root>/litric/apps/       installed executables
+```
+
+The production root is `<home>/.local/state/litric/backups`, derived from
+`--home`, or `--backup-root`. It is outside the copied XDG data root and cannot
+be the source or contain it. No request names a path.
+
+A snapshot is `<root>/snapshots/snap-<20 digits>[/<suffix>]/` with a `manifest`
+and `files/` tree. The manifest is:
+
+```text
+litric-backup\t1
+id\tsnap-00000000001800000000
+created\t1800000000
+source\tapplications,litric/apps
+entry\tapplications/com.example.app.desktop\t142\t<sha256>\t420
+```
+
+Entries are sorted, duplicate-free, and bind relative path, size, SHA-256 and
+mode. The parser requires the protocol/version, exact id, source label, one of
+each header field and bounded totals. Links, special files, tabs/newlines in
+names, traversal, absolute paths, an oversized tree and a manifest for another
+id are refused.
+
+Creation copies to a pid-tagged staging directory, fsyncs the manifest, then
+renames the directory into place. Retention keeps **seven** valid snapshot
+directories; the oldest are removed after publish. The manifest is fsynced, but
+the containing directory is not, so power-loss durability is not claimed.
+
+`BACKUP VERIFY <id>` re-opens every listed file, checks the id, size and mode,
+re-hashes the bytes, then walks the snapshot and refuses an unlisted file. A
+valid-looking manifest with changed bytes is `ERR checksum`, not a verification.
+Status/list are read-only; `BACKUP CREATE CONFIRM` requires a `BackupControl`
+grant scoped to `backup://create` with live consent. The scheduler is daemon
+configuration and does not ask the broker.
+
+The serve loop runs the first tick immediately and then every
+`min(interval, 60)` seconds, using the real clock and the `Sysd` mutex. The
+default interval is 86,400 seconds. The schedule is not persisted, so a daemon
+restart makes a new snapshot due immediately; retention still caps the count.
+
+The Updates page asks `BACKUP STATUS` once on open or on **Check for changes**.
+It shows state, schedule, snapshot count, the last id/counts and a short error
+token; it never shows the root path or free-form I/O detail. It does not poll,
+create a snapshot or claim a restore.
+
+### 80.3 Tests
+
+* `cargo test -p litric-sysd backup --lib` — **10 passed**: create/re-hash,
+  retention at seven, missing snapshot, corrupt manifest, manifest naming
+  another snapshot, checksum mismatch, links/bad ids, the interval, and the two
+  protocol parser cases.
+* `cargo test -p litric-shell backupstatus --lib` — **5 passed**: ready/disabled
+  states, typed refusal, ignored path fields and bad ids, missing state.
+* `cargo test -p litric-shell e2e_backup --lib` — **1 passed**: the full journey
+  below.
+
+### 80.4 What the real-socket journey proves
+
+A real `litric-sysd` binds a temporary Unix socket with a real application root
+and a one-second interval. The **scheduler**, not the test, creates the first
+snapshot. The test reads `BACKUP STATUS` and `BACKUP LIST`, parses the manifest,
+and independently recomputes both SHA-256 digests and modes. It reads the shell's
+`backupstatus` over the same socket. It then verifies through the protocol,
+mutates and deletes the originals, and asserts the snapshot bytes still match.
+It tampers with a snapshot file and requires `ERR checksum`, repairs it and
+re-verifies. Finally `BACKUP CREATE CONFIRM` returns `state=created`.
+
+The 25-frame `frame_dump` run includes `25-settings-updates`, rendered through
+the shipping `views::draw` path. It reports no text overlaps on that frame. The
+PNG review set is under `build/ui-review-2026-10-30/` (generated output, not
+source).
+
+### 80.5 Verification (real output, 2026-10-30)
+
+* `cargo fmt --all --check` → exit 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+* `cargo test --workspace` → **1,974 passed, 0 failed, 0 ignored**.
+* `bash ci/verify.sh` → **39 pass, 0 fail, 3 skipped**.
+* `python3 ci/lint-doc-refs.py` → **1,468 citations across 167 documents**.
+* `python3 ci/lint-line-endings.py` → **394 files, all LF**.
+* `python3 ci/lint-file-safety.py` → **144 deletion sites, all reviewed**.
+* `python3 ci/count-scope.py` → **1,165 rows: 9 D · 117 P · 293 S · 746 T**.
+
+The three CI skips remain the environment skips: `mkosi` absent, QEMU absent,
+and the platform needed for idle RAM/CPU/boot timing absent.
+
+### 80.6 Limits
+
+* No restore, conflict resolution, snapshot rollback or file picker. ADR-0021's
+  conflict-aware restore is not designed; verification is the delivered proof.
+* No off-machine, encrypted, deduplicated or incremental backup. A user account
+  that can delete the home directory can delete the backup too.
+* No Btrfs/filesystem snapshot and no atomic point-in-time capture against a
+  program writing outside the daemon. Empty directories are copied but are not
+  manifest entries, so verification covers regular files.
+* No byte quota, manual prune, schedule persistence or policy UI.
+* No root-owned system-state backup; the source is the daemon user's app root.
+* No booted image in this run. The e2e uses the shipping daemon path in-process,
+  a real socket and real files.
+* §73 is still open; this adds backup rows to its Updates page. C2/KMS and the
+  remaining settings families are separate.
+* `SYSTEM-SCOPE` rows moved: **none**. Rows 577 and 1135 remain `T`: restore
+  and external/offline targets are still absent, and this batch is a local copy.
+
+### 80.7 Git
+
+Base `2219115`. The commit contains the backup service, manifest/retention/
+verify path, capability and protocol wiring, real scheduler, shell status and
+page rows, focused tests, real-socket e2e, design note and this evidence. Final
+hash and `HEAD == origin/main` are recorded in the delivery report.

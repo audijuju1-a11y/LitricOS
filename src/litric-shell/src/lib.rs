@@ -42,6 +42,7 @@ pub mod activity;
 pub mod anim;
 pub mod appicons;
 pub mod apps;
+pub mod backupstatus;
 pub mod canvas;
 pub mod chrome;
 pub mod clients;
@@ -88,3 +89,5 @@ pub mod wordmark;
 mod e2e;
 #[cfg(test)]
 mod e2e_app_install;
+#[cfg(test)]
+mod e2e_backup;

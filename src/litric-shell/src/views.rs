@@ -3636,6 +3636,28 @@ fn draw_settings_page(
                         .map_or_else(|| "Unavailable".to_owned(), |s| format!("schema {s}")),
                 ));
             }
+            // The backup service is a separate daemon-owned schedule. It is on
+            // this page because both answers are system state a person checks
+            // after a change, not because the shell runs either one.
+            let backup = shell.backup_status.clone();
+            if let Some(error) = &backup.error {
+                rows.push(("Backup status".to_owned(), "Unavailable".to_owned()));
+                rows.push(("Backup reason".to_owned(), error.clone()));
+            } else {
+                rows.push(("Backup status".to_owned(), backup.state_label().to_owned()));
+                if let Some(schedule) = backup.schedule_label() {
+                    rows.push(("Backup schedule".to_owned(), schedule));
+                }
+                if let Some(count) = backup.snapshot_count_label() {
+                    rows.push(("Local snapshots".to_owned(), count));
+                }
+                if let Some(last) = backup.last_snapshot_label() {
+                    rows.push(("Last snapshot".to_owned(), last));
+                }
+                if let Some(error) = &backup.last_error {
+                    rows.push(("Last backup error".to_owned(), error.clone()));
+                }
+            }
             settings_rows_from(canvas, t, pane, pane.y + t.px(98.0), &rows);
         }
     }

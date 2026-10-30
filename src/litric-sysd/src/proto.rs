@@ -162,6 +162,21 @@ pub enum Request {
         /// Reverse-DNS application id.
         id: String,
     },
+    /// The local backup service's scheduling and last-attempt state.
+    BackupStatus,
+    /// List valid snapshots, newest first.
+    BackupList,
+    /// Make one backup now. Writing a copy is an action, so the caller names
+    /// the confirmation word; the automatic scheduler does not use this path.
+    BackupCreate {
+        /// Whether the caller confirmed the copy in the moment.
+        consent: bool,
+    },
+    /// Re-hash every file in one snapshot and compare its manifest.
+    BackupVerify {
+        /// The snapshot id reported by `BACKUP STATUS` or `BACKUP LIST`.
+        id: String,
+    },
     /// Read the update generation state. A question: it changes nothing and
     /// needs no capability.
     UpdateStatus {
@@ -656,6 +671,36 @@ impl Request {
                 }
                 other => Err(ProtoError::BadArgument {
                     name: "AUTH subcommand",
+                    value: other.to_owned(),
+                }),
+            },
+            "backup" => match arg(0).to_ascii_lowercase().as_str() {
+                "status" => {
+                    arity("BACKUP STATUS", 1)?;
+                    Ok(Self::BackupStatus)
+                }
+                "list" => {
+                    arity("BACKUP LIST", 1)?;
+                    Ok(Self::BackupList)
+                }
+                "create" => {
+                    arity("BACKUP CREATE", 2)?;
+                    if !arg(1).eq_ignore_ascii_case("confirm") {
+                        return Err(ProtoError::BadArgument {
+                            name: "backup confirmation",
+                            value: arg(1).to_owned(),
+                        });
+                    }
+                    Ok(Self::BackupCreate { consent: true })
+                }
+                "verify" => {
+                    arity("BACKUP VERIFY", 2)?;
+                    Ok(Self::BackupVerify {
+                        id: arg(1).to_owned(),
+                    })
+                }
+                other => Err(ProtoError::BadArgument {
+                    name: "BACKUP subcommand",
                     value: other.to_owned(),
                 }),
             },
@@ -1490,6 +1535,47 @@ mod tests {
             Request::parse("UPDATE ROLLBACK CONFIRM"),
             Ok(Request::UpdateRollback { consent: true })
         );
+    }
+
+    #[test]
+    fn backup_requests_parse_with_an_explicit_confirmation() {
+        assert_eq!(Request::parse("BACKUP STATUS"), Ok(Request::BackupStatus));
+        assert_eq!(Request::parse("BACKUP LIST"), Ok(Request::BackupList));
+        assert_eq!(
+            Request::parse("BACKUP CREATE confirm"),
+            Ok(Request::BackupCreate { consent: true })
+        );
+        assert_eq!(
+            Request::parse("BACKUP VERIFY snap-00000000000000000001"),
+            Ok(Request::BackupVerify {
+                id: "snap-00000000000000000001".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_backup_create_without_confirmation_is_refused() {
+        assert!(matches!(
+            Request::parse("BACKUP CREATE"),
+            Err(ProtoError::BadArity {
+                verb: "BACKUP CREATE",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("BACKUP CREATE yes"),
+            Err(ProtoError::BadArgument {
+                name: "backup confirmation",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("BACKUP NONSENSE"),
+            Err(ProtoError::BadArgument {
+                name: "BACKUP subcommand",
+                ..
+            })
+        ));
     }
 
     #[test]

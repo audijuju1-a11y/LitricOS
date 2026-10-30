@@ -1372,6 +1372,7 @@ impl Shell {
     /// operation is a fault the page should show, not paper over with polling.
     pub fn refresh_update_status(&mut self) {
         self.update_status = crate::updatestatus::read(&self.sysd_socket);
+        self.backup_status = crate::backupstatus::read(&self.sysd_socket);
         self.request_full_redraw();
     }
 }
@@ -3074,6 +3075,9 @@ pub struct Shell {
     /// the user asks again. It is a snapshot, never a live read in the paint
     /// path.
     pub update_status: crate::updatestatus::Status,
+    /// The backup service's last answer, read on the same action and shown as a
+    /// reading; the schedule itself belongs to `litric-sysd`.
+    pub backup_status: crate::backupstatus::Status,
     /// The Activity window's model: machine meters, the process table, and what
     /// a person has changed about both.
     pub activity: crate::taskmgr::TaskManager,
@@ -3695,6 +3699,7 @@ impl Shell {
             base_scale,
             facts: SystemFacts::default(),
             update_status: crate::updatestatus::Status::default(),
+            backup_status: crate::backupstatus::Status::default(),
             activity: crate::taskmgr::TaskManager::new(),
             activity_end_confirm: None,
             files: crate::apps::FilesApp::default(),

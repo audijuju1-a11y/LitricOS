@@ -3128,3 +3128,58 @@ and discovery result are all asserted absent.
 Revert this commit. The installer, protocol variants, state methods, e2e module,
 design note and this evidence disappear. Existing launch and discovery remain
 unchanged, and no installed file outside a test's temporary root is touched.
+
+## 2026-10-30 — §80: automatic local backup, verification and shell status
+
+The daemon now makes a real copy of the application state on a timer, writes a
+checksummed manifest, keeps seven snapshots and verifies every byte through the
+socket. The Updates page reads the daemon's status. This is not a restore
+feature and not an off-machine backup.
+
+Design: [backup service](design/2026-10-30-backup-service.md).
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-sysd backup --lib` | 10 passed, 0 failed |
+| `cargo test -p litric-shell backupstatus --lib` | 5 passed, 0 failed |
+| `cargo test -p litric-shell e2e_backup --lib` | 1 passed, 0 failed |
+| `cargo test --workspace` | 1,974 passed, 0 failed, 0 ignored |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| `python3 ci/lint-doc-refs.py` | 1,468 citations across 167 documents |
+| `python3 ci/lint-line-endings.py` | 394 files, all LF |
+| `python3 ci/lint-file-safety.py` | 144 deletion sites, all reviewed |
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D · 117 P · 293 S · 746 T |
+| `frame_dump` review set | 25 frames; new `25-settings-updates`, no text overlaps on that frame |
+
+### What the journey proves
+
+A real daemon socket serves a real application root. Its serve loop's scheduler
+creates the first snapshot without a request. The manifest names exactly the
+desktop entry and executable; the test independently hashes both and checks
+their modes. `BACKUP LIST`, the shell's status reader and `BACKUP VERIFY <id>`
+all pass over that socket. After the originals are changed and deleted, the
+snapshot bytes still match. Tampering with a snapshot returns `ERR checksum`;
+repairing it verifies again. `BACKUP CREATE CONFIRM` creates a second snapshot
+through the capability-checked path.
+
+### What it does not prove
+
+| Claim | Why not |
+|---|---|
+| that a snapshot can be restored | no restore command or conflict policy exists |
+| that the backup survives loss of the machine/home | it is a local directory on the same host |
+| that the copy is a point-in-time filesystem snapshot | it is a file copy, not Btrfs/CoW; external writers are not frozen |
+| that the schedule survives a daemon restart | `next_due` is in memory; restart makes the first tick immediate |
+| that a power cut cannot lose the snapshot rename | the manifest is fsynced, the containing directory is not |
+| that §73, C2/KMS or the rest of recovery is closed | separate open work; this is one backup service and one status page |
+| that a booted image or real display was exercised | the e2e is a real socket in-process; the UI review is a rendered frame |
+
+### Rollback
+
+Revert this commit. The backup module, capability/protocol variants, scheduler,
+shell status rows, e2e and design note disappear. Update generations, app
+install and all prior daemon state remain unchanged.

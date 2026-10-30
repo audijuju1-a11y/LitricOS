@@ -10,12 +10,13 @@ license.workspace      = true
 workspace = true
 
 [dependencies]
-litric-core    = { path = "../litric-core" }
-litric-caps    = { path = "../litric-caps" }
-litric-env     = { path = "../litric-env" }
-litric-storage = { path = "../litric-storage" }
-litric-trash   = { path = "../litric-trash" }
-litric-update  = { path = "../litric-update" }
+litric-core     = { path = "../litric-core" }
+litric-caps     = { path = "../litric-caps" }
+litric-defender = { path = "../litric-defender" }
+litric-env      = { path = "../litric-env" }
+litric-storage  = { path = "../litric-storage" }
+litric-trash    = { path = "../litric-trash" }
+litric-update   = { path = "../litric-update" }
 
 [lib]
 name = "litric_sysd"

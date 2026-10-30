@@ -335,6 +335,38 @@ fn scene_settings_appearance(rig: &mut Rig) {
     rig.shell.settings.page = litric_shell::settings::Page::Appearance;
 }
 
+/// Settings, on the Updates page: the updater's generation record and the
+/// daemon-owned backup schedule as the shell reads both over its socket.
+///
+/// The values are the protocol's own shape, not a second model: the page parses
+/// the same lines a running daemon writes, so this frame shows what a person
+/// sees when both services have a valid record.
+fn scene_settings_updates(rig: &mut Rig) {
+    let _ = rig.shell.open_app(App::Settings);
+    rig.shell.settings.page = litric_shell::settings::Page::Updates;
+    rig.shell.update_status = litric_shell::updatestatus::Status {
+        schema: Some(3),
+        state: "ready".to_owned(),
+        active_slot: Some("A".to_owned()),
+        active_version: Some("1.0.0".to_owned()),
+        rollback_slot: Some("B".to_owned()),
+        rollback_version: Some("0.9.0".to_owned()),
+        health: Some("healthy".to_owned()),
+        health_matches: Some(true),
+        ..Default::default()
+    };
+    rig.shell.backup_status = litric_shell::backupstatus::Status {
+        state: "ready".to_owned(),
+        interval_secs: Some(86_400),
+        snapshots: Some(3),
+        last_id: Some("snap-00000000001800000000".to_owned()),
+        last_created: Some(1_800_000_000),
+        last_entries: Some(7),
+        last_bytes: Some(48_213),
+        ..Default::default()
+    };
+}
+
 /// The danger dialog: deleting a file, with the object named and Cancel as the
 /// safe default (governance §2, screen 9).
 fn scene_danger_dialog(rig: &mut Rig) {
@@ -770,12 +802,13 @@ fn main() -> ExitCode {
     // (04-QA-LINT-GOVERNANCE §2) plus the frames this dump has always written:
     // the lock in three states, the launcher and its search, and the remaining
     // applications. `ci/check-golden-frames.py` names the required ten.
-    let scenes: [Scene; 16] = [
+    let scenes: [Scene; 17] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
         ("04-files", scene_files),
         ("16-files-empty", scene_files_empty),
         ("05-settings", scene_settings_appearance),
+        ("25-settings-updates", scene_settings_updates),
         ("17-control-centre", scene_control_centre),
         ("18-notifications", scene_notifications),
         ("19-dialog-danger", scene_danger_dialog),

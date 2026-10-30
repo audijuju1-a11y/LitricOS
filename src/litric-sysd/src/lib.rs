@@ -39,6 +39,7 @@
 
 pub mod action;
 pub mod auth;
+pub mod backup;
 pub mod facts;
 pub mod grants;
 pub mod install;
