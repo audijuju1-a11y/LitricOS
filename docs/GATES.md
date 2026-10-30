@@ -3073,9 +3073,58 @@ for changes** asks the same daemon again and still reports `uninitialized`.
 | that a generation switched or booted | no image, update unit or boot in this run |
 | that health evidence is healthy | the e2e record is intentionally uninitialized |
 | that §73 is complete | this is one page of the settings wave |
-| that auto-backup or Linux app install exists | separate, not implemented here |
+| that auto-backup or C2/KMS exists | separate, not implemented here |
 
 ### Rollback
 
 Revert this commit. The page, module, hotspots and e2e journey disappear; the
 daemon's `UPDATE STATUS` contract and every prior update batch are unchanged.
+
+## 2026-10-30 — §79: a Linux app installs, runs and uninstalls through the daemon
+
+The daemon can now install one local bundle, generate its desktop entry, and
+remove exactly those paths. This is not an app store, signature verifier,
+network download or manifest registry.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-sysd install::` | 5 passed, 0 failed |
+| `cargo test -p litric-sysd proto::tests::app_install` | 1 passed, 0 failed |
+| `cargo test -p litric-shell journey_app_install_launch_uninstall_through_sysd` | 1 passed, 0 failed |
+| `cargo test --workspace` | 1958 passed, 0 failed, 0 ignored |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| `python3 ci/lint-doc-refs.py` | 1468 citations across 166 documents |
+| `python3 ci/lint-line-endings.py` | 391 files, all LF |
+| `python3 ci/lint-file-safety.py` | 135 deletion sites, all reviewed |
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D · 117 P · 293 S · 746 T |
+
+### What the journey proves
+
+A real `litric-sysd` binds a temporary Unix socket. `APP INSTALL` copies a
+real shell-script bundle into `litric/apps/com.example.installed/app`, writes
+the generated entry under `applications/`, and returns `state=installed`. The
+shell's own discovery parser finds that entry. `LAUNCH`, sent over the same
+socket, starts the installed copy, which writes `installed-app-ran` to a marker
+file. `APP UNINSTALL` returns `state=removed`; the executable, desktop entry
+and discovery result are all asserted absent.
+
+### What it does not prove
+
+| Claim | Why not |
+|---|---|
+| that a signed or trusted package was installed | no signature or trust store exists |
+| that an app store or `litric-manifest` registry exists | no catalog, dependency solver or manifest integration |
+| that the executable is an ELF binary | the e2e fixture is an executable shell script, a real program but not a compiled one |
+| that a root-owned system app was installed | the target is the daemon user's XDG data root; no privilege escalation |
+| that a shell install UI exists | none was added; existing discovery can observe the entry |
+| that §73, auto-backup, C2/KMS or F1 is closed | separate open work; F1's manifest registry is not implemented |
+
+### Rollback
+
+Revert this commit. The installer, protocol variants, state methods, e2e module,
+design note and this evidence disappear. Existing launch and discovery remain
+unchanged, and no installed file outside a test's temporary root is touched.

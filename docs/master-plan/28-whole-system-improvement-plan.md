@@ -157,7 +157,7 @@ producer. Its budget is already written: `litric-shell.slice` at
 
 | Batch | Outcome |
 |---|---|
-| **F1** | App registry and installer over `src/litric-manifest`, with a real install and uninstall in a temp root |
+| **F1** | App registry and installer over `src/litric-manifest`, with a real install and uninstall in a temp root (**partial 2026-10-30**: §79 adds local bundle install/uninstall; the manifest registry remains open) |
 | **F2** | OOBE account creation and password change (the matrix's named `NOT_IMPLEMENTED` gap), with the lock surface unable to be dismissed around it |
 | **F3** | M6 close-out: every ledger row decided and evidenced, research `PENDING` = 0, gate-matrix truth pass, release label still `NOT_VERIFIED` unless gates 01–13 each carry the required evidence level |
 
@@ -253,6 +253,7 @@ end to end rather than half-built.
 | 75 | Update service: boot-attempt entrypoint and status/actions over the real socket | `--boot` + socket integration tests on a temp root (**landed 2026-10-30**, 1,917 workspace tests; see tracker §75) | here |
 | 76 | Update state crash consistency and one writer per root | atomic record ordering + simulated interruption + concurrent boot/live-lock/reclaim tests (**landed 2026-10-30**, 1,927 workspace tests; see tracker §76) | here |
 | 77 | Boot-attested update health evidence and a real commit gate | system-written `booting`/`healthy` record bound to slot/version/attempt + real-socket missing/stale/malformed/failed/replay/concurrency tests (**landed 2026-10-30**, 1,939 workspace tests; see tracker §77) | here |
+| 79 | Linux application bundle install, launch and uninstall over the real socket | validated local bundle, generated `.desktop`, real installed program writes a marker, uninstall removes files and discovery entry (**landed 2026-10-30**, 1,958 workspace tests; see tracker §79) | here |
 
 Image-level rows (A1, C2, and every `VM E2E` claim) stay in `docs/GATES.md` as
 `NOT RUN` until a builder exists. That is a scheduling fact, not an excuse: the

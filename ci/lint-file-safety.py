@@ -117,6 +117,16 @@ ALLOWED = {
         "tampered_bytes_are_refused_and_kept": "removes the scratch root this test created under the system temp directory, after asserting the tampered contained copy was kept",
         "a_legacy_record_restores_unverified": "removes the scratch root this test created under the system temp directory, after asserting the legacy entry was restored",
     },
+    "src/litric-sysd/src/install.rs": {
+        "install": "removes only the installer's own pid-tagged staging directory, or the target it has just committed when writing the desktop entry failed; the target is the validated application id below the configured app root, and the desktop path is the same id",
+        "uninstall": "removes exactly the validated application directory and desktop entry the installer wrote; both paths are symlink_metadata-checked and a link is refused rather than followed",
+        "write_atomic": "removes its own temporary desktop file (a pid-tagged sibling in the applications directory) before replacing it, never an application file",
+        "scratch": "test helper: removes the scratch installer root this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
+        "cleanup": "test helper: removes the scratch installer root this test created under the system temp directory, after its assertions",
+    },
+    "src/litric-shell/src/e2e_app_install.rs": {
+        "journey_app_install_launch_uninstall_through_sysd": "removes the pid-tagged temporary installer root this journey created under the system temp directory, after asserting the installed program wrote its marker and uninstall removed both the executable and its desktop entry",
+    },
     "src/litric-shell/src/e2e.rs": {
         "journey_settings_updates_reads_the_real_daemon_status": "removes the pid-tagged temporary fixture root this Settings journey created under the system temp directory, after asserting the real daemon reported an uninitialized update record and the page drew no Ready state",
         "e2e_root": "removes the temporary fixture root it is about to recreate; the name is tagged with this process's id and lives under the system temp directory",

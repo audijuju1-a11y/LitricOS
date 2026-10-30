@@ -144,6 +144,24 @@ pub enum Request {
         /// The vector; the first element is the absolute program path.
         argv: Vec<String>,
     },
+    /// Take one local bundle from the service's incoming directory and make it
+    /// a runnable application.
+    ///
+    /// The bundle is named, not pathed: it is one directory below the
+    /// service's own `incoming` root, and the installer refuses anything that
+    /// is not one safe segment. The service validates the id, the executable
+    /// and the desktop description before it writes anything.
+    AppInstall {
+        /// Reverse-DNS application id.
+        id: String,
+        /// One bundle directory name below `litric/incoming`.
+        bundle: String,
+    },
+    /// Remove an installed application and its desktop entry.
+    AppUninstall {
+        /// Reverse-DNS application id.
+        id: String,
+    },
     /// Read the update generation state. A question: it changes nothing and
     /// needs no capability.
     UpdateStatus {
@@ -641,6 +659,25 @@ impl Request {
                     value: other.to_owned(),
                 }),
             },
+            "app" => match arg(0).to_ascii_lowercase().as_str() {
+                "install" => {
+                    arity("APP INSTALL", 3)?;
+                    Ok(Self::AppInstall {
+                        id: arg(1).to_owned(),
+                        bundle: arg(2).to_owned(),
+                    })
+                }
+                "uninstall" => {
+                    arity("APP UNINSTALL", 2)?;
+                    Ok(Self::AppUninstall {
+                        id: arg(1).to_owned(),
+                    })
+                }
+                other => Err(ProtoError::BadArgument {
+                    name: "APP subcommand",
+                    value: other.to_owned(),
+                }),
+            },
             "launch" => {
                 if args.is_empty() || args.len() > MAX_ARGV {
                     return Err(ProtoError::BadArity {
@@ -861,6 +898,37 @@ mod tests {
         assert_eq!(Request::parse("ping"), Ok(Request::Ping));
         assert_eq!(Request::parse("  Facts  "), Ok(Request::Facts));
         assert_eq!(Request::parse("QUIT"), Ok(Request::Quit));
+    }
+
+    #[test]
+    fn app_install_and_uninstall_parse_without_turning_a_bundle_into_a_path() {
+        assert_eq!(
+            Request::parse("APP INSTALL com.example.fixture fixture"),
+            Ok(Request::AppInstall {
+                id: "com.example.fixture".to_owned(),
+                bundle: "fixture".to_owned(),
+            })
+        );
+        assert_eq!(
+            Request::parse("APP UNINSTALL com.example.fixture"),
+            Ok(Request::AppUninstall {
+                id: "com.example.fixture".to_owned(),
+            })
+        );
+        assert!(matches!(
+            Request::parse("APP INSTALL com.example.fixture"),
+            Err(ProtoError::BadArity {
+                verb: "APP INSTALL",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("APP DESTROY com.example.fixture"),
+            Err(ProtoError::BadArgument {
+                name: "APP subcommand",
+                ..
+            })
+        ));
     }
 
     #[test]

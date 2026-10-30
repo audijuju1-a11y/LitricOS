@@ -26,6 +26,7 @@ use litric_trash::{Retention, Trash};
 
 use crate::action::{self, PowerAction, Runner, SystemRunner};
 use crate::facts::{read_facts, Facts};
+use crate::install::{self, Installed};
 use crate::proto::{AccessWord, Request, Response};
 use crate::provider_contract::{AudioLevel, Provider, ToolProvider};
 use crate::providers::{BtAction, SystemAction};
@@ -145,6 +146,10 @@ pub struct Sysd {
     /// Generation state, boot counts and rollback. `disabled()` until
     /// the daemon is given the one root it is allowed to write.
     updates: UpdateService,
+    /// The XDG data root below which applications are installed. It is
+    /// configuration, not a request field: a request that could name a root
+    /// could name `/`.
+    applications_root: PathBuf,
 }
 
 impl Sysd {
@@ -181,6 +186,7 @@ impl Sysd {
             lockout_written_at: 0,
             lockout_note: "disabled".to_owned(),
             updates: UpdateService::disabled(),
+            applications_root: Path::new(home).join(".local/share"),
         }
     }
 
@@ -222,6 +228,16 @@ impl Sysd {
     #[must_use]
     pub fn with_update_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.updates = UpdateService::new(root);
+        self
+    }
+
+    /// Attach the XDG data root that application installs use.
+    ///
+    /// Production derives it from the user's home. A test supplies a temporary
+    /// root, and nothing else can change it per request.
+    #[must_use]
+    pub fn with_application_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.applications_root = root.into();
         self
     }
 
@@ -476,6 +492,8 @@ impl Sysd {
             Request::Action { action, consent } => self.action(action, *consent, now),
             Request::Resolve { app, uri, access } => self.resolve(app, uri, *access, now),
             Request::LaunchApp { argv } => self.launch_app(argv),
+            Request::AppInstall { id, bundle } => self.app_install(id, bundle),
+            Request::AppUninstall { id } => self.app_uninstall(id),
             Request::UpdateStatus { schema } => self.update_status(*schema, now),
             Request::UpdateStage {
                 version,
@@ -551,6 +569,66 @@ impl Sysd {
             }
         }
         self.lockout_written_at = now;
+    }
+
+    /// Install one validated bundle if the session client may manage apps.
+    ///
+    /// Reuses the local shell's `ProcessSpawn`/`app://` authority: installing
+    /// is making a program the shell may start, and a separate capability would
+    /// not narrow that authority while the shell can already name any absolute
+    /// program. The installer, not the broker, is what enforces the bundle
+    /// shape and the destination root.
+    fn app_install(&mut self, id: &str, bundle: &str) -> Response {
+        if let Err(refusal) = self.app_management_authorised() {
+            return refusal;
+        }
+        match install::install(&self.applications_root, id, bundle) {
+            Ok(Installed { id, .. }) => {
+                Response::ok(vec![format!("id={id}"), "state=installed".to_owned()])
+            }
+            Err(error) => Response::err(error.kind(), error.detail()),
+        }
+    }
+
+    /// Remove exactly what [`install::install`] wrote, if authorised.
+    fn app_uninstall(&mut self, id: &str) -> Response {
+        if let Err(refusal) = self.app_management_authorised() {
+            return refusal;
+        }
+        match install::uninstall(&self.applications_root, id) {
+            Ok(()) => Response::ok(vec![
+                format!("id={}", id.to_ascii_lowercase()),
+                "state=removed".to_owned(),
+            ]),
+            Err(error) => Response::err(error.kind(), error.detail()),
+        }
+    }
+
+    fn app_management_authorised(&mut self) -> Result<(), Response> {
+        let Some(client) = self.client.clone() else {
+            return Err(Response::err(
+                "refused",
+                "this build has no local client identity",
+            ));
+        };
+        let Ok(scope) = Scope::parse_resource("app://") else {
+            return Err(Response::err("bad-argument", "no scope for this action"));
+        };
+        let Some(capability) = Capability::new(CapabilityId::ProcessSpawn, scope) else {
+            return Err(Response::err(
+                "bad-argument",
+                "no capability for this action",
+            ));
+        };
+        let decision = self.caps.check_with_consent(&client, &capability, false, 0);
+        if decision.is_allowed() {
+            Ok(())
+        } else {
+            Err(Response::err(
+                "refused",
+                format!("{} {capability}", decision.reason().token()),
+            ))
+        }
     }
 
     /// Start a program the user chose, if the session client may ask.

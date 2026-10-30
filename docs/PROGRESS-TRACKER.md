@@ -8387,3 +8387,88 @@ and the same absent platform for idle RAM/CPU/boot timing.
 Base `e75a741`. The commit contains the updater status module, page, shell
 wiring, accessibility label, e2e journey, design note and this tracker entry.
 Final hash and `HEAD == origin/main` are recorded in the delivery report.
+
+## 79. Batch: a real Linux app installs, runs and uninstalls through sysd (verified)
+
+### 79.1 Requirement
+
+The launcher could discover and start `.desktop` applications, but the system
+had no install or uninstall operation. An application had to be placed in the
+XDG tree by hand. This batch adds one local, validated bundle path and proves it
+end to end over the real daemon socket.
+
+It does not add a package manager, network download, signature verification,
+manifest registry, shell install page or root escalation.
+
+### 79.2 Contract
+
+`APP INSTALL <reverse-dns-id> <bundle-name>` reads
+`<application-root>/litric/incoming/<bundle>/` and requires exactly:
+
+* `app`, a regular executable no larger than 64 MiB;
+* `app.desktop`, a regular file no larger than 64 KiB with
+  `Type=Application`, a non-empty `Name`, and `Exec=app`.
+
+The bundle name is one segment of `[A-Za-z0-9._-]`, may not start with `.`, and
+may not be `.` or `..`. The id is validated by `litric-core::AppId`. Source and
+target paths are inspected with `symlink_metadata`; a link is refused. The
+generated desktop entry has an absolute `Exec` built from the daemon's
+configured root, never from request text.
+
+Install uses a pid-tagged staging directory and a rename into place. A duplicate
+id is refused, and a failed desktop write rolls back only the app this attempt
+had just committed. `APP UNINSTALL <id>` removes exactly
+`litric/apps/<id>/` and `applications/<id>.desktop`; a wrong type or link is
+refused before either is removed.
+
+The operation reuses the local shell's `ProcessSpawn`/`app://` grant. The
+installer narrows what can be written and where; no request can choose a root.
+
+### 79.3 Tests
+
+* `cargo test -p litric-sysd install::` — **5 passed**: valid install, traversal
+  and linked executable, duplicate/unknown id, canary-preserving uninstall, and
+  a bad desktop description.
+* `cargo test -p litric-sysd proto::tests::app_install` — **1 passed**: both new
+  requests parse, arity and an unknown `APP` subcommand are refused.
+* `cargo test -p litric-shell journey_app_install_launch_uninstall_through_sysd`
+  — **1 passed**: real daemon and socket, real shell-script bundle, the shell's
+  own discovery parser, a real `LAUNCH`, a marker written by the installed
+  copy, then uninstall and an empty discovery result.
+
+The e2e fixture is an executable shell script, not a compiled ELF. It genuinely
+executes and writes the marker, so the install/launch/remove chain is real; the
+format limit is stated rather than hidden.
+
+### 79.4 Verification (real output, 2026-10-30)
+
+* `cargo fmt --all --check` → exit 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+* `cargo test --workspace` → 1958 passed, 0 failed, 0 ignored.
+* `bash ci/verify.sh` → 39 pass, 0 fail, 3 skipped.
+* `python3 ci/lint-doc-refs.py` → 1468 citations across 166 documents.
+* `python3 ci/lint-line-endings.py` → 391 files, all LF.
+* `python3 ci/lint-file-safety.py` → 135 deletion sites, all reviewed.
+* `python3 ci/count-scope.py` → 1,165 rows: 9 D · 117 P · 293 S · 746 T.
+
+The three skips are unchanged: `mkosi` absent, QEMU absent, and the platform
+needed for idle RAM/CPU/boot timing absent.
+
+### 79.5 Limits
+
+* No signed/trusted package, store, catalog or `litric-manifest` registry.
+* No root-owned system install; the root is the daemon user's XDG data root.
+* No shell install/uninstall control. Existing discovery can observe the
+  generated entry; this batch is the daemon and protocol.
+* No compiled fixture and no booted image. The script fixture is a real program.
+* F1 remains open: its manifest registry is not implemented.
+* Auto-backup, the rest of §73 and C2/KMS remain open. This batch does none of
+  them.
+* `SYSTEM-SCOPE` rows moved: **none**. The new write path reuses the existing
+  app-management authority and adds no machine-wide capability.
+
+### 79.6 Git
+
+Base `dbb881c`. The commit contains the installer module, protocol variants,
+state wiring, focused tests, real-socket e2e, design note and this evidence.
+Final hash and `HEAD == origin/main` are recorded in the delivery report.
