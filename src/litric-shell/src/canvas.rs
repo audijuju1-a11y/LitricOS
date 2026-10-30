@@ -1325,7 +1325,15 @@ impl Canvas {
     /// The pixel range a drawing loop may visit: the rectangle, cut to the
     /// canvas **and to the clip**. For loops where each pixel's new value
     /// depends only on that pixel.
-    fn span(&self, r: &Rect) -> (i64, i64, i64, i64) {
+    /// The part of `r` this canvas will accept: its own bounds intersected with
+    /// the clip, in pixels, as `(x0, y0, x1, y1)`.
+    ///
+    /// Public because a caller that paints a deterministic picture has to know
+    /// which pixels are worth computing: `paint_cover` walks this instead of the
+    /// whole screen when the wallpaper is repainted into one damaged region
+    /// (§67). `put` still refuses anything outside, so the values written are
+    /// the same either way.
+    pub fn span(&self, r: &Rect) -> (i64, i64, i64, i64) {
         let (mut x0, mut y0, mut x1, mut y1) = self.bounds_of(r);
         if let Some(c) = self.clip {
             let (cx0, cy0, cx1, cy1) = clip_pixels(&c);

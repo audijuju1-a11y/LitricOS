@@ -176,7 +176,7 @@ a gate, not a wish. Today's known costs:
 
 | Item | Cost | Status |
 |---|---:|---|
-| Three full-screen canvases, 1920×1080 | 23.7 MiB raw | `docs/PERF-budget.md` §3d |
+| Two full-screen canvases, 1920×1080 | 15.8 MiB raw; 16.8 MiB measured (§67) | `docs/PERF-budget.md` §3d |
 | Five with lock caches | 39.6 MiB raw | same |
 | Same, at 2560×1600 (the ceiling) | 46.9 / 78.1 MiB | same |
 | `litric-shell` cgroup | 110M high / 140M max | configured, not measured |
@@ -201,7 +201,7 @@ Levers, in order of expected value (hypotheses, per `docs/PERF-budget.md` §6):
 
 | Lever | Expected effect | What it removes |
 |---|---|---|
-| One canvas + damage tiles instead of three full-screen buffers | −15.8 MiB at 1080p | one full-screen copy; requires damage-region correctness |
+| One canvas + damage tiles instead of two full-screen buffers | −7.9 MiB at 1080p | one full-screen copy (§67 removed the other); requires damage-region correctness |
 | Region blur cache instead of two full-screen passes | the renderer's largest cost (91.2 ms measured) | full-screen blur on unchanged regions |
 | Event-driven idle, every timer named | toward ≤ 2 wakeups/s | polling that exists only because it was easy |
 | Text atlas cap + per-glyph accounting | bounded, measured | untracked atlas growth |

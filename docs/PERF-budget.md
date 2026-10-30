@@ -244,16 +244,22 @@ a target over the lines written down, not a whole-system measurement.
 
 ### 3d. Surface budget: the largest mode the shell accepts
 
-The compositor holds three full-screen 32-bit canvases (wallpaper, scene and the
-cached glass backdrop), and the lock screen can add two more. Those are the
-largest allocations in the shell, so the mode is itself a budget decision. Raw
-pixel payload only — not RSS, not a measurement:
+The compositor holds two full-screen 32-bit canvases (the scene and the cached
+glass backdrop), and the lock screen can add two more. Those are the largest
+allocations in the shell, so the mode is itself a budget decision. Raw pixel
+payload only for the table — the measured figures below it come from the kernel:
 
-| Mode | One canvas | Three canvases | Five, with the lock caches |
+| Mode | One canvas | Two, in the compositor | Four, with the lock caches |
 |---|---:|---:|---:|
-| 1920×1080 | 7.9 MiB | 23.7 MiB | 39.6 MiB |
-| 2560×1600 | 15.6 MiB | 46.9 MiB | 78.1 MiB |
-| 3840×2160 | 31.6 MiB | 94.9 MiB | 158.2 MiB |
+| 1920×1080 | 7.9 MiB | 15.8 MiB | 31.7 MiB |
+| 2560×1600 | 15.6 MiB | 31.3 MiB | 62.5 MiB |
+| 3840×2160 | 31.6 MiB | 63.3 MiB | 126.5 MiB |
+
+Measured, not multiplied: `cargo run --release -p litric-shell --example
+canvas_bytes` builds the real compositor and reports the process's `VmRSS`
+before and after. At 1920×1080 that is **17,184 KiB** with
+`MALLOC_MMAP_THRESHOLD_=131072`, against **25,148 KiB** before the wallpaper copy
+was removed (`docs/PROGRESS-TRACKER.md` §67).
 
 `litric-shell.slice` sets `MemoryMax=140M`, so five canvases at 4K exceed the
 cap before the text atlas, the browser frame or the allocator are counted.

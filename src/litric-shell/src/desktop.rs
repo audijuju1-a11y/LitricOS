@@ -235,8 +235,15 @@ pub fn glass_params(theme: &Theme) -> (u32, f32) {
 /// [`Compositor::repaint`], so what is measured is what runs.
 #[derive(Debug, Clone)]
 pub struct Compositor {
-    /// The wallpaper, painted once. A repainted region starts as a copy of it.
-    pub wallpaper: Canvas,
+    /// The theme and the wallpaper choice this frame is composed for.
+    ///
+    /// Kept instead of a second full-screen copy of the wallpaper. A repainted
+    /// region is restored by painting the wallpaper into the scene under that
+    /// region's clip -- the same deterministic function whose output a copy
+    /// would have held -- so the shell holds one frame of pixels rather than
+    /// two (`docs/PROGRESS-TRACKER.md` §67, measured with `canvas_bytes`).
+    theme: Theme,
+    choice: Wallpaper,
     /// The frame that is presented. Glass on it samples a blurred, saturated
     /// copy of the wallpaper made by [`Compositor::new`].
     pub scene: Canvas,
@@ -262,12 +269,15 @@ impl Compositor {
         // The shell composites single-threaded, so the shared backdrop is an
         // Rc: `Canvas` is neither Send nor Sync and never needs to be.
         let source = std::rc::Rc::new(paper.glass_source(blur, saturation));
-        let mut scene = paper.clone();
-        // The backdrop is made from a canvas of the scene's own size, so the
-        // size check in set_backdrop cannot refuse it.
+        // The scene *is* the wallpaper at this point: there is no second copy,
+        // and a later repaint restores its region by painting the same
+        // wallpaper into it. The backdrop is made from a canvas of the scene's
+        // own size, so the size check in set_backdrop cannot refuse it.
+        let mut scene = paper;
         let _ = scene.set_backdrop(Some(source));
         Self {
-            wallpaper: paper,
+            theme: *theme,
+            choice,
             scene,
             cursor: None,
         }
@@ -281,9 +291,10 @@ impl Compositor {
         wallpaper_for(&mut paper, theme, choice);
         let (blur, saturation) = glass_params(theme);
         let source = std::rc::Rc::new(paper.glass_source(blur, saturation));
-        let mut scene = paper.clone();
+        let mut scene = paper;
         let _ = scene.set_backdrop(Some(source));
-        self.wallpaper = paper;
+        self.theme = *theme;
+        self.choice = choice;
         self.scene = scene;
         self.cursor = None;
     }
@@ -291,8 +302,8 @@ impl Compositor {
     /// Draw a frame: the whole screen when `full`, otherwise only the regions
     /// [`Repaint::plan`] makes of `damage`.
     ///
-    /// Each region is restored from the wallpaper and the whole desktop is
-    /// drawn over it with the clip set to that region, so every pixel inside
+    /// Each region is restored by painting the wallpaper into it and the whole
+    /// desktop is drawn over it with the clip set to that region, so every pixel inside
     /// it goes through the same drawing a full frame gives it and no pixel
     /// outside it is visited. Returns the plan, so the caller presents exactly
     /// the rows that were repainted.
@@ -314,7 +325,10 @@ impl Compositor {
             // is invisible - `frame_dump`'s fingerprints for 11-lock and
             // 12-lock-password are unchanged by it.
             if !shell.lock.locked {
-                self.scene.blit_from(&self.wallpaper, region);
+                // Painted, not blitted: the same function that produced the
+                // pixels a wallpaper buffer would have held, restricted to
+                // `region` by the clip set above.
+                wallpaper_for(&mut self.scene, &self.theme, self.choice);
             }
             views::draw(&mut self.scene, shell);
             self.scene.set_clip(saved);
@@ -419,12 +433,19 @@ fn paint_cover(canvas: &mut Canvas, iw: u32, ih: u32, pixels: &[u32]) {
     let last_x = iw.saturating_sub(1) as usize;
     let last_y = ih.saturating_sub(1) as usize;
     let stride = iw as usize;
-    for y in 0..ch {
-        let sy = (((y as f32 + 0.5 + oy) / scale) as usize).min(last_y);
-        for x in 0..cw {
+    // Walk only the part of the picture the clip admits. `put` refuses a pixel
+    // outside it anyway, so the values written are unchanged; what changes is
+    // that restoring a damaged region no longer walks the whole screen to
+    // paint a few thousand pixels of it.
+    let field = Rect::new(0.0, 0.0, cw as f32, ch as f32);
+    let (cx0, cy0, cx1, cy1) = canvas.span(&field);
+    for y in cy0..cy1 {
+        let py = y as f32;
+        let sy = (((py + 0.5 + oy) / scale) as usize).min(last_y);
+        for x in cx0..cx1 {
             let sx = (((x as f32 + 0.5 + ox) / scale) as usize).min(last_x);
             if let Some(&c) = pixels.get(sy.saturating_mul(stride).saturating_add(sx)) {
-                canvas.put(i64::from(x), i64::from(y), c);
+                canvas.put(x, y, c);
             }
         }
     }

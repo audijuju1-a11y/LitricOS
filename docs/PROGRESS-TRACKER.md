@@ -6651,3 +6651,181 @@ that need mkosi/QEMU. No gate, golden frame or key file was edited.
 Base `ce08ee8`. This entry and the bug record are committed on `main` and
 pushed; `HEAD == origin/main` and the tracked worktree is empty at the end of the
 turn.
+
+## 67. Batch: the wallpaper copy is gone, and the bytes are measured (verified)
+
+### 67.1 Requirement
+
+The improvement plan scopes this batch by its proof
+(`docs/master-plan/28-whole-system-improvement-plan.md`, batch 67):
+
+> Canvas memory: one buffer + damage tiles, bytes measured | frame oracle, pixel
+> diff, bytes
+
+and names the lever it is meant to pull:
+
+> **One canvas + damage tiles** instead of three full-screen buffers | −15.8 MiB
+> at 1080p | one full-screen copy; requires damage-region correctness
+
+The batch contract's rule 4 sets the bar for the number
+(`docs/master-plan/28-whole-system-improvement-plan.md`):
+
+> **Caps are justified by a measured distribution, not by a round number.**
+
+and rule 2 says a saving has to name what it removed.
+
+### 67.2 Audit, before the change
+
+`Compositor` held three full-screen 32-bit canvases
+(`src/litric-shell/src/desktop.rs`): `wallpaper` (painted once, the restore
+source for a damaged region), `scene` (the frame), and the blurred glass backdrop
+attached to the scene. At 1920×1080 that is 3 × 8,294,400 bytes = 24.9 MB raw,
+matching `docs/PERF-budget.md` §3d's arithmetic.
+
+The word "measured" was the part that was missing: §3d multiplied pixels, and
+nothing in the tree reported what the process really allocated. So the batch
+built the smallest honest harness, `src/litric-shell/examples/canvas_bytes.rs`,
+which constructs the shipped `Compositor` and prints `VmRSS` from
+`/proc/self/statm` before and after. One mode per process, because a second
+compositor in the same process reuses the first one's freed heap and the delta
+would then describe the allocator.
+
+Baseline, before any edit:
+
+```bash
+cd src
+cargo build --release -p litric-shell --example canvas_bytes
+MALLOC_MMAP_THRESHOLD_=131072 ./target/release/examples/canvas_bytes 1920x1080
+```
+
+| Mode | compositor RSS |
+|---|---:|
+| 1280×800 | 13,008 KiB |
+| 1920×1080 | 25,148 KiB |
+| 2560×1600 | 48,824 KiB |
+
+### 67.3 What changed
+
+* `Compositor::wallpaper` is **deleted**. The scene is built from the wallpaper
+  and kept; a damaged region is restored by painting the wallpaper into it under
+  the region's clip, which is the same deterministic function whose output the
+  copy held. The struct keeps `theme` and `choice` instead — 24 bytes rather than
+  4 bytes a pixel.
+* `paint_cover` walks `Canvas::span` (the canvas intersected with the clip)
+  instead of the whole picture. `put` already refused pixels outside the clip, so
+  the values written are unchanged; what changes is that restoring a small region
+  no longer walks a whole screen to paint a few thousand pixels of it. `span`
+  became public for that reason, with its contract in the doc comment.
+* `Compositor::new` and `retheme` no longer clone the wallpaper canvas: the scene
+  *is* it, and the backdrop is derived from it before it is moved.
+
+### 67.4 Measured bytes, identical command, before and after
+
+The before column is the same binary rebuilt with `desktop.rs` stashed, so only
+the change differs.
+
+| Mode | before | after | saved |
+|---|---:|---:|---:|
+| 1280×800 | 13,008 KiB | **8,984 KiB** | 4,024 KiB |
+| 1920×1080 | 25,148 KiB | **17,184 KiB** | 7,964 KiB |
+| 2560×1600 | 48,824 KiB | **32,988 KiB** | 15,836 KiB |
+
+The saving is one canvas at every mode (4,096 / 8,100 / 16,000 KiB of raw
+payload, plus allocator overhead). Without `MALLOC_MMAP_THRESHOLD_=131072` the
+same run reports the saving only at 2560×1600: glibc raises its mmap threshold
+after the first large free, so the freed 4 MB block stays in the heap at the
+smaller modes and `VmRSS` does not fall. That is an allocator artefact, not a
+property of the change, and it is why the table above names the variable.
+
+### 67.5 Wiring (file → line, measured on this commit)
+
+| File | Line | What it does |
+| --- | --- | --- |
+| `src/litric-shell/src/desktop.rs` | 245 | `theme: Theme` — kept instead of the wallpaper buffer |
+| `src/litric-shell/src/desktop.rs` | 246 | `choice: Wallpaper` — which wallpaper to repaint |
+| `src/litric-shell/src/desktop.rs` | 265 | `new`: the scene *is* the wallpaper; no clone, no second buffer |
+| `src/litric-shell/src/desktop.rs` | 287 | `retheme`: rebuilds the scene and records theme/choice |
+| `src/litric-shell/src/desktop.rs` | 331 | `repaint`: a region is restored by painting, under the clip |
+| `src/litric-shell/src/desktop.rs` | 441 | `paint_cover`: walks `span` (clip) instead of the whole picture |
+| `src/litric-shell/src/canvas.rs` | 1336 | `span` is public: the pixels a canvas will accept |
+| `src/litric-shell/examples/canvas_bytes.rs` | 25 | `rss_kb` — `/proc/self/statm`, the measurement |
+| `src/litric-shell/examples/canvas_bytes.rs` | 49 | one mode per process, so the delta is the desktop |
+| `docs/PERF-budget.md` | 247 | §3d corrected: two canvases, with the measured figure |
+
+### 67.6 The test that was written, proved non-sensitive, and removed
+
+A unit test was added: dirty a region, repaint it partially, repaint the same
+frame fully, and assert every pixel of the region matches. It passed — and then
+it **also passed with the wallpaper restore deleted**, which is the only thing it
+was supposed to defend:
+
+```text
+=== SENSITIVITY: skip the wallpaper restore ===
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 725 filtered out
+```
+
+The reason is real and worth recording: `views::draw` repaints every pixel of the
+clip, so a region's final pixels are the desktop's, not the wallpaper's, and the
+restore is invisible to that comparison at both positions tried (centre of the
+screen and bare wallpaper at the right edge). A test that stays green when the
+behaviour it names is removed proves nothing, so it was deleted rather than
+shipped. The pixel oracle that does exist and was run is the golden-frame check
+inside `ci/verify.sh`, which compares whole frames byte for byte.
+
+### 67.7 Gate
+
+```text
+$ cargo fmt --all --check
+exit 0
+
+$ cargo clippy --workspace --all-targets -- -D warnings
+exit 0
+
+$ cargo test --workspace
+1,837 passed; 0 failed   (unchanged: no test ships from this batch)
+
+$ python3 ci/lint-doc-refs.py
+OK: 1,246 citation(s) across 156 document(s) resolve
+
+$ python3 ci/lint-file-safety.py
+OK: 116 deletion site(s), all inside reviewed functions
+
+$ bash ci/verify.sh
+summary: 32 pass, 2 fail, 3 skipped
+```
+
+The two failures are the recorded baseline (`mkosi config…`, `dev key pairs…`);
+the three skips are the image build, boot smoke test and idle measurement. The
+golden-frame check is among the 32 passes, so whole frames are unchanged. No
+gate, golden frame or key file was edited.
+
+### 67.8 Costs and limits, stated
+
+| Figure | Value |
+| --- | --- |
+| heap at rest | **−4,024 KiB @ 1280×800 · −7,964 KiB @ 1920×1080 · −15,836 KiB @ 2560×1600** |
+| production code changed | one field removed, one accessor made public, one loop bounded |
+| per-frame work added | not measured — see below |
+| dependencies / `unsafe` | 0 / none |
+
+* **The time cost was not measured here.** `render_bench` does not call
+  `Compositor::repaint` (it restores with its own blit), and `frame_dump` refuses
+  to run on this host: *"no Latin text face is installed, so no frame can be
+  drawn"*. So the claim this batch makes is bytes; the cost of painting a
+  damaged region instead of blitting it is **unmeasured**, and the loop it uses
+  is bounded by the clip rather than the screen, which is the shape that made it
+  acceptable to ship without the number.
+* **Not one buffer with damage tiles yet.** The plan's lever is "one canvas +
+  damage tiles"; this batch removes the third full-screen buffer (the wallpaper
+  copy) and leaves two (scene + glass backdrop). The backdrop is a real cache
+  that saves the live blur, so removing it is a different trade, not an
+  oversight.
+* **The lock screen still adds up to two full-screen caches** (`lock::Cache`),
+  unchanged here.
+* **No image-level evidence.** These are host `VmRSS` figures; a booted image's
+  cgroup memory is still unmeasured (`docs/GATES.md` stays `NOT RUN`).
+
+### 67.9 Git
+
+Base `f4b04da`. This batch is committed on `main` and pushed; `HEAD ==
+origin/main` and the tracked worktree is empty at the end of the turn.
