@@ -114,7 +114,7 @@ remains open because this host has no builder, QEMU or booted desktop.
 | Batch | Outcome | Where |
 |---|---|---|
 | **B1** | Capability grants, denials and the audit survive a daemon restart; a corrupt store degrades to *no grants*, never *all grants* | here |
-| **B2** | The Files daemon is reached by a per-user socket or a documented, tested equivalent; the 0600 root-owned compromise is retired or its threat-model entry is made explicit | here |
+| **B2** | The Files daemon is reached by a per-user socket or a documented, tested equivalent; the 0600 root-owned compromise is retired or its threat-model entry is made explicit (**landed 2026-10-30**: socket owner aligned to `litric`, threat-model entry and `[3i]` negative control added; still no per-peer check, root shell accepted) | here |
 | **B3** | Defender either ships the daemon its unit names, or the unit and every claim about on-access scanning are removed until it does | here |
 | **B4** | The recovery/update generation engine exists for a temp root, with a rollback demonstrated and an ADR-0021 check: no generation advertised before it can roll back | here |
 

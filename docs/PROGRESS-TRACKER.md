@@ -8066,3 +8066,84 @@ could pass on a planted violation. The existing A2 self-test still runs.
 Base `ca4e7c1`. This batch changes the audit note, the ledger and its tally, the
 master-plan marker and the tracker/GATES entries. The final hash and
 `HEAD == origin/main` check are recorded in the delivery report after the push.
+
+## B2. Batch: the Files socket belongs to the daemon user (verified)
+
+### B2.1 Requirement
+
+The master plan's B2 row: the Files daemon must be reached by a per-user socket
+or a documented, tested equivalent; the root-owned `0600` compromise must be
+retired or its threat-model entry made explicit. B1 was already the landed §63
+work, and B4 is the landed §74 engine, so B2 is the next unlanded Stage B row.
+
+### B2.2 What the audit found
+
+`litric-files@.service` runs as `User=litric`, but
+`image/mkosi.extra/usr/lib/systemd/system/litric-files.socket` created the
+listener with `SocketUser=root` and `SocketGroup=root`. The mode was already
+`0600`, so no other local uid could connect; the defect was that the socket
+identity did not match the service identity. The ordinary client path depended
+on root's DAC override rather than on the daemon user's own permission. The
+beta gate matrix and §27 already recorded the root-owned gap; `SEC-00` did not.
+
+### B2.3 What changed
+
+| File | Change |
+|---|---|
+| `image/mkosi.extra/usr/lib/systemd/system/litric-files.socket` | `SocketUser=litric`, `SocketGroup=litric`; `0600`, `Accept=yes`, `MaxConnections=8` and `RemoveOnStop=yes` unchanged |
+| `ci/lint-unit-sockets.py` | rejects a `litric-files.socket` whose owner/group is not `litric`; self-test plants a root-owned unit and proves the rejection |
+| `docs/SEC-00-threatmodel.md` | BOUNDARY B1 entry: other-uid connection, root-shell residual, no peer-credential claim |
+| `docs/adr/0019-litric-files.md` and its image copy | socket owner corrected; root DAC override and no-peer-check residual stated |
+| `docs/master-plan/25-beta-1.0-gate-matrix.md` | the root-owned sentence is no longer current |
+| `docs/design/2026-10-30-files-socket-boundary.md` | precedence, failure/degradation rules, evidence and limits |
+| `docs/master-plan/28-whole-system-improvement-plan.md` | B2 marked landed |
+
+No LFP/1 request, response, daemon path, shell client or file-operation rule was
+changed. `SYSTEM-SCOPE` rows moved: **none**; this is a transport-identity
+change, not a new ledger capability.
+
+### B2.4 Tests and negative control
+
+* `python3 ci/lint-unit-sockets.py` → `OK: 3 socket unit(s) are owner-only,
+  explicit and removed on stop`.
+* `python3 ci/lint-unit-sockets.py --self-test` → `OK: checker rejects a
+  planted 0666 unit and a root-owned Files socket`. The second planted unit is
+  the negative control for this batch; before the new rule it would have been
+  accepted.
+* `ci/verify.sh` `[3i]` runs both the checker and its self-test.
+* Existing `litric-files` socket tests still prove `0600`, ownership, live
+  socket refusal, stale replacement and a real same-user connection.
+
+### B2.5 Verification (real output, 2026-10-30)
+
+* `cargo fmt --all --check` → exit 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+* `cargo test -p litric-update` → **21 passed, 0 failed**.
+* `cargo test --workspace` → **1,939 passed, 0 failed** (62 test binaries).
+* `python3 ci/count-scope.py` → 1,165 rows: **9 D · 117 P · 293 S · 746 T**.
+* `python3 ci/lint-doc-refs.py` → **1,429 citations across 162 documents** resolve.
+* `python3 ci/lint-line-endings.py` → **387 files, all LF**.
+* `python3 ci/lint-file-safety.py` → **125 deletion sites**, all reviewed.
+* `bash ci/verify.sh` → **35 pass, 0 fail, 3 skipped**; skips are image build
+  (`mkosi` absent), boot smoke (QEMU absent) and idle RAM/CPU/boot timing
+  (same).
+
+### B2.6 Limits, stated plainly
+
+* The shell is uid 0 and can connect through its DAC override. This is not a
+  per-connection identity check and not a sandbox against root.
+* `SO_PEERCRED` is unstable in std on this toolchain; a userspace check would
+  need a dependency or `unsafe`, which the dependency policy forbids. That
+  remains an open design decision.
+* Cross-uid refusal was not executed: this host has one uid and no root or
+  second account. The evidence is the unit's owner/mode and the kernel rule.
+* No systemd was booted, no image was built and no QEMU run exists. The linter
+  proves what the unit declares, not what systemd applies at runtime.
+* B3 (Defender daemon/unit truth) and the rest of Stage B remain open.
+
+### B2.7 Git
+
+Base `642109f`. This batch changes the socket unit, the socket linter and its
+negative control, the threat model, ADR, beta matrix, design note, master plan
+and tracker/GATES. The final hash and `HEAD == origin/main` check are recorded
+in the delivery report after the push.

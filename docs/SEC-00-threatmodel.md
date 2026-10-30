@@ -36,6 +36,13 @@
 | Rogue D-Bus service | Spoofing | Service activation policy, bus name ownership | P02 | Trusted services only on system bus |
 | Capability escalation via IPC | Elevation of Privilege | Capabilities are non-transferable, broker validates | P07 | IPC implementation bugs |
 
+### BOUNDARY B1: Files daemon socket
+
+| Threat | STRIDE | Mitigation | Phase | Residual |
+|--------|--------|------------|-------|----------|
+| Another local uid connects to the Files daemon | Spoofing / Elevation of Privilege | `/run/litric/files.sock` is owned by `litric`, the user `litric-files@.service` runs as, and is mode `0600`; `connect` from every other uid fails with `EACCES` before a request byte. `ci/lint-unit-sockets.py` rejects a root-owned unit and has a planted negative control. | P00 | No `SO_PEERCRED` check; the kernel's owner/mode check is the boundary. Cross-uid refusal is not executed on this one-uid host. |
+| Compromised root shell uses the Files daemon | Elevation of Privilege | Accepted by design: the shell is uid 0 and is already trusted to drive the display. The daemon confines logical paths to `/var/lib/litric-files/root` and holds no network or device access. | P00 | This is not a sandbox against root; a root shell can use the daemon and can reach root-owned paths. |
+
 ### BOUNDARY C: App ↔ App
 
 | Threat | STRIDE | Mitigation | Phase | Residual |

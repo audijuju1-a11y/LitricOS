@@ -21,9 +21,11 @@ performs trash operations (`litric-filesd`) and it did not exist.
    (`/var/lib/litric-files`, created by `StateDirectory=` and opened through
    `ProtectSystem=strict`; `ProtectHome=yes` hides the user's home from it entirely),
    activated per connection by `litric-files.socket` (`/run/litric/files.sock`,
-   `SocketMode=0600`, owner root, `Accept=yes`), exactly like the browser broker in
-   ADR-0018. The shell is what opens that socket; it no longer performs a file
-   operation of its own.
+   `SocketMode=0600`, owner `litric`, `Accept=yes`), exactly like the browser
+   broker in ADR-0018 except that the socket is owned by the service user rather
+   than root. The shell is what opens that socket; it no longer performs a file
+   operation of its own. Root can still connect through its DAC override; that is
+   the documented root-shell trust boundary, not a per-connection identity check.
 2. **Logical paths.** The shell never sends an absolute host path. Every path is
    relative to the user root and written `/Documents/report.odt`. Each segment is
    validated: not empty, not `.` or `..`, no `/`, no NUL or other control byte, at most

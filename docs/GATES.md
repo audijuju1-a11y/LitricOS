@@ -2821,3 +2821,80 @@ and idle RAM/CPU/boot timing (same). They are environmental skips, not evidence.
 Revert this commit. The five rows return to `P`, the tally returns to 122 P / 288
 S, and the audit note and tracker/GATES/master-plan markers disappear. No code,
 image, user data, update state or measured budget is touched.
+
+## 2026-10-30 — B2: the Files socket belongs to the daemon user
+
+`B2` closes the root-owned Files socket mismatch. The daemon already ran as
+`litric`; the listener was still root-owned. The socket is now owned by
+`litric`/`litric` with mode `0600`, so the kernel's access check and the service
+identity agree. `root` can still connect by DAC override; that is recorded as
+the accepted root-shell boundary, not a peer-credential check.
+
+B1 was the landed §63 restart/corruption work and B4 is the landed §74 engine;
+B2 was the next unlanded Stage B row. A1 remains blocked on `mkosi`, QEMU, a
+booted desktop and a real budget snapshot.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `image/mkosi.extra/usr/lib/systemd/system/litric-files.socket` | `SocketUser=litric`, `SocketGroup=litric`; mode `0600` and activation settings unchanged |
+| `ci/lint-unit-sockets.py` | new owner/group rule for `litric-files.socket`; self-test plants a root-owned unit |
+| `docs/SEC-00-threatmodel.md` | explicit BOUNDARY B1 entry and residual |
+| `docs/adr/0019-litric-files.md`, image copy | owner corrected, root DAC/no-peer-check residual stated |
+| `docs/master-plan/25-beta-1.0-gate-matrix.md` | root-owned sentence corrected |
+| `docs/design/2026-10-30-files-socket-boundary.md` | design, precedence, degradation and limits |
+| `docs/master-plan/28-whole-system-improvement-plan.md` | B2 marked landed |
+
+### Evidence (commands run on this batch)
+
+| Check | Result |
+|---|---|
+| `python3 ci/lint-unit-sockets.py` | `OK: 3 socket unit(s) are owner-only, explicit and removed on stop` |
+| `python3 ci/lint-unit-sockets.py --self-test` | `OK: checker rejects a planted 0666 unit and a root-owned Files socket` |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-update` | 21 passed, 0 failed |
+| `cargo test --workspace` | 1,939 passed, 0 failed (62 test binaries) |
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D, 117 P, 293 S, 746 T |
+| `python3 ci/lint-doc-refs.py` | 1,429 citations across 162 documents resolve |
+| `python3 ci/lint-line-endings.py` | 387 files, all LF |
+| `python3 ci/lint-file-safety.py` | 125 deletion sites, all reviewed |
+| `bash ci/verify.sh` | 35 pass, 0 fail, 3 skipped |
+
+The three skips are the image build (`mkosi` absent), boot smoke (QEMU absent)
+and idle RAM/CPU/boot timing (same). They are environmental skips, not evidence.
+
+### What the negative control proves
+
+The self-test creates a `litric-files.socket` with `SocketUser=root` and
+`SocketGroup=root` and fails if the linter accepts it. It also still plants a
+`0666` unit and fails if that is accepted. Before this batch the owner rule did
+not exist, so the root-owned unit was accepted; after it, the same fixture is
+rejected.
+
+### What this establishes
+
+* The Files listener is owned by the same unprivileged user that runs
+  `litric-files@.service`, not root.
+* The static socket gate can fail on both a world-connectable mode and a
+  root-owned Files socket.
+* The threat model now states the root-shell override and the absence of a
+  peer-credential check instead of leaving the compromise implicit.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that a booted systemd applies the ownership | no systemd/image/QEMU here; only the unit text and static gate were exercised |
+| that another uid is refused at runtime | this host has one uid; no cross-uid process test was possible |
+| that the shell is unprivileged | it runs as uid 0; root's DAC override is accepted and documented |
+| that a peer-credential check exists | it does not; `SO_PEERCRED` is unstable and the dependency policy forbids the workaround here |
+| that B3, B4, A1 or W9 are closed | they are separate batches; A1 still needs a builder |
+
+### Rollback
+
+Revert this commit. The socket returns to root-owned `0600`, the linter owner
+rule and self-test fixture disappear, the threat-model/ADR/design/tracker/GATES
+entries are removed, and the master plan returns B2 to unlanded. No LFP/1 code,
+user data, image or measured budget is touched.

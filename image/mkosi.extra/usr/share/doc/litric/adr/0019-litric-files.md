@@ -19,8 +19,10 @@ performs trash operations (`litric-filesd`) and it did not exist.
 1. **`litric-filesd`** (crate `litric-files`) performs every file operation. It runs
    as the desktop user `litric`, with write access to that user's home only
    (`/var/home/litric`), activated per connection by `litric-files.socket`
-   (`/run/litric/files.sock`, `SocketMode=0600`, owner root, `Accept=yes`), exactly like
-   the browser broker in ADR-0018.
+   (`/run/litric/files.sock`, `SocketMode=0600`, owner `litric`, `Accept=yes`),
+   exactly like the browser broker in ADR-0018 except that the socket is owned by
+   the service user. Root can still connect through its DAC override; there is no
+   per-connection peer-credential check.
 2. **Logical paths.** The shell never sends an absolute host path. Every path is
    relative to the user root and written `/Documents/report.odt`. Each segment is
    validated: not empty, not `.` or `..`, no `/`, no NUL or other control byte, at most

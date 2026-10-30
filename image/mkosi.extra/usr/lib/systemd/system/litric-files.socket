@@ -3,11 +3,14 @@ Description=Litric Files daemon socket
 Documentation=file:///usr/share/doc/litric/adr/0019-litric-files.md
 
 [Socket]
-# Same shape as litric-browser.socket: 0600 root, so only the shell can ask the
-# daemon to touch the user's files, and one daemon process per connection.
+# The daemon runs as `litric` (litric-files@.service). The socket belongs to
+# the same uid and group, so the kernel's 0600 check admits that user and root
+# (root's DAC override is deliberate) and refuses every other local uid before
+# a request byte exists. No peer-credential check is implemented; ownership and
+# mode are the whole boundary. One daemon process per connection.
 ListenStream=/run/litric/files.sock
-SocketUser=root
-SocketGroup=root
+SocketUser=litric
+SocketGroup=litric
 SocketMode=0600
 DirectoryMode=0755
 Accept=yes

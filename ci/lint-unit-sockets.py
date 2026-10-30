@@ -22,6 +22,10 @@ requires the property to be stated in the place systemd actually enforces it:
   * `Accept=` is present, and `Accept=no` names `SocketUser=` and
     `SocketGroup=`, because a long-running listener's ownership must be
     explicit rather than inherited from whoever started systemd;
+  * `litric-files.socket` is owned by `litric`, the user its service runs as.
+    A root-owned socket would require root's DAC override for the ordinary
+    client path and would contradict the threat model; this rule is the
+    regression test for that ownership decision;
   * `RemoveOnStop=yes`, so a stopped unit leaves no stale socket behind (the
     daemons replace a stale socket, but leaving one is still a lie about who is
     listening).
@@ -50,6 +54,11 @@ IMAGE = ROOT / "image"
 RUNTIME_PREFIX = "/run/litric/"
 
 EXPECTED_MODE = "0600"
+
+# The Files daemon's service runs `User=litric`. The listening socket must be
+# owned by the same identity; otherwise the shell would depend on root's DAC
+# override rather than on the daemon user's own permission.
+SOCKET_OWNERS = {"litric-files.socket": ("litric", "litric")}
 
 
 def parse_socket_section(path: Path) -> dict[str, str]:
@@ -111,6 +120,16 @@ def check_root(root: Path) -> list[str]:
                         f"{rel}: Accept=no needs {key}= so the listener's ownership is explicit"
                     )
 
+        expected_owner = SOCKET_OWNERS.get(path.name)
+        if expected_owner is not None:
+            for key, expected in zip(("SocketUser", "SocketGroup"), expected_owner):
+                actual = values.get(key)
+                if actual != expected:
+                    errors.append(
+                        f"{rel}: {key}={actual or 'missing'}, expected {expected}: "
+                        "litric-filesd runs as that user, so the socket must be owned by it"
+                    )
+
         if values.get("RemoveOnStop") != "yes":
             errors.append(f"{rel}: RemoveOnStop=yes is required so a stop leaves no socket file")
 
@@ -149,7 +168,26 @@ def self_test() -> int:
         if not bad:
             print("FAIL: the checker accepted a world-connectable socket")
             return 1
-        print(f"OK: checker rejects a planted 0666 unit with {len(bad)} finding(s)")
+        (root / "litric-files.socket").write_text(
+            "[Socket]\n"
+            "ListenStream=/run/litric/files.sock\n"
+            "SocketUser=root\n"
+            "SocketGroup=root\n"
+            f"SocketMode={EXPECTED_MODE}\n"
+            "Accept=yes\n"
+            "RemoveOnStop=yes\n",
+            encoding="utf-8",
+        )
+        wrong_owner = check_root(root)
+        if not any("SocketUser=root, expected litric" in line for line in wrong_owner):
+            print("FAIL: the checker accepted a root-owned Files socket")
+            for line in wrong_owner:
+                print(f"  {line}")
+            return 1
+
+        print(
+            "OK: checker rejects a planted 0666 unit and a root-owned Files socket"
+        )
         return 0
 
 
