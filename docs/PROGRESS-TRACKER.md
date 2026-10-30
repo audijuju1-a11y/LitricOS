@@ -7487,8 +7487,11 @@ refuses before the backend is called.
   guessing_many_names_hits_the_daemon_wide_ceiling,
   the_account_table_stays_bounded,
   four_failures_export_and_the_next_attempt_locks_after_restore,
-  restore_clamps_a_deadline_and_drops_expired_entries}` — the policy with a
-  supplied clock, no sleep, and the clamp/restore rules.
+  restore_clamps_a_deadline_and_drops_expired_entries,
+  clock_moving_forward_expires_a_loaded_lockout_and_starts_a_new_window,
+  clock_moving_backward_caps_a_loaded_lockout_at_one_lockout_from_load}` — the
+  policy with a supplied clock, no sleep, the clamp/restore rules, and both
+  clock-change directions.
 * `lockout::tests::{a_record_round_trips_through_the_atomic_file,
   a_damaged_file_is_an_error_not_a_panic,
   more_accounts_than_the_meter_holds_is_refused,
@@ -7496,8 +7499,11 @@ refuses before the backend is called.
   atomic write, and bounds.
 * `state::tests::{a_lockout_survives_a_restart,
   an_expired_lockout_is_dropped_when_it_is_loaded,
-  a_damaged_lockout_file_fails_open_and_leaves_the_daemon_alive}` — restart,
-  expiry, and fail-open through the real dispatch path.
+  a_damaged_lockout_file_fails_open_and_leaves_the_daemon_alive,
+  a_forward_clock_jump_drops_a_loaded_lockout,
+  a_backward_clock_jump_caps_a_loaded_lockout_at_one_minute}` — restart, expiry,
+  fail-open, and both clock-change directions through the real file and dispatch
+  path.
 * `state::tests::failed_verifications_are_locked_out_before_the_helper_runs` —
   five rejections reach the runner, the sixth answers `ERR locked-out` without a
   sixth call, and the attempt after the window reaches the helper again.
@@ -7506,8 +7512,8 @@ refuses before the backend is called.
 
 * `cargo fmt --all --check` → 0.
 * `cargo clippy --workspace --all-targets -- -D warnings` → 0.
-* `cargo test -p litric-sysd` → 241 passed, 0 failed (234 lib + 5 + 1 + 1).
-* `cargo test --workspace` → **1,879 passed, 0 failed**.
+* `cargo test -p litric-sysd` → 245 passed, 0 failed (238 lib + 5 + 1 + 1).
+* `cargo test --workspace` → **1,883 passed, 0 failed**.
 
 ### 72.6 Limits, stated plainly
 
@@ -7522,9 +7528,13 @@ refuses before the backend is called.
 * Requests have no serializer by design: clients compose the line and the daemon
   parses it, so no `Request::to_line` API was added. Stability is proven with a
   test-local canonical composer (compose → parse → compose) instead.
-* Lockout counters are in memory: a daemon restart clears them, and they are not
-  written to the audit log. Persisting them needs a durable store and a decision
-  about surviving reboot, neither of which this batch takes.
+* Lockout counters survive a restart, but they are wall-clock timestamps: a
+  forward clock jump can expire a lockout early and a backward jump can re-arm at
+  most one configured lockout from load. Without a monotonic cross-restart
+  reference the daemon cannot distinguish that from elapsed time. Up to 2 s of
+  ordinary failures can be lost in an abrupt kill; a lockout starting or a
+  success clearing one is written immediately. The counters are still not written
+  to the audit log.
 * The rate limit bounds guesses, not a compromised local account: a caller that
   can already reach the 0600 socket as the daemon's user does not need to guess
   a password to act as that user. Raising the socket's permissions is a separate
@@ -7559,13 +7569,17 @@ refuses before the backend is called.
   clamped to 60 s (account) or 30 s (global) from load time, a future window
   start becomes now, and at most 256 accounts are accepted; the file is capped
   at 64 KiB with 512-byte lines;
-* a daemon restart no longer resets the meter; the remaining limit is clock skew
-  (a forward jump expires a lockout early, a backward jump can extend it by the
-  skew, never past the configured maximum).
+* a daemon restart no longer resets the meter; clock changes are handled
+  explicitly on load: a forward jump consumes the stored lock and drops the
+  record once its window is over, so the next failure starts at one; a backward
+  jump pulls a future window start to load time and caps the deadline at 60 s
+  (account) or 30 s (global) from load, so the skew can extend a wait but never
+  become the wait.
 
 ### 72.8 Git
 
 Base `79bbd58`; verification pass on `3628937`; rate limit on `acea817`;
-integrated lockout on `4796a86`. All are committed on `main` and pushed;
-`HEAD == origin/main` and the tracked worktree is empty at the end of the turn.
-The durable-lockout batch records 241 package tests and 1,879 workspace tests.
+integrated lockout on `4796a86`; durable lockout on `9ebedb8`. All are committed
+on `main` and pushed; `HEAD == origin/main` and the tracked worktree is empty at
+the end of the turn. The durable-lockout batch records 241 package tests and
+1,879 workspace tests; the clock-skew tests raise that to 245 and 1,883.

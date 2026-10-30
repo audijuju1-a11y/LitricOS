@@ -1744,6 +1744,101 @@ mod tests {
     }
 
     #[test]
+    fn a_forward_clock_jump_drops_a_loaded_lockout() {
+        let root = lockout_dir("clock-forward");
+        std::fs::create_dir_all(&root).expect("test directory");
+        let path = root.join("grants.conf");
+        let records = vec![crate::auth::LockoutRecord {
+            user: Some("alice".to_owned()),
+            count: crate::auth::VERIFY_FAILURE_LIMIT,
+            window_start: NOW,
+            locked_until: NOW + crate::auth::VERIFY_LOCKOUT_SECS,
+        }];
+        crate::lockout::Store::new(path.with_extension("lockout"))
+            .save(&records)
+            .expect("writes the live record");
+        drop(records);
+
+        // The clock is an hour ahead by the time the daemon loads the record:
+        // both the lockout deadline and its failure window are in the past.
+        let later = NOW + 3_600;
+        let runner = RejectingRunner::default();
+        let calls = std::sync::Arc::clone(&runner.calls);
+        let mut state = sysd().with_runner(Box::new(runner)).with_grant_store(&path);
+        let reply = state.handle(&Request::parse(&verify_line(1)).expect("verify"), later);
+        assert!(
+            reply.encode().starts_with("ERR action-failed"),
+            "{}",
+            reply.encode()
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "a lockout expired by a forward jump must not reach the helper"
+        );
+        assert_eq!(state.lockout_note, "loaded:1");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_backward_clock_jump_caps_a_loaded_lockout_at_one_minute() {
+        let root = lockout_dir("clock-backward");
+        std::fs::create_dir_all(&root).expect("test directory");
+        let path = root.join("grants.conf");
+        let records = vec![crate::auth::LockoutRecord {
+            user: Some("alice".to_owned()),
+            count: crate::auth::VERIFY_FAILURE_LIMIT,
+            window_start: NOW,
+            locked_until: NOW + crate::auth::VERIFY_LOCKOUT_SECS,
+        }];
+        crate::lockout::Store::new(path.with_extension("lockout"))
+            .save(&records)
+            .expect("writes the live record");
+        drop(records);
+
+        // The clock is five minutes behind. The stored deadline appears 360 s
+        // away, but loading may only re-arm one configured lockout.
+        let loaded_at = NOW - 300;
+        let runner = RejectingRunner::default();
+        let calls = std::sync::Arc::clone(&runner.calls);
+        let mut state = sysd().with_runner(Box::new(runner)).with_grant_store(&path);
+        let reply = state.handle(&Request::parse(&verify_line(1)).expect("verify"), loaded_at);
+        assert!(
+            reply.encode().starts_with("ERR locked-out"),
+            "{}",
+            reply.encode()
+        );
+        assert!(
+            reply.encode().contains("retry_after=60"),
+            "the skew must not become the wait: {}",
+            reply.encode()
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "the capped lockout still blocks the helper"
+        );
+
+        // Exactly one lockout after load the cap ends, despite the stored
+        // wall-clock deadline being 300 s later.
+        let reply = state.handle(
+            &Request::parse(&verify_line(2)).expect("verify"),
+            loaded_at + crate::auth::VERIFY_LOCKOUT_SECS,
+        );
+        assert!(
+            reply.encode().starts_with("ERR action-failed"),
+            "{}",
+            reply.encode()
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the backward jump must not extend the lock past one lockout from load"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn failed_verifications_are_locked_out_before_the_helper_runs() {
         let runner = RejectingRunner::default();
         let calls = std::sync::Arc::clone(&runner.calls);

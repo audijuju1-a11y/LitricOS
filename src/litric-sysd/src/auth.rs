@@ -1114,6 +1114,96 @@ mod throttle_tests {
     }
 
     #[test]
+    fn clock_moving_forward_expires_a_loaded_lockout_and_starts_a_new_window() {
+        let written = 1_000;
+        let records = vec![
+            LockoutRecord {
+                user: Some("alice".to_owned()),
+                count: VERIFY_FAILURE_LIMIT,
+                window_start: written,
+                locked_until: written + VERIFY_LOCKOUT_SECS,
+            },
+            LockoutRecord {
+                user: None,
+                count: VERIFY_GLOBAL_FAILURE_LIMIT,
+                window_start: written,
+                locked_until: written + VERIFY_GLOBAL_LOCKOUT_SECS,
+            },
+        ];
+
+        // Half the account lock and the whole global lock have elapsed.
+        let now = written + VERIFY_GLOBAL_LOCKOUT_SECS;
+        let throttle = Throttle::restore(records.clone(), now);
+        assert_eq!(
+            throttle.retry_after("alice", now),
+            Some(VERIFY_LOCKOUT_SECS - VERIFY_GLOBAL_LOCKOUT_SECS),
+            "a forward jump consumes the stored lock rather than restarting it"
+        );
+        assert_eq!(
+            throttle.retry_after("stranger", now),
+            None,
+            "the global lock ends at its stored deadline"
+        );
+
+        // A jump past both the deadline and the window drops the record. If the
+        // stale count survived, its first new failure would lock immediately.
+        let later = written + 3_600;
+        let mut throttle = Throttle::restore(records, later);
+        assert_eq!(throttle.retry_after("alice", later), None);
+        throttle.record_failure("alice", later);
+        assert_eq!(
+            throttle.retry_after("alice", later),
+            None,
+            "forward past the window must start the count at one, not six"
+        );
+    }
+
+    #[test]
+    fn clock_moving_backward_caps_a_loaded_lockout_at_one_lockout_from_load() {
+        let written = 1_000;
+        let now = written - 300;
+        let records = vec![
+            LockoutRecord {
+                user: Some("alice".to_owned()),
+                count: VERIFY_FAILURE_LIMIT,
+                window_start: written,
+                locked_until: written + VERIFY_LOCKOUT_SECS,
+            },
+            LockoutRecord {
+                user: None,
+                count: VERIFY_GLOBAL_FAILURE_LIMIT,
+                window_start: written,
+                locked_until: written + VERIFY_GLOBAL_LOCKOUT_SECS,
+            },
+        ];
+        let throttle = Throttle::restore(records, now);
+
+        // The stored deadlines are 360 s and 330 s away on the new clock. The
+        // cap turns them into exactly one configured lockout from load.
+        assert_eq!(
+            throttle.retry_after("alice", now),
+            Some(VERIFY_LOCKOUT_SECS),
+            "a backward jump may re-arm one lockout, never the whole skew"
+        );
+        assert_eq!(
+            throttle.retry_after("stranger", now),
+            Some(VERIFY_GLOBAL_LOCKOUT_SECS)
+        );
+        assert_eq!(
+            throttle.retry_after("alice", now + VERIFY_LOCKOUT_SECS - 1),
+            Some(1)
+        );
+        assert_eq!(
+            throttle.retry_after("alice", now + VERIFY_LOCKOUT_SECS),
+            None
+        );
+        assert_eq!(
+            throttle.retry_after("stranger", now + VERIFY_GLOBAL_LOCKOUT_SECS),
+            None
+        );
+    }
+
+    #[test]
     fn guessing_many_names_hits_the_daemon_wide_ceiling() {
         let mut throttle = Throttle::new();
         for i in 0..VERIFY_GLOBAL_FAILURE_LIMIT {
