@@ -51,7 +51,7 @@ use litric_locale::Regional;
 use litric_shell::canvas::{rgb, Canvas, Rect};
 use litric_shell::desktop;
 use litric_shell::lock::Stage;
-use litric_shell::shell::{DesktopMode, EnvRow, ProcRow, Shell};
+use litric_shell::shell::{DesktopMode, EnvRow, NetIface, ProcRow, Shell};
 use litric_shell::shortcuts::{Action, App};
 use litric_shell::ui::Tokens;
 use litric_shell::views;
@@ -365,6 +365,84 @@ fn scene_settings_updates(rig: &mut Rig) {
         last_bytes: Some(48_213),
         ..Default::default()
     };
+}
+
+/// Every Settings page, rendered through the same `views::draw` path. The
+/// measured pages get the provider facts a booted machine would have supplied,
+/// so their controls are visible; the facts are still a fixed fixture, which is
+/// why these frames are layout evidence rather than VM photographs.
+fn scene_settings_page(rig: &mut Rig, page: litric_shell::settings::Page) {
+    let _ = rig.shell.open_app(App::Settings);
+    rig.shell.settings.page = page;
+    match page {
+        litric_shell::settings::Page::Network => {
+            rig.shell.facts.net_ifaces = vec![NetIface {
+                name: "enp0s2".to_owned(),
+                state: "up".to_owned(),
+                mac: "02:00:00:00:00:01".to_owned(),
+                wireless: false,
+            }];
+            rig.shell.quick.net_note =
+                "The link was asked to change; the state below is read from the kernel.".to_owned();
+        }
+        litric_shell::settings::Page::Bluetooth => {
+            rig.shell.facts.bt_state = Some("ready".to_owned());
+            rig.shell.facts.bt_adapters = vec!["hci0 00:1a:7d:da:71:13".to_owned()];
+            rig.shell.facts.bt_daemon = Some(true);
+            rig.shell.quick.bt_powered = Some(true);
+            rig.shell.quick.bt_note =
+                "the radio is on, as BlueZ reports after the change.".to_owned();
+        }
+        litric_shell::settings::Page::Sound => {
+            rig.shell.facts.audio_cards = vec!["HDA Intel PCH".to_owned()];
+            rig.shell.facts.audio_server = Some("WirePlumber".to_owned());
+            rig.shell.quick.volume = Some(40);
+            rig.shell.quick.audio_note =
+                "Asked the sound server for 40%; the level it reads back is what the panel shows."
+                    .to_owned();
+        }
+        _ => {}
+    }
+}
+
+fn scene_settings_display(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Display);
+}
+fn scene_settings_input(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Input);
+}
+fn scene_settings_network(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Network);
+}
+fn scene_settings_bluetooth(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Bluetooth);
+}
+fn scene_settings_power(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Power);
+}
+fn scene_settings_region(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Region);
+}
+fn scene_settings_environments(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Environments);
+}
+fn scene_settings_accessibility(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Accessibility);
+}
+fn scene_settings_notifications(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Notifications);
+}
+fn scene_settings_sound(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Sound);
+}
+fn scene_settings_privacy(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Privacy);
+}
+fn scene_settings_accounts(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Accounts);
+}
+fn scene_settings_diagnostics(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Diagnostics);
 }
 
 /// The danger dialog: deleting a file, with the object named and Cancel as the
@@ -802,13 +880,26 @@ fn main() -> ExitCode {
     // (04-QA-LINT-GOVERNANCE §2) plus the frames this dump has always written:
     // the lock in three states, the launcher and its search, and the remaining
     // applications. `ci/check-golden-frames.py` names the required ten.
-    let scenes: [Scene; 17] = [
+    let scenes: [Scene; 30] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
         ("04-files", scene_files),
         ("16-files-empty", scene_files_empty),
         ("05-settings", scene_settings_appearance),
         ("25-settings-updates", scene_settings_updates),
+        ("26-settings-display", scene_settings_display),
+        ("27-settings-input", scene_settings_input),
+        ("28-settings-network", scene_settings_network),
+        ("29-settings-bluetooth", scene_settings_bluetooth),
+        ("30-settings-power", scene_settings_power),
+        ("31-settings-region", scene_settings_region),
+        ("32-settings-environments", scene_settings_environments),
+        ("33-settings-accessibility", scene_settings_accessibility),
+        ("34-settings-notifications", scene_settings_notifications),
+        ("35-settings-sound", scene_settings_sound),
+        ("36-settings-privacy", scene_settings_privacy),
+        ("37-settings-accounts", scene_settings_accounts),
+        ("38-settings-diagnostics", scene_settings_diagnostics),
         ("17-control-centre", scene_control_centre),
         ("18-notifications", scene_notifications),
         ("19-dialog-danger", scene_danger_dialog),

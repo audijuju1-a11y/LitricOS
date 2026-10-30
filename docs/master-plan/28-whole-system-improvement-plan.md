@@ -248,7 +248,7 @@ end to end rather than half-built.
 | 70 | Chapter `F`: tooltips + pickers + grids/empty states | keyboard path per component, screenshots | here |
 | 71 | Accessibility tree: roles, names, focus order, keyboard-only proof | tree dump test, e2e journey | here |
 | 72 | OOBE account + password change, with no dismiss path around the lock | e2e journey over a temp root | here |
-| 73 | Settings family wave (research order `WB` → `MD`), ledger-first | one store key + backend + test per row (**in progress 2026-10-30**: §78 adds the read-only Updates page and §80 adds its backup rows; the wave is not closed) | here |
+| 73 | Settings family wave (research order `WB` → `MD`), ledger-first | **closed at the page/row surface 2026-10-30**: all 15 `settings::Page::ALL` pages render through `views::draw`; every shell-owned registry row is on its registered page; daemon-backed Network/Bluetooth/Sound actions are exposed; the 175 research rows remain honestly split **49 ADAPT · 4 ADOPT · 61 DEFER · 61 REJECT** — closure does not invent the deferred backends (see tracker §81) | here |
 | 74 | Recovery/update generation engine core with a demonstrated rollback | temp-root generation swap + revert (**landed 2026-10-30**, 19 tests; see tracker §74) | here |
 | 75 | Update service: boot-attempt entrypoint and status/actions over the real socket | `--boot` + socket integration tests on a temp root (**landed 2026-10-30**, 1,917 workspace tests; see tracker §75) | here |
 | 76 | Update state crash consistency and one writer per root | atomic record ordering + simulated interruption + concurrent boot/live-lock/reclaim tests (**landed 2026-10-30**, 1,927 workspace tests; see tracker §76) | here |

@@ -441,6 +441,8 @@ pub enum Hot {
     SettingsDoNotDisturb,
     /// Toggle whether Files lists dot-prefixed entries.
     SettingsShowHidden,
+    /// Cycle the engine the omnibox searches with.
+    SettingsSearchEngine,
     /// The UI-scale control on the Display page: cycles the scale and arms the
     /// countdown that puts the old one back.
     DisplayScale,
@@ -3504,6 +3506,22 @@ impl Shell {
         self.save_preferences(next)
     }
 
+    /// Step to the next search engine, through the same persisted setter the
+    /// browser menu and start-page chips use.
+    fn cycle_search_engine(&mut self) -> Vec<Effect> {
+        use crate::apps::SearchEngine;
+        let current = self.settings.preferences.search_engine;
+        let next = SearchEngine::ALL
+            .iter()
+            .position(|engine| *engine == current)
+            .and_then(|index| SearchEngine::ALL.get(index.saturating_add(1)).copied())
+            .or_else(|| SearchEngine::ALL.first().copied());
+        match next {
+            Some(engine) => self.set_search_engine(engine),
+            None => Vec::new(),
+        }
+    }
+
     /// Step to the next wallpaper. Like the accent, the first entry is the
     /// shipped look, so the default is reachable from the cycle.
     fn cycle_wallpaper(&mut self) -> Vec<Effect> {
@@ -6348,6 +6366,7 @@ impl Shell {
                 Vec::new()
             }
             Hot::SettingsCategory(index) => {
+                let mut effects = Vec::new();
                 if let Some(page) = crate::settings::Page::from_index(index) {
                     self.settings.page = page;
                     // A deep link's highlight belongs to the page it named. A
@@ -6357,8 +6376,18 @@ impl Shell {
                     if page == crate::settings::Page::Updates {
                         self.refresh_update_status();
                     }
+                    // Sound and Bluetooth pages draw controls whose position is
+                    // a measurement, not a stored request. Ask for both when
+                    // the page opens, exactly as the quick panel does, so the
+                    // page can show a switch rather than "unknown" forever.
+                    if matches!(
+                        page,
+                        crate::settings::Page::Sound | crate::settings::Page::Bluetooth
+                    ) {
+                        effects.push(Effect::ReadPanelState);
+                    }
                 }
-                Vec::new()
+                effects
             }
             Hot::SettingsUpdatesRefresh => {
                 self.refresh_update_status();
@@ -6377,6 +6406,7 @@ impl Shell {
             Hot::SettingsTransparency => self.toggle_reduced_transparency(),
             Hot::SettingsDoNotDisturb => self.toggle_do_not_disturb(),
             Hot::SettingsShowHidden => self.toggle_show_hidden(),
+            Hot::SettingsSearchEngine => self.cycle_search_engine(),
             Hot::DisplayScale => self.cycle_ui_scale(),
             Hot::ScaleKeep => self.keep_pending_change(),
             Hot::ScaleUndo => {
@@ -8507,6 +8537,88 @@ mod tests {
         let mut restarted = shell();
         restarted.load_preferences(saved);
         assert_eq!(restarted.browser.engine, SearchEngine::DuckDuckGo);
+    }
+
+    #[test]
+    fn the_settings_search_engine_row_cycles_through_persisted_values() {
+        use crate::apps::SearchEngine;
+
+        let mut s = shell();
+        assert_eq!(s.settings.preferences.search_engine, SearchEngine::Google);
+        let effects = s.activate(Hot::SettingsSearchEngine);
+        assert_eq!(
+            s.settings.preferences.search_engine,
+            SearchEngine::DuckDuckGo
+        );
+        assert!(
+            effects.iter().any(
+                |e| matches!(e, Effect::PersistPreferences(p) if p.search_engine == SearchEngine::DuckDuckGo)
+            ),
+            "the row must store the value it shows: {effects:?}"
+        );
+        // The event loop completes the write before the next click.
+        s.finish_preferences_save(Ok(()));
+        let effects = s.activate(Hot::SettingsSearchEngine);
+        assert_eq!(s.settings.preferences.search_engine, SearchEngine::Bing);
+        assert!(effects.iter().any(
+            |e| matches!(e, Effect::PersistPreferences(p) if p.search_engine == SearchEngine::Bing)
+        ));
+        s.finish_preferences_save(Ok(()));
+        assert_eq!(
+            s.activate(Hot::SettingsSearchEngine)
+                .iter()
+                .filter(|e| matches!(e, Effect::PersistPreferences(_)))
+                .count(),
+            1,
+            "the cycle wraps back to Google and persists it"
+        );
+        assert_eq!(s.settings.preferences.search_engine, SearchEngine::Google);
+    }
+
+    #[test]
+    fn the_settings_sound_and_bluetooth_pages_ask_for_measurements_when_opened() {
+        let mut s = shell();
+        // Sound is index 10 and Bluetooth index 4 in Page::ALL.
+        assert_eq!(
+            s.activate(Hot::SettingsCategory(10)),
+            vec![Effect::ReadPanelState]
+        );
+        assert_eq!(s.settings.page, crate::settings::Page::Sound);
+        assert_eq!(
+            s.activate(Hot::SettingsCategory(4)),
+            vec![Effect::ReadPanelState]
+        );
+        assert_eq!(s.settings.page, crate::settings::Page::Bluetooth);
+
+        // The controls themselves are the quick panel's provider paths, which
+        // is what makes this a second surface over one action rather than a
+        // second implementation.
+        s.facts.net_ifaces = vec![NetIface {
+            name: "enp0s2".to_owned(),
+            state: "up".to_owned(),
+            mac: "02:00:00:00:00:01".to_owned(),
+            wireless: false,
+        }];
+        assert_eq!(
+            s.activate(Hot::QuickLinkToggle),
+            vec![Effect::SetLink {
+                iface: "enp0s2".to_owned(),
+                up: false,
+            }]
+        );
+        assert_eq!(
+            s.activate(Hot::QuickLinkReconnect),
+            vec![Effect::ReconfigureLink("enp0s2".to_owned())]
+        );
+        s.quick.volume = Some(40);
+        assert_eq!(s.activate(Hot::QuickVolumeUp), vec![Effect::Volume(1)]);
+        s.facts.bt_state = Some("ready".to_owned());
+        s.facts.bt_adapters = vec!["hci0 00:1a:7d:da:71:13".to_owned()];
+        s.quick.bt_powered = Some(true);
+        assert_eq!(
+            s.activate(Hot::QuickBluetoothPower),
+            vec![Effect::SetBluetoothPower(false)]
+        );
     }
 
     #[test]
@@ -11844,6 +11956,13 @@ impl Shell {
             Hot::SettingsTheme => literal(Role::Button, "Theme"),
             Hot::SetupDone => literal(Role::Button, "Finish setup"),
             Hot::SettingsLanguage => literal(Role::Button, "Language"),
+            Hot::SettingsSearchEngine => literal(Role::Button, "Search engine"),
+            Hot::QuickVolumeDown => literal(Role::Button, "Volume down"),
+            Hot::QuickVolumeUp => literal(Role::Button, "Volume up"),
+            Hot::QuickVolumeMute => literal(Role::Button, "Volume mute"),
+            Hot::QuickLinkToggle => literal(Role::Button, "Network link"),
+            Hot::QuickLinkReconnect => literal(Role::Button, "Re-read network configuration"),
+            Hot::QuickBluetoothPower => literal(Role::Button, "Bluetooth radio power"),
             Hot::SettingsWallpaper => literal(Role::Button, "Wallpaper"),
             Hot::SettingsSchedule => literal(Role::Button, "Appearance schedule"),
             Hot::SettingsMotion => literal(Role::Button, "Reduced motion"),

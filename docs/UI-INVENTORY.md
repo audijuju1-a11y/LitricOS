@@ -69,7 +69,7 @@ for the window manager.
 | [src/domkey.rs](../src/litric-shell/src/domkey.rs) | 332 | Keyboard events named the way the web platform names them (`key`, `code`, `keyCode`). |
 | [src/textaudit.rs](../src/litric-shell/src/textaudit.rs) | 297 | Finding text drawn over other text (the "ตัวอักษรทับกัน" complaint, as a check). |
 | [src/lib.rs](../src/litric-shell/src/lib.rs) | 55 | Crate root and layer statement. |
-| [examples/frame_dump.rs](../src/litric-shell/examples/frame_dump.rs) | 483 | One frame per scene, to a PPM, for looking at. |
+| [examples/frame_dump.rs](../src/litric-shell/examples/frame_dump.rs) | 1020 | One frame per scene, to a PPM, for looking at; S81 adds every Settings page. |
 | [examples/render_bench.rs](../src/litric-shell/examples/render_bench.rs) | 426 | 15-run medians of full frames, damage frames, blur and present. |
 | [tests/design_lint.rs](../src/litric-shell/tests/design_lint.rs) | 270 | The design system's rules, asserted. |
 | [tests/overflow_audit.rs](../src/litric-shell/tests/overflow_audit.rs) | 168 | Nothing draws outside what it was given. |
@@ -342,6 +342,11 @@ cargo run --release -p litric-shell --example render_bench   # 15-run medians
 cargo run --release -p litric-shell --example frame_dump -- ../build/frames
 python3 tools/frames-page.py                                  # browse them
 ```
+
+The committed S81 review set is [docs/ui-review/2026-10-30](ui-review/2026-10-30/index.html):
+38 frames rendered through `views::draw`, with every Settings page, a per-screen
+PNG and an `all-screens.png` contact sheet. It is a fixture render, not a VM
+photograph; [its README](ui-review/2026-10-30/README.md) states the limits.
 
 **A live, usable screen**, on the Linux builder (WSL). QEMU's VNC server speaks
 websocket itself, so a browser reaches the VM with noVNC and no proxy:

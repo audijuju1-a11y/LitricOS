@@ -8604,3 +8604,70 @@ Base `2219115`. The commit contains the backup service, manifest/retention/
 verify path, capability and protocol wiring, real scheduler, shell status and
 page rows, focused tests, real-socket e2e, design note and this evidence. Final
 hash and `HEAD == origin/main` are recorded in the delivery report.
+
+
+## 2026-10-30 — §81: §73 settings family closeout and the complete UI gallery
+
+Base `ce19c40`. This batch closes **the page/row surface** of §73 and delivers a
+committed review of every screen `frame_dump` can reach. It does not claim that
+the 61 `DEFER` research rows now have backends, and it adds no C2/KMS or restore
+implementation.
+
+### What was actually wrong
+
+| Finding | Evidence before S81 |
+|---|---|
+| Region had a measured layout but no language control | the control was drawn by Appearance at `views.rs:3094–3113`; `registry.rs:156–161` assigns `language` to `Page::Region` |
+| Privacy never drew its own search-engine row | `registry.rs:203–209` registers `search_engine` on `Page::Privacy`; the Privacy arm had no such control |
+| Network described actions as "Managed by system services" | the daemon already implements `NET LINK` and `NET RECONFIGURE`, and quick settings invokes both |
+| Bluetooth and Sound pages showed readings but no actions | `BT POWER`, `AUDIO VOLUME`, `AUDIO MUTE` and `AUDIO LEVEL` already exist in `litric-sysd` |
+| The review set had only 2 of 15 Settings pages | `build/ui-review-2026-10-30` held 25 frames, not a complete page set |
+
+### What changed
+
+* `views.rs:2749–2788` draws the persisted language control on Region; the
+  duplicate on Appearance was removed.
+* `views.rs:3598–3618` draws the search-engine row on Privacy, using the same
+  `set_search_engine`/`prefsave` path as the browser menu.
+* `views.rs:3267–3315` exposes Network's link switch and re-read, with the plain
+  interface kind rather than the kernel name and the daemon's visible note.
+* `views.rs:3340–3378` exposes Bluetooth radio power only when the radio is
+  controllable and a read-back exists.
+* `views.rs:3538–3600` exposes Sound's quieter/louder/mute actions after a
+  measured level exists, plus the measured percentage and last action note.
+* `shell.rs:6368–6392` asks for `ReadPanelState` when Sound or Bluetooth opens;
+  `shell.rs:3511–3526` adds the persisted search-engine cycle.
+* The controls reuse the existing provider effects, so no new protocol, daemon
+  command or system capability was introduced. There is no new ADR for that
+  reason; the existing protocol and settings-store decisions still govern it.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` (run from `src/`) | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-shell --lib every_settings_page_renders_and_the_measured_pages_offer_provider_controls` | 1 passed |
+| `cargo test -p litric-shell --lib the_settings_search_engine_row_cycles_through_persisted_values` | 1 passed |
+| `cargo test -p litric-shell --lib the_settings_sound_and_bluetooth_pages_ask_for_measurements_when_opened` | 1 passed |
+| `cargo test -p litric-shell --lib journey_activity_environment_and_settings_controls_change_real_state` | 1 passed |
+| `cargo test --workspace` | 1,977 passed, 0 failed, 0 ignored |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| `frame_dump` | 38 frames, all 15 Settings pages, no within-surface text overlaps; the two dense multi-window scenes report only cross-window overlaps |
+| Committed gallery | `docs/ui-review/2026-10-30/` — 38 PNGs, index, contact sheet, README |
+| `SYSTEM-SCOPE` rows moved | **none**; this exposes existing actions, it does not add a capability |
+
+The three skips are the environment's existing ones: `mkosi` absent, QEMU
+absent, and the platform needed for idle RAM/CPU/boot timing absent. A real VM,
+a real display, C2/KMS, restore and the deferred settings backends were not
+exercised.
+
+### §73 closure, stated narrowly
+
+All 15 pages in `settings::Page::ALL` render through the shipping `views::draw`
+path; every one of the 11 shell-owned registry rows is drawn on the page
+`registry.rs` names; the daemon-backed actions already present for Network,
+Bluetooth and Sound are reachable from their pages; and failures are visible in
+the page note. The research ledger remains **175 settings rows: 49 ADAPT, 4
+ADOPT, 61 DEFER, 61 REJECT**. The `DEFER` rows still need backends that this
+batch did not pretend to have.

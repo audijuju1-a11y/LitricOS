@@ -600,6 +600,9 @@ fn journey_activity_environment_and_settings_controls_change_real_state() {
         crate::desktop::Wallpaper::System,
         "the wallpaper row must move the wallpaper off the shipped default"
     );
+    // The registry names Region as the language row's page, so the journey
+    // leaves Appearance and draws the page a deep link would have opened.
+    s.settings.page = crate::settings::Page::Region;
     let _ = draw_frame(&mut s);
     let language = s.hotspots().rect_of(Hot::SettingsLanguage).unwrap();
     let effects = click(&mut s, language.center().0, language.center().1);

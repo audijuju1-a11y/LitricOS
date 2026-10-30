@@ -83,6 +83,20 @@ OPTIONAL: list[str] = [
     "13-lock-customize",
     "14-launcher",
     "20-environments",
+    "25-settings-updates",
+    "26-settings-display",
+    "27-settings-input",
+    "28-settings-network",
+    "29-settings-bluetooth",
+    "30-settings-power",
+    "31-settings-region",
+    "32-settings-environments",
+    "33-settings-accessibility",
+    "34-settings-notifications",
+    "35-settings-sound",
+    "36-settings-privacy",
+    "37-settings-accounts",
+    "38-settings-diagnostics",
 ]
 
 GRID_W = 64

@@ -3183,3 +3183,43 @@ through the capability-checked path.
 Revert this commit. The backup module, capability/protocol variants, scheduler,
 shell status rows, e2e and design note disappear. Update generations, app
 install and all prior daemon state remain unchanged.
+
+
+## 2026-10-30 — §81: §73 page/row closeout and complete Settings gallery
+
+This batch closes the **page/row surface** of §73: every `settings::Page::ALL`
+page renders through the shipping `views::draw` composition, every shell-owned
+`registry` row appears on its registered page, and the daemon actions that
+already exist for Network, Bluetooth and Sound are reachable from those pages.
+It does not claim the 61 `DEFER` research rows or C2/KMS/restore.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| Settings render test | 1 passed: all 15 pages draw a title and state, and the measured pages draw their provider controls |
+| Search-engine persistence test | 1 passed |
+| Sound/Bluetooth open-state test | 1 passed |
+| Existing settings e2e journey | 1 passed |
+| `cargo test --workspace` | 1,977 passed, 0 failed, 0 ignored |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| `frame_dump` review set | 38 frames; 15/15 Settings pages; no within-surface text overlaps (two multi-window scenes report cross-window overlaps) |
+| Committed gallery | `docs/ui-review/2026-10-30/index.html`, 38 PNGs, `all-screens.png`, README |
+
+### What it does not prove
+
+| Claim | Why not |
+|---|---|
+| that every research-led settings row exists | 61 rows remain `DEFER` for missing backends; 49 are adapted and 4 adopted |
+| that C2/KMS, restore or secure boot is complete | separate open work; no such backend is added here |
+| that the frames are a booted-VM capture | they are deterministic `frame_dump` fixtures through `views::draw`; no framebuffer or scanout was exercised |
+| that WiFi joining or Bluetooth pairing works | only the existing link switch, re-read and radio power are exposed |
+| that the three CI skips were resolved | `mkosi`, QEMU and the idle-RAM/CPU/boot-timing platform remain absent |
+
+### Rollback
+
+Revert the S81 commit. The Region/Privacy/Network/Bluetooth/Sound controls, the
+three focused tests, the 13 extra `frame_dump` scenes and the committed review
+disappear. Existing daemon protocol, preferences and all other pages remain.

@@ -2751,6 +2751,29 @@ fn draw_settings(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         return;
     }
 
+    // Language is the one Region value this shell can change; everything else
+    // on the page is a measurement. It lives here rather than on Appearance
+    // because `registry.rs` names this as its page, and a registered row that
+    // appears on another page is a search result that lies about where it goes.
+    let language_label = format!(
+        "{} · {}",
+        "Change language",
+        shell.settings.preferences.language.label()
+    );
+    settings_button(
+        canvas,
+        shell,
+        &t,
+        pane,
+        pane.y + t.px(48.0),
+        SettingRow {
+            key: "language",
+            label: &language_label,
+            hot: Hot::SettingsLanguage,
+        },
+    );
+    c.space(t.px(44.0));
+
     ui::section_label(
         canvas,
         &t,
@@ -3091,29 +3114,6 @@ fn draw_settings_page(
                 },
             );
             y += t.px(40.0);
-            // `label` rather than `title`: a language offered under its own
-            // name is the friendly thing to do, until the face that draws that
-            // name is the missing one — then the cheerful label is itself a row
-            // of boxes, and the reader learns nothing. When Thai cannot be
-            // drawn the button says so and says why.
-            let label = format!(
-                "{} · {}",
-                "Change language",
-                shell.settings.preferences.language.label()
-            );
-            settings_button(
-                canvas,
-                shell,
-                t,
-                pane,
-                y,
-                SettingRow {
-                    key: "language",
-                    label: &label,
-                    hot: Hot::SettingsLanguage,
-                },
-            );
-            y += t.px(40.0);
             // The schedule is its own row rather than a fourth theme: it
             // answers "when", and the theme row answers "which". The detail
             // line under it is the same `effective` call the shell makes when it
@@ -3260,11 +3260,53 @@ fn draw_settings_page(
                     ));
                 }
             }
+            // The two actions the quick-settings tile already performs are
+            // offered here too, from the same measurement and the same daemon
+            // protocol. No control is drawn when there is no interface to act
+            // on: a button with no link behind it would be a drawing.
+            if let Some(iface) = primary {
+                let kind = crate::copy::interface_kind(&iface.name, iface.wireless);
+                let token = if iface.state == "up" { "down" } else { "up" };
+                let action = format!("Bring {kind} {token}");
+                settings_button(
+                    canvas,
+                    shell,
+                    t,
+                    pane,
+                    y,
+                    SettingRow {
+                        key: "net_link",
+                        label: &action,
+                        hot: Hot::QuickLinkToggle,
+                    },
+                );
+                y += t.px(40.0);
+                let reconfigure = format!("Re-read {kind} configuration");
+                settings_button(
+                    canvas,
+                    shell,
+                    t,
+                    pane,
+                    y,
+                    SettingRow {
+                        key: "net_reconfigure",
+                        label: &reconfigure,
+                        hot: Hot::QuickLinkReconnect,
+                    },
+                );
+                y += t.px(40.0);
+            }
             rows.push((
-                "Network changes".to_owned(),
-                "Managed by system services".to_owned(),
+                "Link actions".to_owned(),
+                if shell.quick.net_note.is_empty() || !crate::copy::is_plain(&shell.quick.net_note)
+                {
+                    "NET LINK and NET RECONFIGURE over litric-sysd; the state above is the kernel readback"
+                        .to_owned()
+                } else {
+                    shell.quick.net_note.clone()
+                },
             ));
-            settings_rows(canvas, t, pane, &rows);
+            settings_rows_from(canvas, t, pane, y + t.px(10.0), &rows);
         }
         Page::Bluetooth => {
             // Four answers, not two. "Unavailable" for a machine with no radio
@@ -3280,8 +3322,11 @@ fn draw_settings_page(
                 _ => "Unavailable",
             };
             let mut rows = vec![("Radio".to_owned(), verdict.to_owned())];
-            for adapter in &facts.bt_adapters {
-                rows.push((adapter.clone(), "Adapter".to_owned()));
+            if !facts.bt_adapters.is_empty() {
+                rows.push((
+                    "Adapters".to_owned(),
+                    format!("{} reported by BlueZ", facts.bt_adapters.len()),
+                ));
             }
             rows.push((
                 "Pairing service".to_owned(),
@@ -3291,7 +3336,41 @@ fn draw_settings_page(
                     None => "Unavailable".to_owned(),
                 },
             ));
-            settings_rows(canvas, t, pane, &rows);
+            // Radio power is the one Bluetooth action the daemon already
+            // performs. It appears only when the facts say a radio exists and
+            // a measurement says which position the switch is in; otherwise
+            // the row below explains what is missing.
+            if shell.bt_controllable() {
+                if let Some(on) = shell.quick.bt_powered {
+                    let action = format!("Turn radio {}", if on { "off" } else { "on" });
+                    settings_button(
+                        canvas,
+                        shell,
+                        t,
+                        pane,
+                        y,
+                        SettingRow {
+                            key: "bt_power",
+                            label: &action,
+                            hot: Hot::QuickBluetoothPower,
+                        },
+                    );
+                    y += t.px(40.0);
+                }
+            }
+            rows.push((
+                "Radio power".to_owned(),
+                match (shell.bt_controllable(), shell.quick.bt_powered) {
+                    (false, _) => "No power control: the facts above name why".to_owned(),
+                    (true, None) => "Not measured yet; opening this page asks BT STATUS".to_owned(),
+                    (true, Some(true)) => "On, as BlueZ reports".to_owned(),
+                    (true, Some(false)) => "Off, as BlueZ reports".to_owned(),
+                },
+            ));
+            if !shell.quick.bt_note.is_empty() {
+                rows.push(("Last radio action".to_owned(), shell.quick.bt_note.clone()));
+            }
+            settings_rows_from(canvas, t, pane, y + t.px(10.0), &rows);
         }
         Page::Power => {
             let battery = facts.battery_percent.map_or_else(
@@ -3463,6 +3542,20 @@ fn draw_settings_page(
             // page says that rather than "no state is exposed", which reads as
             // a shell that did not look.
             let mut rows = Vec::new();
+            // The same three actions the quick panel performs, registered only
+            // after a measured level exists. A level of zero is a measurement,
+            // so it still gets controls; `None` does not.
+            if shell.quick.volume.is_some() {
+                let mute = if shell.quick.muted { "Unmute" } else { "Mute" };
+                for (key, label, hot) in [
+                    ("audio_down", "Quieter", Hot::QuickVolumeDown),
+                    ("audio_up", "Louder", Hot::QuickVolumeUp),
+                    ("audio_mute", mute, Hot::QuickVolumeMute),
+                ] {
+                    settings_button(canvas, shell, t, pane, y, SettingRow { key, label, hot });
+                    y += t.px(40.0);
+                }
+            }
             if facts.audio_cards.is_empty() {
                 rows.push((
                     "Sound cards".to_owned(),
@@ -3481,12 +3574,43 @@ fn draw_settings_page(
                     .unwrap_or_else(|| "Unavailable".to_owned()),
             ));
             rows.push((
-                "Volume and routing".to_owned(),
-                "Managed by the sound service".to_owned(),
+                "Default output".to_owned(),
+                shell.quick.volume.map_or_else(
+                    || "Not measured yet; opening this page asks AUDIO LEVEL".to_owned(),
+                    |level| {
+                        format!(
+                            "{level}%{}",
+                            if shell.quick.muted { " · muted" } else { "" }
+                        )
+                    },
+                ),
             ));
-            settings_rows(canvas, t, pane, &rows);
+            if !shell.quick.audio_note.is_empty() {
+                rows.push((
+                    "Last volume action".to_owned(),
+                    shell.quick.audio_note.clone(),
+                ));
+            }
+            settings_rows_from(canvas, t, pane, y + t.px(10.0), &rows);
         }
         Page::Privacy => {
+            let engine = format!(
+                "Search engine · {}",
+                shell.settings.preferences.search_engine.title()
+            );
+            settings_button(
+                canvas,
+                shell,
+                t,
+                pane,
+                y,
+                SettingRow {
+                    key: "search_engine",
+                    label: &engine,
+                    hot: Hot::SettingsSearchEngine,
+                },
+            );
+            y += t.px(40.0);
             let label = format!(
                 "{} · {}",
                 "Show hidden files",
@@ -3526,7 +3650,7 @@ fn draw_settings_page(
                     format!("Persistent store: {}", shell.files_root.display()),
                 ),
             ];
-            settings_rows_from(canvas, t, pane, pane.y + t.px(98.0), &rows);
+            settings_rows_from(canvas, t, pane, pane.y + t.px(138.0), &rows);
         }
         Page::Accounts => settings_rows(
             canvas,
@@ -7304,6 +7428,92 @@ mod tests {
         let mut b = canvas();
         draw(&mut b, &mut s);
         assert_eq!(a.pixels(), b.pixels(), "two identical frames differ");
+    }
+
+    #[test]
+    fn every_settings_page_renders_and_the_measured_pages_offer_provider_controls() {
+        use crate::settings::Page;
+
+        let mut s = shell();
+        s.facts.net_ifaces = vec![NetIface {
+            name: "enp0s2".to_owned(),
+            state: "up".to_owned(),
+            mac: "02:00:00:00:00:01".to_owned(),
+            wireless: false,
+        }];
+        s.facts.bt_state = Some("ready".to_owned());
+        s.facts.bt_adapters = vec!["hci0 00:1a:7d:da:71:13".to_owned()];
+        s.facts.bt_daemon = Some(true);
+        s.quick.bt_powered = Some(true);
+        s.facts.audio_cards = vec!["HDA Intel PCH".to_owned()];
+        s.facts.audio_server = Some("WirePlumber".to_owned());
+        s.quick.volume = Some(40);
+        s.open_app(App::Settings);
+
+        for page in Page::ALL {
+            s.settings.page = page;
+            let mut c = canvas();
+            c.record_text(true);
+            draw(&mut c, &mut s);
+            let runs: Vec<String> = c.text_runs().iter().map(|r| r.text.clone()).collect();
+            assert!(
+                runs.iter().any(|run| run == page.title()),
+                "{page:?} did not draw its own title: {runs:?}"
+            );
+            assert!(
+                runs.len() > 2,
+                "{page:?} drew only its title, not a state or a control: {runs:?}"
+            );
+        }
+
+        s.settings.page = Page::Region;
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        assert!(
+            s.hotspots().rect_of(Hot::SettingsLanguage).is_some(),
+            "Region owns the language row in the registry and must draw it"
+        );
+
+        s.settings.page = Page::Appearance;
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        assert!(
+            s.hotspots().rect_of(Hot::SettingsLanguage).is_none(),
+            "Appearance must not draw a row the registry gives to Region"
+        );
+
+        s.settings.page = Page::Privacy;
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        assert!(
+            s.hotspots().rect_of(Hot::SettingsSearchEngine).is_some(),
+            "Privacy owns the search-engine row and must draw it"
+        );
+
+        s.settings.page = Page::Network;
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        assert!(s.hotspots().rect_of(Hot::QuickLinkToggle).is_some());
+        assert!(s.hotspots().rect_of(Hot::QuickLinkReconnect).is_some());
+
+        s.settings.page = Page::Bluetooth;
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        assert!(s.hotspots().rect_of(Hot::QuickBluetoothPower).is_some());
+
+        s.settings.page = Page::Sound;
+        let mut c = canvas();
+        draw(&mut c, &mut s);
+        for hot in [
+            Hot::QuickVolumeDown,
+            Hot::QuickVolumeUp,
+            Hot::QuickVolumeMute,
+        ] {
+            assert!(
+                s.hotspots().rect_of(hot).is_some(),
+                "{hot:?} must be on the Sound page once a level is measured"
+            );
+        }
     }
 
     #[test]
