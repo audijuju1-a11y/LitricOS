@@ -24,6 +24,8 @@ use core::fmt;
 use crate::action::PowerAction;
 use crate::launch::MAX_ARGV;
 use crate::providers::{self, AudioAction, AuthAction, BtAction, NetAction, SystemAction};
+use crate::update::HealthSignal;
+use litric_core::Version;
 
 /// The longest request line accepted, in bytes.
 ///
@@ -141,6 +143,30 @@ pub enum Request {
     LaunchApp {
         /// The vector; the first element is the absolute program path.
         argv: Vec<String>,
+    },
+    /// Read the update generation state. A question: it changes nothing and
+    /// needs no capability.
+    UpdateStatus,
+    /// Stage a downloaded tree from the service's `incoming` directory.
+    UpdateStage {
+        /// The generation version being staged.
+        version: Version,
+        /// A relative path below `<root>/incoming`.
+        source: String,
+        /// Whether the caller confirmed the write in the moment.
+        consent: bool,
+    },
+    /// Commit the staged candidate after the caller's health check.
+    UpdateCommit {
+        /// The caller's health-check result; never a probe performed here.
+        health: HealthSignal,
+        /// Whether the caller confirmed the activation in the moment.
+        consent: bool,
+    },
+    /// Return to the other committed generation.
+    UpdateRollback {
+        /// Whether the caller confirmed the switch in the moment.
+        consent: bool,
     },
     /// Close the connection.
     Quit,
@@ -659,6 +685,62 @@ impl Request {
                 };
                 Ok(Self::Power { action, consent })
             }
+            "update" => match arg(0).to_ascii_lowercase().as_str() {
+                "status" => {
+                    arity("UPDATE STATUS", 1)?;
+                    Ok(Self::UpdateStatus)
+                }
+                "stage" => {
+                    arity("UPDATE STAGE", 4)?;
+                    if !arg(3).eq_ignore_ascii_case("confirm") {
+                        return Err(ProtoError::BadArgument {
+                            name: "update confirmation",
+                            value: arg(3).to_owned(),
+                        });
+                    }
+                    let version = Version::parse(arg(1)).map_err(|_| ProtoError::BadArgument {
+                        name: "update version",
+                        value: arg(1).to_owned(),
+                    })?;
+                    Ok(Self::UpdateStage {
+                        version,
+                        source: arg(2).to_owned(),
+                        consent: true,
+                    })
+                }
+                "commit" => {
+                    arity("UPDATE COMMIT", 3)?;
+                    if !arg(2).eq_ignore_ascii_case("confirm") {
+                        return Err(ProtoError::BadArgument {
+                            name: "update confirmation",
+                            value: arg(2).to_owned(),
+                        });
+                    }
+                    let health =
+                        HealthSignal::parse(arg(1)).ok_or_else(|| ProtoError::BadArgument {
+                            name: "health signal",
+                            value: arg(1).to_owned(),
+                        })?;
+                    Ok(Self::UpdateCommit {
+                        health,
+                        consent: true,
+                    })
+                }
+                "rollback" => {
+                    arity("UPDATE ROLLBACK", 2)?;
+                    if !arg(1).eq_ignore_ascii_case("confirm") {
+                        return Err(ProtoError::BadArgument {
+                            name: "update confirmation",
+                            value: arg(1).to_owned(),
+                        });
+                    }
+                    Ok(Self::UpdateRollback { consent: true })
+                }
+                other => Err(ProtoError::BadArgument {
+                    name: "UPDATE subcommand",
+                    value: other.to_owned(),
+                }),
+            },
             "resolve" => {
                 arity("RESOLVE", 3)?;
                 let access = AccessWord::parse(&arg(2).to_ascii_lowercase()).ok_or_else(|| {
@@ -1275,6 +1357,69 @@ mod tests {
         let e = Response::err("unknown-verb", "no such verb: SHUTDOWN");
         assert_eq!(e.encode(), "ERR unknown-verb no such verb: SHUTDOWN\n");
         assert!(!e.is_ok());
+    }
+
+    #[test]
+    fn update_requests_parse_with_an_explicit_health_and_confirmation() {
+        assert_eq!(Request::parse("UPDATE STATUS"), Ok(Request::UpdateStatus));
+        assert_eq!(
+            Request::parse("update stage 1.1.0 release CONFIRM"),
+            Ok(Request::UpdateStage {
+                version: Version::parse("1.1.0").expect("version"),
+                source: "release".to_owned(),
+                consent: true,
+            })
+        );
+        assert_eq!(
+            Request::parse("UPDATE COMMIT PASSED confirm"),
+            Ok(Request::UpdateCommit {
+                health: HealthSignal::Passed,
+                consent: true,
+            })
+        );
+        assert_eq!(
+            Request::parse("UPDATE ROLLBACK CONFIRM"),
+            Ok(Request::UpdateRollback { consent: true })
+        );
+    }
+
+    #[test]
+    fn an_update_without_confirmation_or_with_a_bad_version_is_refused() {
+        assert!(matches!(
+            Request::parse("UPDATE STAGE 1.1.0 release"),
+            Err(ProtoError::BadArity {
+                verb: "UPDATE STAGE",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("UPDATE STAGE 1.1.0 release yes"),
+            Err(ProtoError::BadArgument {
+                name: "update confirmation",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("UPDATE STAGE nope release CONFIRM"),
+            Err(ProtoError::BadArgument {
+                name: "update version",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("UPDATE COMMIT maybe CONFIRM"),
+            Err(ProtoError::BadArgument {
+                name: "health signal",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("UPDATE NONSENSE"),
+            Err(ProtoError::BadArgument {
+                name: "UPDATE subcommand",
+                ..
+            })
+        ));
     }
 
     #[test]

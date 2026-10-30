@@ -187,6 +187,20 @@ impl Engine {
             .map(|generation| &generation.version)
     }
 
+    /// Verify that a slot's marker names the version the state expects.
+    ///
+    /// A read-only probe for the service boundary: status must be able to say
+    /// that a slot directory disappeared or was replaced, rather than reporting
+    /// a state as ready because the state file alone parses. Activation calls
+    /// the same check before it moves the active pointer.
+    ///
+    /// # Errors
+    /// [`UpdateError::CandidateIncomplete`] when the slot directory or marker
+    /// is missing, is not a regular file, or names another version.
+    pub fn verify_generation(&self, slot: Slot) -> Result<()> {
+        self.candidate_ready(slot)
+    }
+
     /// The staged candidate's version.
     #[must_use]
     pub fn pending_version(&self) -> Option<&Version> {

@@ -2476,3 +2476,76 @@ Revert this commit. The new crate, its tests, the scope status changes, the
 design note and the two deletion-review entries disappear; rows 760, 762 and
 1145 return to `S`, and the updater backend is absent again. No user data, boot
 configuration or image is touched by this batch.
+
+## 2026-10-30 — the update engine gets a boot entrypoint and a socket service
+
+`§75` wires the §74 generation engine into the running system. It adds the
+`litric-sysd --boot` entrypoint to the real unit, `UPDATE STATUS/STAGE/COMMIT/ROLLBACK`
+on the existing socket, and `update.control` scopes in the existing broker. It
+is not a bootloader, partition writer, signature verifier or health probe.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-sysd/src/update.rs` | service owns the root; boot counting, status, stage/commit/rollback; missing/corrupt/incomplete degrade without panic |
+| `src/litric-sysd/src/state.rs` | service field, three policy grants, broker+consent gate |
+| `src/litric-sysd/src/proto.rs` | four `UPDATE` requests, `CONFIRM`, typed `PASSED|FAILED`, `schema=1` |
+| `src/litric-sysd/src/main.rs` | `--boot` and `--update-root`; serve attaches the root |
+| `src/litric-update/src/engine.rs` | `verify_generation` read-only marker probe; `UpdateError::kind` stable tokens |
+| `src/litric-caps/src/capability.rs` | `update.control`, `update://`, high risk, live consent |
+| `image/mkosi.extra/usr/lib/systemd/system/litric-sysd.service` | `ExecStartPre=--boot`; writable update root |
+| `image/mkosi.extra/usr/lib/tmpfiles.d/litric-update.conf` | `0700` state/incoming directories |
+| `src/litric-sysd/tests/update_service.rs` | process/socket tests for boot, commit, rollback, unauthorized and corrupt state |
+| `docs/SYSTEM-SCOPE.md` | row 764 `Boot-time regression guard` → `P` (120 P / 290 S) |
+| `docs/design/2026-10-30-update-service.md` | boot/service protocol, failure table and limits |
+| `docs/PROGRESS-TRACKER.md` | §75 |
+
+### Evidence (commands run on this batch)
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-update` | **19 passed, 0 failed** |
+| `cargo test --workspace` | **1,917 passed, 0 failed** |
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D, 120 P, 290 S, 746 T |
+| `python3 ci/lint-doc-refs.py` | 1,330 citations across 159 documents resolve |
+| `python3 ci/lint-line-endings.py` | 384 files, all LF |
+| `python3 ci/lint-file-safety.py` | all deletion sites reviewed, including this batch's four test cleanup sites |
+| `bash ci/verify.sh` | **34 pass, 0 fail, 3 skipped** |
+
+The three skips are the image build (`mkosi` absent), the boot smoke test
+(QEMU absent) and idle RAM/CPU/boot timing (same). They are environmental
+skips, not evidence.
+
+The socket tests start the real `litric-sysd` binary, run `--boot` as separate
+processes, and query through `--query`. They prove the attempt count, the
+budget rejection, commit, rollback, the user-data canary, an empty grant record
+being refused, and a corrupt state still answering.
+
+### What this establishes
+
+* The daemon's boot unit counts a staged candidate before the socket exists.
+* A missing state is `uninitialized`; a damaged state is `corrupt`; a missing
+  slot is `incomplete`; none of these take the daemon down.
+* A candidate is activated only through `UPDATE COMMIT PASSED CONFIRM` and the
+  existing broker; `UPDATE ROLLBACK CONFIRM` moves the pointer and records
+  `manual`.
+* The update root is configuration, and `STAGE` cannot escape `incoming`.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that a bootloader boots the candidate | no systemd-boot/UKI/ESP reader exists; the attempt is per daemon start |
+| that the budget path calls `Engine::rollback` | the candidate never became active; the engine rejects it and leaves the committed active slot. `UPDATE ROLLBACK` is the real pointer move |
+| that health checks pass | `PASSED` is the caller's typed assertion, not a probe; row 763 stays `S` |
+| that an image was built or booted | mkosi and QEMU are absent; the image/boot/idle gates remain skips |
+| that an update is authentic or power-cut safe | no signature/hash/monotonic check and no power-cut test |
+
+### Rollback
+
+Revert this commit. The service module, four protocol requests, the capability,
+the boot `ExecStartPre`, tmpfiles root, tests and docs disappear; row 764
+returns to `S` and the engine is again a library with no running caller.

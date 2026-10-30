@@ -19,7 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use litric_caps::{Broker, Capability, CapabilityId, Grant, Issuer, Scope};
-use litric_core::AppId;
+use litric_core::{AppId, Version};
 use litric_env::{EnvironmentId, EnvironmentManager, SwitchOutcome};
 use litric_storage::{Access, Layout, StorageBroker, StorageUri};
 use litric_trash::{Retention, Trash};
@@ -28,6 +28,7 @@ use crate::action::{self, PowerAction, Runner, SystemRunner};
 use crate::facts::{read_facts, Facts};
 use crate::proto::{AccessWord, Request, Response};
 use crate::providers::{self, BtAction, SystemAction};
+use crate::update::{HealthSignal, UpdateService};
 
 /// The application the local session client is, for capability purposes.
 ///
@@ -70,13 +71,16 @@ pub type Timestamp = u64;
 /// read. `iface://` and `wifi://` are two grants of one capability: a link and a
 /// network are different resources with different consequences, and a single
 /// grant covering both would make narrowing one impossible later.
-pub const PROVIDER_GRANTS: [(CapabilityId, &str); 6] = [
+pub const PROVIDER_GRANTS: [(CapabilityId, &str); 9] = [
     (CapabilityId::AudioSet, "audio://"),
     (CapabilityId::NetConfigure, "iface://"),
     (CapabilityId::NetConfigure, "wifi://"),
     (CapabilityId::BluetoothAdmin, "bt://"),
     (CapabilityId::AuthSession, "lock://"),
     (CapabilityId::ProcessSpawn, "app://"),
+    (CapabilityId::UpdateControl, "update://stage"),
+    (CapabilityId::UpdateControl, "update://commit"),
+    (CapabilityId::UpdateControl, "update://rollback"),
 ];
 
 /// The whole daemon, minus its transport.
@@ -134,6 +138,9 @@ pub struct Sysd {
     lockout_written_at: Timestamp,
     /// How the lockout file was read, for diagnostics and tests.
     lockout_note: String,
+    /// Generation state, boot counts and rollback. `disabled()` until
+    /// the daemon is given the one root it is allowed to write.
+    updates: UpdateService,
 }
 
 impl Sysd {
@@ -168,6 +175,7 @@ impl Sysd {
             lockout_urgent: false,
             lockout_written_at: 0,
             lockout_note: "disabled".to_owned(),
+            updates: UpdateService::disabled(),
         }
     }
 
@@ -186,6 +194,18 @@ impl Sysd {
     #[must_use]
     pub fn with_auth(mut self, auth: Box<dyn crate::auth::AuthProvider>) -> Self {
         self.auth = auth;
+        self
+    }
+
+    /// Attach the one update root this daemon may read or write.
+    ///
+    /// The path is configuration, never a request field. Without it every
+    /// update request is refused and status is `state=disabled`, which keeps
+    /// `--report`, unit tests and a daemon without an image from touching
+    /// `/var`.
+    #[must_use]
+    pub fn with_update_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.updates = UpdateService::new(root);
         self
     }
 
@@ -427,6 +447,14 @@ impl Sysd {
             Request::Action { action, consent } => self.action(action, *consent, now),
             Request::Resolve { app, uri, access } => self.resolve(app, uri, *access, now),
             Request::LaunchApp { argv } => self.launch_app(argv),
+            Request::UpdateStatus => Response::ok(self.updates.status()),
+            Request::UpdateStage {
+                version,
+                source,
+                consent,
+            } => self.update_stage(version, source, *consent, now),
+            Request::UpdateCommit { health, consent } => self.update_commit(*health, *consent, now),
+            Request::UpdateRollback { consent } => self.update_rollback(*consent, now),
         };
         self.flush_lockouts(now, false);
         reply
@@ -530,6 +558,84 @@ impl Sysd {
                 Response::ok(vec![format!("pid={pid}"), format!("program={name}")])
             }
             Err(error) => Response::err(error.kind(), error.detail()),
+        }
+    }
+
+    /// Authorise one update operation through the same broker as everything
+    /// else. The scope names exactly one operation, so a grant to stage a
+    /// candidate cannot commit it.
+    fn update_authorised(
+        &mut self,
+        operation: &str,
+        consent: bool,
+        now: Timestamp,
+    ) -> Option<Response> {
+        let Some(client) = self.client.clone() else {
+            return Some(Response::err(
+                "refused",
+                "this build has no local client identity",
+            ));
+        };
+        let Ok(scope) = Scope::parse_resource(&format!("update://{operation}")) else {
+            return Some(Response::err(
+                "bad-argument",
+                "no scope for this update operation",
+            ));
+        };
+        let Some(capability) = Capability::new(CapabilityId::UpdateControl, scope) else {
+            return Some(Response::err(
+                "bad-argument",
+                "no capability for this update operation",
+            ));
+        };
+        let decision = self
+            .caps
+            .check_with_consent(&client, &capability, consent, now);
+        if !decision.is_allowed() {
+            return Some(Response::err(
+                "refused",
+                format!("{} {capability}", decision.reason().token()),
+            ));
+        }
+        None
+    }
+
+    fn update_stage(
+        &mut self,
+        version: &Version,
+        source: &str,
+        consent: bool,
+        now: Timestamp,
+    ) -> Response {
+        if let Some(refused) = self.update_authorised("stage", consent, now) {
+            return refused;
+        }
+        match self.updates.stage(version.clone(), source) {
+            Ok(lines) => Response::ok(lines),
+            Err(error) => Response::err(error.kind(), error.to_string()),
+        }
+    }
+
+    fn update_commit(&mut self, health: HealthSignal, consent: bool, now: Timestamp) -> Response {
+        if let Some(refused) = self.update_authorised("commit", consent, now) {
+            return refused;
+        }
+        match self.updates.commit(health, now) {
+            Ok(lines) => Response::ok(lines),
+            Err(error) => Response::err(error.kind(), error.to_string()),
+        }
+    }
+
+    fn update_rollback(&mut self, consent: bool, now: Timestamp) -> Response {
+        if let Some(refused) = self.update_authorised("rollback", consent, now) {
+            return refused;
+        }
+        match self
+            .updates
+            .rollback(litric_update::RollbackReason::Manual, now)
+        {
+            Ok(lines) => Response::ok(lines),
+            Err(error) => Response::err(error.kind(), error.to_string()),
         }
     }
 
@@ -2289,6 +2395,72 @@ mod tests {
             log.last().is_some_and(|e| e.allowed),
             "an allowed action is a decision too"
         );
+    }
+
+    #[test]
+    fn update_actions_need_consent_and_a_scope_that_survives_revocation() {
+        let root =
+            std::env::temp_dir().join(format!("litric-sysd-update-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let source = root.join("incoming/release");
+        std::fs::create_dir_all(&source).expect("incoming");
+        std::fs::write(source.join("app"), "candidate").expect("candidate");
+        litric_update::Engine::init(&root, Version::parse("1.0.0").expect("version"))
+            .expect("generation state");
+
+        let mut s = sysd().with_update_root(&root);
+        let version = Version::parse("1.1.0").expect("version");
+        let unconfirmed = s.handle(
+            &Request::UpdateStage {
+                version: version.clone(),
+                source: "release".to_owned(),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(!unconfirmed.is_ok(), "{}", unconfirmed.encode());
+        assert!(
+            unconfirmed.encode().contains("needs-live-consent"),
+            "{}",
+            unconfirmed.encode()
+        );
+
+        let staged = s.handle(
+            &Request::UpdateStage {
+                version,
+                source: "release".to_owned(),
+                consent: true,
+            },
+            NOW + 1,
+        );
+        assert!(staged.is_ok(), "{}", staged.encode());
+        assert!(line(&staged, "slot=B").is_some(), "{:?}", staged.lines());
+
+        let client = s.client().expect("client").clone();
+        s.caps_mut()
+            .revoke(&client, CapabilityId::UpdateControl, NOW + 2);
+        let denied = s.handle(
+            &Request::UpdateCommit {
+                health: HealthSignal::Passed,
+                consent: true,
+            },
+            NOW + 3,
+        );
+        assert!(!denied.is_ok(), "{}", denied.encode());
+        assert!(
+            denied.encode().contains("revoked") || denied.encode().contains("no-grant"),
+            "{}",
+            denied.encode()
+        );
+
+        let status = s.handle(&Request::UpdateStatus, NOW + 4);
+        assert!(status.is_ok(), "{}", status.encode());
+        assert!(
+            line(&status, "active_slot=A").is_some(),
+            "a refused commit must not activate the candidate: {:?}",
+            status.lines()
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

@@ -101,6 +101,14 @@ pub enum CapabilityId {
     /// it was never granted, which is the confused deputy this layer exists to
     /// prevent.
     ProcessSpawn,
+    /// Stage, commit or roll back a system generation.
+    ///
+    /// Separate from [`Self::PowerControl`] and [`Self::SystemSettings`]: an
+    /// update changes the tree the machine will boot, so a grant to change the
+    /// volume or a preference must not authorise it. The scopes name one
+    /// operation (`update://stage`, `update://commit`, `update://rollback`) so
+    /// an installer that may stage a verified candidate cannot activate it.
+    UpdateControl,
 }
 
 impl CapabilityId {
@@ -140,6 +148,7 @@ impl CapabilityId {
             Self::AuthSession => "auth.session",
             Self::BluetoothAdmin => "device.bluetooth.admin",
             Self::ProcessSpawn => "process.spawn",
+            Self::UpdateControl => "update.control",
         }
     }
 
@@ -179,6 +188,7 @@ impl CapabilityId {
             "auth.session" => Self::AuthSession,
             "device.bluetooth.admin" => Self::BluetoothAdmin,
             "process.spawn" => Self::ProcessSpawn,
+            "update.control" => Self::UpdateControl,
             _ => return None,
         })
     }
@@ -219,6 +229,7 @@ impl CapabilityId {
             Self::AuthSession,
             Self::BluetoothAdmin,
             Self::ProcessSpawn,
+            Self::UpdateControl,
         ]
     }
 
@@ -244,6 +255,7 @@ impl CapabilityId {
                 | Self::ProcessDebug
                 | Self::SystemSettings
                 | Self::AuthSession
+                | Self::UpdateControl
         )
     }
 
@@ -291,7 +303,8 @@ impl CapabilityId {
             | Self::PowerControl
             | Self::AuthSession
             | Self::BluetoothAdmin
-            | Self::ProcessSpawn => Scoping::Optional,
+            | Self::ProcessSpawn
+            | Self::UpdateControl => Scoping::Optional,
             _ => Scoping::Never,
         }
     }
@@ -335,6 +348,7 @@ impl CapabilityId {
             Self::AuthSession => "lock the screen",
             Self::BluetoothAdmin => "pair and manage Bluetooth devices",
             Self::ProcessSpawn => "start a program for you",
+            Self::UpdateControl => "install a system update or roll it back",
         }
     }
 
@@ -352,7 +366,8 @@ impl CapabilityId {
             | Self::SecureStorage
             | Self::NetConfigure
             | Self::AuthSession
-            | Self::ProcessSpawn => Risk::High,
+            | Self::ProcessSpawn
+            | Self::UpdateControl => Risk::High,
             Self::FsRead
             | Self::FsList
             | Self::NetServer
@@ -475,6 +490,7 @@ impl std::error::Error for ScopeError {}
 ///   lock://<session>         one login session's display
 ///   switch://<uid>           switching to one user
 ///   power://system/<verb>    suspend, reboot, poweroff
+///   update://<operation>     stage, commit, roll back a generation
 /// ```
 const RESOURCE_SCHEMES: &[&str] = &[
     "wifi://",
@@ -489,6 +505,7 @@ const RESOURCE_SCHEMES: &[&str] = &[
     "switch://",
     "power://",
     "app://",
+    "update://",
 ];
 
 /// Storage URI schemes, from RUNTIME section 17.
@@ -584,7 +601,7 @@ impl Scope {
     /// The same rule as [`Self::parse_uri`], for the same reason: a `..`
     /// segment is refused rather than resolved, so `iface://../../etc/passwd`
     /// never reaches a place that constructs a path from it. The scheme must
-    /// be one of the ten above — an unrecognised scheme is not a resource this
+    /// be one of the schemes above — an unrecognised scheme is not a resource this
     /// system knows how to authorise, and guessing would grant something the
     /// user was never shown.
     ///
@@ -1241,6 +1258,21 @@ mod tests {
         // And a resource grant never matches a storage or host grant.
         assert!(!home.contains(&Scope::parse_uri("user://home").expect("v")));
         assert!(!home.contains(&Scope::parse_host("home").expect("v")));
+    }
+
+    #[test]
+    fn update_control_is_scoped_to_one_operation_and_needs_consent() {
+        let stage =
+            Capability::new(CapabilityId::UpdateControl, res("update://stage")).expect("valid");
+        let commit =
+            Capability::new(CapabilityId::UpdateControl, res("update://commit")).expect("valid");
+        assert!(stage.requires_live_consent());
+        assert!(!stage.authorises(&commit));
+        assert!(
+            Capability::new(CapabilityId::UpdateControl, res("update://"))
+                .expect("valid")
+                .authorises(&stage)
+        );
     }
 
     #[test]

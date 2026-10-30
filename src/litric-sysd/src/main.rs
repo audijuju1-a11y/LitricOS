@@ -16,6 +16,7 @@
 //!
 //! ```text
 //!   litric-sysd --report            measure the machine, print litric.* lines
+//!   litric-sysd --boot              count this boot against a staged candidate
 //!   litric-sysd --serve             bind the socket and answer requests
 //!   litric-sysd --query "ENV LIST"  ask a running daemon one question
 //! ```
@@ -51,11 +52,20 @@ const DEFAULT_SOCKET: &str = "/run/litric/sysd.sock";
 /// the file — and because the read-only dm-verity root could not hold it.
 const DEFAULT_STATE: &str = "/var/lib/litric-sysd/grants.conf";
 
+/// Where the update generation record and incoming trees live by default.
+///
+/// Under `/var` because the A/B pointer must survive a reboot. The systemd unit
+/// creates this path with tmpfiles and opens exactly this directory for writing;
+/// the daemon does not invent a second location.
+const DEFAULT_UPDATE_ROOT: &str = litric_sysd::update::DEFAULT_ROOT;
+
 /// What the command line asked for.
 #[derive(Debug)]
 enum Mode {
     /// Print measured facts and exit.
     Report,
+    /// Count one boot against a staged candidate and exit.
+    Boot,
     /// Run the socket server.
     Serve,
     /// Send one request to a running daemon.
@@ -73,6 +83,7 @@ struct Args {
     home: String,
     root: PathBuf,
     state: PathBuf,
+    update_root: PathBuf,
 }
 
 fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
@@ -82,6 +93,7 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
         home: std::env::var("HOME").unwrap_or_else(|_| "/root".to_owned()),
         root: PathBuf::from("/"),
         state: PathBuf::from(DEFAULT_STATE),
+        update_root: PathBuf::from(DEFAULT_UPDATE_ROOT),
     };
     let mut saw_mode = false;
     while let Some(a) = it.next() {
@@ -91,6 +103,10 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
         match a.as_str() {
             "--report" => {
                 args.mode = Mode::Report;
+                saw_mode = true;
+            }
+            "--boot" => {
+                args.mode = Mode::Boot;
                 saw_mode = true;
             }
             "--serve" => {
@@ -105,6 +121,7 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
             "--home" => args.home = need("--home")?,
             "--root" => args.root = PathBuf::from(need("--root")?),
             "--state" => args.state = PathBuf::from(need("--state")?),
+            "--update-root" => args.update_root = PathBuf::from(need("--update-root")?),
             "--help" | "-h" => {
                 return Ok(Args {
                     mode: Mode::Help,
@@ -131,11 +148,15 @@ litric-sysd — the LitricOS system daemon
 
 USAGE:
     litric-sysd [--report] [--root DIR]
+    litric-sysd --boot [--update-root DIR]
     litric-sysd --serve [--socket PATH] [--home DIR] [--root DIR] [--state PATH]
+                       [--update-root DIR]
     litric-sysd --query REQUEST [--socket PATH]
 
 OPTIONS:
     --report          Measure the machine and print litric.* lines (default).
+    --boot            Count one boot against a staged update candidate, then
+                      exit. Run by the unit's ExecStartPre before --serve.
     --serve           Bind the socket and answer requests.
     --query REQUEST   Send one request line to a running daemon.
     --socket PATH     Socket path (default /run/litric/sysd.sock).
@@ -143,6 +164,8 @@ OPTIONS:
     --root DIR        Where /proc and /sys are rooted. For testing.
     --state PATH      The durable capability record. Default
                       /var/lib/litric-sysd/grants.conf.
+    --update-root DIR The generation record and incoming trees. Default
+                      /var/lib/litric/update.
     -h, --help        This text.
     -V, --version     Version.
 ";
@@ -167,7 +190,9 @@ fn report(root: &Path, home: &str) -> ExitCode {
 
 #[cfg(unix)]
 fn run_server(args: &Args) -> ExitCode {
-    let state = state::Sysd::from_system(&args.home, &args.root).with_grant_store(&args.state);
+    let state = state::Sysd::from_system(&args.home, &args.root)
+        .with_grant_store(&args.state)
+        .with_update_root(&args.update_root);
     let listener = match server::bind(&args.socket) {
         Ok(l) => l,
         Err(e) => {
@@ -201,6 +226,16 @@ fn run_server(args: &Args) -> ExitCode {
 fn run_server(_args: &Args) -> ExitCode {
     eprintln!("litric-sysd: --serve needs a Unix host; this build has no socket transport");
     ExitCode::FAILURE
+}
+
+fn run_boot(args: &Args) -> ExitCode {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+    for line in litric_sysd::update::boot(&args.update_root, now) {
+        println!("{line}");
+    }
+    ExitCode::SUCCESS
 }
 
 #[cfg(unix)]
@@ -248,6 +283,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Mode::Report => report(&args.root, &args.home),
+        Mode::Boot => run_boot(&args),
         Mode::Serve => run_server(&args),
         Mode::Query(r) => run_query(&args, r),
     }
@@ -275,6 +311,10 @@ mod tests {
             Mode::Serve
         ));
         assert!(matches!(
+            args(&["--boot"]).expect("parses").mode,
+            Mode::Boot
+        ));
+        assert!(matches!(
             args(&["--query", "PING"]).expect("parses").mode,
             Mode::Query(ref r) if r == "PING"
         ));
@@ -290,6 +330,9 @@ mod tests {
             args(&["--serve", "--socket", "/tmp/s.sock", "--home", "/home/bob"]).expect("parses");
         assert_eq!(a.socket, PathBuf::from("/tmp/s.sock"));
         assert_eq!(a.home, "/home/bob");
+
+        let b = args(&["--boot", "--update-root", "/tmp/updates"]).expect("parses");
+        assert_eq!(b.update_root, PathBuf::from("/tmp/updates"));
     }
 
     #[test]

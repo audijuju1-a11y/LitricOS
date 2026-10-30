@@ -114,13 +114,13 @@ component, our UI and policy on top
 | Status | Count | Share |
 |---|---:|---:|
 | `D` done and tested | **9** | 0.8% |
-| `P` partial, real code with passing tests | **119** | 10.2% |
-| `S` specified, no code | **291** | 25.0% |
+| `P` partial, real code with passing tests | **120** | 10.3% |
+| `S` specified, no code | **290** | 24.9% |
 | `T` not started | **746** | 64.0% |
 | **Total** | **1165** | |
 
 Nine rows are done: the boot chain, proved by `docs/evidence/gate01-boot.log`.
-A hundred and four are partial — real code with passing tests, most of it now
+A hundred and twenty are partial — real code with passing tests, most of it now
 running inside the image: the capability engine, the storage broker, the
 manifest parser, the Windows compatibility planner and its known-software
 table, the environment manager, the design tokens, the trash policy, the input
@@ -1124,7 +1124,7 @@ Treated as gate items, not wishes (Phase 06 §5).
 | 761 | Activation on next boot, single reboot | O+U | S |
 | 762 | Boot counting with automatic rollback | U | P |
 | 763 | Health checks before commit | O | S |
-| 764 | Boot-time regression guard | O | S |
+| 764 | Boot-time regression guard | O | P |
 | 765 | Pre-update snapshot of user data | O | S |
 | 766 | "Undo update" for 7 days | O | S |
 | 767 | Signature verification before writing anything | O | S |

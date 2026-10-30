@@ -1,8 +1,10 @@
 # Update generations: A/B state, boot counting and rollback
 
-Status: implemented as a core library in §74, not wired to a bootloader or an
-image. This note records what the code guarantees, what it deliberately does
-not, and how a temp-root test proves each guarantee.
+Status: the core library landed in §74 and is now driven by `litric-sysd` in
+§75. It is not wired to a bootloader or an image. This note records what the
+engine guarantees, what it deliberately does not, and how a temp-root test
+proves each guarantee. The service boundary is in
+[2026-10-30-update-service.md](2026-10-30-update-service.md).
 
 ## Why this exists
 
@@ -161,21 +163,23 @@ filesystem.
 * **No power-cut test.** The ordering and fsyncs are designed for it, but CI
   cannot cut power mid-rename. The state parser and atomic-write tests are the
   executable part; a QEMU power-cut matrix remains `NOT RUN`.
-* **No settings or update UI.** `WA.10.05`, `WB.11.*` and `WB.01.12.*` remain
-  deferred until a service exposes this state to the shell.
-* **One writer.** There is no cross-process lock. The future service unit owns
-  serialisation.
+* **No updater UI.** `WA.10.05`, `WB.11.*` and `WB.01.12.*` remain deferred; the
+  service now exposes the state, but no shell panel consumes it.
+* **No cross-process lock.** The normal path is serialised by systemd ordering
+  (`--boot` before `--serve`); two update services pointed at one root are not
+  prevented by a file lock.
 
 ## Next step
 
-Wire the engine to the image's boot path, then expose a read-only status
-provider to `litric-sysd` so the shell can say "update staged / next boot /
-rollback available" without inventing state. The settings page is only worth
-drawing after that provider exists.
+The boot entrypoint and `UPDATE STATUS` now exist in `litric-sysd`; see the
+service note. The next consumer is the shell, which can say "update staged /
+next boot / rollback available" from `UPDATE STATUS` without inventing state.
+The settings page is only worth drawing after that consumer exists.
 
 ## References
 
 * [ADR-0021](../adr/0021-deep-recovery-data-protection.md)
 * [master-plan/23 — deep recovery](../master-plan/23-deep-recovery.md)
 * [master-plan/13 — supply chain and updates](../master-plan/13-supply-chain-updates.md)
-* [whole-system plan §6, batch 74](../master-plan/28-whole-system-improvement-plan.md)
+* [whole-system plan §6, batches 74–75](../master-plan/28-whole-system-improvement-plan.md)
+* [The update service](2026-10-30-update-service.md)

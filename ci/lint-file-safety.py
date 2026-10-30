@@ -187,6 +187,11 @@ ALLOWED = {
         "a_corrupt_record_makes_a_restarted_daemon_grant_nothing": "removes this test's own stale socket before starting the first daemon, tagged with the process id under the system temp directory",
         "cleanup": "removes the temporary fixture root and the socket this restart test created under the system temp directory, after stopping both daemons and asserting a corrupt record granted nothing",
     },
+    "src/litric-sysd/tests/update_service.rs": {
+        "scratch": "removes the temporary fixture root this process-level update-service test is about to recreate; the name is tagged with this process's id under the system temp directory",
+        "start": "removes this test's own stale socket, tagged with the process id and test tag under the system temp directory, before the daemon binds it",
+        "cleanup": "removes the temporary fixture root this update-service test created under the system temp directory, after stopping the daemon and checking the generation state",
+    },
     "src/litric-compositor/src/keymap.rs": {
         "load": "unlinks the keymap file it has just written into the session runtime directory, after the descriptor is open and before any client is given it: the path is built from the runtime directory the caller supplied, never a user path, and the open descriptor is what clients receive",
     },

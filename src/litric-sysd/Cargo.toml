@@ -15,6 +15,7 @@ litric-caps    = { path = "../litric-caps" }
 litric-env     = { path = "../litric-env" }
 litric-storage = { path = "../litric-storage" }
 litric-trash   = { path = "../litric-trash" }
+litric-update  = { path = "../litric-update" }
 
 [lib]
 name = "litric_sysd"

@@ -108,6 +108,9 @@ pub enum UpdateError {
         /// The refused candidate.
         candidate: litric_core::Version,
     },
+    /// A commit was asked for while the caller reported a failed health check.
+    /// The engine has no probe of its own; this is the caller's signal.
+    HealthNotPassed,
     /// A candidate is already staged; commit or discard it first.
     AlreadyPending(Slot),
     /// There is no candidate to commit.
@@ -181,6 +184,9 @@ impl fmt::Display for UpdateError {
                 f,
                 "candidate {candidate} is not newer than the active generation {active}"
             ),
+            Self::HealthNotPassed => {
+                write!(f, "the caller reported that the health check did not pass")
+            }
             Self::AlreadyPending(slot) => {
                 write!(f, "slot {} already holds a staged candidate", slot.as_str())
             }
@@ -216,6 +222,37 @@ impl fmt::Display for UpdateError {
             Self::PathTooLong { limit } => {
                 write!(f, "a staging source path is longer than {limit} bytes")
             }
+        }
+    }
+}
+
+impl UpdateError {
+    /// A stable machine-readable token, for a protocol `ERR <kind>` field.
+    ///
+    /// The display text is for an operator; a caller that needs to distinguish
+    /// "there is no state yet" from "the state is damaged" must not parse it.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Io { .. } => "io",
+            Self::InvalidState(_) => "invalid-state",
+            Self::MissingState(_) => "missing-state",
+            Self::StateAlreadyExists(_) => "state-exists",
+            Self::SlotAlreadyExists(_) => "slot-exists",
+            Self::BadVersion(_) => "bad-version",
+            Self::InvalidSlot(_) => "invalid-slot",
+            Self::NotAnUpgrade { .. } => "not-an-upgrade",
+            Self::HealthNotPassed => "health-not-passed",
+            Self::AlreadyPending(_) => "already-pending",
+            Self::NoPendingCandidate => "no-pending",
+            Self::PendingCandidate(_) => "pending",
+            Self::NoRollbackTarget => "no-rollback-target",
+            Self::CandidateIncomplete { .. } => "incomplete",
+            Self::SourceNotDirectory(_) => "source-not-directory",
+            Self::UnsafeSource { .. } => "unsafe-source",
+            Self::TooManyEntries { .. } => "too-many-entries",
+            Self::TooManyBytes { .. } => "too-many-bytes",
+            Self::PathTooLong { .. } => "path-too-long",
         }
     }
 }

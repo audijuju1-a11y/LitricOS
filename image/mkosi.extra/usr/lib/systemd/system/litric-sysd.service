@@ -14,7 +14,14 @@ After=basic.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock
+# The boot entrypoint runs before the socket exists. It reads the generation
+# record, counts one attempt for a staged candidate and, when the third attempt
+# was already used, rejects that candidate while leaving the active generation
+# untouched. It never blocks boot on a missing or damaged record: it reports the
+# result on the console and the service still starts, so the damaged state is
+# diagnosable instead of producing a machine that will not come up.
+ExecStartPre=/usr/bin/litric-sysd --boot --update-root /var/lib/litric/update
+ExecStart=/usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock --update-root /var/lib/litric/update
 
 # The socket is a runtime object and must not survive a reboot. It could not
 # live anywhere else anyway: / is a read-only dm-verity root.
@@ -88,7 +95,7 @@ ProtectHome=yes
 # this namespace does not touch, so opening /etc here is enough and /var
 # remains read-only: a direct write to the upperdir inside the namespace still
 # fails with EROFS (measured).
-ReadWritePaths=/var/lib/iwd /etc
+ReadWritePaths=/var/lib/iwd /etc /var/lib/litric/update
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

@@ -44,6 +44,7 @@ pub mod platform;
 pub mod proto;
 pub mod providers;
 pub mod state;
+pub mod update;
 
 #[cfg(unix)]
 pub mod server;

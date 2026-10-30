@@ -7697,3 +7697,107 @@ Base `9d3d22c`; this batch is committed on `main` with the code, design note,
 scope update, file-safety review and this entry. The final hash and
 `HEAD == origin/main` check are recorded in the delivery report after the push;
 the tracked worktree is empty at the end of the turn.
+
+## 75. Batch: the update service — boot counting, status and health-gated activation (verified)
+
+### 75.1 Requirement
+
+§74 left the generation engine as a library. This batch wires it into the
+running system: the real `litric-sysd` boot unit counts an attempt before the
+socket exists, the daemon exposes the state over its existing IPC, and the
+existing capability broker gates staging, commit and rollback. It does not start
+§73, build an updater UI, or claim a bootloader/partition integration.
+
+### 75.2 The contract, and where it lives (file → item)
+
+* `src/litric-sysd/src/update.rs` — `UpdateService` owns one configured root;
+  `boot` is the `--boot` entrypoint; `status` reports `disabled`,
+  `uninitialized`, `corrupt`, `incomplete` or `ready`; `stage` accepts only a
+  relative tree under `<root>/incoming`; `commit` consumes the caller's typed
+  `HealthSignal`; `rollback` moves the pointer and records `manual`.
+* `src/litric-sysd/src/state.rs` — the service is a field of `Sysd`; three
+  `update.control` scopes are policy-granted to the local client and checked by
+  `check_with_consent` before any engine call. `PROVIDER_GRANTS` now has nine
+  entries; the existing dynamic grant-count test covers it.
+* `src/litric-sysd/src/proto.rs` — `UPDATE STATUS`, `UPDATE STAGE`,
+  `UPDATE COMMIT` and `UPDATE ROLLBACK`, with a required `CONFIRM` word and a
+  typed `PASSED|FAILED` health field. `schema=1` is stated in every status.
+* `src/litric-sysd/src/main.rs` — `--boot` and `--update-root`; `--serve`
+  attaches the same root.
+* `src/litric-update/src/engine.rs` — `verify_generation`, a read-only marker
+  check used by status; `UpdateError::kind` supplies stable protocol tokens.
+* `src/litric-caps/src/capability.rs` — `update.control`, its `update://`
+  scheme, high risk, live-consent requirement and three scopes.
+* `image/mkosi.extra/usr/lib/systemd/system/litric-sysd.service` — `--boot`
+  runs as `ExecStartPre`; `/var/lib/litric/update` is opened for writing.
+* `image/mkosi.extra/usr/lib/tmpfiles.d/litric-update.conf` — creates the
+  `0700` root and `incoming` directory before the mount namespace is built.
+* `src/litric-sysd/tests/update_service.rs` — the real binary and socket.
+
+### 75.3 Behavior pinned by the tests
+
+* A boot with a staged candidate prints `attempt=1`; three attempts are allowed
+  and the fourth rejects the candidate. The active slot remains A, the candidate
+  is `none`, `last_result=reject:boot-count`, and `<root>/user` is unchanged.
+* `UPDATE STATUS` over the socket reports schema 1, active/candidate slots,
+  attempt count, rollback availability, last result and last rollback reason.
+* `UPDATE COMMIT PASSED CONFIRM` activates B; `UPDATE ROLLBACK CONFIRM` returns
+  to A with `reason=manual`; the user-data canary is byte-identical.
+* `UPDATE COMMIT FAILED CONFIRM` is refused and leaves the candidate staged.
+* A missing grant record produces `ERR refused` with `no-grant` or
+  `unknown-application`; the engine is not called.
+* A corrupt state answers `state=corrupt` with a reason, and a missing active
+  slot answers `state=incomplete`; neither panics.
+* Absolute and `..` source paths are refused before staging.
+
+### 75.4 Tests added
+
+* `update::tests::{status_before_any_state_is_uninitialized_and_actions_refuse,
+  corrupt_state_is_reported_and_mutations_are_refused,
+  a_failed_health_signal_never_commits,
+  the_service_rolls_back_and_leaves_user_data_byte_for_byte,
+  boot_budget_exhaustion_returns_to_the_active_generation,
+  a_missing_slot_directory_is_incomplete_not_a_panic,
+  staging_cannot_escape_the_incoming_directory}`
+* `state::tests::update_actions_need_consent_and_a_scope_that_survives_revocation`
+* `proto::tests::{update_requests_parse_with_an_explicit_health_and_confirmation,
+  an_update_without_confirmation_or_with_a_bad_version_is_refused}`
+* `capability::tests::update_control_is_scoped_to_one_operation_and_needs_consent`
+* `src/litric-sysd/tests/update_service.rs` (4 process/socket tests)
+
+### 75.5 Gates (real output, 2026-10-30)
+
+* `cargo fmt --all --check` → exit 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
+* `cargo test -p litric-update` → **19 passed, 0 failed**.
+* `cargo test --workspace` → **1,917 passed, 0 failed** (62 test binaries).
+* `python3 ci/count-scope.py` → 1,165 rows: **9 D · 120 P · 290 S · 746 T**.
+* `docs/SYSTEM-SCOPE.md` row 764 moves to `P`; row 763 (health checks),
+  row 181 (boot-menu counting) and the bootloader/recovery rows stay `S`
+  because no probe, no bootloader and no recovery environment exists.
+* `python3 ci/lint-doc-refs.py` → 1,330 citations across 159 documents resolve.
+* `python3 ci/lint-line-endings.py` → 384 files, all LF.
+* `python3 ci/lint-file-safety.py` → all deletion sites reviewed, including the
+  four process-test cleanup sites this batch adds.
+* `bash ci/verify.sh` → **34 pass, 0 fail, 3 skipped**. The skips are the image
+  build (mkosi absent), boot smoke (QEMU absent) and idle RAM/CPU/boot timing
+  (same). No failed gate is hidden by the skips.
+
+### 75.6 Limits, stated plainly
+
+* The attempt is counted per `litric-sysd` start, not per kernel boot. No
+  bootloader reads the record; no partition is written.
+* The budget path is an automatic return to the already-active generation. It
+  is not a call to `Engine::rollback`, because the candidate never held the
+  active pointer. `UPDATE ROLLBACK` is the real pointer move.
+* `COMMIT PASSED` is a caller assertion. Session, storage and critical-service
+  probes are still absent; `SYSTEM-SCOPE` row 763 stays `S`.
+* No signature/hash/monotonic check, no EROFS/verity/ESP writer, no power-cut
+  test and no UI. There is no cross-process lock; systemd orders `--boot`
+  before `--serve`, which is the serialisation this batch relies on.
+
+### 75.7 Git
+
+Base `278639b`; this batch is committed on `main` with the service, its tests,
+the design note, scope/plan/tracker/GATES updates. The final hash and
+`HEAD == origin/main` check are recorded in the delivery report after the push.

@@ -312,6 +312,7 @@ dependencies = [
  "litric-env",
  "litric-storage",
  "litric-trash",
+ "litric-update",
 ]
 
 [[package]]
