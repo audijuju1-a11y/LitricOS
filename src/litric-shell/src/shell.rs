@@ -10397,6 +10397,22 @@ mod tests {
     }
 
     #[test]
+    fn escape_cannot_dismiss_first_run_setup() {
+        let mut s = shell();
+        s.settings.preferences.onboarded = false;
+        s.keyboard_focus = Some(Hot::SetupDone);
+        let effects = s.handle(&key(Key::Escape, Modifiers::NONE), 3_000);
+        assert!(!s.settings.preferences.onboarded);
+        assert!(!effects
+            .iter()
+            .any(|e| matches!(e, Effect::PersistPreferences(p) if p.onboarded)));
+        assert_eq!(
+            s.a11y_name(Hot::SetupDone),
+            Some((crate::a11y::Role::Button, "Finish setup".to_owned()))
+        );
+    }
+
+    #[test]
     fn first_run_setup_finishes_from_the_keyboard() {
         let mut s = shell();
         s.settings.preferences.onboarded = false;
@@ -11790,6 +11806,7 @@ impl Shell {
                 .map(|accent| (Role::Segment, format!("{accent:?}"))),
             Hot::SettingsAccent => literal(Role::Button, "Accent"),
             Hot::SettingsTheme => literal(Role::Button, "Theme"),
+            Hot::SetupDone => literal(Role::Button, "Finish setup"),
             Hot::SettingsLanguage => literal(Role::Button, "Language"),
             Hot::SettingsWallpaper => literal(Role::Button, "Wallpaper"),
             Hot::SettingsSchedule => literal(Role::Button, "Appearance schedule"),
