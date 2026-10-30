@@ -3,9 +3,9 @@
 //! ADR-0022 separates the **decision** from the **enforcement**: the library is
 //! the pure policy core, and this binary is the process that is allowed to touch
 //! untrusted bytes. Until this file existed the crate built no binary at all, so
-//! `image/units-pending/litric-defender.service` named an `ExecStart` the image
-//! could not install, and the Defender application scanned inside the desktop
-//! process — the one place ADR-0022 says content scanning must not happen.
+//! The former on-access unit named an `ExecStart` the image could not install,
+//! and the Defender application scanned inside the desktop process — the one
+//! place ADR-0022 says content scanning must not happen.
 //!
 //! # What it is, and what it is not
 //!
@@ -13,8 +13,8 @@
 //! framed worker a parent process can drive. It is **not** the on-access daemon:
 //! that needs the fanotify transport (ADR-0022 Phase 2), which needs
 //! `CAP_SYS_ADMIN` and a kernel-facing layer this crate does not have. The
-//! parked unit therefore stays parked, and this binary is honest about being the
-//! worker, not the hook.
+//! The on-access unit and slice were removed in B3; this binary is honest about
+//! being the on-demand worker, not the hook.
 //!
 //! # Cost
 //!

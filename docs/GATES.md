@@ -497,7 +497,7 @@ This is the pass that answered them, and the first full `ci/verify.sh` run since
 |---|---|
 | no version control | closed: `git init`, `.gitignore`, and `.gitattributes` pinning LF — the host's Git had `core.autocrlf=true`, and a checkout would otherwise have rewritten the line endings that `ci/lint-line-endings.py` fails the gate for |
 | no backend for network, Bluetooth, audio, power or authentication | **unchanged, and unchanged on purpose**: these stay design-first, so no code was written for them |
-| units naming binaries that do not exist | the five units and `litric-defender.slice` are parked in `image/units-pending/`, with the reason each is waiting and the condition for its return; gate section [3g] now fails when an installed unit names a binary no crate builds |
+| units naming binaries that do not exist | the parked defender service and slice were removed by B3; gate section [3g] still fails when an installed unit names a binary no crate builds |
 | documents contradicting the tree | corrected: `docs/ARCH-00-boundaries.md`, `docs/REPO-00-layout.md`, `docs/master-plan/24-feature-parity.md` and `docs/RISK-00.md` (RISK-010 marked not applicable) |
 | the zero-dependency rule unenforced | gate section [3h]: `ci/lint-deps.py` derives coverage from `src/Cargo.toml`'s own group comments, fails closed on a group with no decision, refuses an in-workspace build-dependency, and requires a path dependency to point at a declared member |
 
@@ -2898,3 +2898,69 @@ Revert this commit. The socket returns to root-owned `0600`, the linter owner
 rule and self-test fixture disappear, the threat-model/ADR/design/tracker/GATES
 entries are removed, and the master plan returns B2 to unlanded. No LFP/1 code,
 user data, image or measured budget is touched.
+
+## 2026-10-30 — B3: the on-access Defender unit is removed
+
+`B3` removes the parked `litric-defender.service` and `.slice`. The executable
+is an on-demand scanner, not a fanotify daemon: it has no `--rules`, `--cache`,
+`Type=notify` or file-open gate. Shipping the unit would be a promise the image
+cannot keep.
+
+### What changed
+
+| File | Change |
+|---|---|
+| former on-access service file | deleted |
+| former on-access slice | deleted |
+| `ci/lint-defender-claims.py` | new gate: no on-access unit or slice under `image/` |
+| `ci/verify.sh` | new `[3l]` check and self-test |
+| current docs and shipped copies | resident-service claims corrected to on-demand scanner |
+| `docs/master-plan/28-whole-system-improvement-plan.md` | B3 marked landed |
+
+### Evidence (commands run on this batch)
+
+| Check | Result |
+|---|---|
+| `python3 ci/lint-defender-claims.py` | `OK: no litric-defender.service or litric-defender.slice under image/; the on-demand scanner is the only Defender executable` |
+| `python3 ci/lint-defender-claims.py --self-test` | `OK: checker rejects a planted litric-defender.service and litric-defender.slice` |
+| `python3 ci/check-memory-budget.py` | PASS (static policy only) |
+| `python3 ci/lint-unit-binaries.py` | 17 references, 9 resolvable, 8 skips, 0 broken |
+| `cargo test --workspace` | 1,939 passed, 0 failed (62 test binaries) |
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D, 117 P, 293 S, 746 T |
+| `python3 ci/lint-doc-refs.py` | 1440 citations across 163 documents resolve |
+| `python3 ci/lint-line-endings.py` | 386 files, all LF |
+| `python3 ci/lint-file-safety.py` | 125 deletion sites, all reviewed |
+| `bash ci/verify.sh` | 37 pass, 0 fail, 3 skipped |
+
+The three skips are the image build (`mkosi` absent), boot smoke (QEMU absent)
+and idle RAM/CPU/boot timing (same). They are environmental skips, not evidence.
+
+### What the negative control proves
+
+The self-test plants both the removed service and the removed slice in a
+temporary tree; the checker must reject each. Before this batch no such checker
+existed, so either file could have been restored and read as a working feature.
+
+### What this establishes
+
+* The tree no longer ships or parks an on-access Defender service or slice.
+* The on-demand scanner is described as what it is; no file-open hook is
+  claimed.
+* A future re-add is caught statically before it can look like a supported
+  capability.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that any file open was scanned or blocked | no fanotify responder exists |
+| that a booted image has no failed unit | no image or QEMU here |
+| that on-access latency is acceptable | transport not implemented |
+| that Defender is a full antivirus | the policy core is advisory and Phase 0 |
+| that B4, A1 or W9 are closed | separate batches; A1 still needs a builder |
+
+### Rollback
+
+Revert this commit. The two parked files return, the `[3l]` check and self-test
+disappear, and the corrected current claims revert. No scanner behavior, user
+data, image or measurement is touched.

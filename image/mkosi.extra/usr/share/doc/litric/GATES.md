@@ -497,7 +497,7 @@ This is the pass that answered them, and the first full `ci/verify.sh` run since
 |---|---|
 | no version control | closed: `git init`, `.gitignore`, and `.gitattributes` pinning LF — the host's Git had `core.autocrlf=true`, and a checkout would otherwise have rewritten the line endings that `ci/lint-line-endings.py` fails the gate for |
 | no backend for network, Bluetooth, audio, power or authentication | **unchanged, and unchanged on purpose**: these stay design-first, so no code was written for them |
-| units naming binaries that do not exist | the five units and `litric-defender.slice` are parked in `image/units-pending/`, with the reason each is waiting and the condition for its return; gate section [3g] now fails when an installed unit names a binary no crate builds |
+| units naming binaries that do not exist | the parked defender service and slice were removed by B3; gate section [3g] still fails when an installed unit names a binary no crate builds |
 | documents contradicting the tree | corrected: `docs/ARCH-00-boundaries.md`, `docs/REPO-00-layout.md`, `docs/master-plan/24-feature-parity.md` and `docs/RISK-00.md` (RISK-010 marked not applicable) |
 | the zero-dependency rule unenforced | gate section [3h]: `ci/lint-deps.py` derives coverage from `src/Cargo.toml`'s own group comments, fails closed on a group with no decision, refuses an in-workspace build-dependency, and requires a path dependency to point at a declared member |
 

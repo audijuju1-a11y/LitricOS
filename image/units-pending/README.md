@@ -2,8 +2,7 @@
 
 These unit files are **not installed into the image**. They were moved here from
 `image/mkosi.extra/usr/lib/systemd/system/` on 2026-10-11 because each service
-among them starts a binary that no crate in `src/` produces (and one slice here
-belongs to a service that does). A unit that names a
+among them starts a binary that no crate in `src/` produces  A unit that names a
 missing binary is a promise the image cannot keep: `systemd` reports it as a
 failed unit at boot, or — worse, in the socket-activated case — fails only when
 a user first asks for the service, which looks like a bug in the thing they were
@@ -17,8 +16,11 @@ The sandbox profiles in these files are real design work and must not be lost.
 | Unit | `ExecStart` | Binary target in `src/`? | What it is for |
 |---|---|---|---|
 | `litric-capd.service` / `.socket` | `/usr/bin/litric-capd` | **none** | the capability broker as a separate process. [ADR-0016](../../docs/adr/0016-system-daemon.md) decided the broker lives **inside** `litric-sysd`, and says these units "should be removed rather than left to look like they work" |
-| `litric-defender.service` | `/usr/bin/litric-defender` | **on-demand scanner only** — §64 ships the binary, but not the unit's `--rules`/`--cache` flags, `Type=notify` or fanotify hook | on-access scanning daemon. ADR-0022 Phase 2 (fanotify, `CAP_SYS_ADMIN`, `sd_notify`) is what this unit still waits for |
-| `litric-defender.slice` | — (a slice, not a service) | n/a | the resource slice that gives row 10 of the memory ledger its `MemoryMax=64M`. It travels with `litric-defender.service`: a slice sets limits on the units that join it, and with the service parked nothing joins it, so the limits would govern nothing while still reading as though they were in force. `ci/check-memory-budget.py` says exactly that when it finds a slice no unit joins. Until the daemon exists, `docs/PERF-budget.md` row 10 records 60 MB as a target rather than a configured cap |
+
+> **Removed 2026-10-30 (B3):** the parked `litric-defender.service` and
+> `litric-defender.slice` were deleted. `src/litric-defender` builds an
+> **on-demand** scanner, not the fanotify daemon the unit described. The gate
+> `ci/lint-defender-claims.py` now fails if either file returns.
 
 ## The one that came back
 

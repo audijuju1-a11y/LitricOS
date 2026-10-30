@@ -75,7 +75,7 @@ litric/
 │   └── tokens/                    # Design tokens (color, type, spacing)
 │
 ├── defender/                      # Security & defender
-│   ├── onaccess/                  # fanotify on-access engine (Rust/C)
+│   ├── onaccess/                  # reserved for the future fanotify hook (not implemented)
 │   ├── engine/                    # YARA + hash denylist + classifier
 │   ├── behavior/                  # eBPF behavioral hooks
 │   └── quarantine/                # Quarantine management

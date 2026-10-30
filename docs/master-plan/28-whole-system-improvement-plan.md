@@ -58,9 +58,10 @@ Three facts drive the whole ordering below:
    `mkosi`, no QEMU here; `docs/GATES.md` GATE 02–13 are `NOT REACHED`. A plan
    that schedules VM work first would stall on line one.
 3. **The shell shows more than the backends can back.** Network, Bluetooth and
-   audio are `BLOCKED` in the matrix, and `litric-defender.service` points at a
-   binary that does not exist. Adding surfaces before providers is how a
-   product ends up with controls that report success.
+   audio are `BLOCKED` in the matrix. The on-access Defender unit and slice
+   were removed in B3; the only Defender executable is the on-demand scanner.
+   Adding surfaces before providers is how a product ends up with controls that
+   report success.
 
 ---
 
@@ -115,7 +116,7 @@ remains open because this host has no builder, QEMU or booted desktop.
 |---|---|---|
 | **B1** | Capability grants, denials and the audit survive a daemon restart; a corrupt store degrades to *no grants*, never *all grants* | here |
 | **B2** | The Files daemon is reached by a per-user socket or a documented, tested equivalent; the 0600 root-owned compromise is retired or its threat-model entry is made explicit (**landed 2026-10-30**: socket owner aligned to `litric`, threat-model entry and `[3i]` negative control added; still no per-peer check, root shell accepted) | here |
-| **B3** | Defender either ships the daemon its unit names, or the unit and every claim about on-access scanning are removed until it does | here |
+| **B3** | Defender either ships the daemon its unit names, or the unit and every claim about on-access scanning are removed until it does (**landed 2026-10-30**: removed the parked on-access service + slice and corrected current claims; `[3l]` has a planted-unit negative control; on-demand scanner only) | here |
 | **B4** | The recovery/update generation engine exists for a temp root, with a rollback demonstrated and an ADR-0021 check: no generation advertised before it can roll back | here |
 
 ### Stage C — Providers behind the tiles (P0 / `BLOCKED`)

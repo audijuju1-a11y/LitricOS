@@ -6120,10 +6120,10 @@ worker. It does **not** ship the on-access hook, and §64.9 says so.
 * `tools/build.sh` already had `litric-defender` in its staging loop (line
   205), so a binary would have been staged and installed the
   moment one existed; the loop was waiting, not broken.
-* `image/units-pending/litric-defender.service` asks for
+* The former on-access unit asked for
   `--rules /usr/lib/litric/yara --cache /var/cache/litric/defender`,
   `Type=notify` and `CAP_SYS_ADMIN` — the fanotify transport (ADR-0022 Phase 2),
-  none of which exists.
+  none of which exists. B3 removed that unit and its slice in 2026-10-30.
 * The Defender application scanned in-process through
   `litric_defender::engine::Engine` (`src/litric-shell/src/shell.rs`), reading a
   file's bytes in the desktop's address space.
@@ -8147,3 +8147,70 @@ Base `642109f`. This batch changes the socket unit, the socket linter and its
 negative control, the threat model, ADR, beta matrix, design note, master plan
 and tracker/GATES. The final hash and `HEAD == origin/main` check are recorded
 in the delivery report after the push.
+
+## B3. Batch: the on-access Defender unit is removed (verified)
+
+### B3.1 Requirement
+
+The master plan's B3 row: Defender either ships the daemon its unit names, or the
+unit and every claim about on-access scanning are removed until it does. The
+unit was parked, but the parked file and its slice still read as a capability.
+No fanotify daemon exists; `src/litric-defender/src/main.rs` is an on-demand
+scanner. B3 takes the removal path.
+
+### B3.2 What the audit found
+
+The former on-access service file asked for `--rules`, `--cache`,
+`Type=notify` and `CAP_SYS_ADMIN`; the binary accepts only `--scan` and
+`--stdio`. The slice only supplied a limit to that nonexistent service. Several
+current documents still called Defender a resident service, including the API
+contract, architecture ownership table, repository layout, executive summary and
+the parked-unit README.
+
+### B3.3 What changed
+
+* Deleted the former on-access service file.
+* Deleted its slice.
+* Added `ci/lint-defender-claims.py`; it fails if either name returns anywhere
+  under `image/`. Wired it into `ci/verify.sh` as `[3l]` with a planted-unit
+  self-test.
+* Corrected current claims in the master plan, beta matrix, memory ledger,
+  API/architecture/repository/executive docs and shipped copies.
+* Kept the on-demand scanner and its tests; only its stale header comment
+  changed.
+
+No LFP/1, capability, file-operation or scanner behavior changed. **No
+`SYSTEM-SCOPE` row moved**: rows 529/1156 remain `S`, and the Phase-0 engine rows
+remain `P`.
+
+### B3.4 Tests and negative control
+
+* `python3 ci/lint-defender-claims.py` → `OK: no litric-defender.service or
+  litric-defender.slice under image/; the on-demand scanner is the only
+  Defender executable`.
+* `python3 ci/lint-defender-claims.py --self-test` → `OK: checker rejects a
+  planted litric-defender.service and litric-defender.slice`.
+* `python3 ci/check-memory-budget.py` → **PASS**, static policy only; row 10 is
+  an acknowledged future target with `BUG-0008`.
+* `python3 ci/lint-unit-binaries.py` → 17 program references, 9 resolvable,
+  8 base-distribution skips, 0 broken.
+* `cargo test --workspace` → **1,939 passed, 0 failed** (62 test binaries).
+* `bash ci/verify.sh` → **37 pass, 0 fail, 3 skipped**; the 37 includes the new
+  checker and its self-test. Skips remain image build (`mkosi` absent), boot
+  smoke (QEMU absent) and idle measurement (same).
+
+### B3.5 Limits
+
+* No systemd boot, image or QEMU run: this proves the tree no longer ships the
+  unit, not what a booted image would do.
+* No fanotify, `CAP_SYS_ADMIN`, on-access latency or file-open interception is
+  implemented or measured.
+* The on-demand scanner still exists; an absent scan is reported as unavailable,
+  never as clean.
+* B3 does not close A1, W9, Stage B's remaining work or the corpus.
+
+### B3.6 Git
+
+Base `0a1e357`. This batch changes the two removed parked files, the new gate,
+the `ci/verify.sh` `[3l]` entry, current claims/docs and tracker/GATES. The final
+hash and `HEAD == origin/main` check are recorded in the delivery report.

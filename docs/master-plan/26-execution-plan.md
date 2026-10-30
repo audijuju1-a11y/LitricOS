@@ -41,7 +41,7 @@ re-derive them:
 | P04 Network | GATE 04 | no provider code; no D-Bus client in any crate | gate matrix row; `src/` has no network crate |
 | P05 Graphics | GATE 05 | software raster on a KMS scanout path with fbdev as fallback; **nothing measured on a real card** | `src/litric-shell/src/{drm,present}.rs`, `drmpresent.c`; ADR-0026 |
 | P06 Desktop | GATE 06 | shell is far along (lock, browser, files UI, overview, settings); **no notifications daemon, no crash-restart proof, no soak test** | `docs/DESKTOP-2.0.md` §5; `src/litric-shell` |
-| P07 Security + Defender | GATE 07 | `litric-defender` is a library; **no daemon, no on-access hook**; capability grants are in memory | `src/litric-defender`, `src/litric-sysd/src/state.rs` |
+| P07 Security + Defender | GATE 07 | `litric-defender` is an on-demand scanner binary; **no on-access daemon or hook**; capability grants are in memory | `src/litric-defender`, `src/litric-sysd/src/state.rs` |
 | P08 Update | GATE 08 | **nothing** | no `update/` subtree, no sysupdate transfer |
 | P09 AI | GATE 09 | nothing | — |
 | P10 Apps | GATE 10 | `litric-manifest` parser; **no installer, no store, no SDK** | gate matrix row |

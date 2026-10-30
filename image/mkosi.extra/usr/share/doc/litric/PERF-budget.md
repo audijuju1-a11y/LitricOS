@@ -36,7 +36,7 @@ LitricOS ships four build profiles. Each has its own budget and its own gate.
 |---|---|---:|---:|---:|
 | `nano` | kernel + init + serial console. CI/embedded. | **≤ 55 MB** | ≤ 0.10 % | ≤ 1.2 s |
 | `core` | nano + udev + storage + network + resolved | **≤ 95 MB** | ≤ 0.20 % | ≤ 2.0 s |
-| `desktop` | core + shell + audio + defender + portals | **≤ 320 MB** | ≤ 0.50 % | ≤ 3.5 s |
+| `desktop` | core + shell + audio + portals (Defender on demand) | **≤ 320 MB** | ≤ 0.50 % | ≤ 3.5 s |
 | `gaming` | desktop + gamescope + staged Proton runtime | **≤ 420 MB** | ≤ 0.50 % | ≤ 3.5 s |
 
 `desktop` is the headline profile. **≤ 320 MB** is the number LitricOS is held to.
@@ -52,7 +52,7 @@ our results, and they must never be presented as ours.
 | Windows 11, clean idle | 2.2–3.3 GB | **7–10× lighter** |
 | GNOME / KDE Plasma 6 | 1–2 GB | 3–6× lighter |
 | XFCE / LXQt | 500–700 MB | 1.6–2.2× lighter |
-| Sway / labwc / Hyprland | 300–500 MB | comparable to slightly lighter — but with a full shell, defender and portals, which those do not include |
+| Sway / labwc / Hyprland | 300–500 MB | comparable to slightly lighter — but with a full shell and portals; Defender is on demand, which those do not include |
 
 The honest framing: against Windows the advantage is large and structural.
 Against a bare tiling WM the advantage is *features per megabyte*, not raw
@@ -94,7 +94,7 @@ below surfaced.
 | 7 | seatd | 2 MB | TARGET (not enforced: no drop-in supplies it - BUG-0008) | |
 | 8 | **litric-shell** (compositor + shell) | **110 MB** | `MemoryHigh=110M`, `MemoryMax=140M` on `litric-shell.slice` joined by the shell service | ADR-0009; measured at 1920×1080 |
 | 9 | pipewire + wireplumber | 18 MB | TARGET (not enforced: no drop-in supplies it - BUG-0008) | socket-activated; **0 MB until first stream** |
-| 10 | litric-defender | 60 MB | TARGET (not enforced: the scanner has no binary in the image, so its units and its slice are parked under image/units-pending/ - BUG-0008) | ADR-0014; v1 allowed 100 MB; the 64 MB cap is designed into the parked `litric-defender.slice`, not removed |
+| 10 | litric-defender (on-demand scanner) | 60 MB | TARGET (not enforced: B3 removed the on-access unit and slice; the scanner runs only on demand and has no resident unit - BUG-0008) | ADR-0014; v1 allowed 100 MB; 60 MB is a future resident-daemon target, not a configured cap |
 | 11 | litric-aid (AI, model unloaded) | 8 MB | `MemoryMax=12M` [ACK: `litric-ai.slice` carries it, but no shipped unit joins that slice and no AI service is in the image, so it governs nothing - BUG-0008] | socket-activated; **0 MB until first request** |
 | 12 | portals (xdg-desktop-portal) | 0 MB idle | dbus-activated | resident only while a portal dialog is open |
 | 13 | headroom / slack | 27 MB | — | absorbs kernel version drift |
@@ -246,7 +246,7 @@ That is the number to chase; 320 MB is the number that fails the build.
 | Line | v1 | v2 | How |
 |---|---:|---:|---|
 | compositor + shell | 360 MB (180 + 180) | **110 MB** | one process, no widget toolkit |
-| defender | 100 MB | **60 MB** | mmap'd YARA rules, no in-process signature DB |
+| future resident defender | 100 MB | **60 MB** | only when the on-access daemon exists; the on-demand scanner is not resident |
 | **total** | **600 MB** | **320 MB** | |
 
 ---

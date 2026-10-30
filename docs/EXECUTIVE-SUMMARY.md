@@ -114,7 +114,7 @@ Linux gaming ยังมี performance gap กับ Windows Litric ผสา�
 | 9 | **LUKS2 + TPM2 Encryption** | Argon2id KDF, TPM PCR seal | Fallback without TPM | 1p-m |
 | 10 | **AI Inference Opt-in** | llama.cpp 3B Q4K_M, Intel NPU via OpenVINO | High resource (off by default) | 2p-m |
 | 11 | **Accessibility & i18n** | Multi-language, speech, contrast, gestures, braille | UI complexity | 2p-m |
-| 12 | **Background Defender** | ClamAV/YARA on-demand, fanotify gate, <100MB RSS | Scan speed on large files | 1p-m |
+| 12 | **On-demand Defender** | ClamAV/YARA on demand; the fanotify on-access gate is not implemented | Scan speed on large files | 1p-m |
 
 ---
 

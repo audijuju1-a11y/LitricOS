@@ -126,7 +126,7 @@ Windows Compat branch (subordinate):
 | Kernel | upstream Linux | C | upstream + config | 0 |
 | Init/service supervisor | systemd | C | upstream | 1 |
 | Desktop shell (no separate compositor) | Litric | Rust | own, software framebuffer (ADR-0017) | 2 |
-| Defender daemon | Litric | Rust/C | own | 1 |
+| Defender on-demand scanner (no resident on-access daemon) | Litric | Rust | own | 1 |
 | AI service | Litric + llama.cpp | Rust/C | integrated | 1 |
 | Package manager | Flatpak + Litric | C/Rust | upstream + own | 1 |
 | Update system | systemd-sysupdate | C | upstream | 1 |

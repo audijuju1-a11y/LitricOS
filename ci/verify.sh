@@ -320,6 +320,22 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
+echo "[3l] On-access Defender unit boundary"
+# ---------------------------------------------------------------------------
+# B3 removed the parked on-access service and slice: the binary is an on-demand
+# scanner, not a fanotify daemon. Keep that distinction executable, so a future
+# unit cannot quietly reintroduce a promise the image cannot keep.
+if [[ -n "$PY" ]]; then
+    check "no on-access Defender unit or slice without a daemon" \
+        "$PY" ci/lint-defender-claims.py
+    check "Defender claim linter detects a planted on-access unit" \
+        "$PY" ci/lint-defender-claims.py --self-test
+else
+    skip "on-access Defender unit boundary" "no python interpreter on PATH"
+fi
+
+# ---------------------------------------------------------------------------
+echo
 echo "[4] Development signing keys"
 # ---------------------------------------------------------------------------
 if have openssl; then

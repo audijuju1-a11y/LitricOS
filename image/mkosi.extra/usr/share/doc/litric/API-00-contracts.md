@@ -210,7 +210,7 @@ fn defender_restore(quarantine_id: QuarantineId) -> Result<(), DefenderError>
 fn defender_status() -> DefenderStatus  // Active | Scanning | Paused | Error
 ```
 
-**Trust boundary:** Defender service (L1) → App (L3-4)
+**Trust boundary:** on-demand Defender scanner worker → App (L3-4); no resident on-access service exists
 **Capability:** `system.settings` (admin only for manual scans)
 **Honesty:** Advisory only; will not match commercial AV coverage.
 
