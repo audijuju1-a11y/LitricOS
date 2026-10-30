@@ -7000,3 +7000,147 @@ so no frame changed. No gate, golden frame or key file was edited.
 
 Base `eacf5d1`. This batch is committed on `main` and pushed; `HEAD ==
 origin/main` and the tracked worktree is empty at the end of the turn.
+
+---
+
+## 69. Batch: the text cache is bounded in bytes, and the per-glyph cost is printed (verified)
+
+### 69.1 Requirement
+
+The improvement plan names this batch and its proof
+(`docs/master-plan/28-whole-system-improvement-plan.md`, batch 69):
+
+> Text atlas measured and capped per glyph | bytes/glyph test | here
+
+and the lever it serves (`docs/master-plan/28-whole-system-improvement-plan.md`,
+the RAM table):
+
+> | Text atlas cap + per-glyph accounting | bounded, measured | untracked atlas
+> growth |
+
+Stage D's outcome row is the same requirement in one line:
+
+> Text atlas and glyph caches measured and capped; bytes per glyph printed by a
+> test
+
+The batch contract's rule 5 applies: no claim without a tool, a command, an
+environment and `n`.
+
+### 69.2 The inventory (file -> line, verified with grep on this commit)
+
+| File:line | What it allocates | Bytes per glyph for which key | Growth trigger | Never freed? | Named reason |
+| --- | --- | --- | --- | --- | --- |
+| `src/litric-text/src/lib.rs:20` | `CACHE_LIMIT = 512` shaped runs | none: it counts *runs*, not glyphs | every cache miss | oldest run past 512 | Bounds the lookup work, not the memory. Kept as a second bound after this batch. |
+| `src/litric-text/src/lib.rs:30` | `CACHE_BYTE_LIMIT = 8 MiB` of runs | 303.9 bytes/glyph for a 256-byte mask, measured below | every cache miss | **new**: evicted from the oldest end until under the limit | The run's size is text length x font size x masks, so 512 short and 512 long runs differ by orders of magnitude. 8 MiB is a little under one 1280x800 frame. |
+| `src/litric-text/src/lib.rs:104` | `run_bytes`: entry struct + text capacity + glyph-vector capacity + every mask's coverage buffer | this is the per-glyph accounting itself | per insert | n/a (accounting) | Without the coverage buffers counted, the cap would be a count in disguise. |
+| `src/litric-text/src/lib.rs:121` | `cache_bytes`: the fold over entries | n/a | per insert | n/a (accounting) | One number for the whole cache so the bound is checkable from one place. |
+| `src/litric-text/src/lib.rs:133` | `evict_to`: byte bound first, then the count bound | n/a | per insert | pops the oldest | The last entry is never evicted: one run larger than the limit is still the answer to the question asked, and dropping it would miss forever on that string. |
+| `src/litric-text/src/lib.rs:492`, `:496` | `remember` after a fresh shape | n/a | cache miss | no | One insertion point for both the blended and the single-face path, so nothing can bypass the bound. |
+| `src/litric-text/src/lib.rs:607` | `evict_to(&mut cache, CACHE_BYTE_LIMIT)` | n/a | per insert | pops the oldest | The only call site of the cap in the crate. |
+| `src/litric-shell/src/font.rs:1108` | `GLYPHS`: the 105-glyph vector fallback table | 8 bytes/glyph for `BOXES` (see below) | never (static) | process exit | Compiled-in artwork; it is the fallback when no face is installed, not a cache. |
+| `src/litric-shell/src/font.rs:1663` | `BOXES`: `OnceLock<Vec<(f32, f32)>>` | 8 bytes/glyph (105 glyphs -> 840 bytes, measured by arithmetic on the static table) | first `ink_box` call (`:1661`) | never, and deliberately so | Inert ink extents for the vector path; a fixed 840 bytes is cheaper than recomputing a bounding box per frame. |
+| `src/litric-text/src/lib.rs` `LoadedFace.bytes` | the six installed face files, one `Arc<[u8]>` each | face-sized, not per glyph | load, once | process exit | The faces are the fonts; there is nothing to evict and reloading them per string would be the actual cost. |
+
+The two classes that could grow without bound before this batch were the run
+cache's byte content (capped now) and nothing else: the vector table is static,
+the face bytes are fixed at load, and the masks live inside the cached runs.
+
+### 69.3 Measured: 303.9 bytes/glyph, and a 96,870-byte cache becomes 7,266
+
+```bash
+cd src
+cargo test -p litric-text --lib the_run_cache_is_capped -- --nocapture
+```
+
+```text
+run_bytes=2431 bytes_per_glyph=303.9 coverage_per_glyph=256 count_limit=512 byte_limit=8388608
+cache_before_bytes=96870 cache_after_bytes=7266 cache_limit=7294 runs_kept=3
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out
+```
+
+Read honestly: **this host has no installed font face** (`/usr/share/fonts` is
+empty and no `NotoSans-*.ttf` exists anywhere), so a real Noto glyph mask cannot
+be measured here -- the same limitation §59, §61 and §68 recorded for text. The
+figure above is the accounting itself, driven through the exact `run_bytes` and
+`evict_to` the cache calls, over runs of eight 16x16 masks (256 coverage bytes
+each): 2,431 bytes per run, 303.9 of them per glyph, of which 256 are the mask.
+It is a **fixture measurement of the bound**, not an average Noto glyph. What it
+does prove is that the bound holds on real code: forty runs of 2,431 bytes
+(96,870 bytes) were evicted down to 7,266 bytes against a 7,294-byte limit, with
+the newest kept and the oldest gone.
+
+At the shipped ceiling (8,388,608 bytes) and this fixture's 303.9 bytes/glyph the
+cache holds on the order of 27,600 glyph masks before the byte bound bites --
+several hundred ordinary UI strings -- and the count bound still stops a cache of
+tiny runs at 512 (`src/litric-text/src/lib.rs:20`).
+
+### 69.4 The change, and why it costs nothing per frame
+
+`evict_to` asks the same question it always did, plus one integer comparison per
+stored entry: the fold is over entries already in memory, on the insert path
+only. There is **no work added to the paint path** -- `layout` hits `find_cached`
+(`src/litric-text/src/lib.rs:581`) and returns an `Arc<Run>` clone, exactly as
+before -- and no new dependency, no `unsafe` (`#![forbid(unsafe_code)]` still
+holds in the crate), and no new per-frame allocation. The bound is checked when
+the cache grows, which is when memory is spent.
+
+The over-limit case is honest rather than clever: one run larger than 8 MiB stays
+in the cache (the last-entry rule at `src/litric-text/src/lib.rs:133`), because a
+run that big is the answer to the call that just happened; the alternative is a
+guaranteed miss and a re-rasterisation of the same string on every frame that
+asks for it.
+
+### 69.5 Sensitivity: removing the bound must fail, and it does
+
+```text
+probe removed the byte comparison from evict_to
+cache_before_bytes=96870 cache_after_bytes=96870 cache_limit=7294 runs_kept=40
+thread 'tests::the_run_cache_is_capped_in_bytes_as_well_as_in_runs' panicked at
+litric-text/src/lib.rs:835:9:
+the byte cap did not hold: 96870 bytes against a 7294-byte limit
+test result: FAILED. 0 passed; 1 failed; ...
+restored -> test result: ok. 1 passed; 0 failed
+```
+
+The test is sensitive: with the byte comparison forced false the cache keeps all
+forty runs and the assertion fails with the real numbers; restored, it passes.
+The run-count half of the same test forces `CACHE_LIMIT + 50` tiny entries and
+checks the count bound still stops at 512.
+
+### 69.6 Gates (run on this commit, real output)
+
+| Gate | Result |
+| --- | --- |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test --workspace` | **1,839 passed, 0 failed** (+1 against 1,838) |
+| `python3 ci/lint-doc-refs.py` | `OK: 1273 citation(s) across 156 document(s) resolve` (1,267 before this section was added) |
+| `python3 ci/lint-file-safety.py` | `OK: 116 deletion site(s), all inside reviewed functions` |
+| `bash ci/verify.sh` | **32 pass, 2 fail, 3 skipped** -- the pre-existing `mkosi config` and `dev key pairs` fails, unchanged |
+
+One mistake was caught by these gates and fixed: the first version of the test
+computed `per_run / 8`, which the workspace clippy configuration rejects as
+`integer division`; `ci/verify.sh` went to **31 pass, 3 fail** with the clippy
+check red. The fix was to compute the per-glyph figure as `f64`, after which the
+gate returned to 32/2/3. No assertion was weakened to get there.
+
+### 69.7 Limits, stated plainly
+
+* **No real-glyph measurement on this host.** The 303.9 bytes/glyph figure comes
+  from a 16x16 fixture mask, not from Noto Sans. A run of real Noto text at 13 px
+  will have smaller masks and a different per-glyph figure; it has not been
+  measured because no face exists here. Label it a fixture measurement, not an
+  atlas average.
+* **The vector path is not capped, it is static.** 105 glyphs x 8 bytes = 840
+  bytes, computed from the table's own length; there is nothing to evict.
+* **The bound is per `TextSystem`, not per process.** There is one system today;
+  a second one would be a second 8 MiB ceiling.
+* **No image-level evidence.** All of this is host-side; a booted image's text
+  RSS is still unmeasured (`docs/GATES.md` stays `NOT RUN`).
+* **The count bound is still the first line of defence for tiny runs.** 512 runs
+  of one glyph each is ~20 KiB; the byte cap does not tighten that case.
+
+### 69.8 Git
+
+Base `9bf3099`. This batch is committed on `main` and pushed; `HEAD ==
+origin/main` and the tracked worktree is empty at the end of the turn.

@@ -278,6 +278,23 @@ Lines 9, 11 and 12 are budgeted at their *running* cost but are **not running at
 idle**. A cold-booted, logged-in, untouched desktop should sit nearer **~275 MB**.
 That is the number to chase; 320 MB is the number that fails the build.
 
+### 3e. Text atlas bound
+
+The shaped-run cache in `litric-text` was bounded by **count only** (512 runs)
+until batch §69. Its real size is text length x font size x glyph masks, so that
+count said nothing about memory. It now carries a byte ceiling of **8 MiB**
+(`src/litric-text/src/lib.rs:30`) with per-entry accounting that includes every
+mask's coverage buffer (`src/litric-text/src/lib.rs:104`), evicting from the
+oldest end (`src/litric-text/src/lib.rs:133`).
+
+Measured on this host through the crate's own accounting, with 16x16 masks
+(fixture, not Noto -- no font is installed here): **303.9 bytes/glyph**, 2,431
+bytes for an eight-glyph run, and a 96,870-byte cache evicted to **7,266 bytes**
+against a 7,294-byte limit. The vector fallback's extents table is static: 105
+glyphs x 8 bytes = **840 bytes**, never grown. The cache costs **zero work per
+frame**; the fold runs on insert only. Details and limits: `docs/PROGRESS-TRACKER.md`
+§69.
+
 ### Deltas vs v1
 
 | Line | v1 | v2 | How |

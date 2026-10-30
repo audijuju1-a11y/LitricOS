@@ -16,7 +16,18 @@ use fontdue::{Font, FontSettings};
 use harfrust::{Buffer, Direction, ShapeOptions, ShaperFont};
 
 const EM_SCALE: f32 = 1000.0;
+/// How many shaped runs the cache keeps.
 const CACHE_LIMIT: usize = 512;
+/// How many bytes of glyph masks it keeps.
+///
+/// `CACHE_LIMIT` counts runs, and a run's size is text length times font size
+/// times the glyphs a face produces for it -- so 512 short runs and 512 long
+/// ones are the same "512" and differ by orders of magnitude in memory. This is
+/// the bound that makes the cache's worst case a number instead of a function
+/// of what the user typed: 8 MiB is a little under one 1280x800 frame, and it
+/// still holds several hundred ordinary UI strings (`docs/PROGRESS-TRACKER.md`
+/// §69 measures the per-glyph figure).
+const CACHE_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 
 /// Selects one of the trusted installed faces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -82,6 +93,50 @@ struct CachedRun {
     key: RunKey,
     text: String,
     run: Arc<Run>,
+}
+
+/// The bytes one cached run holds, as the allocations it owns.
+///
+/// Counted, not estimated: the entry itself, its copy of the text, the glyph
+/// vector's capacity, and every mask's coverage buffer. Shared runs are counted
+/// per entry because that is what the cache is holding; an `Arc` a caller still
+/// holds is not the cache's bound to keep.
+fn run_bytes(entry: &CachedRun) -> usize {
+    let mut bytes = std::mem::size_of::<CachedRun>()
+        .saturating_add(entry.text.capacity())
+        .saturating_add(
+            entry
+                .run
+                .glyphs
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Bitmap>()),
+        );
+    for glyph in &entry.run.glyphs {
+        bytes = bytes.saturating_add(glyph.coverage.len());
+    }
+    bytes
+}
+
+/// The bytes a cache holds.
+fn cache_bytes(cache: &VecDeque<CachedRun>) -> usize {
+    cache
+        .iter()
+        .fold(0_usize, |sum, entry| sum.saturating_add(run_bytes(entry)))
+}
+
+/// Evict from the oldest end until both bounds hold.
+///
+/// The last entry is never evicted: a single run larger than the byte limit is
+/// still the answer to the question being asked, and dropping it would make the
+/// cache miss forever on the one string that does not fit. The count bound is
+/// applied after the byte bound so a cache of tiny runs still stops at 512.
+fn evict_to(cache: &mut VecDeque<CachedRun>, byte_limit: usize) {
+    while cache.len() > 1 && cache_bytes(cache) > byte_limit {
+        let _ = cache.pop_back();
+    }
+    while cache.len() > CACHE_LIMIT {
+        let _ = cache.pop_back();
+    }
 }
 
 /// Cap height as a fraction of the em, for the faces the image installs.
@@ -549,9 +604,23 @@ impl TextSystem {
             text: text.to_owned(),
             run,
         });
-        while cache.len() > CACHE_LIMIT {
-            let _ = cache.pop_back();
+        evict_to(&mut cache, CACHE_BYTE_LIMIT);
+    }
+
+    /// How many runs the cache holds, and how many bytes they hold.
+    #[must_use]
+    pub fn cache_stats(&self) -> (usize, usize) {
+        match self.runs.lock() {
+            Ok(cache) => (cache.len(), cache_bytes(&cache)),
+            Err(_) => (0, 0),
         }
+    }
+
+    /// The bound [`TextSystem::cache_stats`] is held to, for a caller that wants
+    /// to print it beside the figure.
+    #[must_use]
+    pub const fn cache_byte_limit() -> usize {
+        CACHE_BYTE_LIMIT
     }
 }
 
@@ -704,5 +773,87 @@ mod tests {
         let latin = text.layout("LitricOS ", Face::Sans, 24.0, 0.0).unwrap();
         assert!((mixed.width - (latin.width + thai.width)).abs() < 0.1);
         assert_eq!(mixed.glyphs.len(), latin.glyphs.len() + thai.glyphs.len());
+    }
+
+    #[test]
+    #[allow(clippy::arithmetic_side_effects)]
+    fn the_run_cache_is_capped_in_bytes_as_well_as_in_runs() {
+        // No face is installed on this host, so real masks cannot be measured
+        // here (see `docs/PROGRESS-TRACKER.md` §69). What can be measured is the
+        // eviction the shell uses, driven through the same `run_bytes` and
+        // `evict_to` the cache calls, with runs whose byte size is known: one
+        // byte of coverage per mask pixel, 16x16 masks.
+        let entry = |text: &str, glyphs: usize| CachedRun {
+            key: RunKey {
+                face: Face::Sans,
+                size_tenths: 130,
+                tracking_tenths: 0,
+            },
+            text: text.to_owned(),
+            run: Arc::new(Run {
+                glyphs: (0..glyphs)
+                    .map(|_| Bitmap {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 16,
+                        height: 16,
+                        coverage: Arc::from(vec![0_u8; 16 * 16]),
+                    })
+                    .collect(),
+                width: 100.0,
+            }),
+        };
+        let one = entry("Hello, LitricOS", 8);
+        let per_run = run_bytes(&one);
+        let per_glyph = per_run as f64 / 8.0;
+        println!(
+            "run_bytes={per_run} bytes_per_glyph={per_glyph:.1} coverage_per_glyph=256 \
+             count_limit={CACHE_LIMIT} byte_limit={CACHE_BYTE_LIMIT}"
+        );
+        assert!(
+            per_glyph >= 256.0,
+            "a glyph's mask must be counted: {per_glyph} bytes for a 256-byte mask"
+        );
+
+        // Forty runs, each the size of the one above, against a limit that holds
+        // three of them. The cache must come out under the limit, oldest gone.
+        let mut cache: VecDeque<CachedRun> = VecDeque::new();
+        for i in 0..40 {
+            cache.push_front(entry(&format!("run {i}"), 8));
+        }
+        let before = cache_bytes(&cache);
+        let limit = per_run.saturating_mul(3).saturating_add(1);
+        evict_to(&mut cache, limit);
+        let after = cache_bytes(&cache);
+        println!(
+            "cache_before_bytes={before} cache_after_bytes={after} cache_limit={limit} \
+             runs_kept={}",
+            cache.len()
+        );
+        assert!(
+            after <= limit,
+            "the byte cap did not hold: {after} bytes against a {limit}-byte limit"
+        );
+        assert!(
+            cache.len() >= 2,
+            "the byte cap evicted every run, which would make the cache useless"
+        );
+        assert_eq!(
+            cache.front().map(|e| e.text.as_str()),
+            Some("run 39"),
+            "eviction must take the oldest run, not the newest"
+        );
+
+        // The run count is still a bound for runs too small to reach the bytes.
+        let mut many: VecDeque<CachedRun> = VecDeque::new();
+        for i in 0..CACHE_LIMIT.saturating_add(50) {
+            many.push_front(entry(&format!("t{i}"), 0));
+        }
+        evict_to(&mut many, CACHE_BYTE_LIMIT);
+        assert_eq!(
+            many.len(),
+            CACHE_LIMIT,
+            "the run bound must still stop a cache of tiny runs at {CACHE_LIMIT}"
+        );
     }
 }
