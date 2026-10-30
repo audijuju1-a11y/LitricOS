@@ -330,6 +330,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "litric-update"
+version = "0.2.0"
+dependencies = [
+ "litric-core",
+]
+
+[[package]]
 name = "litric-winbridge"
 version = "0.2.0"
 dependencies = [

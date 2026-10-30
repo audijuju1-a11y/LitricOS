@@ -154,6 +154,9 @@ ALLOWED = {
         "journey_hidden_files_toggle_is_a_real_read_and_survives_a_restart": "removes the temporary fixture root this hidden-visibility journey created, tagged with its own pid, after asserting the dot entry was absent before the switch, present after the real read, and present again in a restarted shell",
         "journey_do_not_disturb_persists_silences_the_banner_and_survives_a_restart": "removes the temporary fixture root this quiet-mode journey created, tagged with its own pid, after asserting the real banner disappeared from the composed frame, the queue kept the note, and the persisted choice survived a restart",
     },
+    "src/litric-update/src/fsutil.rs": {
+        "remove_any": "the one choke point for removing this crate's own staging directory, one of its two slot directories, or its state temporary; every path is built under <root>/system, never a user path",
+    },
     "src/litric-sysd/src/providers.rs": {
         "apply_file": "removes one Wi-Fi credential; the path is refused unless it is a direct child of iwd's state directory under the daemon root, and the network name was validated by `valid_ssid` before the path was built",
     },
@@ -161,6 +164,9 @@ ALLOWED = {
         "save": "removes only the store's own temporary file (grants.conf.tmp.<pid>) -- before writing, and again when the write failed -- never a grant record",
         "fixture": "removes the temporary fixture root this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
         "cleanup": "removes the temporary fixture root this test created under the system temp directory, after asserting the record it wrote round-tripped or was refused",
+    },
+    "src/litric-sysd/src/lockout.rs": {
+        "save": "removes only the lockout store's own temporary file (lockout.tmp.<pid>) before writing it, and again when the write failed; the final record is committed by rename and the path is built beside the store path, never a user path",
     },
     "src/litric-sysd/src/state.rs": {
         "grants_fixture": "removes the temporary fixture root this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",

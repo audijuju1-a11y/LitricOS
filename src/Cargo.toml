@@ -29,6 +29,7 @@ members = [
     "litric-files",
     "litric-manifest",
     "litric-winbridge",
+    "litric-update",
 
     # --- runtime: runs inside the OS, Unix transport, still no third-party deps -
     "litric-sysd",

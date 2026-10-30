@@ -7583,3 +7583,117 @@ integrated lockout on `4796a86`; durable lockout on `9ebedb8`. All are committed
 on `main` and pushed; `HEAD == origin/main` and the tracked worktree is empty at
 the end of the turn. The durable-lockout batch records 241 package tests and
 1,879 workspace tests; the clock-skew tests raise that to 245 and 1,883.
+
+## 74. Batch: update generations, boot counting and a demonstrated rollback (verified)
+
+### 74.1 Requirement
+
+Plan §74 asks for a recovery/update generation engine core with a demonstrated
+rollback in a temp root, and for no generation to be advertised before it can
+roll back. It was scheduled after §73 (the settings-family wave); this batch
+runs it first because the backend is what several `DEFER` rows are waiting for,
+and because the ordering rule is backend before surface. §73 is not claimed by
+this entry.
+
+### 74.2 The contract, and where it lives (file → item)
+
+* `src/litric-update/src/engine.rs` — `Engine::init` creates one committed A
+  generation; `stage` copies a closed source tree into the inactive slot and
+  persists it staged; `note_boot` counts attempts and rejects a candidate after
+  three failed boots; `commit` activates only after the caller's health checks;
+  `discard_pending` is the cancel path; `rollback` marks the left generation bad
+  and returns to the other committed one. `copy_tree` refuses symlinks, special
+  files, entries past 100,000, bytes past 8 GiB and paths past 4,096 bytes.
+* `src/litric-update/src/state.rs` — the bounded `litric-generations` record
+  (active, pending, two slot records, eight events), strict parser, `0600` atomic
+  write (`fsync` + rename + directory `fsync`), marker read/write, and the
+  `MAX_BOOT_ATTEMPTS = 3` / `MAX_EVENTS = 8` / 16 KiB / 512-byte bounds.
+* `src/litric-update/src/fsutil.rs` — the single removal choke point for this
+  crate's own staging directory, slot directory and state temporary. Every path
+  is under `<root>/system`; no user path is accepted.
+* `src/litric-update/src/lib.rs` — the public API and structured `UpdateError`;
+  no new third-party dependency, only `litric-core` for `Version` ordering.
+* `src/Cargo.toml` — the crate is a workspace member; `Cargo.lock` records the
+  one workspace edge.
+* `ci/lint-file-safety.py` — records the review of the new deletion site and, as
+  a gate repair, the two existing lockout-store temporary removals that had no
+  review entry.
+* `docs/design/2026-10-30-update-generations.md` — the design note, crash
+  ordering, exact state machine, tests and limits.
+
+### 74.3 Behavior pinned by the tests
+
+* A candidate is copied and committed without changing the active slot before
+  `commit`; after commit the previous generation remains a rollback target.
+* Three boots without a commit are allowed; the fourth `note_boot` rejects the
+  candidate, keeps the active slot, and marks the candidate bad.
+* `rollback` returns to the other committed slot, records slot/reason/user-data,
+  and a canary in `<root>/user` is byte-identical afterwards.
+* Anti-downgrade is strict (`candidate > active`), before state or slot writes.
+* A missing/mismatched marker cannot be committed or rolled back to.
+* A symlink in the source, a corrupt state, a state overwrite, an entry/byte
+  cap and a second pending candidate are all refused without inventing a slot.
+* The state file is `0600`; ten updates leave at most eight switch events.
+
+### 74.4 Tests added
+
+* `tests::a_candidate_is_staged_copied_and_committed_without_touching_the_active_slot`
+* `tests::three_failed_boots_discard_the_candidate_and_keep_the_active_generation`
+* `tests::rollback_switches_to_the_previous_committed_slot_and_leaves_user_data_alone`
+* `tests::a_downgrade_is_refused_before_the_state_or_a_slot_is_written`
+* `tests::a_second_stage_requires_the_first_candidate_to_finish`
+* `tests::the_boot_budget_is_a_boundary_not_an_accumulator`
+* `tests::a_symlink_in_the_source_is_refused_and_the_active_slot_stays`
+* `tests::a_missing_marker_is_never_advertised`
+* `tests::a_corrupt_state_is_refused_and_left_byte_for_byte`
+* `tests::limits_stop_a_candidate_before_it_is_published`
+* `tests::init_refuses_to_replace_an_existing_state`
+* `tests::the_state_file_is_owner_only`
+* `tests::the_switch_history_stays_bounded_across_many_updates`
+* `tests::rollback_without_a_second_generation_is_refused`
+* `state::tests::{the_record_round_trips_through_the_format,
+  a_damaged_record_is_refused_not_guessed, the_switch_history_is_bounded,
+  an_oversized_line_is_refused_before_parsing,
+  rollback_requires_a_second_committed_generation}`
+
+### 74.5 Gates (real output, 2026-10-30)
+
+* `cargo fmt --all --check` → 0.
+* `cargo clippy --workspace --all-targets -- -D warnings` → 0.
+* `cargo test -p litric-update` → **19 passed, 0 failed**.
+* `cargo test --workspace` → **1,902 passed, 0 failed** (1,883 + 19).
+* `python3 ci/count-scope.py` → 1,165 rows: **9 D · 119 P · 291 S · 746 T**.
+* `python3 ci/lint-parity.py` → 391 rows, 597 research items.
+* `python3 ci/lint-doc-refs.py` → 1,284 citations across 158 documents.
+* `python3 ci/lint-line-endings.py` → 380 files, all LF.
+* `python3 ci/lint-file-safety.py` → 120 deletion sites, all reviewed.
+* `bash ci/verify.sh` → **34 pass, 0 fail, 3 skipped**. The skips are the image
+  build (mkosi absent), boot smoke (QEMU absent) and idle RAM/CPU/boot timing
+  (same). No failed gate is hidden by the skips.
+* Development keys were generated locally with `tools/gen-dev-keys.sh` so the
+  mkosi schema linter and key-pair check could run; `keys/dev` is ignored and
+  was not committed.
+
+### 74.6 Limits, stated plainly
+
+* This is a core library, not the updater service. No image was built or booted;
+  no bootloader reads the state file; no EROFS/verity/ESP write exists.
+* `commit` assumes the caller performed the session, storage and critical-service
+  health checks. Those checks are not implemented here.
+* The engine does not verify signatures, hashes or a signed monotonic counter.
+  The caller must do that before `stage`; a valid local upgrade can still be a
+  replay of an older signed image.
+* No power-cut test is possible in CI. The ordering and fsyncs are designed for
+  it, but only the atomic-write and parser behavior are executed.
+* One writer is assumed; there is no cross-process lock. The future service unit
+  is the serialization point.
+* `SYSTEM-SCOPE` rows 760 and 762 moved to `P` because real staged-write,
+  marker-verification and boot-count logic exists with passing tests. They do not
+  mean the A/B partition or bootloader integration is done.
+
+### 74.7 Git
+
+Base `9d3d22c`; this batch is committed on `main` with the code, design note,
+scope update, file-safety review and this entry. The final hash and
+`HEAD == origin/main` check are recorded in the delivery report after the push;
+the tracked worktree is empty at the end of the turn.

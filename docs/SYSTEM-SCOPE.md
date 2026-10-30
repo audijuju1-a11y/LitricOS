@@ -114,8 +114,8 @@ component, our UI and policy on top
 | Status | Count | Share |
 |---|---:|---:|
 | `D` done and tested | **9** | 0.8% |
-| `P` partial, real code with passing tests | **116** | 10.0% |
-| `S` specified, no code | **294** | 25.2% |
+| `P` partial, real code with passing tests | **119** | 10.2% |
+| `S` specified, no code | **291** | 25.0% |
 | `T` not started | **746** | 64.0% |
 | **Total** | **1165** | |
 
@@ -1120,9 +1120,9 @@ Treated as gate items, not wishes (Phase 06 §5).
 | # | Feature | Owner | Status |
 |---:|---|:---:|:---:|
 | 759 | Background download of updates | O+U | S |
-| 760 | A/B slot write and verify | O+U | S |
+| 760 | A/B slot write and verify | O+U | P |
 | 761 | Activation on next boot, single reboot | O+U | S |
-| 762 | Boot counting with automatic rollback | U | S |
+| 762 | Boot counting with automatic rollback | U | P |
 | 763 | Health checks before commit | O | S |
 | 764 | Boot-time regression guard | O | S |
 | 765 | Pre-update snapshot of user data | O | S |
@@ -1671,7 +1671,7 @@ the implementable contract is [master-plan/23](master-plan/23-deep-recovery.md).
 
 | 1144 | Recovery operations are transactional; partial failure rolls the recovery back | O | S |
 
-| 1145 | Every generation switch records slot, reason and user-data-integrity result | O | S |
+| 1145 | Every generation switch records slot, reason and user-data-integrity result | O | P |
 
 | 1146 | Per-environment watchdog heartbeats with containment actions | O | S |
 

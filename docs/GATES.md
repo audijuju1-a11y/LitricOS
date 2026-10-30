@@ -2393,3 +2393,86 @@ return to `PENDING`, the plan returns to 175/400, and a reviewer is left with th
 static reading that the shell has notifications — without the record that banners
 cannot be clicked, that a critical banner cannot be dismissed where it appears,
 and that nine controls on screen have no name at all.
+
+## 2026-10-30 — update generations: a temp-root rollback, and no advertised slot that cannot boot
+
+`§74` of the whole-system plan asked for the recovery/update generation engine
+core with a demonstrated rollback. The corpus-ledger rows for updates
+(`WA.10.05`, `WB.11.*`, `WB.01.12.*`) were all `DEFER` because there was no
+backend that owned the active slot, a staged candidate, boot counting or a
+rollback. This entry records the backend, not a settings page and not a booted
+image.
+
+### What was found
+
+| Finding | Evidence |
+|---|---|
+| No generation state existed. `SYSTEM-SCOPE` rows 760 and 762 were `S`, and row 1145 (every switch records slot, reason, user-data result) was `S` | `docs/SYSTEM-SCOPE.md` before this batch |
+| The boot chain and the storage layout were designed for generations, but nothing wrote or read an A/B pointer | ADR-0021 §3; `image/mkosi.repart/20-var.conf` |
+| The file-safety gate had two unreviewed deletion sites in the durable lockout store's temporary-file path | `ci/lint-file-safety.py` before this batch |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-update/` | new zero-third-party-dependency crate: two-slot state, strict bounded parser, atomic `0600` store, closed-tree staging, marker verification, boot counting, commit, discard and rollback |
+| `src/Cargo.toml`, `src/Cargo.lock` | workspace member and its single `litric-core` edge |
+| `src/litric-update/src/engine.rs` | `init`, `open`, `stage`, `note_boot`, `commit`, `discard_pending`, `rollback`; source caps and symlink refusal |
+| `src/litric-update/src/state.rs` | `litric-generations` protocol, 16 KiB/512-byte bounds, eight-event history, marker read/write |
+| `src/litric-update/src/fsutil.rs` | one reviewable removal choke point under `<root>/system` |
+| `src/litric-update/src/tests.rs` | 14 real-directory lifecycle tests plus 5 parser tests |
+| `ci/lint-file-safety.py` | reviewed the new deletion site and the two pre-existing lockout temporary removals |
+| `docs/design/2026-10-30-update-generations.md` | design, crash ordering, state machine, tests and limits |
+| `docs/SYSTEM-SCOPE.md` | rows 760, 762 and 1145 moved to `P` (119 P / 291 S); the tally was regenerated |
+| `docs/master-plan/28-whole-system-improvement-plan.md` | batch 74 marked landed, 19 tests |
+| `docs/PROGRESS-TRACKER.md` | §74, including the real gate numbers |
+
+### Evidence (commands run on this batch)
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-update` | **19 passed, 0 failed** |
+| `cargo test --workspace` | **1,902 passed, 0 failed** |
+| `python3 ci/count-scope.py` | 1,165 rows: 9 D, 119 P, 291 S, 746 T |
+| `python3 ci/lint-parity.py` | 391 rows, 597 checklist items |
+| `python3 ci/lint-doc-refs.py` | 1,284 citations across 158 documents |
+| `python3 ci/lint-line-endings.py` | 380 files, all LF |
+| `python3 ci/lint-file-safety.py` | 120 deletion sites, all reviewed |
+| `bash ci/verify.sh` | **34 pass, 0 fail, 3 skipped** |
+
+The three skips are the image build (`mkosi` absent), the boot smoke test (QEMU
+absent) and idle RAM/CPU/boot timing (same). They are environmental skips, not
+evidence. Development keys were generated locally for the key checks; `keys/dev`
+is ignored and was not committed.
+
+### What this establishes
+
+* A candidate is copied into the inactive slot and is never active before a
+  health-check commit.
+* The fourth boot request without a commit discards the candidate; the active
+  generation stays active.
+* A rollback returns to the other committed generation and records the slot,
+  reason and user-data result; a canary outside `<root>/system` is unchanged.
+* A downgrade, a symlink, a missing marker, a corrupt state, a second pending
+  candidate and the staging caps are all refused without publishing a slot.
+* The state write is atomic and `0600`; the event history is bounded at eight.
+
+### What this does not establish
+
+| Claim | Why |
+|---|---|
+| that the image boots a staged generation | no mkosi, no QEMU, no bootloader integration; the skips above |
+| that updates are power-cut safe end to end | the fsync/rename ordering is designed for it, but no power-cut test ran; only the state parser and atomic write are executed |
+| that a downloaded image is authentic | the engine does not verify signatures, hashes or a signed monotonic counter; the caller must |
+| that health checks pass before activation | `commit` is the seam after the caller's checks; those checks are not implemented here |
+| that the A/B partition is written | the engine writes a slot directory, not an EROFS/verity image or an ESP entry |
+| that update settings exist | no service or UI consumes the state yet; the ledger rows remain deferred |
+
+### Rollback
+
+Revert this commit. The new crate, its tests, the scope status changes, the
+design note and the two deletion-review entries disappear; rows 760, 762 and
+1145 return to `S`, and the updater backend is absent again. No user data, boot
+configuration or image is touched by this batch.

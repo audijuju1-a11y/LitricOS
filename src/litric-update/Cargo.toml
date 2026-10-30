@@ -1,0 +1,13 @@
+[package]
+name        = "litric-update"
+description = "LitricOS update generations: A/B state, boot counting, atomic staging and rollback"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+litric-core = { path = "../litric-core" }
