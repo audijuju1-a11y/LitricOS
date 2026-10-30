@@ -15,6 +15,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::action::{Runner, SystemRunner};
+
 /// The shortest password this build accepts.
 pub const MIN_PASSWORD_CHARS: usize = 12;
 
@@ -329,6 +331,93 @@ impl AuthProvider for FakeAuth {
     }
 }
 
+/// How long one helper step is given before it is killed.
+const AUTH_STEP_TIMEOUT_SECS: u32 = 10;
+
+/// A [`AuthProvider`] that runs the distribution's helpers for real.
+///
+/// The process seam is [`Runner`], the same one the rest of the daemon uses, so
+/// tests can record invocations without root and without touching `/etc`.
+#[derive(Debug)]
+pub struct SystemAuthProvider<R> {
+    runner: R,
+}
+
+impl SystemAuthProvider<SystemRunner> {
+    /// A provider that spawns real processes.
+    #[must_use]
+    pub fn system() -> Self {
+        Self {
+            runner: SystemRunner,
+        }
+    }
+}
+
+impl<R: Runner> SystemAuthProvider<R> {
+    /// A provider over a caller-supplied runner.
+    pub const fn new(runner: R) -> Self {
+        Self { runner }
+    }
+
+    /// Run one step, scrubbing its standard input afterwards.
+    fn step(&self, plan: &mut Plan) -> Result<(), AuthError> {
+        let args: Vec<&str> = plan.args.iter().map(String::as_str).collect();
+        let status = self
+            .runner
+            .run(
+                plan.program,
+                &args,
+                plan.stdin.as_deref(),
+                AUTH_STEP_TIMEOUT_SECS,
+            )
+            .map_err(|_| AuthError::SpawnFailed)?;
+        if let Some(input) = plan.stdin.as_mut() {
+            scrub(input);
+        }
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(AuthError::NonZeroExit(
+                u8::try_from(status).unwrap_or(u8::MAX),
+            ))
+        }
+    }
+}
+
+impl<R: Runner> AuthProvider for SystemAuthProvider<R> {
+    fn create(&mut self, name: &str, password: &str) -> Result<(), AuthError> {
+        let mut plans = create_plans(name, password)?;
+        self.step(&mut plans.useradd)?;
+        self.step(&mut plans.chpasswd)
+    }
+
+    fn change(&mut self, name: &str, current: &str, new: &str) -> Result<(), AuthError> {
+        let mut plans = change_plans(name, current, new)?;
+        // A wrong current password is an answer about the attempt, not a daemon
+        // failure; the account is untouched and no second step runs.
+        self.step(&mut plans.verify).map_err(|error| match error {
+            AuthError::NonZeroExit(_) => AuthError::VerifyFailed,
+            other => other,
+        })?;
+        self.step(&mut plans.chpasswd)
+    }
+
+    fn verify(&self, name: &str, password: &str) -> Result<(), AuthError> {
+        if !valid_account_name(name) {
+            return Err(AuthError::InvalidName);
+        }
+        let mut plan = Plan {
+            program: UNIX_CHKPWD,
+            args: vec![name.to_owned(), "nonull".to_owned()],
+            stdin: Some(chkpwd_input(password)),
+        };
+        self.step(&mut plan).map_err(|error| match error {
+            AuthError::NonZeroExit(_) => AuthError::VerifyFailed,
+            other => other,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -472,6 +561,121 @@ mod tests {
         );
         auth.verify("litric", STRONG)
             .expect("the original password still works");
+    }
+
+    type Call = (String, Vec<String>, Option<Vec<u8>>);
+    type Script = std::collections::VecDeque<Result<i32, std::io::ErrorKind>>;
+
+    #[derive(Debug, Default)]
+    struct RecordingRunner {
+        calls: std::sync::Arc<std::sync::Mutex<Vec<Call>>>,
+        results: std::sync::Arc<std::sync::Mutex<Script>>,
+    }
+
+    impl RecordingRunner {
+        fn with(results: Vec<Result<i32, std::io::ErrorKind>>) -> Self {
+            Self {
+                calls: std::sync::Arc::default(),
+                results: std::sync::Arc::new(std::sync::Mutex::new(results.into())),
+            }
+        }
+    }
+
+    impl crate::action::Runner for RecordingRunner {
+        fn run(
+            &self,
+            program: &str,
+            args: &[&str],
+            stdin: Option<&[u8]>,
+            _timeout_secs: u32,
+        ) -> std::io::Result<i32> {
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push((
+                    program.to_owned(),
+                    args.iter().map(|arg| (*arg).to_owned()).collect(),
+                    stdin.map(<[u8]>::to_vec),
+                ));
+            }
+            let next = self
+                .results
+                .lock()
+                .ok()
+                .and_then(|mut results| results.pop_front())
+                .unwrap_or(Ok(0));
+            match next {
+                Ok(code) => Ok(code),
+                Err(kind) => Err(std::io::Error::from(kind)),
+            }
+        }
+
+        fn capture(
+            &self,
+            program: &str,
+            args: &[&str],
+            timeout_secs: u32,
+        ) -> std::io::Result<(i32, String)> {
+            self.run(program, args, None, timeout_secs)
+                .map(|code| (code, String::new()))
+        }
+    }
+
+    #[test]
+    fn the_system_provider_creates_in_two_steps_without_a_password_in_argv() {
+        let runner = RecordingRunner::with(vec![Ok(0), Ok(0)]);
+        let calls = std::sync::Arc::clone(&runner.calls);
+        let mut provider = super::SystemAuthProvider::new(runner);
+        provider.create("litric", STRONG).expect("create");
+        let recorded = calls.lock().expect("calls");
+        assert_eq!(recorded.len(), 2);
+        let first = recorded.first().cloned().expect("useradd");
+        let second = recorded.get(1).cloned().expect("chpasswd");
+        assert_eq!(first.0, "/usr/sbin/useradd");
+        assert!(!first.1.iter().any(|arg| arg.contains(STRONG)));
+        assert_eq!(second.0, "/usr/sbin/chpasswd");
+        assert!(!second.1.iter().any(|arg| arg.contains(STRONG)));
+        assert_eq!(
+            second.2.as_deref(),
+            Some(format!("litric:{STRONG}\n").as_bytes())
+        );
+    }
+
+    #[test]
+    fn a_failed_first_step_never_runs_the_second() {
+        let runner = RecordingRunner::with(vec![Ok(1)]);
+        let calls = std::sync::Arc::clone(&runner.calls);
+        let mut provider = super::SystemAuthProvider::new(runner);
+        assert_eq!(
+            provider.create("litric", STRONG),
+            Err(AuthError::NonZeroExit(1))
+        );
+        assert_eq!(
+            calls.lock().expect("calls").len(),
+            1,
+            "chpasswd must not run"
+        );
+    }
+
+    #[test]
+    fn a_spawn_failure_and_a_bad_current_password_are_distinct() {
+        let runner = RecordingRunner::with(vec![Err(std::io::ErrorKind::NotFound)]);
+        let mut provider = super::SystemAuthProvider::new(runner);
+        assert_eq!(
+            provider.create("litric", STRONG),
+            Err(AuthError::SpawnFailed)
+        );
+
+        let runner = RecordingRunner::with(vec![Ok(1)]);
+        let calls = std::sync::Arc::clone(&runner.calls);
+        let mut provider = super::SystemAuthProvider::new(runner);
+        assert_eq!(
+            provider.change("litric", "wrong password here", "another password"),
+            Err(AuthError::VerifyFailed)
+        );
+        assert_eq!(
+            calls.lock().expect("calls").len(),
+            1,
+            "no write after a failed check"
+        );
     }
 
     #[test]
