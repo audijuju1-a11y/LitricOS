@@ -24,6 +24,7 @@ use core::fmt;
 use crate::action::PowerAction;
 use crate::launch::{MAX_ARGV, MAX_ENV};
 use crate::providers::{self, AudioAction, AuthAction, BtAction, NetAction, SystemAction};
+use crate::services::ServiceAction;
 use crate::update::HealthSignal;
 use litric_core::Version;
 
@@ -717,6 +718,34 @@ impl Request {
                     value: other.to_owned(),
                 }),
             },
+            "service" => {
+                arity("SERVICE", 3)?;
+                let action = match (
+                    arg(0).to_ascii_lowercase().as_str(),
+                    arg(1).to_ascii_lowercase().as_str(),
+                ) {
+                    ("apparmor", "reload") => ServiceAction::AppArmorReload,
+                    ("firewall", "reload") => ServiceAction::FirewallReload,
+                    ("store", "refresh") => ServiceAction::StoreRefresh,
+                    ("networkmanager", "reload") => ServiceAction::NetworkManagerReload,
+                    _ => {
+                        return Err(ProtoError::BadArgument {
+                            name: "SERVICE subcommand",
+                            value: format!("{} {}", arg(0), arg(1)),
+                        })
+                    }
+                };
+                if !arg(2).eq_ignore_ascii_case("confirm") {
+                    return Err(ProtoError::BadArgument {
+                        name: "service confirmation",
+                        value: arg(2).to_owned(),
+                    });
+                }
+                Ok(Self::Action {
+                    action: SystemAction::Service(action),
+                    consent: true,
+                })
+            }
             "app" => match arg(0).to_ascii_lowercase().as_str() {
                 "install" => {
                     arity("APP INSTALL", 3)?;
@@ -1374,6 +1403,42 @@ mod tests {
                 }
                 other => panic!("not an action: {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn service_reloads_parse_only_with_confirmation_and_a_known_service() {
+        for (line, want) in [
+            (
+                "SERVICE APPARMOR RELOAD CONFIRM",
+                ServiceAction::AppArmorReload,
+            ),
+            (
+                "SERVICE FIREWALL RELOAD CONFIRM",
+                ServiceAction::FirewallReload,
+            ),
+            ("SERVICE STORE REFRESH CONFIRM", ServiceAction::StoreRefresh),
+            (
+                "SERVICE NETWORKMANAGER RELOAD CONFIRM",
+                ServiceAction::NetworkManagerReload,
+            ),
+        ] {
+            let parsed = Request::parse(line).expect(line);
+            match parsed {
+                Request::Action { action, consent } => {
+                    assert!(consent);
+                    assert_eq!(action, SystemAction::Service(want));
+                }
+                other => panic!("not an action: {other:?}"),
+            }
+        }
+        for line in [
+            "SERVICE APPARMOR RELOAD",
+            "SERVICE APPARMOR RELOAD yes",
+            "SERVICE APPARMOR START CONFIRM",
+            "SERVICE UNKNOWN RELOAD CONFIRM",
+        ] {
+            assert!(Request::parse(line).is_err(), "{line} was accepted");
         }
     }
 

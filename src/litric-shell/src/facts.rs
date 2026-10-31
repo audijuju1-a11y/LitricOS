@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::shell::{InputDevice, NetIface, ProcRow, SystemFacts};
+use crate::shell::{InputDevice, NetIface, ProcRow, ServiceFacts, SystemFacts};
 
 /// Where `litric-sysd` listens when the runner does not say otherwise.
 pub(crate) const DEFAULT_SOCKET: &str = "/run/litric/sysd.sock";
@@ -123,6 +123,7 @@ pub(crate) fn gather(socket: &Path, root: &Path) -> SystemFacts {
                 .and_then(|rest| rest.split_whitespace().next())
                 .map(str::to_owned)
         });
+        f.services = parse_services(&lines);
         // The level the sound server reported. Absent means nobody has measured
         // it — the panel says so rather than showing a zero it made up.
         if let Some(rest) = lines.iter().find_map(|l| l.strip_prefix("audio.level ")) {
@@ -289,6 +290,9 @@ pub(crate) fn gather(socket: &Path, root: &Path) -> SystemFacts {
             .server
             .as_ref()
             .map(|s| s.state.to_owned());
+        let service_lines = raw.platform.services.to_lines();
+        let service_refs: Vec<&str> = service_lines.iter().map(String::as_str).collect();
+        f.services = parse_services(&service_refs);
     }
 
     if let Some(reply) = ask(socket, "TRASH LIST") {
@@ -628,6 +632,65 @@ pub fn parse_processes(lines: &[&str]) -> Vec<ProcRow> {
     out
 }
 
+/// One `key=value` field from a `svc.*` line.
+fn svc_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.split_whitespace().find_map(|token| {
+        token
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+    })
+}
+
+fn svc_num<T: std::str::FromStr>(line: &str, key: &str) -> Option<T> {
+    svc_value(line, key).and_then(|value| value.parse().ok())
+}
+
+fn svc_bool(line: &str, key: &str) -> bool {
+    svc_value(line, key) == Some("1")
+}
+
+/// The five service paragraphs from the daemon's reply.
+///
+/// A line that is missing leaves its whole section at the default, so the page
+/// can say "Unavailable" rather than display invented zeroes. Counts are
+/// `Option` for the same reason a zero is real when the daemon wrote it.
+pub fn parse_services(lines: &[&str]) -> ServiceFacts {
+    let mut facts = ServiceFacts::default();
+    for line in lines {
+        if let Some(rest) = line.strip_prefix("svc.apparmor ") {
+            facts.apparmor_state = svc_value(rest, "state").unwrap_or_default().to_owned();
+            facts.apparmor_profiles = svc_num(rest, "profiles");
+            facts.apparmor_enforce = svc_num(rest, "enforce");
+            facts.apparmor_complain = svc_num(rest, "complain");
+            facts.apparmor_parser = svc_bool(rest, "parser");
+            facts.apparmor_status = svc_bool(rest, "status");
+        } else if let Some(rest) = line.strip_prefix("svc.polkit ") {
+            facts.polkit_state = svc_value(rest, "state").unwrap_or_default().to_owned();
+            facts.polkit_actions = svc_num(rest, "actions");
+        } else if let Some(rest) = line.strip_prefix("svc.firewall ") {
+            facts.firewall_state = svc_value(rest, "state").unwrap_or_default().to_owned();
+            facts.firewall_tool = svc_bool(rest, "tool");
+            facts.firewall_running = svc_bool(rest, "running");
+            facts.firewall_zones = svc_num(rest, "zones");
+            facts.firewall_default_zone = svc_value(rest, "default_zone")
+                .filter(|zone| *zone != "-" && !zone.is_empty())
+                .map(str::to_owned);
+        } else if let Some(rest) = line.strip_prefix("svc.flatpak ") {
+            facts.flatpak_state = svc_value(rest, "state").unwrap_or_default().to_owned();
+            facts.flatpak_tool = svc_bool(rest, "tool");
+            facts.flatpak_sandbox = svc_bool(rest, "sandbox");
+            facts.flatpak_apps = svc_num(rest, "apps");
+            facts.flatpak_remotes = svc_num(rest, "remotes");
+        } else if let Some(rest) = line.strip_prefix("svc.networkmanager ") {
+            facts.networkmanager_state = svc_value(rest, "state").unwrap_or_default().to_owned();
+            facts.networkmanager_tool = svc_bool(rest, "tool");
+            facts.networkmanager_running = svc_bool(rest, "running");
+            facts.networkmanager_connections = svc_num(rest, "connections");
+        }
+    }
+    facts
+}
+
 /// Parsed from a daemon reply for the desktop.
 pub fn read_root_fs(root: &Path) -> Option<String> {
     let text = fs::read_to_string(root.join("proc/self/mounts")).ok()?;
@@ -687,4 +750,46 @@ pub fn read_battery(root: &Path) -> (Option<u8>, Option<bool>) {
         return (pct, charging);
     }
     (None, None)
+}
+
+#[cfg(test)]
+mod service_fact_tests {
+    use super::*;
+
+    #[test]
+    fn service_lines_are_parsed_without_turning_absent_into_zero() {
+        let facts = parse_services(&[
+            "svc.apparmor state=mixed enabled=1 profiles=2 enforce=1 complain=1 known=1 parser=1 status=1",
+            "svc.polkit state=ready daemon=1 pkcheck=1 actions=7",
+            "svc.firewall state=running tool=1 configured=1 running=1 zones=3 default_zone=work",
+            "svc.flatpak state=ready tool=1 sandbox=1 apps=4 remotes=2",
+            "svc.networkmanager state=running tool=1 configured=1 running=1 connections=2",
+        ]);
+        assert_eq!(facts.apparmor_state, "mixed");
+        assert_eq!(facts.apparmor_profiles, Some(2));
+        assert!(facts.apparmor_parser);
+        assert_eq!(facts.polkit_actions, Some(7));
+        assert_eq!(facts.firewall_default_zone.as_deref(), Some("work"));
+        assert_eq!(facts.flatpak_apps, Some(4));
+        assert_eq!(facts.networkmanager_connections, Some(2));
+    }
+
+    #[test]
+    fn a_missing_service_paragraph_stays_unavailable() {
+        let facts = parse_services(&[]);
+        assert!(facts.apparmor_state.is_empty());
+        assert_eq!(facts.apparmor_profiles, None);
+        assert_eq!(facts.firewall_zones, None);
+        assert!(!facts.flatpak_tool);
+    }
+
+    #[test]
+    fn the_managed_counts_are_real_zeroes_when_the_daemon_reports_them() {
+        let facts = parse_services(&[
+            "svc.firewall state=installed tool=1 configured=0 running=0 zones=0 default_zone=-",
+        ]);
+        assert_eq!(facts.firewall_zones, Some(0));
+        assert_eq!(facts.firewall_default_zone, None);
+        assert!(!facts.firewall_running);
+    }
 }

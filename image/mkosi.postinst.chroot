@@ -111,6 +111,18 @@ enable_unit systemd-resolved.service multi-user.target
 # a service's state — is what the interface reports.
 enable_unit iwd.service         multi-user.target
 enable_unit bluetooth.service   multi-user.target
+# AppArmor's service loads the profiles after the kernel has enabled the LSM.
+# The unit is absent on profiles that do not ship the package, which
+# enable_unit reports rather than treating as a failure.
+enable_unit apparmor.service    multi-user.target
+# The firewall is opt-in in the package, but a security feature that is
+# installed and off is a claim without behaviour. The shipped default zone
+# allows outbound traffic and the DHCP client.
+enable_unit firewalld.service   multi-user.target
+# NetworkManager is intentionally not enabled: systemd-networkd + iwd is the
+# native stack and starting a second manager on the same interfaces would make
+# both report a half-managed link. The package exists so a compatibility image
+# can enable it; the service page reads whichever manager is actually running.
 
 
 # --- 2. Repair permissions inherited from the Windows filesystem ------------

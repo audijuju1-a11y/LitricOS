@@ -54,6 +54,7 @@ use std::path::{Path, PathBuf};
 use litric_caps::{Capability, CapabilityId, Scope};
 
 use crate::action::{Outcome, Runner};
+use crate::services::ServiceAction;
 
 /// WirePlumber's own client, which owns the PipeWire graph's default sink.
 pub const WPCTL: &str = "/usr/bin/wpctl";
@@ -485,6 +486,8 @@ pub enum SystemAction {
     Net(NetAction),
     /// Bluetooth.
     Bluetooth(BtAction),
+    /// A bounded reload of an installed system service.
+    Service(ServiceAction),
     /// Authentication.
     Auth(AuthAction),
 }
@@ -501,6 +504,10 @@ impl SystemAction {
             Self::Audio(a) => a.capability(),
             Self::Net(n) => n.capability(),
             Self::Bluetooth(b) => b.capability(),
+            Self::Service(s) => {
+                let scope = Scope::parse_resource(s.scope_token()).ok()?;
+                Capability::new(CapabilityId::ServiceControl, scope)
+            }
             Self::Auth(a) => a.capability(),
         }
     }
@@ -512,6 +519,7 @@ impl SystemAction {
             Self::Audio(_) => "audio",
             Self::Net(_) => "net",
             Self::Bluetooth(_) => "bluetooth",
+            Self::Service(_) => "service",
             Self::Auth(_) => "auth",
         }
     }
@@ -523,6 +531,7 @@ impl SystemAction {
             Self::Audio(a) => a.token(),
             Self::Net(n) => n.token(),
             Self::Bluetooth(b) => b.token(),
+            Self::Service(s) => s.token(),
             Self::Auth(a) => a.token(),
         }
     }
@@ -537,7 +546,7 @@ impl SystemAction {
     /// toggle rather than a dialog.
     #[must_use]
     pub const fn requires_consent(&self) -> bool {
-        matches!(self, Self::Auth(_))
+        matches!(self, Self::Auth(_) | Self::Service(_))
     }
 }
 
@@ -726,6 +735,7 @@ impl SystemAction {
             Self::Audio(a) => Ok(Self::audio_plan(*a)),
             Self::Net(n) => Self::net_plan(n, root),
             Self::Bluetooth(b) => Self::bt_plan(b),
+            Self::Service(s) => s.plan(),
             Self::Auth(a) => Self::auth_plan(a),
         }
     }
@@ -1605,12 +1615,19 @@ mod tests {
     }
 
     #[test]
-    fn only_a_verification_demands_consent() {
+    fn verification_and_service_reloads_demand_consent() {
         assert!(SystemAction::Auth(AuthAction::Verify {
             user: "alice".to_owned(),
             password: "hunter2".to_owned(),
         })
         .requires_consent());
+        for action in crate::services::ServiceAction::ALL {
+            assert!(
+                SystemAction::Service(action).requires_consent(),
+                "{} is administrative",
+                action.token()
+            );
+        }
         assert!(!audio_volume(50).requires_consent());
         assert!(!SystemAction::Bluetooth(BtAction::Power(false)).requires_consent());
         assert!(!SystemAction::Net(NetAction::SetLink {

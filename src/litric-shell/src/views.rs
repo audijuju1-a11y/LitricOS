@@ -3095,6 +3095,7 @@ fn settings_icon(page: crate::settings::Page) -> Icon {
         Page::Accounts => Icon::User,
         Page::Diagnostics => Icon::Activity,
         Page::Updates => Icon::Info,
+        Page::Services => Icon::Shield,
     }
 }
 
@@ -3931,6 +3932,114 @@ fn draw_settings_page(
                 }
             }
             settings_rows_from(canvas, t, pane, pane.y + t.px(98.0), &rows);
+        }
+        Page::Services => {
+            let services = &facts.services;
+            let mut controls = 0usize;
+            for command in crate::shell::ServiceCommand::ALL {
+                if command.available(services) {
+                    settings_button(
+                        canvas,
+                        shell,
+                        t,
+                        pane,
+                        y,
+                        SettingRow {
+                            key: command.key(),
+                            label: command.button(),
+                            hot: Hot::ServiceAction(command),
+                        },
+                    );
+                    y += t.px(40.0);
+                    controls = controls.saturating_add(1);
+                }
+            }
+
+            let count = |value: Option<usize>| -> String {
+                value.map_or_else(|| "unknown".to_owned(), |n| n.to_string())
+            };
+            let apparmor = match services.apparmor_state.as_str() {
+                "" => "Unavailable · the daemon did not report AppArmor".to_owned(),
+                "disabled" => "Disabled in this kernel".to_owned(),
+                "unknown" => "Kernel support unknown".to_owned(),
+                "enabled-no-profiles" => "Enabled · no profiles loaded".to_owned(),
+                state => format!(
+                    "{state} · {} profiles · {} enforcing · {} complain",
+                    count(services.apparmor_profiles),
+                    count(services.apparmor_enforce),
+                    count(services.apparmor_complain)
+                ),
+            };
+            let polkit = if services.polkit_state.is_empty() {
+                "Unavailable · the daemon did not report Polkit".to_owned()
+            } else {
+                format!(
+                    "{} · {} policy actions",
+                    services.polkit_state,
+                    count(services.polkit_actions)
+                )
+            };
+            let firewall = if services.firewall_state.is_empty() {
+                "Unavailable · the daemon did not report firewalld".to_owned()
+            } else {
+                let zone = services
+                    .firewall_default_zone
+                    .as_deref()
+                    .map_or_else(|| "no default zone".to_owned(), |z| format!("default {z}"));
+                format!(
+                    "{} · {} zones · {zone}",
+                    services.firewall_state,
+                    count(services.firewall_zones)
+                )
+            };
+            let store = if services.flatpak_state.is_empty() {
+                "Unavailable · the daemon did not report Flatpak".to_owned()
+            } else {
+                format!(
+                    "{} · {} system apps · {} remotes",
+                    services.flatpak_state,
+                    count(services.flatpak_apps),
+                    count(services.flatpak_remotes)
+                )
+            };
+            let networkmanager = if services.networkmanager_state.is_empty() {
+                "Unavailable · the daemon did not report NetworkManager".to_owned()
+            } else if services.networkmanager_state == "absent" {
+                "Not installed · native: networkd + iwd".to_owned()
+            } else {
+                format!(
+                    "{} · {} connections · native: networkd + iwd",
+                    services.networkmanager_state,
+                    count(services.networkmanager_connections)
+                )
+            };
+            let sandbox = if services.flatpak_sandbox {
+                "bubblewrap present · Flatpak sandbox available"
+            } else {
+                "bubblewrap missing · Flatpak cannot sandbox apps"
+            };
+            let mut rows = vec![
+                ("AppArmor".to_owned(), apparmor),
+                ("Polkit".to_owned(), polkit),
+                ("Firewall".to_owned(), firewall),
+                ("App Store (Flatpak)".to_owned(), store),
+                ("App sandbox".to_owned(), sandbox.to_owned()),
+                ("NetworkManager".to_owned(), networkmanager),
+            ];
+            if controls == 0 {
+                rows.push((
+                    "Reload controls".to_owned(),
+                    "None available: the daemon reports no installed tool for these services"
+                        .to_owned(),
+                ));
+            }
+            if !shell.services_note.is_empty() {
+                rows.push((
+                    "Last service action".to_owned(),
+                    shell.services_note.clone(),
+                ));
+            }
+            settings_rows_from(canvas, t, pane, y + t.px(10.0), &rows);
         }
     }
     if matches!(

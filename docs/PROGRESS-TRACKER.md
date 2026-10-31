@@ -9090,3 +9090,85 @@ absent, and the idle-RAM/CPU/boot-timing platform absent.
 Revert the S87 commit. Dock pins, their context-menu rows, stale-launch
 convergence, the UI assertions and `42-pinned-dock` disappear; S86 uninstall and
 S85 install remain unchanged.
+
+
+## 2026-10-31 — S88: the system services are measured and reloadable
+
+Settings could describe the machine's CPU, memory, network, Bluetooth, audio and
+updates, but it had no surface for the services that confine programs, authorise
+administrators, filter the network or provide the app sandbox. S88 adds a real
+`litric-sysd` read model for AppArmor, Polkit, firewalld, Flatpak and
+NetworkManager, one Settings page that reports each one, and four bounded reload
+actions behind a new scoped `service.control` capability. The desktop image now
+enables AppArmor in the kernel and installs the services it reports.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-sysd/src/services.rs` | New fixture-testable readers for AppArmor, Polkit, firewalld, Flatpak and NetworkManager; four closed `ServiceAction` plans with 30 s/60 s deadlines. |
+| `src/litric-sysd/src/platform/mod.rs` | Adds `ServiceFacts` to `Platform` and emits stable `svc.*` lines. |
+| `src/litric-sysd/src/providers.rs` | `SystemAction::Service` uses the new `ServiceControl` capability and `service://…` scope. |
+| `src/litric-sysd/src/proto.rs` | `SERVICE <name> <verb> CONFIRM` parsing, with unknown names and missing consent refused. |
+| `src/litric-sysd/src/state.rs` | Grants the four scopes; a confirmed firewalld reload runs the fixed plan once in the state test. |
+| `src/litric-caps/src/capability.rs` | Adds `service.control` (`service://…`), risk High, live consent required. |
+| `src/litric-shell/src/facts.rs` | Parses `svc.*` from the daemon and from a direct platform read; absent stays absent. |
+| `src/litric-shell/src/settings.rs` | Adds the `Services` page, slug `services`; the sidebar now has 16 pages. |
+| `src/litric-shell/src/views.rs` | Draws AppArmor, Polkit, firewall, App Store/Flatpak, app sandbox and NetworkManager state; controls appear only when the tool and runtime state make them actionable. |
+| `src/litric-shell/src/shell.rs` | Adds the service model, the `ServiceAction` hotspots and the `Effect::Service` request. |
+| `src/litric-shell/src/main.rs` | Sends the confirmed request over the daemon socket, shows the daemon's answer and re-reads the facts. |
+| `kernel/config/litric-base.config` | Enables `CONFIG_SECURITY_APPARMOR` and adds AppArmor to `CONFIG_LSM`. |
+| `image/mkosi.conf` | Adds `apparmor=1` and the matching LSM order to the kernel command line. |
+| `image/mkosi.profiles/desktop.conf` | Installs `apparmor`, `polkit`, `firewalld` and an optional `networkmanager`. |
+| `image/mkosi.postinst.chroot` | Enables `apparmor.service` and `firewalld.service`; NetworkManager is intentionally not enabled. |
+| `src/litric-shell/examples/frame_dump.rs` | Adds `43-settings-services`, with fixed service facts and the selected row visible. |
+
+### User-visible outcomes
+
+| State | Result |
+|---|---|
+| AppArmor enabled and tools present | The page reports enforcing/complain/mixed profile counts and offers **Reload AppArmor profiles**. |
+| AppArmor disabled | The page says **Disabled in this kernel** and offers no reload. |
+| Polkit | Reports whether the daemon and `pkcheck` are present, plus the installed policy-action count. |
+| firewalld running | Reports zone count and default zone, and offers **Reload firewall rules**. |
+| Flatpak ready | Reports system apps and remotes, says whether bubblewrap is available, and offers **Refresh app catalog**. |
+| NetworkManager installed but not running | Reports `installed` and the native `networkd + iwd` stack; no reload button is drawn. |
+| Reload refused | The daemon's `ERR` line is shown verbatim in the page and in a notification. |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | **1,998 passed, 0 failed, 0 ignored** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all --check` | exit 0 |
+| `ci/lint-kconfig.py` | `OK: 1 kernel fragment(s) clean` |
+| `frame_dump` + `ci/check-golden-frames.py` | 42 frames recorded; 10 required screens pass; new `43-settings-services` |
+| Settings frames | 0.04% of cells changed, mean delta 0.01 levels, from the extra sidebar row; within threshold |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+
+The three skips remain the environment limits: no `mkosi`, no
+`qemu-system-x86_64`, and no idle-RAM/CPU/boot-timing platform.
+
+### Limits
+
+* NetworkManager is installed but deliberately not enabled. LitricOS keeps
+  `systemd-networkd` + `iwd` as the native stack; starting two managers on the
+  same links would make both report a half-managed interface.
+* Wi-Fi joining through NetworkManager still needs a secret-agent design. S88
+  adds status and a configuration reload, not a second Wi-Fi client.
+* Flatpak counts the system installation under `/var/lib/flatpak`; user
+  installations under a home directory are not counted.
+* AppArmor loads the distribution package's profiles. LitricOS does not yet
+  ship its own reviewed profile set.
+* The image and kernel changes were not built or booted here: `mkosi` and QEMU
+  are absent. Readers and plans are fixture/unit tested; the page is rendered
+  from fixed facts.
+* Real-card C2 KMS modeset/page-flip claims remain **NOT MADE**.
+
+### Rollback
+
+Revert the S88 commit. The service facts, `Services` page, `service.control`
+capability, four reload plans, image packages/units, AppArmor kernel enablement,
+the new tests and `43-settings-services` disappear. The existing
+networkd/iwd, Flatpak install/uninstall and Settings pages remain unchanged.

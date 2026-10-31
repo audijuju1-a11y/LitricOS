@@ -456,6 +456,8 @@ pub enum Hot {
     DisplayScale,
     /// Ask the update service for a fresh status snapshot.
     SettingsUpdatesRefresh,
+    /// Reload one installed system service through the daemon.
+    ServiceAction(ServiceCommand),
     /// Keep the scale that is on screen and let the countdown go.
     ScaleKeep,
     /// Put the previous scale back now, without waiting out the countdown.
@@ -995,6 +997,145 @@ pub struct EnvRow {
     pub hotkey: String,
 }
 
+/// The service surfaces the daemon reports, as the Settings page shows them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServiceFacts {
+    /// AppArmor verdict.
+    pub apparmor_state: String,
+    /// Loaded profiles.
+    pub apparmor_profiles: Option<usize>,
+    /// Profiles in enforcing mode.
+    pub apparmor_enforce: Option<usize>,
+    /// Profiles in complain mode.
+    pub apparmor_complain: Option<usize>,
+    /// Whether the profile parser is installed.
+    pub apparmor_parser: bool,
+    /// Whether `aa-status` is installed.
+    pub apparmor_status: bool,
+    /// Polkit verdict.
+    pub polkit_state: String,
+    /// Installed action policy files.
+    pub polkit_actions: Option<usize>,
+    /// firewalld verdict.
+    pub firewall_state: String,
+    /// Whether `firewall-cmd` is installed.
+    pub firewall_tool: bool,
+    /// Whether the runtime directory is present.
+    pub firewall_running: bool,
+    /// Zone XML files.
+    pub firewall_zones: Option<usize>,
+    /// The configured default zone.
+    pub firewall_default_zone: Option<String>,
+    /// Flatpak verdict.
+    pub flatpak_state: String,
+    /// Whether the Flatpak client is installed.
+    pub flatpak_tool: bool,
+    /// Whether a bubblewrap helper is installed.
+    pub flatpak_sandbox: bool,
+    /// System applications.
+    pub flatpak_apps: Option<usize>,
+    /// Configured remotes.
+    pub flatpak_remotes: Option<usize>,
+    /// NetworkManager verdict.
+    pub networkmanager_state: String,
+    /// Whether `nmcli` is installed.
+    pub networkmanager_tool: bool,
+    /// Whether the runtime directory is present.
+    pub networkmanager_running: bool,
+    /// Saved connection profiles.
+    pub networkmanager_connections: Option<usize>,
+}
+
+/// One bounded reload the Settings page can request from the daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceCommand {
+    /// Reload AppArmor's loaded profiles.
+    AppArmor,
+    /// Reload firewalld's configuration.
+    Firewall,
+    /// Refresh Flatpak's app catalog.
+    Store,
+    /// Reload NetworkManager's configuration.
+    NetworkManager,
+}
+
+impl ServiceCommand {
+    /// Every command, in page order.
+    pub const ALL: [Self; 4] = [
+        Self::AppArmor,
+        Self::Firewall,
+        Self::Store,
+        Self::NetworkManager,
+    ];
+
+    /// The words on the button.
+    #[must_use]
+    pub const fn button(self) -> &'static str {
+        match self {
+            Self::AppArmor => "Reload AppArmor profiles",
+            Self::Firewall => "Reload firewall rules",
+            Self::Store => "Refresh app catalog",
+            Self::NetworkManager => "Reload NetworkManager",
+        }
+    }
+
+    /// The name in a notification and a result line.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::AppArmor => "AppArmor",
+            Self::Firewall => "Firewall",
+            Self::Store => "App catalog",
+            Self::NetworkManager => "NetworkManager",
+        }
+    }
+
+    /// The settings key for a deep link's focus ring.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::AppArmor => "service_apparmor",
+            Self::Firewall => "service_firewall",
+            Self::Store => "service_store",
+            Self::NetworkManager => "service_networkmanager",
+        }
+    }
+
+    /// The request's service word and verb.
+    #[must_use]
+    pub const fn parts(self) -> (&'static str, &'static str) {
+        match self {
+            Self::AppArmor => ("apparmor", "reload"),
+            Self::Firewall => ("firewall", "reload"),
+            Self::Store => ("store", "refresh"),
+            Self::NetworkManager => ("networkmanager", "reload"),
+        }
+    }
+
+    /// Whether the reported machine state makes this control meaningful.
+    #[must_use]
+    pub fn available(self, facts: &ServiceFacts) -> bool {
+        match self {
+            Self::AppArmor => {
+                facts.apparmor_parser
+                    && facts.apparmor_status
+                    && !matches!(facts.apparmor_state.as_str(), "" | "disabled" | "unknown")
+            }
+            Self::Firewall => facts.firewall_tool && facts.firewall_running,
+            Self::Store => facts.flatpak_tool,
+            Self::NetworkManager => facts.networkmanager_tool && facts.networkmanager_running,
+        }
+    }
+
+    /// The protocol line. `CONFIRM` is the click's live consent; the daemon
+    /// still validates the capability and the scope.
+    #[must_use]
+    pub fn request_line(self) -> String {
+        let (service, verb) = self.parts();
+        format!("SERVICE {service} {verb} CONFIRM")
+    }
+}
+
 /// The numbers the desktop shows, and where they came from.
 ///
 /// Every field is an `Option`. A machine that cannot report its GPU load shows
@@ -1097,6 +1238,8 @@ pub struct SystemFacts {
     pub processes: Vec<ProcRow>,
     /// Whether the daemon's process list was cut short by its own bound.
     pub processes_truncated: bool,
+    /// AppArmor, Polkit, firewalld, Flatpak and NetworkManager.
+    pub services: ServiceFacts,
     /// Where these numbers came from.
     pub source: String,
     /// What can verify a password on this machine: `unix-chkpwd`, `pam-helper`
@@ -1442,6 +1585,9 @@ pub enum Effect {
     ReadPanelState,
     /// A power profile was requested.
     SetPowerProfile(PowerProfile),
+    /// Reload one system service. The command's fixed arguments are validated
+    /// by the daemon, and the request carries the click's confirmation.
+    Service(ServiceCommand),
     /// A power transition was confirmed by the user and must be carried out.
     ///
     /// This effect only exists after the confirm step has been answered, so the
@@ -3526,6 +3672,8 @@ pub struct Shell {
     /// the user asks again. It is a snapshot, never a live read in the paint
     /// path.
     pub update_status: crate::updatestatus::Status,
+    /// The last service reload's answer, shown on the System services page.
+    pub services_note: String,
     /// The backup service's last answer, read on the same action and shown as a
     /// reading; the schedule itself belongs to `litric-sysd`.
     pub backup_status: crate::backupstatus::Status,
@@ -4306,6 +4454,7 @@ impl Shell {
             base_scale,
             facts: SystemFacts::default(),
             update_status: crate::updatestatus::Status::default(),
+            services_note: String::new(),
             backup_status: crate::backupstatus::Status::default(),
             activity: crate::taskmgr::TaskManager::new(),
             activity_end_confirm: None,
@@ -7064,6 +7213,10 @@ impl Shell {
             Hot::SettingsUpdatesRefresh => {
                 self.refresh_update_status();
                 Vec::new()
+            }
+            Hot::ServiceAction(command) => {
+                self.services_note = format!("Requesting {}…", command.title());
+                vec![Effect::Service(command)]
             }
             // The pane itself is a scroll target, not a command: the wheel path
             // handles it before a click is considered.

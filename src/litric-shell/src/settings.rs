@@ -267,11 +267,13 @@ pub enum Page {
     Diagnostics,
     /// Update generations, health evidence and the daemon's status.
     Updates,
+    /// AppArmor, Polkit, firewalld, Flatpak/App Store and NetworkManager.
+    Services,
 }
 
 impl Page {
     /// Pages shown by Settings in sidebar order.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::Appearance,
         Self::Display,
         Self::Input,
@@ -287,6 +289,7 @@ impl Page {
         Self::Accounts,
         Self::Diagnostics,
         Self::Updates,
+        Self::Services,
     ];
 
     /// Stable user-facing English title (translated by the text catalog).
@@ -308,6 +311,7 @@ impl Page {
             Self::Accounts => "Accounts",
             Self::Diagnostics => "Diagnostics",
             Self::Updates => "Updates",
+            Self::Services => "Services",
         }
     }
 
@@ -340,6 +344,7 @@ impl Page {
             Self::Accounts => "accounts",
             Self::Diagnostics => "diagnostics",
             Self::Updates => "updates",
+            Self::Services => "services",
         }
     }
 

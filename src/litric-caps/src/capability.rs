@@ -116,6 +116,15 @@ pub enum CapabilityId {
     /// operation (`backup://create`) so a future restore or prune grant cannot
     /// be inherited from this one.
     BackupControl,
+    /// Reload one system service through its own bounded command.
+    ///
+    /// Separate from [`Self::SystemSettings`], which is unscoped: a service
+    /// reload is a specific operation on a named service, and the scope
+    /// (`service://apparmor`, `service://firewall`, `service://store`,
+    /// `service://networkmanager`) records exactly which one. It requires live
+    /// consent because reloading security or network policy is an
+    /// administrative act, even though it does not overwrite user data.
+    ServiceControl,
 }
 
 impl CapabilityId {
@@ -157,6 +166,7 @@ impl CapabilityId {
             Self::ProcessSpawn => "process.spawn",
             Self::UpdateControl => "update.control",
             Self::BackupControl => "backup.control",
+            Self::ServiceControl => "service.control",
         }
     }
 
@@ -198,6 +208,7 @@ impl CapabilityId {
             "process.spawn" => Self::ProcessSpawn,
             "update.control" => Self::UpdateControl,
             "backup.control" => Self::BackupControl,
+            "service.control" => Self::ServiceControl,
             _ => return None,
         })
     }
@@ -240,6 +251,7 @@ impl CapabilityId {
             Self::ProcessSpawn,
             Self::UpdateControl,
             Self::BackupControl,
+            Self::ServiceControl,
         ]
     }
 
@@ -267,6 +279,7 @@ impl CapabilityId {
                 | Self::AuthSession
                 | Self::UpdateControl
                 | Self::BackupControl
+                | Self::ServiceControl
         )
     }
 
@@ -316,7 +329,8 @@ impl CapabilityId {
             | Self::BluetoothAdmin
             | Self::ProcessSpawn
             | Self::UpdateControl
-            | Self::BackupControl => Scoping::Optional,
+            | Self::BackupControl
+            | Self::ServiceControl => Scoping::Optional,
             _ => Scoping::Never,
         }
     }
@@ -362,6 +376,7 @@ impl CapabilityId {
             Self::ProcessSpawn => "start a program for you",
             Self::UpdateControl => "install a system update or roll it back",
             Self::BackupControl => "create a backup of your application state",
+            Self::ServiceControl => "reload a system service",
         }
     }
 
@@ -381,7 +396,8 @@ impl CapabilityId {
             | Self::AuthSession
             | Self::ProcessSpawn
             | Self::UpdateControl
-            | Self::BackupControl => Risk::High,
+            | Self::BackupControl
+            | Self::ServiceControl => Risk::High,
             Self::FsRead
             | Self::FsList
             | Self::NetServer
@@ -521,6 +537,7 @@ const RESOURCE_SCHEMES: &[&str] = &[
     "app://",
     "update://",
     "backup://",
+    "service://",
 ];
 
 /// Storage URI schemes, from RUNTIME section 17.

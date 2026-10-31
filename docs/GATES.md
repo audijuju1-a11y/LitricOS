@@ -3457,3 +3457,46 @@ modeset/page-flip claims remain unproven and are not made here.
 Revert the S87 commit. The dock pin, its context-menu actions, discovery pruning,
 stale-launch sentence, journey assertions and `42-pinned-dock` disappear; S85
 and S86 remain.
+
+
+## 2026-10-31 — S88: system services are connected end to end
+
+`litric-sysd` now reports AppArmor, Polkit, firewalld, Flatpak and
+NetworkManager from their own files and base tools. Settings has a **Services**
+page that shows each real state and offers a bounded reload only when the
+machine can perform it. The four reloads use the new scoped
+`service.control` capability (`service://apparmor`, `firewall`, `store`,
+`networkmanager`) and require live consent. The desktop image enables AppArmor
+in the kernel and installs/enables the security services; NetworkManager is
+installed but left stopped so the native networkd + iwd stack is not disturbed.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | **1,998 passed, 0 failed, 0 ignored** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all --check` | exit 0 |
+| `ci/lint-kconfig.py` | kernel LSM and command line agree; clean |
+| golden frames | 42 recorded; new `43-settings-services`; 10 required screens pass |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| image build / boot | **NOT RUN**; no `mkosi` or `qemu-system-x86_64` |
+| real-card KMS / page flip | **NOT RUN**; no DRM card node on this host |
+
+### Limits
+
+NetworkManager is not enabled by the image: NetworkManager's Wi-Fi secret
+agent is not implemented, and starting it beside networkd/iwd would make both
+managers claim the same interfaces. The page reports `installed` and the native
+stack rather than pretending the package is the active manager. Flatpak's count
+covers the system installation, not user remotes under a home directory. The
+AppArmor profile set is the distribution package's, not a LitricOS-reviewed set.
+The image changes and the kernel's AppArmor activation need a real boot to be
+called verified; the unit and fixture evidence does not make that claim.
+
+### Rollback
+
+Revert the S88 commit. The facts, page, capability, reload plans, image
+packages/units, kernel AppArmor enablement, new tests and `43-settings-services`
+disappear. networkd/iwd, Flatpak install/uninstall and all earlier Settings
+pages remain.

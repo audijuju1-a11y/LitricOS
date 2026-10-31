@@ -401,6 +401,34 @@ fn scene_settings_page(rig: &mut Rig, page: litric_shell::settings::Page) {
                 "Asked the sound server for 40%; the level it reads back is what the panel shows."
                     .to_owned();
         }
+        litric_shell::settings::Page::Services => {
+            let services = &mut rig.shell.facts.services;
+            services.apparmor_state = "mixed".to_owned();
+            services.apparmor_profiles = Some(42);
+            services.apparmor_enforce = Some(37);
+            services.apparmor_complain = Some(5);
+            services.apparmor_parser = true;
+            services.apparmor_status = true;
+            services.polkit_state = "ready".to_owned();
+            services.polkit_actions = Some(18);
+            services.firewall_state = "running".to_owned();
+            services.firewall_tool = true;
+            services.firewall_running = true;
+            services.firewall_zones = Some(3);
+            services.firewall_default_zone = Some("public".to_owned());
+            services.flatpak_state = "ready".to_owned();
+            services.flatpak_tool = true;
+            services.flatpak_sandbox = true;
+            services.flatpak_apps = Some(6);
+            services.flatpak_remotes = Some(2);
+            services.networkmanager_state = "installed".to_owned();
+            services.networkmanager_tool = true;
+            services.networkmanager_connections = Some(0);
+            rig.shell.services_note = "Firewall: applied=true · one bounded reload".to_owned();
+            // The page is the last sidebar row. Scroll it into view so the
+            // evidence frame shows which page is selected.
+            rig.shell.settings.sidebar_scroll = 96.0;
+        }
         _ => {}
     }
 }
@@ -443,6 +471,9 @@ fn scene_settings_accounts(rig: &mut Rig) {
 }
 fn scene_settings_diagnostics(rig: &mut Rig) {
     scene_settings_page(rig, litric_shell::settings::Page::Diagnostics);
+}
+fn scene_settings_services(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::Services);
 }
 
 /// The danger dialog: deleting a file, with the object named and Cancel as the
@@ -947,7 +978,7 @@ fn main() -> ExitCode {
     // (04-QA-LINT-GOVERNANCE §2) plus the frames this dump has always written:
     // the lock in three states, the launcher and its search, and the remaining
     // applications. `ci/check-golden-frames.py` names the required ten.
-    let scenes: [Scene; 33] = [
+    let scenes: [Scene; 34] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
         ("04-files", scene_files),
@@ -967,6 +998,7 @@ fn main() -> ExitCode {
         ("36-settings-privacy", scene_settings_privacy),
         ("37-settings-accounts", scene_settings_accounts),
         ("38-settings-diagnostics", scene_settings_diagnostics),
+        ("43-settings-services", scene_settings_services),
         ("17-control-centre", scene_control_centre),
         ("18-notifications", scene_notifications),
         ("19-dialog-danger", scene_danger_dialog),

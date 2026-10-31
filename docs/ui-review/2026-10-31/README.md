@@ -1,10 +1,22 @@
-# LitricOS UI review — 2026-10-31 (S82, updated in S87)
+# LitricOS UI review — 2026-10-31 (S82, updated in S88)
 
-This directory holds **42 screens**, each **1280×800 px**. Forty-one are the
+This directory holds **43 screens**, each **1280×800 px**. Forty-two are the
 fixture gallery regenerated through the shipping `litric-shell/examples/frame_dump.rs`
-and `litric_shell::views::draw`. The forty-second is not a fixture: it is the frame composed during the S82
+and `litric_shell::views::draw`. The forty-third is not a fixture: it is the frame composed during the S82
 real-socket e2e after `weston-simple-shm` was installed through `APP INSTALL`,
 launched by the shell through `litric-sysd`, and mapped as a Wayland client.
+
+## What changed in S88
+
+- Settings has a **Services** page: AppArmor profile modes, Polkit action
+  policies, firewalld zones, Flatpak system apps/remotes, bubblewrap availability
+  and NetworkManager state, read from the daemon's `svc.*` facts.
+- The page draws a reload control only when the tool and runtime state make it
+  actionable; the frame shows the three controls a configured machine would
+  offer, and the installed-but-stopped NetworkManager has none.
+- `43-settings-services` is new. The other Settings frames moved by 0.04% of
+  cells because the sidebar gained one row; that is within the golden threshold
+  and the set was re-recorded.
 
 ## What changed in S87
 

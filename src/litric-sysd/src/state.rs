@@ -74,7 +74,7 @@ pub type Timestamp = u64;
 /// read. `iface://` and `wifi://` are two grants of one capability: a link and a
 /// network are different resources with different consequences, and a single
 /// grant covering both would make narrowing one impossible later.
-pub const PROVIDER_GRANTS: [(CapabilityId, &str); 10] = [
+pub const PROVIDER_GRANTS: [(CapabilityId, &str); 14] = [
     (CapabilityId::AudioSet, "audio://"),
     (CapabilityId::NetConfigure, "iface://"),
     (CapabilityId::NetConfigure, "wifi://"),
@@ -85,6 +85,10 @@ pub const PROVIDER_GRANTS: [(CapabilityId, &str); 10] = [
     (CapabilityId::UpdateControl, "update://commit"),
     (CapabilityId::UpdateControl, "update://rollback"),
     (CapabilityId::BackupControl, "backup://create"),
+    (CapabilityId::ServiceControl, "service://apparmor"),
+    (CapabilityId::ServiceControl, "service://firewall"),
+    (CapabilityId::ServiceControl, "service://store"),
+    (CapabilityId::ServiceControl, "service://networkmanager"),
 ];
 
 /// The whole daemon, minus its transport.
@@ -1032,6 +1036,7 @@ impl Sysd {
             SystemAction::Bluetooth(b) => {
                 self.provider.bluetooth(b, self.runner.as_ref(), &self.root)
             }
+            SystemAction::Service(s) => self.provider.service(s, self.runner.as_ref(), &self.root),
             SystemAction::Auth(a) => self.provider.auth(a, self.runner.as_ref(), &self.root),
         };
         // Only a helper that ran and rejected the password counts as a guess.
@@ -2415,6 +2420,22 @@ mod tests {
             PowerAction::ALL.len() + PROVIDER_GRANTS.len(),
             "exactly the actions with an implementation are granted"
         );
+    }
+
+    #[test]
+    fn an_authorised_service_reload_runs_the_fixed_plan_once() {
+        let r = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&r);
+        let reply = s.handle(
+            &Request::parse("SERVICE FIREWALL RELOAD CONFIRM").expect("service request"),
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(r.calls().len(), 1, "the tool ran exactly once");
+        let calls = r.calls();
+        let call = calls.first().expect("the recorded call");
+        assert_eq!(call.0, crate::services::FIREWALL_CMD);
+        assert_eq!(call.1, vec!["--reload".to_owned()]);
     }
 
     #[test]

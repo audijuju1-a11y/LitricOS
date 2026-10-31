@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::action::{Outcome, Runner};
 use crate::providers::{self, AudioAction, AuthAction, BtAction, NetAction, SystemAction};
+use crate::services::ServiceAction;
 
 /// A measured default-sink volume and mute flag.
 ///
@@ -57,6 +58,11 @@ pub trait Provider: fmt::Debug + Send + Sync {
 
     /// Apply an authentication action that is a single plan (verification).
     fn auth(&self, action: &AuthAction, runner: &dyn Runner, root: &Path) -> Outcome;
+
+    /// Apply a bounded reload of an installed system service.
+    fn service(&self, action: &ServiceAction, runner: &dyn Runner, root: &Path) -> Outcome {
+        providers::perform(&SystemAction::Service(*action), runner, root)
+    }
 
     /// Ask the sound server for the default sink's level.
     ///
@@ -209,6 +215,10 @@ impl Provider for FakeProvider {
 
     fn auth(&self, action: &AuthAction, _runner: &dyn Runner, _root: &Path) -> Outcome {
         self.record(&SystemAction::Auth(action.clone()))
+    }
+
+    fn service(&self, action: &ServiceAction, _runner: &dyn Runner, _root: &Path) -> Outcome {
+        self.record(&SystemAction::Service(*action))
     }
 
     fn audio_level(&self, _runner: &dyn Runner) -> Result<AudioLevel, String> {

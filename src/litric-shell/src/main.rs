@@ -44,7 +44,7 @@ use litric_shell::desktop;
 use litric_shell::facts::{ask, field};
 use litric_shell::fb::PixelFormat;
 use litric_shell::present::{self, Choice};
-use litric_shell::shell::{DesktopMode, Effect, EnvRow, Priority, Shell};
+use litric_shell::shell::{DesktopMode, Effect, EnvRow, Priority, ServiceCommand, Shell};
 use litric_shell::shortcuts::App;
 use litric_shell::ui::Tokens;
 
@@ -669,6 +669,53 @@ fn apply_bluetooth_power(args: &Args, shell: &mut Shell, on: bool) {
     }
 }
 
+/// Carry out one service reload. The command is a closed enum, and the daemon
+/// validates the capability, scope and consent again; the shell never builds a
+/// command line from anything the user typed.
+fn apply_service(args: &Args, shell: &mut Shell, command: ServiceCommand) {
+    let request = command.request_line();
+    match ask(&args.socket, &request) {
+        Some(reply) if reply.starts_with("ERR ") => {
+            shell.services_note = reply.trim().to_owned();
+            shell.notify(
+                "System services",
+                &format!("{} was not reloaded", command.title()),
+                reply.trim(),
+                Priority::High,
+                Some(8_000),
+            );
+        }
+        Some(reply) => {
+            let lines: Vec<&str> = reply.lines().collect();
+            let applied = field(&lines, "applied").unwrap_or("unknown");
+            shell.services_note = format!("{}: applied={applied}", command.title());
+            shell.notify(
+                "System services",
+                &format!("{}: applied={applied}", command.title()),
+                "The service reported its own result; the page was re-read.",
+                Priority::Normal,
+                Some(5_000),
+            );
+            // The reload may have changed which profiles, zones or applications
+            // the service reports, so the page re-reads the machine once rather
+            // than leaving the pre-reload numbers on screen.
+            shell.refresh_facts();
+        }
+        None => {
+            shell.services_note =
+                "litric-sysd did not answer: nothing was asked of the system.".to_owned();
+            shell.notify(
+                "System services",
+                "litric-sysd did not answer",
+                "The service was not reloaded.",
+                Priority::High,
+                Some(8_000),
+            );
+        }
+    }
+    shell.request_full_redraw();
+}
+
 fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
     for e in effects {
         match e {
@@ -875,6 +922,7 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
                     }
                 }
             }
+            Effect::Service(command) => apply_service(args, shell, *command),
             Effect::Volume(step) => apply_volume(args, shell, *step),
             // The panel's two questions, asked together and only when somebody
             // is looking: both cost a process and both answers are measurements.

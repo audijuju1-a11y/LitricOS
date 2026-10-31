@@ -48,6 +48,9 @@ use std::path::Path;
 pub struct Platform {
     /// Interfaces, routes and DNS.
     pub net: net::NetFacts,
+    /// Optional system services: AppArmor, Polkit, firewalld, Flatpak and
+    /// NetworkManager.
+    pub services: crate::services::ServiceFacts,
     /// Sound cards, PCM devices, and whether a sound server is running.
     pub audio: audio::AudioFacts,
     /// Power supplies, thermal zones, backlights.
@@ -85,6 +88,7 @@ impl Platform {
         }
         let mut out = Vec::new();
         out.extend(self.net.to_lines());
+        out.extend(self.services.to_lines());
         out.extend(self.audio.to_lines());
         out.extend(self.power.to_lines());
         out.extend(self.bluetooth.to_lines());
@@ -110,6 +114,7 @@ pub fn read(root: &Path) -> Platform {
     Platform {
         unreadable,
         net: net::read(root),
+        services: crate::services::read(root),
         audio: audio::read(root),
         power: power::read(root),
         bluetooth: bluetooth::read(root),
