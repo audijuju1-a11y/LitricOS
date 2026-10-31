@@ -203,3 +203,19 @@ enabled dialog.
 A normal tile disappears with its bundle. The e2e reaches the missing-id path by
 restoring a stale desktop entry in an external application directory, then
 using the same visible tile menu; the daemon correctly reports `not-installed`.
+
+## Dock pins and uninstall convergence (S87)
+
+A discovered application's launcher-tile context menu can pin it to the dock.
+The pin is an id in `Shell.desktop_pins`, drawn by the ordinary dock with the
+same tile and hover language as the built-ins. It is not written to
+`Preferences` or any other file: the pin list is session state, so an
+uninstalled id can never survive a reload from disk.
+
+Successful uninstall removes the pin after the daemon confirms removal. Every
+discovery load or watch reload also prunes pins whose id is absent, so an
+external removal cannot leave a dock tile pointing at nothing. If a launch is
+attempted through a pin before that convergence, the shell checks the
+executable and reports **<name> is no longer installed**, removes the stale pin
+and entry, and posts an Applications notification. The daemon's `not-found`
+launch reply maps to the same sentence.

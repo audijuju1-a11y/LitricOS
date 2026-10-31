@@ -4193,6 +4193,23 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
         .iter()
         .filter_map(|i| apps.get(*i).map(|a| (*i, *a)))
         .collect();
+    // Discovered pins are kept in their own group: the built-in eight keep
+    // their meaning and the Trash separator stays last. Names and icon paths
+    // are copied before the draw so the mutable hotspot table is not borrowed
+    // through the app list.
+    let installed_pins: Vec<(usize, String, Option<std::path::PathBuf>)> = shell
+        .desktop_pins
+        .iter()
+        .enumerate()
+        .filter_map(|(index, id)| {
+            shell
+                .desktop_apps
+                .iter()
+                .find(|app| &app.id == id)
+                .map(|app| (index, app.name.clone(), app.icon_path.clone()))
+        })
+        .collect();
+    let total_tiles = pinned.len().saturating_add(installed_pins.len());
 
     // The resting pill, measured from what it holds. Time already lives in
     // the system bar, so the dock has more room for its useful search field.
@@ -4200,8 +4217,8 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
     let measured = pad * 2.0
         + item
         + t.px(10.0)
-        + item * pinned.len() as f32
-        + gap * (pinned.len().saturating_sub(1)) as f32
+        + item * total_tiles as f32
+        + gap * total_tiles.saturating_sub(1) as f32
         + sep * 2.0
         + gap
         + bubble_w;
@@ -4438,12 +4455,43 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
     // strip cannot afford, and a hover lift of a few pixels says "this one" at
     // the cost of one tile.
     let mut ix = button.right() + t.px(10.0);
-    let mut tip: Option<(Rect, &'static str)> = None;
+    let mut tip: Option<(Rect, String)> = None;
     for (n, (i, app)) in pinned.iter().map(|(i, a)| (*i, a)).enumerate() {
         if searching {
             break;
         }
         if n == DOCK_SEPARATE_BEFORE {
+            // Discovered applications sit between the built-in application
+            // group and the Trash. Their icons use the same dock tile, so the
+            // pin reads as part of the strip rather than a second control.
+            for (pin_index, name, icon_path) in &installed_pins {
+                let hot = Hot::DockDesktop(u8::try_from(*pin_index).unwrap_or(u8::MAX));
+                let home = Rect::new(ix, tile_y, item, item);
+                let hovered = shell.is_highlighted(hot);
+                let r = if hovered {
+                    Rect::new(home.x, home.y - t.px(chrome::DOCK_LIFT), home.w, home.h)
+                } else {
+                    home
+                };
+                if hovered {
+                    tip = Some((r, name.clone()));
+                }
+                let drew = icon_path.as_deref().is_some_and(|path| {
+                    crate::themeicons::draw(canvas, path, r.inflate(-t.px(4.0)), 1.0)
+                });
+                if !drew {
+                    canvas.fill_round_rect(r, t.px(8.0), with_alpha(rgb(0xFFFFFF), 0.10));
+                    icons::draw(
+                        canvas,
+                        Icon::Application,
+                        r.inflate(-t.px(10.0)),
+                        t.accent(),
+                        1.0,
+                    );
+                }
+                shell.hotspots_mut().push(home.inflate(t.px(2.0)), hot);
+                ix += item + gap;
+            }
             // The Trash is not an application the user runs; it is where things
             // go. A hairline between the two groups says so without a word.
             canvas.fill_round_rect(
@@ -4470,7 +4518,7 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
             home
         };
         if hovered {
-            tip = Some((r, app.title()));
+            tip = Some((r, app.title().to_owned()));
         }
         // Original artwork, scaled once and kept: see `appicons`.
         appicons::draw(canvas, appicons::Slot::App(*app), grown(r, hovered), 1.0);
@@ -4621,7 +4669,7 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
     // drawn inside that clip it was cut away entirely.
     if let Some((r, title)) = tip {
         let style = Style::new(t.text_px(TypeStep::Caption), t.text());
-        let tw = font::measure(title, &style);
+        let tw = font::measure(&title, &style);
         let lr = Rect::new(
             r.center().0 - tw / 2.0 - t.px(9.0),
             panel.y - t.px(30.0),
@@ -4631,7 +4679,7 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
         ui::surface(canvas, &t, lr, t.radius(Radius::Sm), Material::Elevated);
         font::draw(
             canvas,
-            title,
+            &title,
             lr.x + t.px(9.0),
             lr.y + lr.h / 2.0 + style.size * 0.36,
             &style,

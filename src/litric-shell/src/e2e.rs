@@ -5192,8 +5192,8 @@ fn journey_launcher_lists_a_real_desktop_app_and_starts_it_through_sysd() {
     key_press(&mut s, Key::Enter, Modifiers::NONE);
     assert_eq!(
         s.app_status.as_deref(),
-        Some("Could not start Zeta Marker"),
-        "a refused launch is reported, not hidden"
+        Some("Zeta Marker is no longer installed"),
+        "a stale launch is reported as no longer installed"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

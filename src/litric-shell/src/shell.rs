@@ -257,6 +257,8 @@ pub enum Hot {
     Window(u32),
     /// A pinned app in the dock.
     DockItem(u8),
+    /// A discovered application pinned to the dock.
+    DockDesktop(u8),
     /// A search-engine chip in the browser's start page.
     EngineChip(u8),
     /// A quick-link tile in the browser's start page.
@@ -2809,6 +2811,8 @@ impl Shell {
                 }
             }
             MA::UninstallApp => self.open_uninstall_from_menu(),
+            MA::PinDesktopApp => self.pin_desktop_from_menu(true),
+            MA::UnpinDesktopApp => self.pin_desktop_from_menu(false),
             // The row says "Next wallpaper"; it used to cycle the theme, which
             // made the menu item a lie about the thing it changed.
             MA::NextWallpaper => {
@@ -3031,6 +3035,48 @@ impl Shell {
             id: id.to_owned(),
             name: name.to_owned(),
         }));
+        self.request_full_redraw();
+    }
+
+    /// Pin or unpin the context menu's captured application.
+    fn pin_desktop_from_menu(&mut self, pin: bool) {
+        let id = self
+            .context_menu
+            .as_ref()
+            .or(self.retiring_context_menu.as_ref())
+            .and_then(|menu| menu.app_id.clone());
+        let Some(id) = id else {
+            return;
+        };
+        let Some(name) = self
+            .desktop_apps
+            .iter()
+            .find(|app| app.id == id)
+            .map(|app| app.name.clone())
+        else {
+            self.app_status = Some("That application is no longer installed.".to_owned());
+            self.notify(
+                "Applications",
+                "Application no longer installed",
+                "That application is no longer installed. Install it again to pin it.",
+                Priority::High,
+                Some(6_000),
+            );
+            return;
+        };
+        if pin {
+            if self.desktop_pins.iter().any(|pinned| pinned == &id) {
+                self.app_status = Some(format!("{name} is already on the dock"));
+            } else if self.desktop_pins.len() >= MAX_DESKTOP_PINS {
+                self.app_status = Some("The dock is full. Unpin an application first.".to_owned());
+            } else {
+                self.desktop_pins.push(id);
+                self.app_status = Some(format!("Pinned {name} to the dock"));
+            }
+        } else {
+            self.desktop_pins.retain(|pinned| pinned != &id);
+            self.app_status = Some(format!("Unpinned {name}"));
+        }
         self.request_full_redraw();
     }
 
@@ -3347,6 +3393,7 @@ impl Shell {
             // removal is applied here as well. A stale entry must not survive
             // a successful uninstall even for one frame.
             self.desktop_apps.retain(|app| app.id != id);
+            self.desktop_pins.retain(|pinned| pinned != id);
             self.uninstall_busy = false;
             self.uninstall_error = None;
             self.set_desktop_dialog(None);
@@ -3516,6 +3563,10 @@ pub struct Shell {
     /// reads the host's application directories from `new`, so a test that
     /// builds a shell gets no host-dependent list.
     pub desktop_apps: Vec<crate::desktop_entry::DesktopApp>,
+    /// Discovered application ids pinned to the dock, in pin order. The pin
+    /// list is session state, not a preference record: it is not written to
+    /// disk, so removing an app cannot leave a persisted id behind.
+    pub desktop_pins: Vec<String>,
     /// The directories the discovered list came from and the stamp of their
     /// last look. `None` when the list was placed by hand (`load_desktop_apps`),
     /// in which case nothing is watched and no host directory is touched.
@@ -3714,6 +3765,10 @@ pub const APP_EXIT_GRACE_MS: u64 = 2_000;
 /// worker may still finish, but it can no longer leave the dialog busy.
 pub const INSTALL_TIMEOUT_MS: u64 = 15_000;
 
+/// The most discovered applications the dock will hold. The dock has to fit
+/// on the panel beside the built-ins; this is a layout bound, not a policy.
+const MAX_DESKTOP_PINS: usize = 8;
+
 /// One in-flight `APP INSTALL` started from the install dialog.
 #[derive(Debug)]
 struct InstallJob {
@@ -3764,6 +3819,14 @@ fn default_install_id(bundle: &str) -> String {
 
 /// A person-readable install refusal. The daemon's stable kind is preserved in
 /// the mapping rather than replaced by a single generic failure sentence.
+fn reply_error_kind(reply: &str) -> &str {
+    reply
+        .lines()
+        .find_map(|line| line.strip_prefix("ERR "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or("unknown")
+}
+
 fn install_error_text(reply: &str) -> String {
     let kind = reply
         .lines()
@@ -4253,6 +4316,7 @@ impl Shell {
             files_daemon: None,
             browser: crate::apps::BrowserApp::default(),
             desktop_apps: Vec::new(),
+            desktop_pins: Vec::new(),
             desktop_watch: None,
             desktop_dirs_read: 0,
             desktop_files_read: 0,
@@ -6606,8 +6670,10 @@ impl Shell {
                         })
                         .map(|app| app.id.clone());
                     if let Some(app_id) = app_id {
+                        let pinned = self.desktop_pins.contains(&app_id);
                         self.set_context_menu(Some(crate::apps::ContextMenu::for_launcher(
                             &app_id,
+                            pinned,
                             (at.x, at.y),
                         )));
                         self.request_full_redraw();
@@ -6812,6 +6878,7 @@ impl Shell {
                 };
                 self.dock_click(*app)
             }
+            Hot::DockDesktop(i) => self.dock_desktop_click(usize::from(i)),
             Hot::EngineChip(i) => {
                 let Some(engine) = crate::apps::SearchEngine::ALL.get(usize::from(i)) else {
                     return Vec::new();
@@ -7977,8 +8044,20 @@ impl Shell {
     /// fixture owns the launcher, and a hand-placed list is exactly that.
     pub fn load_desktop_apps(&mut self, apps: Vec<crate::desktop_entry::DesktopApp>) {
         self.desktop_apps = apps;
+        self.prune_desktop_pins();
         self.desktop_watch = None;
         self.request_full_redraw();
+    }
+
+    /// Drop pins whose application is no longer in the discovered list.
+    ///
+    /// A pin is a reference to an application, not a second source of truth.
+    /// Discovery is allowed to replace or remove the list at any time, so the
+    /// pins are narrowed to ids that still exist before any surface draws.
+    fn prune_desktop_pins(&mut self) {
+        let known: Vec<String> = self.desktop_apps.iter().map(|app| app.id.clone()).collect();
+        self.desktop_pins
+            .retain(|pinned| known.iter().any(|id| id == pinned));
     }
 
     /// Discover this machine's applications from `app_dirs`, resolve their icons
@@ -7992,6 +8071,7 @@ impl Shell {
         let mut names = crate::desktop_entry::IconNames::new(icon_dirs);
         let found = crate::desktop_entry::discover_with_cache(app_dirs, icon_dirs, &mut names);
         self.desktop_apps = found.apps;
+        self.prune_desktop_pins();
         self.desktop_dirs_read = found.dirs_read;
         self.desktop_files_read = found.files_read;
         self.desktop_icons_resolved = found.icons_resolved;
@@ -8069,6 +8149,7 @@ impl Shell {
             &mut self.desktop_icon_names,
         );
         self.desktop_apps = found.apps;
+        self.prune_desktop_pins();
         self.desktop_dirs_read = found.dirs_read;
         self.desktop_files_read = found.files_read;
         self.desktop_icons_resolved = found.icons_resolved;
@@ -8134,7 +8215,15 @@ impl Shell {
         let Some(app) = self.desktop_apps.get(index) else {
             return Vec::new();
         };
+        let id = app.id.clone();
         let name = app.name.clone();
+        let exec = app.exec.clone();
+        if exec
+            .first()
+            .is_none_or(|program| !std::path::Path::new(program).is_file())
+        {
+            return self.desktop_app_missing(&id, &name);
+        }
         self.pending_launch = None;
         // The daemon is not inside this session: it has no WAYLAND_DISPLAY of
         // its own. Name the socket this shell is serving, or a graphical
@@ -8145,7 +8234,7 @@ impl Shell {
         } else {
             String::from("LAUNCHENV")
         };
-        for arg in &app.exec {
+        for arg in &exec {
             request.push(' ');
             request.push_str(&litric_sysd::launch::hex_encode(arg.as_bytes()));
         }
@@ -8182,6 +8271,10 @@ impl Shell {
                 );
             }
             Some(reply) => {
+                let kind = reply_error_kind(&reply);
+                if kind == "not-found" {
+                    return self.desktop_app_missing(&id, &name);
+                }
                 let detail = reply
                     .lines()
                     .find(|line| line.starts_with("ERR "))
@@ -8212,6 +8305,49 @@ impl Shell {
                 );
             }
         }
+        Vec::new()
+    }
+
+    /// A launchable reference whose application is gone. The pin and the
+    /// discovered entry are both removed, so no later frame can retry the
+    /// same dead tile, and the user gets the same sentence as the uninstall
+    /// path rather than a generic "could not start".
+    fn desktop_app_missing(&mut self, id: &str, name: &str) -> Vec<Effect> {
+        self.desktop_pins.retain(|pinned| pinned != id);
+        self.desktop_apps.retain(|app| app.id != id);
+        self.pending_launch = None;
+        self.app_status = Some(format!("{name} is no longer installed"));
+        self.notify(
+            "Applications",
+            &format!("{name} is no longer installed"),
+            "That application is no longer installed. Install it again to open it.",
+            Priority::High,
+            Some(6_000),
+        );
+        self.request_full_redraw();
+        Vec::new()
+    }
+
+    /// A click on a pinned discovered application. `None` here means the pin
+    /// outlived the discovered entry; the click still says what happened and
+    /// drops the stale pin instead of doing nothing.
+    fn dock_desktop_click(&mut self, index: usize) -> Vec<Effect> {
+        let Some(id) = self.desktop_pins.get(index).cloned() else {
+            return Vec::new();
+        };
+        if let Some(app_index) = self.desktop_apps.iter().position(|app| app.id == id) {
+            return self.launch_desktop(app_index);
+        }
+        self.desktop_pins.retain(|pinned| pinned != &id);
+        self.app_status = Some("That application is no longer installed".to_owned());
+        self.notify(
+            "Applications",
+            "Application no longer installed",
+            "That application is no longer installed. Install it again to pin it.",
+            Priority::High,
+            Some(6_000),
+        );
+        self.request_full_redraw();
         Vec::new()
     }
 
@@ -12694,6 +12830,11 @@ impl Shell {
                 .get(usize::from(index))
                 .and_then(|app| crate::shortcuts::App::ALL.get(*app))
                 .map(|app| (Role::Button, app.title().to_owned())),
+            Hot::DockDesktop(index) => self
+                .desktop_pins
+                .get(usize::from(index))
+                .and_then(|id| self.desktop_apps.iter().find(|app| &app.id == id))
+                .map(|app| (Role::Button, app.name.clone())),
             Hot::DockToggle => literal(Role::Button, "Launcher"),
             Hot::DockSearch => literal(Role::Text, "Search"),
             Hot::DockLock => literal(Role::Button, "Lock screen"),

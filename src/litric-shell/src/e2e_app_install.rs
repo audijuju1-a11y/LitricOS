@@ -218,8 +218,8 @@ fn journey_bad_install_and_an_app_that_exits_are_reported() {
     assert!(effects.is_empty());
     assert_eq!(
         shell.app_status.as_deref(),
-        Some("Could not start Exiting Fixture"),
-        "a stale launch is refused visibly"
+        Some("Exiting Fixture is no longer installed"),
+        "a stale launch is reported as no longer installed"
     );
 
     let removed = litric_sysd::server::query(&socket, "APP UNINSTALL com.example.exiting")
@@ -451,17 +451,36 @@ fn journey_install_through_the_launcher_ui_is_visible_and_launchable() {
         shell.app_status
     );
 
-    // 6. Uninstall through the installed tile's visible context menu.
+    // 6. Pin the installed app to the dock through the visible menu, then
+    // uninstall through that same tile's menu.
     ui_install_open_launcher(&mut shell, &mut now);
     let tile = shell
         .hotspots()
         .rect_of(Hot::LauncherItem(App::ALL.len()))
-        .expect("the installed app tile is visible before uninstalling");
+        .expect("the installed app tile is visible before pinning");
     ui_install_right_click(&mut shell, tile, now);
     assert!(
         shell.context_menu.is_some(),
         "right-clicking the installed tile opens its menu"
     );
+    ui_install_settle(&mut shell, &mut now, 60);
+    ui_install_draw(&mut shell);
+    let pin = shell
+        .hotspots()
+        .rect_of(Hot::MenuRow(crate::apps::MenuAction::PinDesktopApp))
+        .expect("the tile menu exposes Pin to dock");
+    ui_install_click(&mut shell, pin, now);
+    assert_eq!(
+        shell.desktop_pins,
+        vec!["com.litric.ui-fixture".to_owned()],
+        "the visible menu pins the installed app"
+    );
+    ui_install_draw(&mut shell);
+    assert!(
+        shell.hotspots().rect_of(Hot::DockDesktop(0)).is_some(),
+        "the pinned app appears on the dock"
+    );
+    ui_install_right_click(&mut shell, tile, now);
     ui_install_settle(&mut shell, &mut now, 60);
     ui_install_draw(&mut shell);
     let uninstall = shell
@@ -520,6 +539,10 @@ fn journey_install_through_the_launcher_ui_is_visible_and_launchable() {
         "the removed desktop entry is no longer discovered"
     );
     assert!(
+        shell.desktop_pins.is_empty(),
+        "uninstall removes the dock pin as well as the launcher tile"
+    );
+    assert!(
         !data
             .join("applications/com.litric.ui-fixture.desktop")
             .exists(),
@@ -533,6 +556,10 @@ fn journey_install_through_the_launcher_ui_is_visible_and_launchable() {
             .is_none(),
         "the tile disappears from the launcher"
     );
+    assert!(
+        shell.hotspots().rect_of(Hot::DockDesktop(0)).is_none(),
+        "the dock pin disappears with the app"
+    );
     ui_install_press(&mut shell, Key::Escape, now);
 
     // 7. A stale desktop entry is exactly the missing-id state a user can
@@ -540,9 +567,16 @@ fn journey_install_through_the_launcher_ui_is_visible_and_launchable() {
     // must report not-installed instead of pretending the app is still there.
     let stale_apps = root.join("stale-applications");
     std::fs::create_dir_all(&stale_apps).expect("a stale application directory");
+    let stale_exec = stale_apps.join("ui-fixture");
+    std::fs::write(&stale_exec, "#!/bin/sh\nexit 0\n").expect("the stale executable");
+    std::fs::set_permissions(&stale_exec, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod the stale executable");
     std::fs::write(
         stale_apps.join("com.litric.ui-fixture.desktop"),
-        "[Desktop Entry]\nType=Application\nName=UI Fixture\nExec=/bin/true\n",
+        format!(
+            "[Desktop Entry]\nType=Application\nName=UI Fixture\nExec={}\n",
+            stale_exec.display()
+        ),
     )
     .expect("a stale desktop entry");
     shell.load_desktop_apps_from(&[stale_apps], &[], now);
@@ -592,6 +626,62 @@ fn journey_install_through_the_launcher_ui_is_visible_and_launchable() {
         "the failure leaves the confirmation readable"
     );
     ui_install_press(&mut shell, Key::Escape, now);
+
+    // 8. A stale pin after the bundle disappeared must fail in words, not
+    // launch something else or leave a busy state. The pin is created through
+    // the same tile menu; deleting the executable after discovery models the
+    // window between a removal and the next watch cycle.
+    ui_install_open_launcher(&mut shell, &mut now);
+    let tile = shell
+        .hotspots()
+        .rect_of(Hot::LauncherItem(App::ALL.len()))
+        .expect("the stale tile is visible before pinning");
+    ui_install_right_click(&mut shell, tile, now);
+    ui_install_settle(&mut shell, &mut now, 60);
+    ui_install_draw(&mut shell);
+    let pin = shell
+        .hotspots()
+        .rect_of(Hot::MenuRow(crate::apps::MenuAction::PinDesktopApp))
+        .expect("the stale tile can be pinned");
+    ui_install_click(&mut shell, pin, now);
+    ui_install_draw(&mut shell);
+    assert!(
+        shell.hotspots().rect_of(Hot::DockDesktop(0)).is_some(),
+        "the stale pin is visible on the dock"
+    );
+    std::fs::remove_file(&stale_exec).expect("remove the stale executable");
+    let pinned = shell
+        .hotspots()
+        .rect_of(Hot::DockDesktop(0))
+        .expect("the pin is still visible before the launch");
+    ui_install_click(&mut shell, pinned, now);
+    assert_eq!(
+        shell.app_status.as_deref(),
+        Some("UI Fixture is no longer installed"),
+        "the stale pin says the application is gone"
+    );
+    assert!(
+        shell
+            .notifications
+            .items()
+            .iter()
+            .any(|note| note.title == "UI Fixture is no longer installed"
+                && note.source == "Applications"),
+        "the stale launch posts the Applications notification"
+    );
+    assert!(
+        shell.desktop_pins.is_empty(),
+        "the stale pin is removed after its launch fails"
+    );
+    assert!(
+        shell.desktop_apps.is_empty(),
+        "the stale discovered entry is removed too"
+    );
+    assert!(!shell.uninstall_busy, "no uninstall spinner is left behind");
+    assert!(
+        shell.desktop_dialog.is_none(),
+        "no dialog is left open by the stale launch"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 

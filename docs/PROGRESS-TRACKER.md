@@ -9018,3 +9018,75 @@ and the idle-RAM/CPU/boot-timing platform absent.
 Revert the S86 commit. The tile menu, uninstall dialog, worker, timeout, the two
 tests and `41-uninstall-dialog` disappear; the S85 install UI and the daemon's
 install/uninstall paths remain unchanged.
+
+## 2026-10-31 — S87: uninstall converges every shell surface
+
+S86 removed the launcher tile but had no other user-app surface to converge.
+The dock could not hold a discovered application, so a removed app could not
+leave a stale pin there either. S87 adds the missing secondary surface: a
+discovered app can be pinned to the dock from its tile menu. Uninstall now
+removes that pin, discovery prunes pins whose app vanished, and a stale pin's
+launch fails in words instead of doing nothing.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/apps.rs:2042` | `MenuAction::PinDesktopApp` and `UnpinDesktopApp`. |
+| `src/litric-shell/src/apps.rs:2176` | The launcher-tile menu offers **Pin to dock** or **Unpin from dock** from the captured app id. |
+| `src/litric-shell/src/shell.rs:261` | `Hot::DockDesktop` names a discovered pin independently of the built-in `DockItem`. |
+| `src/litric-shell/src/shell.rs:3042` | `pin_desktop_from_menu` adds/removes the session pin and reports the outcome in the launcher status line. |
+| `src/litric-shell/src/shell.rs:3569` | `desktop_pins` is session state only; it is not part of `Preferences` or any persisted record. |
+| `src/litric-shell/src/shell.rs:3396` | A successful uninstall removes the pin together with the discovered entry. |
+| `src/litric-shell/src/shell.rs:8057` | Every discovery load/reload prunes pins whose application is no longer present. |
+| `src/litric-shell/src/shell.rs:8315` | A missing executable removes the stale entry and pin and posts **<name> is no longer installed** under Applications. |
+| `src/litric-shell/src/shell.rs:8334` | A dock click on a pin that outlived discovery reports the same outcome and drops the pin. |
+| `src/litric-shell/src/views.rs:4198` | The dock draws discovered pins between the built-ins and the Trash separator. |
+| `src/litric-shell/src/e2e_app_install.rs:240` | The real-socket UI journey now pins via the menu, uninstalls, asserts both tile and pin are gone, then exercises a stale pin whose executable disappeared. |
+| `src/litric-shell/examples/frame_dump.rs:718` | `42-pinned-dock` is a rendered gallery scene. |
+
+### User-visible outcomes
+
+| State | Result |
+|---|---|
+| Tile menu, not pinned | **Pin to dock** adds the app to the dock and says `Pinned <name> to the dock`. |
+| Tile menu, pinned | **Unpin from dock** removes the tile and says `Unpinned <name>`. |
+| Uninstall | The launcher tile and dock pin both disappear; `Uninstalled <name>` remains the one success notification. |
+| Discovery reload without the app | The pin is pruned before the next draw; no orphaned dock tile survives. |
+| Dock click on a stale pin | `The application is no longer installed.`; the pin and stale discovered entry are removed, the status line names the app, and there is no busy state or dialog. |
+| Persistence | None: `desktop_pins` is in-memory session state, so no uninstalled id is written to disk. |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test -p litric-shell --lib e2e_app_install::journey_install_through_the_launcher_ui_is_visible_and_launchable -- --nocapture` | 1 passed; visible install, pin, uninstall, pin removal, stale-pin launch refusal |
+| `cargo test --workspace` | **1,988 passed, 0 failed, 0 ignored** |
+| `frame_dump` | 41 fixture frames; only new `42-pinned-dock`; 40 prior fixture frames byte-identical |
+| `ci/check-golden-frames.py --frames build/frames-s87 --update` | PASS; recorded 41 frames including this new optional scene |
+| Committed gallery | `docs/ui-review/2026-10-31/` — 42 PNGs, index, contact sheet, README |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+
+The three skips remain the pre-existing environment limits: `mkosi` absent, QEMU
+absent, and the idle-RAM/CPU/boot-timing platform absent.
+
+### Limits
+
+* Pins are session state. There is no persisted dock-pin format to migrate or
+  clean, which is why no reload-from-disk assertion is needed.
+* A pin can hold at most eight discovered apps; the bound is a layout bound,
+  not a policy.
+* The stale-pin E2E deletes the discovered executable after pinning, modelling
+  the gap before the next watch cycle. The daemon's `not-found` launch reply uses
+  the same user-visible sentence.
+* Real-card C2 KMS modeset/page-flip claims remain **NOT MADE**: no `/dev/dri`,
+  no `/sys/class/drm`, `CONFIG_DRM` unset. VM/image gates remain blocked by the
+  absent `mkosi` and `qemu-system-x86_64`.
+
+### Rollback
+
+Revert the S87 commit. Dock pins, their context-menu rows, stale-launch
+convergence, the UI assertions and `42-pinned-dock` disappear; S86 uninstall and
+S85 install remain unchanged.

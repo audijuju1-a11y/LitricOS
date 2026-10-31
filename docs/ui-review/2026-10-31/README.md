@@ -1,10 +1,22 @@
-# LitricOS UI review — 2026-10-31 (S82, updated in S86)
+# LitricOS UI review — 2026-10-31 (S82, updated in S87)
 
-This directory holds **41 screens**, each **1280×800 px**. Forty are the
+This directory holds **42 screens**, each **1280×800 px**. Forty-one are the
 fixture gallery regenerated through the shipping `litric-shell/examples/frame_dump.rs`
-and `litric_shell::views::draw`. The forty-first is not a fixture: it is the frame composed during the S82
+and `litric_shell::views::draw`. The forty-second is not a fixture: it is the frame composed during the S82
 real-socket e2e after `weston-simple-shm` was installed through `APP INSTALL`,
 launched by the shell through `litric-sysd`, and mapped as a Wayland client.
+
+## What changed in S87
+
+- A discovered application can be pinned to the dock from its launcher-tile
+  context menu. The pin is the dock's existing tile language, inserted between
+  the built-in applications and the Trash separator.
+- `42-pinned-dock` is new: it shows the pinned app in the open launcher and on
+  the same dock strip. The other 40 fixture frames are byte-identical to S86;
+  `39-linux-app` is unchanged. The golden set now records the new frame.
+- Uninstall removes the pin together with the launcher tile. The pin list is
+  session state, not a preference record, so there is no persisted id to clean
+  up on a later reload.
 
 ## What changed in S86
 
@@ -55,8 +67,8 @@ deterministic: two independent e2e runs produced identical SHA-256
 export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$PATH"
 cd src
 cargo run -q -p litric-shell --example frame_dump -- \
-  --fonts ../build/fonts ../build/frames-s86
-for p in ../build/frames-s86/*.ppm; do
+  --fonts ../build/fonts ../build/frames-s87
+for p in ../build/frames-s87/*.ppm; do
   python3 ../tools/ppm2png.py "$p" "${p%.ppm}.png"
 done
 LITRIC_E2E_PNG=build/s82-linux-app.png \
@@ -70,7 +82,7 @@ dump and rebuild `all-screens.png` with a 4-column labelled contact sheet. `buil
 
 ## What this is not
 
-The 40 fixture frames prove what `views::draw` composes from fixed facts. The
+The 41 fixture frames prove what `views::draw` composes from fixed facts. The
 real-app frame proves one genuine `wl_shm` client was installed, spawned,
 connected to the LitricOS Wayland socket, mapped by the compositor, and painted
 by `views::draw`. None of these frames prove a booted VM, a framebuffer/scanout

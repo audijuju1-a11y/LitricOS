@@ -709,6 +709,23 @@ fn scene_uninstall_dialog(rig: &mut Rig) {
     }
 }
 
+/// A discovered application pinned to the dock. The launcher is open around
+/// the same strip, so the new tile is reviewed in the surface it actually
+/// lives in rather than in a mock row.
+fn scene_pinned_dock(rig: &mut Rig) {
+    rig.shell
+        .load_desktop_apps(vec![litric_shell::desktop_entry::DesktopApp {
+            id: "com.example.weston".to_owned(),
+            name: "Weston Simple SHM".to_owned(),
+            exec: vec!["/bin/true".to_owned()],
+            icon: None,
+            icon_path: None,
+            source: std::path::PathBuf::from("/tmp/com.example.weston.desktop"),
+        }]);
+    rig.shell.desktop_pins.push("com.example.weston".to_owned());
+    scene_launcher(rig);
+}
+
 /// The launcher with a query typed: the panel as results and the field.
 fn scene_search(rig: &mut Rig) {
     scene_launcher(rig);
@@ -930,7 +947,7 @@ fn main() -> ExitCode {
     // (04-QA-LINT-GOVERNANCE §2) plus the frames this dump has always written:
     // the lock in three states, the launcher and its search, and the remaining
     // applications. `ci/check-golden-frames.py` names the required ten.
-    let scenes: [Scene; 32] = [
+    let scenes: [Scene; 33] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
         ("04-files", scene_files),
@@ -959,6 +976,7 @@ fn main() -> ExitCode {
         ("14-launcher", scene_launcher),
         ("40-install-dialog", scene_install_dialog),
         ("41-uninstall-dialog", scene_uninstall_dialog),
+        ("42-pinned-dock", scene_pinned_dock),
         ("21-mission-control", scene_mission_control),
         ("22-power-menu", scene_power_menu),
         ("23-litro-menu", scene_litro_menu),

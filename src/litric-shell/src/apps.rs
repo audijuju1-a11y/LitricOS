@@ -2038,6 +2038,10 @@ pub enum MenuAction {
     OpenSelection,
     /// Ask to remove the launcher tile's installed application.
     UninstallApp,
+    /// Put the installed application on the dock.
+    PinDesktopApp,
+    /// Take the installed application off the dock.
+    UnpinDesktopApp,
     /// Change the wallpaper (desktop). Cycles themes.
     NextWallpaper,
     /// Use Google for omnibox searches.
@@ -2150,6 +2154,7 @@ impl ContextMenu {
             ],
             MenuSurface::LauncherTile => vec![
                 MenuItem::Section("Application"),
+                MenuItem::Item("Pin to dock", MenuAction::PinDesktopApp),
                 MenuItem::Item("Uninstall application…", MenuAction::UninstallApp),
             ],
         };
@@ -2163,10 +2168,30 @@ impl ContextMenu {
     }
 
     /// The menu for an installed application's launcher tile.
+    ///
+    /// `pinned` decides which dock row is offered. The id is captured here,
+    /// while the pointer is still over the tile, because the row runs after
+    /// the menu closes and discovery may have changed the tile indices.
     #[must_use]
-    pub fn for_launcher(app_id: &str, at: (f32, f32)) -> Self {
+    pub fn for_launcher(app_id: &str, pinned: bool, at: (f32, f32)) -> Self {
         let mut menu = Self::for_surface(MenuSurface::LauncherTile, at);
         menu.app_id = Some(app_id.to_owned());
+        menu.items = vec![
+            MenuItem::Section("Application"),
+            MenuItem::Item(
+                if pinned {
+                    "Unpin from dock"
+                } else {
+                    "Pin to dock"
+                },
+                if pinned {
+                    MenuAction::UnpinDesktopApp
+                } else {
+                    MenuAction::PinDesktopApp
+                },
+            ),
+            MenuItem::Item("Uninstall application…", MenuAction::UninstallApp),
+        ];
         menu
     }
 

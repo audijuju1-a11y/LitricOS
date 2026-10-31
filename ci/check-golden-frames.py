@@ -84,6 +84,7 @@ OPTIONAL: list[str] = [
     "14-launcher",
     "40-install-dialog",
     "41-uninstall-dialog",
+    "42-pinned-dock",
     "20-environments",
     "25-settings-updates",
     "26-settings-display",

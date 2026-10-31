@@ -3420,3 +3420,40 @@ modeset/page-flip claims remain unproven and are not made here.
 Revert the S86 commit. The tile menu, uninstall dialog, worker, timeout,
 real-socket journey, deadline test and `41-uninstall-dialog` disappear; S85's
 install UI and the existing daemon paths remain.
+
+## 2026-10-31 — S87: the uninstall lifecycle converges
+
+A discovered app can now be pinned to the dock from its launcher-tile menu.
+Successful uninstall removes the pin as well as the tile, discovery prunes pins
+whose app vanished, and a stale pin's click reports **no longer installed**
+instead of silently doing nothing. Pins are session state; no persisted record
+can retain an uninstalled id.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| UI real-socket journey | 1 passed: visible install, pin, uninstall, tile and pin removal, stale-pin launch refusal |
+| `cargo test --workspace` | **1,988 passed, 0 failed, 0 ignored** |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| gallery | 42 screens; only new `42-pinned-dock`; 40 prior fixture frames byte-identical |
+| real card / KMS / page flip | **NOT RUN**; no DRM card node or `/sys/class/drm` on this host |
+| VM/image gates | **NOT RUN**; no `mkosi`, no `qemu-system-x86_64` |
+
+The three skips are the pre-existing environment limits: image build, boot smoke
+and idle measurement. No gate was weakened or skipped for this batch.
+
+### Limits
+
+Dock pins are not persisted, so there is no on-disk format change. The stale-pin
+journey deletes the executable after discovery to model the watch interval; the
+daemon's `not-found` launch reply shares the sentence. Real-card C2 KMS
+modeset/page-flip claims remain unproven and are not made here.
+
+### Rollback
+
+Revert the S87 commit. The dock pin, its context-menu actions, discovery pruning,
+stale-launch sentence, journey assertions and `42-pinned-dock` disappear; S85
+and S86 remain.
