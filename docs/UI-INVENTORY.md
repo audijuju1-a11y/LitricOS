@@ -343,10 +343,12 @@ cargo run --release -p litric-shell --example frame_dump -- ../build/frames
 python3 tools/frames-page.py                                  # browse them
 ```
 
-The committed S81 review set is [docs/ui-review/2026-10-30](ui-review/2026-10-30/index.html):
-38 frames rendered through `views::draw`, with every Settings page, a per-screen
-PNG and an `all-screens.png` contact sheet. It is a fixture render, not a VM
-photograph; [its README](ui-review/2026-10-30/README.md) states the limits.
+The committed S82 review set is [docs/ui-review/2026-10-31](ui-review/2026-10-31/index.html):
+39 frames at 1280×800, including the 38 regenerated `frame_dump` screens and one
+real Weston `weston-simple-shm` window captured through `views::draw` in the
+install/launch e2e. It includes a per-screen PNG and an `all-screens.png` contact
+sheet. It is not a VM photograph; [its README](ui-review/2026-10-31/README.md)
+states the limits.
 
 **A live, usable screen**, on the Linux builder (WSL). QEMU's VNC server speaks
 websocket itself, so a browser reaches the VM with noVNC and no proxy:

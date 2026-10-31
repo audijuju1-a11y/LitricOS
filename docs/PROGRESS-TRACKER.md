@@ -8671,3 +8671,78 @@ Bluetooth and Sound are reachable from their pages; and failures are visible in
 the page note. The research ledger remains **175 settings rows: 49 ADAPT, 4
 ADOPT, 61 DEFER, 61 REJECT**. The `DEFER` rows still need backends that this
 batch did not pretend to have.
+
+## 2026-10-31 — S82: a real Linux application installs, launches and renders
+
+This batch closes the specific gap between "the daemon can spawn a program" and
+"a graphical Linux application is usable": the daemon had no display
+environment, so an installed GUI binary started without `WAYLAND_DISPLAY` and
+exited before mapping. The compositor, window bridge and renderer already
+existed and were not rebuilt.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-sysd/src/proto.rs` | additive `LaunchAppEnv` / `LAUNCHENV <hex argv>… -- <hex NAME=VALUE>…`; argv-only `LAUNCH` remains |
+| `src/litric-sysd/src/launch.rs` | `validate_env` allowlists only `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR`, validates shape and duplicates, and `launch_with_env` applies them with `Command::env` |
+| `src/litric-sysd/src/state.rs` | dispatch of both launch variants through the existing `ProcessSpawn`/`app://` capability check |
+| `src/litric-shell/src/shell.rs` | `launch_desktop` sends `LAUNCHENV` with `Shell::application_env()`; falls back to `LAUNCH` when no compositor is hosted |
+| `src/litric-shell/src/e2e_app_install.rs` | real-socket journey: install real Weston client, launcher path, map, `views::draw` pixels, close/`Gone`, uninstall |
+| `docs/adr/0027-launch-environment.md` | protocol, allowlist, why arbitrary environment names are refused, and limits |
+| `src/litric-shell/tests/fixtures/` | Ubuntu Weston 13 `weston-simple-shm` + `libwayland-client.so.0`, hashes, provenance and licenses |
+
+### What the real path proves
+
+`APP INSTALL com.weston.simple-shm weston` copies the Ubuntu Weston 13 binary
+byte-for-byte into `<data>/litric/apps/com.weston.simple-shm/app` and writes its
+desktop entry. The shell discovers it and calls the same launcher path a user
+uses (`Hit::Desktop` → `launch_desktop`). `litric-sysd` checks `ProcessSpawn`,
+validates the two display variables, spawns the binary, and the binary connects
+to the shell's `wayland-0` socket. The compositor reports `Event::Mapped`; the
+shell creates a `litric.client` window titled `simple-shm`. `views::draw` paints
+the client's ring pixels into the window body. Closing the window produces
+`Gone`; `APP UNINSTALL` removes the executable and entry and discovery no longer
+lists it.
+
+The client is not a stub: it is the Weston project's C reference client, built
+against `libwayland-client`, `wl_shm` and `xdg-shell`. Exact package URLs,
+SHA-256 values and license files are in
+`src/litric-shell/tests/fixtures/README.md`.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-sysd launch::tests` | 9 passed, 0 failed |
+| `cargo test -p litric-sysd proto::tests::a_launch` | 2 passed, 0 failed |
+| `cargo test -p litric-shell --lib journey_real_linux_app_is_installed_launched_mapped_rendered_and_removed` | 1 passed |
+| `cargo test --workspace` | 1,982 passed, 0 failed, 0 ignored |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| `frame_dump` | 38/38 fixture PNGs byte-identical to S81; no paint-path change |
+| Real app capture | two e2e runs byte-identical (SHA-256 `0e9ca27edb96460140ac7a387debffbbb04e42cf51fa1a1bf252f7312e6b8b4d`) |
+| Committed gallery | `docs/ui-review/2026-10-31/` — 39 PNGs, index, contact sheet, README |
+
+The three verifier skips remain the environment's existing ones: `mkosi`
+absent, QEMU absent, and the idle-RAM/CPU/boot-timing platform absent. The
+parity ledger does not move: its 175 rows are Settings research rows, and no
+row describes a Linux launch environment. C2/KMS and restore remain open.
+
+### What remains unproven
+
+| Claim | Why not |
+|---|---|
+| that a booted VM/real GUI session ran this | the compositor is a real socket and renderer on this host; no QEMU boot, framebuffer or physical display was exercised |
+| that GPU scanout, XWayland, clipboard, IME or dmabuf work | none is implemented; ADR-0024 and ADR-0027 list them as absent |
+| that a package manager, signed install or AppImage works | only a validated local bundle is installed; no network/package/signature path exists |
+| that all Linux applications work | one genuine `wl_shm`/xdg-shell client is proved; toolkits needing absent protocols may not start |
+| that C2/KMS, restore or the full "ทั้งระบบ" breadth is complete | separate open work; this batch does not claim it |
+
+### Rollback
+
+Revert the S82 commit. `LAUNCHENV`, the two allowlisted variables, the launcher
+environment, the real-client fixture and its e2e disappear. The argv-only
+`LAUNCH` path, install/discovery and the compositor remain as they were. No file
+outside a test's temporary root is touched.

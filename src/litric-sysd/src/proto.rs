@@ -22,7 +22,7 @@
 use core::fmt;
 
 use crate::action::PowerAction;
-use crate::launch::MAX_ARGV;
+use crate::launch::{MAX_ARGV, MAX_ENV};
 use crate::providers::{self, AudioAction, AuthAction, BtAction, NetAction, SystemAction};
 use crate::update::HealthSignal;
 use litric_core::Version;
@@ -143,6 +143,19 @@ pub enum Request {
     LaunchApp {
         /// The vector; the first element is the absolute program path.
         argv: Vec<String>,
+    },
+    /// Start a program with the session's display environment.
+    ///
+    /// `LAUNCHENV <hex-argv>... -- <hex-NAME=VALUE>...`. The separator is a
+    /// literal `--`, which is not valid hex, so it cannot collide with an
+    /// argument. The older `LAUNCH` remains for callers that need no display
+    /// (the backup/selftest tests and a non-graphical command). The daemon
+    /// accepts only the names in [`crate::launch::ALLOWED_ENV`].
+    LaunchAppEnv {
+        /// The vector; the first element is the absolute program path.
+        argv: Vec<String>,
+        /// The display environment to add to the daemon's own.
+        env: Vec<(String, String)>,
     },
     /// Take one local bundle from the service's incoming directory and make it
     /// a runnable application.
@@ -723,16 +736,45 @@ impl Request {
                     value: other.to_owned(),
                 }),
             },
-            "launch" => {
-                if args.is_empty() || args.len() > MAX_ARGV {
+            "launch" | "launchenv" => {
+                let with_env = verb_lower == "launchenv";
+                let split = if with_env {
+                    let Some(at) = args.iter().position(|raw| *raw == "--") else {
+                        return Err(ProtoError::BadArgument {
+                            name: "LAUNCHENV separator",
+                            value: "<missing>".to_owned(),
+                        });
+                    };
+                    if at.saturating_add(1) >= args.len() {
+                        return Err(ProtoError::BadArity {
+                            verb: "LAUNCHENV",
+                            expected: 2,
+                            got: args.len(),
+                        });
+                    }
+                    (
+                        args.get(..at).unwrap_or(&[]),
+                        args.get(at.saturating_add(1)..).unwrap_or(&[]),
+                    )
+                } else {
+                    (&args[..], &[][..])
+                };
+                if split.0.is_empty() || split.0.len() > MAX_ARGV {
                     return Err(ProtoError::BadArity {
                         verb: "LAUNCH",
                         expected: 1,
-                        got: args.len(),
+                        got: split.0.len(),
                     });
                 }
-                let mut argv = Vec::with_capacity(args.len());
-                for raw in args.iter().copied() {
+                if split.1.len() > MAX_ENV {
+                    return Err(ProtoError::BadArity {
+                        verb: "LAUNCHENV environment",
+                        expected: MAX_ENV,
+                        got: split.1.len(),
+                    });
+                }
+                let mut argv = Vec::with_capacity(split.0.len());
+                for raw in split.0.iter().copied() {
                     let value = hex_text(raw, "argument")?;
                     if value.contains('\0') {
                         return Err(ProtoError::BadArgument {
@@ -742,7 +784,28 @@ impl Request {
                     }
                     argv.push(value);
                 }
-                Ok(Self::LaunchApp { argv })
+                let mut env = Vec::with_capacity(split.1.len());
+                for raw in split.1.iter().copied() {
+                    let value = hex_text(raw, "environment")?;
+                    let Some((name, value)) = value.split_once('=') else {
+                        return Err(ProtoError::BadArgument {
+                            name: "environment",
+                            value: "<missing '='>".to_owned(),
+                        });
+                    };
+                    if name.is_empty() || name.contains('\0') || value.contains('\0') {
+                        return Err(ProtoError::BadArgument {
+                            name: "environment name",
+                            value: "<empty or nul>".to_owned(),
+                        });
+                    }
+                    env.push((name.to_owned(), value.to_owned()));
+                }
+                if with_env {
+                    Ok(Self::LaunchAppEnv { argv, env })
+                } else {
+                    Ok(Self::LaunchApp { argv })
+                }
             }
             "power" => {
                 if args.is_empty() || args.len() > 2 {
@@ -1535,6 +1598,59 @@ mod tests {
             Request::parse("UPDATE ROLLBACK CONFIRM"),
             Ok(Request::UpdateRollback { consent: true })
         );
+    }
+
+    #[test]
+    fn a_launch_can_carry_the_display_environment() {
+        let display = crate::launch::hex_encode(b"wayland-0");
+        let runtime = crate::launch::hex_encode(b"/run/user/1000");
+        let program = crate::launch::hex_encode(b"/bin/true");
+        let env = crate::launch::hex_encode(b"WAYLAND_DISPLAY=wayland-0");
+        let runtime_env = crate::launch::hex_encode(b"XDG_RUNTIME_DIR=/run/user/1000");
+        assert_eq!(
+            Request::parse(&format!("LAUNCHENV {program} -- {env} {runtime_env}")),
+            Ok(Request::LaunchAppEnv {
+                argv: vec!["/bin/true".to_owned()],
+                env: vec![
+                    ("WAYLAND_DISPLAY".to_owned(), "wayland-0".to_owned()),
+                    ("XDG_RUNTIME_DIR".to_owned(), "/run/user/1000".to_owned()),
+                ],
+            })
+        );
+        assert_eq!(
+            Request::parse(&format!("LAUNCH {program} {display} {runtime}")),
+            Ok(Request::LaunchApp {
+                argv: vec![
+                    "/bin/true".to_owned(),
+                    "wayland-0".to_owned(),
+                    "/run/user/1000".to_owned(),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn a_launch_environment_without_a_separator_or_with_a_bad_entry_is_refused() {
+        let program = crate::launch::hex_encode(b"/bin/true");
+        assert!(matches!(
+            Request::parse(&format!("LAUNCHENV {program}")),
+            Err(ProtoError::BadArgument {
+                name: "LAUNCHENV separator",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse(&format!("LAUNCHENV {program} --")),
+            Err(ProtoError::BadArity { .. })
+        ));
+        let no_equals = crate::launch::hex_encode(b"WAYLAND_DISPLAY");
+        assert!(matches!(
+            Request::parse(&format!("LAUNCHENV {program} -- {no_equals}")),
+            Err(ProtoError::BadArgument {
+                name: "environment",
+                ..
+            })
+        ));
     }
 
     #[test]

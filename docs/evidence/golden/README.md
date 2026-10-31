@@ -26,11 +26,11 @@ The review that justifies it is in [`../2026-10-26/`](../2026-10-26/): the six
 scenes that carry the redesign — desktop, Control Centre, lock, launcher, boot,
 windows — in both themes, as PNGs straight from the dump.
 
-The current 38-screen review is
-[`docs/ui-review/2026-10-30/`](../../ui-review/2026-10-30/index.html). It adds
-every Settings page to the review set, and those 13 page frames are now in the
-gate's optional comparison list so a future Settings change cannot silently
-leave the review stale.
+The current review is
+[`docs/ui-review/2026-10-31/`](../../ui-review/2026-10-31/index.html). S82
+re-ran all 38 fixture scenes byte-for-byte and added one real Linux application
+frame captured by the real-socket e2e. The recorded fingerprints did not change;
+S82 adds no paint-path work.
 
 Recording again, when the interface next changes, is a review and not a rebuild:
 dump the frames, look at them, then

@@ -3223,3 +3223,53 @@ It does not claim the 61 `DEFER` research rows or C2/KMS/restore.
 Revert the S81 commit. The Region/Privacy/Network/Bluetooth/Sound controls, the
 three focused tests, the 13 extra `frame_dump` scenes and the committed review
 disappear. Existing daemon protocol, preferences and all other pages remain.
+
+## 2026-10-31 — S82: a real Linux application installs, launches and renders
+
+The daemon can now start an installed graphical application with the session's
+Wayland socket. The missing piece was not the compositor or the window
+renderer—both were already real—but the launch environment: `litric-sysd` is
+outside the graphical session and inherited no `WAYLAND_DISPLAY` or
+`XDG_RUNTIME_DIR`.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo test -p litric-sysd launch::tests` | 9 passed, 0 failed |
+| `cargo test -p litric-sysd proto::tests::a_launch` | 2 passed, 0 failed |
+| `cargo test -p litric-shell --lib journey_real_linux_app_is_installed_launched_mapped_rendered_and_removed` | 1 passed: install → launcher → daemon spawn → mapped window → `views::draw` ring pixels → close/`Gone` → uninstall |
+| `cargo test --workspace` | 1,982 passed, 0 failed, 0 ignored |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| `frame_dump` | 38 frames; all 38 PNGs byte-identical to the S81 committed set |
+| Real app capture determinism | two independent e2e runs, identical SHA-256 `0e9ca27edb96460140ac7a387debffbbb04e42cf51fa1a1bf252f7312e6b8b4d` |
+| Committed gallery | `docs/ui-review/2026-10-31/index.html`, 39 PNGs, `all-screens.png`, README |
+
+### The real application
+
+The fixture is Ubuntu noble's `weston-simple-shm` from
+`weston_13.0.0-4build3_amd64.deb`, a C client using `libwayland-client`,
+`wl_shm` and `xdg-shell`. It is vendored with
+`libwayland-client0_1.22.0-2.1build1_amd64.deb`'s library, SHA-256 hashes,
+copyright files and exact package URLs in
+`src/litric-shell/tests/fixtures/README.md`. The installer copies the binary
+byte-for-byte; the only fixture setup outside the shipping path is the loader
+path for its one shared library.
+
+### What it does not prove
+
+| Claim | Why not |
+|---|---|
+| that a booted VM or physical display produced the frame | the e2e runs the real compositor and socket in this host process; no QEMU, framebuffer scanout or hardware display |
+| that GPU import, XWayland, clipboard, drag-and-drop, IME or dmabuf work | deliberately absent in ADR-0024; this batch adds none |
+| that arbitrary Linux software runs | one real `wl_shm`/xdg-shell client is proved; absent protocols can still stop a toolkit |
+| that a package manager or signature-verified install exists | the installed bundle is local and unsigned; no network package source |
+| that C2/KMS, restore or the remaining §73 `DEFER` rows are closed | separate open work, unchanged here |
+
+### Rollback
+
+Revert the S82 commit. `LAUNCHENV`, the allowlist, the launcher environment, the
+real-client fixture and the real-socket journey disappear. `LAUNCH`,
+install/discovery and the compositor remain.

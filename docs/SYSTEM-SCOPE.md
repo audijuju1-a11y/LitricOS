@@ -74,8 +74,13 @@ component, our UI and policy on top
 > surfaces hosted as ordinary windows with LitricOS title bars.
 > `weston-simple-shm` — a C client from outside this repository — opens a
 > window, draws, resizes, survives input and closes, in
-> `artifacts/foreign-client-window.png` and in two test suites that skip
-> loudly when the client binary is absent.
+> `artifacts/foreign-client-window.png` and in the lower-level suites that skip
+> loudly when the client binary is absent. S82 adds a real-socket e2e that
+> installs this genuine Ubuntu Weston binary through `APP INSTALL`, launches it
+> through the shell and `litric-sysd` with `LAUNCHENV`, maps its Wayland window,
+> checks its pixels in `views::draw`, closes it and uninstalls it. That test does
+> not skip: the client and its one library are vendored with provenance in
+> `src/litric-shell/tests/fixtures/`.
 >
 > The rows are unchanged, and that is deliberate rather than an oversight.
 > Row 880 is guest *VM* surface compositing, which is still `T`: a virtual
@@ -85,8 +90,9 @@ component, our UI and policy on top
 > problem, and inventing a row to move the percentage would be the kind of
 > number-keeping this document exists to prevent. What is still absent in the
 > same area, and is listed in ADR-0024 rather than implied here: XWayland,
-> clipboard and drag-and-drop, input methods, `.desktop` launching, dmabuf and
-> any GPU path.
+> clipboard and drag-and-drop, input methods, dmabuf and any GPU path. Local
+> `.desktop` discovery and launching now exist (ADR-0027); what remains absent is
+> a package manager, signature-verified install and AppImage extractor.
 
 > **2026-09-14: the platform contract widens.** Part K records three architecture decisions from the unified-compatibility and deep-recovery requirement set: one desktop with three application runtimes (ADR-0020), deep recovery with user data as an independent domain (ADR-0021), and the Defender engine whose Phase 0 policy core now exists as `src/litric-defender` (ADR-0022). Ten rows are `P` because a decision function with passing tests exists; the executables that act on those decisions do not, and the statuses say so.
 

@@ -255,6 +255,7 @@ end to end rather than half-built.
 | 77 | Boot-attested update health evidence and a real commit gate | system-written `booting`/`healthy` record bound to slot/version/attempt + real-socket missing/stale/malformed/failed/replay/concurrency tests (**landed 2026-10-30**, 1,939 workspace tests; see tracker §77) | here |
 | 79 | Linux application bundle install, launch and uninstall over the real socket | validated local bundle, generated `.desktop`, real installed program writes a marker, uninstall removes files and discovery entry (**landed 2026-10-30**, 1,958 workspace tests; see tracker §79) | here |
 | 80 | Automatic local backup with a checksummed manifest and verification | real timer-created snapshot, independent hashes, retention, source mutation, tamper refusal, `BACKUP LIST` and shell status over a real socket (**landed 2026-10-30**, 1,974 workspace tests; see tracker §80) | here |
+| 82 | A real Linux application installs, launches and reaches `views::draw` through the real daemon | genuine Weston `weston-simple-shm` installed via `APP INSTALL`, launched by the shell with `LAUNCHENV`, mapped as a `litric.client` window, pixels asserted through `views::draw`, closed and uninstalled over a real Unix socket (**landed 2026-10-31**, 1,982 workspace tests; see tracker §82) | here |
 
 Image-level rows (A1, C2, and every `VM E2E` claim) stay in `docs/GATES.md` as
 `NOT RUN` until a builder exists. That is a scheduling fact, not an excuse: the

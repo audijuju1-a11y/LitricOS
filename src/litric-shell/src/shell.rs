@@ -7525,10 +7525,27 @@ impl Shell {
             return Vec::new();
         };
         let name = app.name.clone();
-        let mut request = String::from("LAUNCH");
+        // The daemon is not inside this session: it has no WAYLAND_DISPLAY of
+        // its own. Name the socket this shell is serving, or a graphical
+        // application starts without a display and exits before it maps.
+        let display_env = self.application_env();
+        let mut request = if display_env.is_empty() {
+            String::from("LAUNCH")
+        } else {
+            String::from("LAUNCHENV")
+        };
         for arg in &app.exec {
             request.push(' ');
             request.push_str(&litric_sysd::launch::hex_encode(arg.as_bytes()));
+        }
+        if !display_env.is_empty() {
+            request.push_str(" --");
+            for (key, value) in &display_env {
+                request.push(' ');
+                request.push_str(&litric_sysd::launch::hex_encode(
+                    format!("{key}={value}").as_bytes(),
+                ));
+            }
         }
         match crate::facts::ask(&self.sysd_socket, &request) {
             Some(reply) if reply.starts_with("OK ") => {

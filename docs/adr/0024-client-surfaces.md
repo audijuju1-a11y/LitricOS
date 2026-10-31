@@ -103,9 +103,10 @@ that is a real limitation, listed below, not a detail.
 - **No clipboard, no drag-and-drop, no IME.** `wl_data_device_manager` and
   `zwp_text_input_v3` are not implemented, so copying between applications and
   typing Thai into one does not work yet.
-- **No `.desktop` launching.** The socket exists and the Terminal launches
-  commands with the right environment; the Application Center does not read
-  `.desktop` files yet, so there is no icon grid of installed applications.
+- **No package manager or AppImage installer.** S82 adds validated local
+  bundle installation and `.desktop` discovery/launching (ADR-0027), including
+  the display environment the daemon must pass. There is still no network
+  package source, signature verifier or AppImage extractor.
 - **No GPU path.** dmabuf import and hardware overlays are absent; every frame
   is a copy through the CPU.
 - **Popups are anchored, not positioned.** Size, anchor, gravity and constraint

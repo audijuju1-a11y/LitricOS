@@ -535,7 +535,8 @@ impl Sysd {
             Request::Power { action, consent } => self.power(*action, *consent, now),
             Request::Action { action, consent } => self.action(action, *consent, now),
             Request::Resolve { app, uri, access } => self.resolve(app, uri, *access, now),
-            Request::LaunchApp { argv } => self.launch_app(argv),
+            Request::LaunchApp { argv } => self.launch_app(argv, &[]),
+            Request::LaunchAppEnv { argv, env } => self.launch_app(argv, env),
             Request::AppInstall { id, bundle } => self.app_install(id, bundle),
             Request::AppUninstall { id } => self.app_uninstall(id),
             Request::UpdateStatus { schema } => self.update_status(*schema, now),
@@ -686,7 +687,7 @@ impl Sysd {
     /// root is deliberately not consulted: a program is named by its own
     /// absolute path, and a request that could choose a root could choose which
     /// binary the path meant.
-    fn launch_app(&mut self, argv: &[String]) -> Response {
+    fn launch_app(&mut self, argv: &[String], env: &[(String, String)]) -> Response {
         let Some(client) = self.client.clone() else {
             return Response::err("refused", "this build has no local client identity");
         };
@@ -703,7 +704,7 @@ impl Sysd {
                 format!("{} {capability}", decision.reason().token()),
             );
         }
-        match crate::launch::launch(argv) {
+        match crate::launch::launch_with_env(argv, env) {
             Ok(pid) => {
                 let program = argv.first().map_or("the program", String::as_str);
                 let name = Path::new(program)

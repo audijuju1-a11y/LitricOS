@@ -134,6 +134,7 @@ ALLOWED = {
     },
     "src/litric-shell/src/e2e_app_install.rs": {
         "journey_app_install_launch_uninstall_through_sysd": "removes the pid-tagged temporary installer root this journey created under the system temp directory, after asserting the installed program wrote its marker and uninstall removed both the executable and its desktop entry",
+        "journey_real_linux_app_is_installed_launched_mapped_rendered_and_removed": "removes the pid-tagged temporary root this journey created under the system temp directory, after asserting the real installed client mapped a window, its pixels reached views::draw, closing it produced Gone, and uninstall removed the executable and entry",
     },
     "src/litric-shell/src/e2e.rs": {
         "journey_settings_updates_reads_the_real_daemon_status": "removes the pid-tagged temporary fixture root this Settings journey created under the system temp directory, after asserting the real daemon reported an uninitialized update record and the page drew no Ready state",
