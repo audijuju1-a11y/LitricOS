@@ -1,6 +1,6 @@
 # LitricOS UI review — 2026-10-30 (S81)
 
-This directory holds **38 screens** rendered by the shipping
+This directory holds **38 screens**, each **1280×800 px**, rendered by the shipping
 `litric-shell/examples/frame_dump.rs`, which calls `litric_shell::views::draw` —
 the same composition path `main.rs` uses. The gallery covers every Settings page
 (`settings::Page::ALL`, 15 pages) and the 23 other reachable surfaces the example
