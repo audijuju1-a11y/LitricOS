@@ -384,6 +384,7 @@ pub fn power(action: PowerAction, runner: &dyn Runner) -> Outcome {
 #[cfg(test)]
 pub(crate) mod testing {
     use super::{io, Runner};
+    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
     /// One recorded call: the program, and its arguments.
@@ -406,12 +407,15 @@ pub(crate) mod testing {
         stdin: Arc<Mutex<Option<usize>>>,
         /// The deadline the last call was given.
         timeout: Arc<Mutex<Option<u32>>>,
-        /// What [`Runner::capture`] answers with: `(exit status, stdout)`.
+        /// What successive [`Runner::capture`] calls answer with: `(exit
+        /// status, stdout)`, in order.
         ///
-        /// `None` means no answer was set, and a capture then fails the way a
-        /// missing tool does — so a test that forgets to set one cannot quietly
-        /// pass by reading an empty string as a real measurement.
-        capture: Arc<Mutex<Option<(i32, String)>>>,
+        /// An empty queue means no answer was set, and a capture then fails the
+        /// way a missing tool does — so a test that forgets to set one cannot
+        /// quietly pass by reading an empty string as a real measurement. A
+        /// queue rather than one slot because a reader like the sandbox's
+        /// permissions makes three bounded calls in one operation.
+        capture: Arc<Mutex<VecDeque<(i32, String)>>>,
     }
 
     impl RecordingRunner {
@@ -423,7 +427,7 @@ pub(crate) mod testing {
                 result: Arc::new(Mutex::new(Some(Ok(code)))),
                 stdin: Arc::new(Mutex::new(None)),
                 timeout: Arc::new(Mutex::new(None)),
-                capture: Arc::new(Mutex::new(None)),
+                capture: Arc::new(Mutex::new(VecDeque::new())),
             }
         }
 
@@ -435,15 +439,29 @@ pub(crate) mod testing {
                 result: Arc::new(Mutex::new(Some(Err(io::Error::new(kind, what.to_owned()))))),
                 stdin: Arc::new(Mutex::new(None)),
                 timeout: Arc::new(Mutex::new(None)),
-                capture: Arc::new(Mutex::new(None)),
+                capture: Arc::new(Mutex::new(VecDeque::new())),
             }
         }
 
         /// The exit status and standard output the next [`Runner::capture`]
         /// answers with.
         #[must_use]
-        pub fn answering(mut self, code: i32, stdout: &str) -> Self {
-            self.capture = Arc::new(Mutex::new(Some((code, stdout.to_owned()))));
+        pub fn answering(self, code: i32, stdout: &str) -> Self {
+            self.answering_queue(&[(code, stdout)])
+        }
+
+        /// Queue several capture answers, consumed in the order given.
+        ///
+        /// One call per answer: a reader that makes three bounded calls gets
+        /// three scripted answers instead of the first one three times.
+        #[must_use]
+        pub fn answering_queue(mut self, answers: &[(i32, &str)]) -> Self {
+            self.capture = Arc::new(Mutex::new(
+                answers
+                    .iter()
+                    .map(|(code, stdout)| (*code, (*stdout).to_owned()))
+                    .collect(),
+            ));
             self
         }
 
@@ -520,7 +538,7 @@ pub(crate) mod testing {
         ) -> io::Result<(i32, String)> {
             self.record(program, args, None, timeout_secs)?;
             match self.capture.lock() {
-                Ok(mut slot) => slot.take().ok_or_else(|| {
+                Ok(mut queue) => queue.pop_front().ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::NotFound,
                         "this test set no captured output".to_owned(),

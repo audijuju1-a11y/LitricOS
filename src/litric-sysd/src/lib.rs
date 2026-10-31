@@ -49,6 +49,7 @@ pub mod platform;
 pub mod proto;
 pub mod provider_contract;
 pub mod providers;
+pub mod sandbox;
 pub mod services;
 pub mod state;
 pub mod store;

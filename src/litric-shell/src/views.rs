@@ -3097,6 +3097,7 @@ fn settings_icon(page: crate::settings::Page) -> Icon {
         Page::Updates => Icon::Info,
         Page::Services => Icon::Shield,
         Page::AppStore => Icon::Grid,
+        Page::AppSandbox => Icon::Shield,
     }
 }
 
@@ -4043,6 +4044,7 @@ fn draw_settings_page(
             settings_rows_from(canvas, t, pane, y + t.px(10.0), &rows);
         }
         Page::AppStore => draw_store_page(canvas, shell, pane, t),
+        Page::AppSandbox => draw_sandbox_page(canvas, shell, pane, t),
     }
     if matches!(
         page,
@@ -4367,6 +4369,428 @@ fn draw_store_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Token
         ui::button(canvas, t, yes, "Confirm", State::Normal, Tone::Bad);
         shell.hotspots_mut().push(no, Hot::StoreCancel);
         shell.hotspots_mut().push(yes, Hot::StoreConfirm);
+    }
+}
+
+/// The App Sandbox page: Flatpak updates, installed applications, the selected
+/// application's effective permissions, and one confirmation for every write.
+///
+/// The page draws facts the daemon reported. It never invents a permission,
+/// never treats "not read" as "denied", and disables a control whose state is
+/// unknown rather than letting it guess.
+fn draw_sandbox_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tokens) {
+    use crate::sandbox::{Confirm, Key};
+
+    let mut y = pane.y + t.px(44.0);
+    let x = pane.x + t.sp(Space::Lg);
+    let width = pane.w - t.sp(Space::Lg) * 2.0;
+    let dim = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    let body = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    let caption = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+
+    if !shell.facts.services.flatpak_tool && shell.sandbox.state != "ready" {
+        font::draw(
+            canvas,
+            "Flatpak is not installed in this image.",
+            x,
+            y + t.px(16.0),
+            &body,
+        );
+        y += t.px(28.0);
+        font::draw(
+            canvas,
+            "There are no updates and no system sandbox to read or change.",
+            x,
+            y + t.px(14.0),
+            &dim,
+        );
+        return;
+    }
+
+    let status = if shell.sandbox.state.is_empty() {
+        "Updates · not read yet".to_owned()
+    } else if shell.sandbox.error.is_empty() {
+        format!(
+            "Updates · {} · {} available",
+            shell.sandbox.state,
+            shell.sandbox.updates.len()
+        )
+    } else {
+        format!(
+            "Updates · {} · {}",
+            shell.sandbox.state, shell.sandbox.error
+        )
+    };
+    font::draw(canvas, &status, x, y + t.px(12.0), &dim);
+    y += t.px(20.0);
+    if !shell.sandbox.note.is_empty() {
+        font::draw(canvas, &shell.sandbox.note, x, y + t.px(11.0), &dim);
+        y += t.px(21.0);
+    }
+
+    ui::section_label(canvas, t, (x, y + t.px(9.0)), "AVAILABLE UPDATES");
+    let all = Rect::new(x + width - t.px(116.0), y, t.px(116.0), t.px(24.0));
+    let can_update_all = shell.sandbox.state == "ready" && !shell.sandbox.updates.is_empty();
+    ui::button(
+        canvas,
+        t,
+        all,
+        "Update all",
+        if can_update_all {
+            State::Normal
+        } else {
+            State::Disabled
+        },
+        Tone::Accent,
+    );
+    if can_update_all {
+        shell.hotspots_mut().push(all, Hot::SandboxUpdateAll);
+    }
+    y += t.px(22.0);
+
+    if shell.sandbox.state == "unavailable" || shell.sandbox.state == "error" {
+        let message = if shell.sandbox.error.is_empty() {
+            "Flatpak did not answer."
+        } else {
+            &shell.sandbox.error
+        };
+        font::draw(canvas, message, x, y + t.px(13.0), &dim);
+        return;
+    }
+    if shell.sandbox.updates.is_empty() {
+        font::draw(
+            canvas,
+            "Every installed system application is up to date.",
+            x,
+            y + t.px(13.0),
+            &dim,
+        );
+        y += t.px(22.0);
+    } else {
+        let updates = shell.sandbox.updates.clone();
+        for (i, update) in updates.iter().take(2).enumerate() {
+            let row = Rect::new(x, y, width, t.px(32.0));
+            font::draw(
+                canvas,
+                &update.name,
+                row.x + t.px(6.0),
+                row.y + t.px(13.0),
+                &body,
+            );
+            let version = format!("version {}", update.version);
+            let vw = font::measure(&version, &caption);
+            font::draw(
+                canvas,
+                &version,
+                row.right() - vw - t.px(6.0),
+                row.y + t.px(13.0),
+                &caption,
+            );
+            let detail = format!("{} · {} · {}", update.id, update.branch, update.origin);
+            font::draw(
+                canvas,
+                &detail,
+                row.x + t.px(6.0),
+                row.y + t.px(27.0),
+                &caption,
+            );
+            shell.hotspots_mut().push(row, Hot::SandboxUpdate(i));
+            y += t.px(34.0);
+        }
+    }
+
+    if shell.sandbox.updates.len() > 2 {
+        font::draw(
+            canvas,
+            &format!(
+                "+ {} more updates",
+                shell.sandbox.updates.len().saturating_sub(2)
+            ),
+            x,
+            y + t.px(11.0),
+            &caption,
+        );
+        y += t.px(18.0);
+    }
+
+    ui::section_label(canvas, t, (x, y + t.px(9.0)), "INSTALLED APPLICATIONS");
+    y += t.px(18.0);
+    if shell.sandbox.apps.is_empty() {
+        font::draw(
+            canvas,
+            "No system applications are installed.",
+            x,
+            y + t.px(13.0),
+            &dim,
+        );
+        y += t.px(20.0);
+    } else {
+        let apps = shell.sandbox.apps.clone();
+        for (i, app) in apps.iter().take(3).enumerate() {
+            let row = Rect::new(x, y, width, t.px(22.0));
+            if shell.sandbox.selected_app == Some(i) {
+                canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.accent(), 0.16));
+            }
+            font::draw(
+                canvas,
+                &app.name,
+                row.x + t.px(6.0),
+                row.y + t.px(14.0),
+                &body,
+            );
+            let detail = format!("{} · {}", app.id, app.version);
+            let dw = font::measure(&detail, &caption);
+            font::draw(
+                canvas,
+                &detail,
+                row.right() - dw - t.px(6.0),
+                row.y + t.px(14.0),
+                &caption,
+            );
+            shell.hotspots_mut().push(row, Hot::SandboxApp(i));
+            y += t.px(22.0);
+        }
+    }
+
+    if shell.sandbox.apps.len() > 3 {
+        font::draw(
+            canvas,
+            &format!(
+                "+ {} more installed applications",
+                shell.sandbox.apps.len().saturating_sub(3)
+            ),
+            x,
+            y + t.px(11.0),
+            &caption,
+        );
+        y += t.px(18.0);
+    }
+
+    let Some(app) = shell.sandbox.app().cloned() else {
+        return;
+    };
+    y += t.px(4.0);
+    ui::section_label(
+        canvas,
+        t,
+        (x, y + t.px(9.0)),
+        &format!("SYSTEM SANDBOX · {}", app.name),
+    );
+    y += t.px(18.0);
+    let permission_state = if shell.sandbox.perm_state.is_empty() {
+        "not read yet".to_owned()
+    } else if shell.sandbox.perm_error.is_empty() {
+        format!(
+            "Effective permissions · {} facts",
+            shell.sandbox.permissions.len()
+        )
+    } else {
+        format!(
+            "{} · {}",
+            shell.sandbox.perm_state, shell.sandbox.perm_error
+        )
+    };
+    font::draw(canvas, &permission_state, x, y + t.px(11.0), &dim);
+    y += t.px(17.0);
+
+    if shell.sandbox.perm_state == "ready" {
+        let effective: Vec<&crate::sandbox::Permission> = shell
+            .sandbox
+            .permissions
+            .iter()
+            .filter(|fact| fact.source == "effective")
+            .collect();
+        if effective.is_empty() {
+            font::draw(
+                canvas,
+                "Flatpak grants this application no context entries.",
+                x,
+                y + t.px(12.0),
+                &dim,
+            );
+            y += t.px(18.0);
+        } else {
+            for fact in effective.iter().take(4) {
+                let row = Rect::new(x, y, width, t.px(19.0));
+                font::draw(
+                    canvas,
+                    &fact.kind,
+                    row.x + t.px(6.0),
+                    row.y + t.px(13.0),
+                    &caption,
+                );
+                font::draw(
+                    canvas,
+                    &fact.value,
+                    row.x + t.px(92.0),
+                    row.y + t.px(13.0),
+                    &body,
+                );
+                y += t.px(19.0);
+            }
+        }
+        if effective.len() > 4 {
+            font::draw(
+                canvas,
+                &format!(
+                    "+ {} more effective facts",
+                    effective.len().saturating_sub(4)
+                ),
+                x,
+                y + t.px(11.0),
+                &caption,
+            );
+            y += t.px(18.0);
+        }
+        let removed: Vec<String> = shell
+            .sandbox
+            .permissions
+            .iter()
+            .filter(|fact| fact.kind == "unshare")
+            .map(|fact| format!("{} ({})", fact.value, fact.source))
+            .collect();
+        if !removed.is_empty() {
+            font::draw(
+                canvas,
+                &format!("Removed by override: {}", removed.join(", ")),
+                x,
+                y + t.px(11.0),
+                &caption,
+            );
+            y += t.px(18.0);
+        }
+    }
+
+    y += t.px(4.0);
+    let mut bx = x;
+    for key in Key::ALL {
+        let granted = shell.sandbox.granted(key);
+        let label = match granted {
+            Some(true) => format!("{}: Allowed", key.title()),
+            Some(false) => format!("{}: Denied", key.title()),
+            None => format!("{}: Unknown", key.title()),
+        };
+        let button = Rect::new(bx, y, t.px(178.0), t.px(26.0));
+        ui::button(
+            canvas,
+            t,
+            button,
+            &label,
+            if granted.is_some() {
+                State::Normal
+            } else {
+                State::Disabled
+            },
+            if granted == Some(true) {
+                Tone::Good
+            } else {
+                Tone::Neutral
+            },
+        );
+        if granted.is_some() {
+            shell.hotspots_mut().push(button, Hot::SandboxToggle(key));
+        }
+        bx += t.px(186.0);
+    }
+    y += t.px(34.0);
+
+    let reset = Rect::new(x, y, t.px(142.0), t.px(26.0));
+    ui::button(
+        canvas,
+        t,
+        reset,
+        "Reset overrides",
+        if shell.sandbox.perm_state == "ready" {
+            State::Normal
+        } else {
+            State::Disabled
+        },
+        Tone::Bad,
+    );
+    if shell.sandbox.perm_state == "ready" {
+        shell.hotspots_mut().push(reset, Hot::SandboxReset);
+    }
+
+    // The confirmation card is centred over the page, not appended below it:
+    // the Settings window is shorter than the page, and a confirmation that can
+    // be clipped is not a confirmation.
+    if let Some(confirm) = shell.sandbox.confirm.clone() {
+        canvas.fill_round_rect(pane, 0.0, with_alpha(rgb(0x000000), 0.62));
+        let (title, detail, tone) = match &confirm {
+            Confirm::UpdateAll => (
+                format!("Apply {} updates?", shell.sandbox.updates.len()),
+                "Flatpak will fetch and install every listed update.".to_owned(),
+                Tone::Accent,
+            ),
+            Confirm::Update(update) => (
+                format!("Update {}?", update.name),
+                format!("{} · version {}", update.id, update.version),
+                Tone::Accent,
+            ),
+            Confirm::Set {
+                id, name, key, on, ..
+            } => (
+                format!(
+                    "{} {}?",
+                    if *on { "Allow" } else { "Deny" },
+                    key.title().to_lowercase()
+                ),
+                format!("{name} · {id}. This changes only this application's system override."),
+                if *on { Tone::Accent } else { Tone::Neutral },
+            ),
+            Confirm::Reset { id, name } => (
+                format!("Reset overrides for {name}?"),
+                format!(
+                    "{id} returns to Flatpak's own defaults. Other applications are not touched."
+                ),
+                Tone::Bad,
+            ),
+        };
+        let panel_w = pane.w.min(t.px(440.0));
+        let panel = Rect::new(
+            pane.x + (pane.w - panel_w) / 2.0,
+            pane.y + (pane.h - t.px(124.0)) / 2.0,
+            panel_w,
+            t.px(124.0),
+        );
+        ui::surface(
+            canvas,
+            t,
+            panel,
+            t.radius(Radius::Md),
+            ui::Material::Elevated,
+        );
+        canvas.stroke_round_rect(panel, t.radius(Radius::Md), 1.0, t.tone(tone));
+        font::draw(
+            canvas,
+            &title,
+            panel.x + t.px(16.0),
+            panel.y + t.px(30.0),
+            &t.style_bold(TypeStep::Title3),
+        );
+        font::draw(
+            canvas,
+            &detail,
+            panel.x + t.px(16.0),
+            panel.y + t.px(54.0),
+            &caption,
+        );
+        let no = Rect::new(
+            panel.right() - t.px(176.0),
+            panel.y + t.px(92.0),
+            t.px(74.0),
+            t.px(24.0),
+        );
+        let yes = Rect::new(
+            panel.right() - t.px(94.0),
+            panel.y + t.px(92.0),
+            t.px(84.0),
+            t.px(24.0),
+        );
+        ui::button(canvas, t, no, "Cancel", State::Normal, Tone::Neutral);
+        ui::button(canvas, t, yes, "Confirm", State::Normal, tone);
+        shell.hotspots_mut().push(no, Hot::SandboxCancel);
+        shell.hotspots_mut().push(yes, Hot::SandboxConfirm);
     }
 }
 

@@ -1,10 +1,23 @@
 # LitricOS UI review — 2026-10-31 (S82, updated in S89)
 
-This directory holds **44 screens**, each **1280×800 px**. Forty-three are the
+This directory holds **45 screens**, each **1280×800 px**. Forty-four are the
 fixture gallery regenerated through the shipping `litric-shell/examples/frame_dump.rs`
-and `litric_shell::views::draw`. The forty-fourth is not a fixture: it is the frame composed during the S82
+and `litric_shell::views::draw`. The forty-fifth is not a fixture: it is the frame composed during the S82
 real-socket e2e after `weston-simple-shm` was installed through `APP INSTALL`,
 launched by the shell through `litric-sysd`, and mapped as a Wayland client.
+
+## What changed in S90
+
+- Settings has an **App Sandbox** page backed by `litric-sysd`: the system Flatpak
+  updates on offer, one application's effective sandbox permissions as discrete
+  attributed facts, two system overrides (host filesystem and network) and a reset.
+  Every write is confirmed; a missing Flatpak is an explicit unavailable state.
+- `45-settings-app-sandbox` is new and was reviewed as an image before recording. It
+  shows two updates, three installed apps, four effective facts, both override states,
+  the removal attributed to the global override, and no clipped or elided values.
+- `44-settings-app-store` moved by 3.01% of cells because the sidebar gained the
+  App Sandbox row; the change was inspected and the frame re-recorded. The other
+  Settings frames moved by 0.04% or less. The golden set records 44 fixture frames.
 
 ## What changed in S89
 

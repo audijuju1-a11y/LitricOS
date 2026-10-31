@@ -694,6 +694,57 @@ fn apply_store(args: &Args, shell: &mut Shell, request: &StoreRequest) {
     shell.request_full_redraw();
 }
 
+/// Carry out one App Sandbox request through the daemon.
+///
+/// Reads and writes are protocol lines built by the view model. The daemon owns
+/// Flatpak, the capability check and live consent; a successful write re-reads
+/// exactly what it changed, so the page shows the machine rather than the
+/// request it sent.
+fn apply_sandbox(args: &Args, shell: &mut Shell, request: &litric_shell::sandbox::Request) {
+    use litric_shell::sandbox::Request as SandboxRequest;
+
+    shell.sandbox.note = request.progress();
+    let reply = ask(&args.socket, &request.line());
+    shell.sandbox.apply(request, reply.as_deref());
+
+    // Opening the page reads the update list and the installed list together.
+    // The installed list is only a chooser; once it arrives, the sandbox for
+    // its first row is the one the page must show.
+    if matches!(request, SandboxRequest::Apps) {
+        if let Some(id) = shell.sandbox.app().map(|app| app.id.clone()) {
+            let read = SandboxRequest::Permissions(id);
+            shell.sandbox.note = read.progress();
+            let answer = ask(&args.socket, &read.line());
+            shell.sandbox.apply(&read, answer.as_deref());
+        }
+    }
+
+    let applied = reply.as_deref().is_some_and(|text| {
+        !text.starts_with("ERR ") && text.lines().any(|line| line == "applied=true")
+    });
+    if request.is_write() && applied {
+        // Keep the write's terminal sentence: the re-read is for the panel, not
+        // for rewriting the answer to "what happened".
+        let terminal = shell.sandbox.note.clone();
+        match request {
+            SandboxRequest::UpdateAll | SandboxRequest::Update { .. } => {
+                let read = SandboxRequest::Updates;
+                let answer = ask(&args.socket, &read.line());
+                shell.sandbox.apply(&read, answer.as_deref());
+            }
+            SandboxRequest::Set { id, .. } | SandboxRequest::Reset { id } => {
+                let read = SandboxRequest::Permissions(id.clone());
+                let answer = ask(&args.socket, &read.line());
+                shell.sandbox.apply(&read, answer.as_deref());
+            }
+            _ => {}
+        }
+        shell.sandbox.note = terminal;
+        shell.refresh_facts();
+    }
+    shell.request_full_redraw();
+}
+
 /// Carry out one service reload. The command is a closed enum, and the daemon
 /// validates the capability, scope and consent again; the shell never builds a
 /// command line from anything the user typed.
@@ -949,6 +1000,7 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
             }
             Effect::Service(command) => apply_service(args, shell, *command),
             Effect::Store(request) => apply_store(args, shell, request),
+            Effect::Sandbox(request) => apply_sandbox(args, shell, request),
             Effect::Volume(step) => apply_volume(args, shell, *step),
             // The panel's two questions, asked together and only when somebody
             // is looking: both cost a process and both answers are measurements.

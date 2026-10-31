@@ -54,6 +54,7 @@ use std::path::{Path, PathBuf};
 use litric_caps::{Capability, CapabilityId, Scope};
 
 use crate::action::{Outcome, Runner};
+use crate::sandbox::SandboxAction;
 use crate::services::ServiceAction;
 use crate::store::StoreAction;
 
@@ -493,6 +494,8 @@ pub enum SystemAction {
     Auth(AuthAction),
     /// Install or remove a Flatpak application.
     Store(StoreAction),
+    /// Apply updates or change one application's system sandbox overrides.
+    Sandbox(SandboxAction),
 }
 
 impl SystemAction {
@@ -516,6 +519,21 @@ impl SystemAction {
                 let scope = Scope::parse_resource(&s.scope()?).ok()?;
                 Capability::new(CapabilityId::AppManage, scope)
             }
+            Self::Sandbox(s) => {
+                // An update and an override are different authorities: fetching
+                // new code for an app the user already has is not the same as
+                // changing what that app can reach. Each request names its exact
+                // narrow scope, and the broker checks that scope against the
+                // broad policy grant.
+                let scope = Scope::parse_resource(&s.scope()?).ok()?;
+                let id = match s {
+                    SandboxAction::Update { .. } => CapabilityId::AppUpdate,
+                    SandboxAction::Set { .. } | SandboxAction::Reset { .. } => {
+                        CapabilityId::SandboxControl
+                    }
+                };
+                Capability::new(id, scope)
+            }
         }
     }
 
@@ -529,6 +547,7 @@ impl SystemAction {
             Self::Service(_) => "service",
             Self::Auth(_) => "auth",
             Self::Store(_) => "store",
+            Self::Sandbox(_) => "sandbox",
         }
     }
 
@@ -542,6 +561,7 @@ impl SystemAction {
             Self::Service(s) => s.token(),
             Self::Auth(a) => a.token(),
             Self::Store(s) => s.token(),
+            Self::Sandbox(s) => s.token(),
         }
     }
 
@@ -555,7 +575,10 @@ impl SystemAction {
     /// toggle rather than a dialog.
     #[must_use]
     pub const fn requires_consent(&self) -> bool {
-        matches!(self, Self::Auth(_) | Self::Service(_) | Self::Store(_))
+        matches!(
+            self,
+            Self::Auth(_) | Self::Service(_) | Self::Store(_) | Self::Sandbox(_)
+        )
     }
 }
 
@@ -747,6 +770,7 @@ impl SystemAction {
             Self::Service(s) => s.plan(),
             Self::Auth(a) => Self::auth_plan(a),
             Self::Store(s) => s.plan(),
+            Self::Sandbox(s) => s.plan(),
         }
     }
 

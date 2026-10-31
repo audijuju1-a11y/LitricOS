@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::action::{Outcome, Runner};
 use crate::providers::{self, AudioAction, AuthAction, BtAction, NetAction, SystemAction};
+use crate::sandbox::{self, AppUpdate, PermissionFact, SandboxAction};
 use crate::services::ServiceAction;
 use crate::store::{self, StoreAction, StoreApp, StoreReadError};
 
@@ -69,6 +70,28 @@ pub trait Provider: fmt::Debug + Send + Sync {
     fn store(&self, action: &StoreAction, runner: &dyn Runner, root: &Path) -> Outcome {
         providers::perform(&SystemAction::Store(action.clone()), runner, root)
     }
+
+    /// Apply updates or change one application's system sandbox overrides.
+    fn sandbox(&self, action: &SandboxAction, runner: &dyn Runner, root: &Path) -> Outcome {
+        providers::perform(&SystemAction::Sandbox(action.clone()), runner, root)
+    }
+
+    /// Read the system applications with an update available.
+    ///
+    /// # Errors
+    /// See [`StoreReadError`]. A missing Flatpak is `Unavailable`, not an empty
+    /// list.
+    fn store_updates(&self, runner: &dyn Runner) -> Result<Vec<AppUpdate>, StoreReadError>;
+
+    /// Read one application's effective system sandbox permissions.
+    ///
+    /// # Errors
+    /// See [`StoreReadError`]. An invalid id is refused before a process runs.
+    fn store_permissions(
+        &self,
+        runner: &dyn Runner,
+        id: &str,
+    ) -> Result<Vec<PermissionFact>, StoreReadError>;
 
     /// Read the installed system applications.
     ///
@@ -140,6 +163,18 @@ impl Provider for ToolProvider {
     ) -> Result<Vec<StoreApp>, StoreReadError> {
         store::search(runner, query)
     }
+
+    fn store_updates(&self, runner: &dyn Runner) -> Result<Vec<AppUpdate>, StoreReadError> {
+        sandbox::list_updates(runner)
+    }
+
+    fn store_permissions(
+        &self,
+        runner: &dyn Runner,
+        id: &str,
+    ) -> Result<Vec<PermissionFact>, StoreReadError> {
+        sandbox::permissions(runner, id)
+    }
 }
 
 /// The state shared by every clone of a [`FakeProvider`].
@@ -151,6 +186,8 @@ struct FakeState {
     calls: Mutex<Vec<String>>,
     store_installed: Mutex<Option<Vec<StoreApp>>>,
     store_results: Mutex<Option<Vec<StoreApp>>>,
+    sandbox_updates: Mutex<Option<Vec<AppUpdate>>>,
+    sandbox_permissions: Mutex<Option<Vec<PermissionFact>>>,
 }
 
 /// A provider that answers without running a tool.
@@ -210,6 +247,28 @@ impl FakeProvider {
             .store_results
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(apps);
+        self
+    }
+
+    /// Script the available system updates.
+    #[must_use]
+    pub fn with_sandbox_updates(self, updates: Vec<AppUpdate>) -> Self {
+        *self
+            .state
+            .sandbox_updates
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(updates);
+        self
+    }
+
+    /// Script one application's effective permissions.
+    #[must_use]
+    pub fn with_sandbox_permissions(self, facts: Vec<PermissionFact>) -> Self {
+        *self
+            .state
+            .sandbox_permissions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(facts);
         self
     }
 
@@ -298,6 +357,36 @@ impl Provider for FakeProvider {
 
     fn store(&self, action: &StoreAction, _runner: &dyn Runner, _root: &Path) -> Outcome {
         self.record(&SystemAction::Store(action.clone()))
+    }
+
+    fn sandbox(&self, action: &SandboxAction, _runner: &dyn Runner, _root: &Path) -> Outcome {
+        self.record(&SystemAction::Sandbox(action.clone()))
+    }
+
+    fn store_updates(&self, _runner: &dyn Runner) -> Result<Vec<AppUpdate>, StoreReadError> {
+        self.state
+            .sandbox_updates
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| {
+                StoreReadError::Unavailable("the fake has no sandbox updates".to_owned())
+            })
+    }
+
+    fn store_permissions(
+        &self,
+        _runner: &dyn Runner,
+        _id: &str,
+    ) -> Result<Vec<PermissionFact>, StoreReadError> {
+        self.state
+            .sandbox_permissions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| {
+                StoreReadError::Unavailable("the fake has no sandbox permissions".to_owned())
+            })
     }
 
     fn store_list(&self, _runner: &dyn Runner) -> Result<Vec<StoreApp>, StoreReadError> {

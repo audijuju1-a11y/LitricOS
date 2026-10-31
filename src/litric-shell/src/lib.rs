@@ -72,6 +72,7 @@ pub mod quarantine;
 pub mod reader;
 pub mod registry;
 pub mod revert;
+pub mod sandbox;
 pub mod seek;
 pub mod settings;
 pub mod shell;

@@ -24,6 +24,7 @@ use core::fmt;
 use crate::action::PowerAction;
 use crate::launch::{MAX_ARGV, MAX_ENV};
 use crate::providers::{self, AudioAction, AuthAction, BtAction, NetAction, SystemAction};
+use crate::sandbox::{SandboxAction, SandboxKey};
 use crate::services::ServiceAction;
 use crate::store::StoreAction;
 use crate::update::HealthSignal;
@@ -186,6 +187,15 @@ pub enum Request {
     StoreSearch {
         /// The words to search for.
         query: String,
+    },
+    /// Read the system applications with an update available.
+    ///
+    /// A question like `STORE LIST`: no capability, and one bounded process.
+    StoreUpdates,
+    /// Read one application's effective system sandbox permissions.
+    StoreSandbox {
+        /// Reverse-DNS application id, validated by the daemon.
+        id: String,
     },
     /// The local backup service's scheduling and last-attempt state.
     BackupStatus,
@@ -772,6 +782,99 @@ impl Request {
                     }
                     let query = args.get(1..).unwrap_or(&[]).join(" ");
                     Ok(Self::StoreSearch { query })
+                }
+                "updates" => {
+                    arity("STORE UPDATES", 1)?;
+                    Ok(Self::StoreUpdates)
+                }
+                "update" => {
+                    arity("STORE UPDATE", 3)?;
+                    if !arg(2).eq_ignore_ascii_case("confirm") {
+                        return Err(ProtoError::BadArgument {
+                            name: "store confirmation",
+                            value: arg(2).to_owned(),
+                        });
+                    }
+                    let id = if arg(1).eq_ignore_ascii_case("all") {
+                        None
+                    } else {
+                        Some(arg(1).to_owned())
+                    };
+                    Ok(Self::Action {
+                        action: SystemAction::Sandbox(SandboxAction::Update { id }),
+                        consent: true,
+                    })
+                }
+                "sandbox" => {
+                    // `STORE SANDBOX <id>` reads one app; the two sub-words are
+                    // the writes and therefore have their own arity and their
+                    // own confirmation word. A sub-word is matched before the
+                    // id position so an application genuinely named `set`
+                    // could not be read here (Flatpak ids are reverse-DNS, so
+                    // that is a malformed id anyway).
+                    if args.len() < 2 {
+                        return Err(ProtoError::BadArity {
+                            verb: "STORE SANDBOX",
+                            expected: 2,
+                            got: args.len(),
+                        });
+                    }
+                    match arg(1).to_ascii_lowercase().as_str() {
+                        "set" => {
+                            arity("STORE SANDBOX SET", 6)?;
+                            let key = SandboxKey::parse(arg(3)).ok_or_else(|| {
+                                ProtoError::BadArgument {
+                                    name: "sandbox key",
+                                    value: arg(3).to_owned(),
+                                }
+                            })?;
+                            let on = match arg(4).to_ascii_lowercase().as_str() {
+                                "on" => true,
+                                "off" => false,
+                                other => {
+                                    return Err(ProtoError::BadArgument {
+                                        name: "sandbox state",
+                                        value: other.to_owned(),
+                                    })
+                                }
+                            };
+                            if !arg(5).eq_ignore_ascii_case("confirm") {
+                                return Err(ProtoError::BadArgument {
+                                    name: "sandbox confirmation",
+                                    value: arg(5).to_owned(),
+                                });
+                            }
+                            Ok(Self::Action {
+                                action: SystemAction::Sandbox(SandboxAction::Set {
+                                    id: arg(2).to_owned(),
+                                    key,
+                                    on,
+                                }),
+                                consent: true,
+                            })
+                        }
+                        "reset" => {
+                            arity("STORE SANDBOX RESET", 4)?;
+                            if !arg(3).eq_ignore_ascii_case("confirm") {
+                                return Err(ProtoError::BadArgument {
+                                    name: "sandbox confirmation",
+                                    value: arg(3).to_owned(),
+                                });
+                            }
+                            Ok(Self::Action {
+                                action: SystemAction::Sandbox(SandboxAction::Reset {
+                                    id: arg(2).to_owned(),
+                                }),
+                                consent: true,
+                            })
+                        }
+                        _ => {
+                            arity("STORE SANDBOX", 2)?;
+                            Ok(Self::StoreSandbox {
+                                id: arg(1).to_owned(),
+                            })
+                        }
+                    }
                 }
                 "install" => {
                     arity("STORE INSTALL", 4)?;
@@ -1906,6 +2009,104 @@ mod tests {
             Request::parse("STORE SEARCH"),
             Err(ProtoError::BadArity {
                 verb: "STORE SEARCH",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn sandbox_reads_and_confirmed_writes_parse_without_guessing() {
+        assert_eq!(Request::parse("STORE UPDATES"), Ok(Request::StoreUpdates));
+        assert_eq!(
+            Request::parse("STORE SANDBOX org.gnome.Builder"),
+            Ok(Request::StoreSandbox {
+                id: "org.gnome.Builder".to_owned()
+            })
+        );
+        let parsed = Request::parse("STORE UPDATE org.gnome.Builder CONFIRM")
+            .expect("a confirmed single-app update");
+        assert!(matches!(
+            parsed,
+            Request::Action {
+                action: SystemAction::Sandbox(SandboxAction::Update { id: Some(id) }),
+                consent: true,
+            } if id == "org.gnome.Builder"
+        ));
+        let parsed = Request::parse("STORE UPDATE ALL CONFIRM").expect("a confirmed update all");
+        assert!(matches!(
+            parsed,
+            Request::Action {
+                action: SystemAction::Sandbox(SandboxAction::Update { id: None }),
+                consent: true,
+            }
+        ));
+        let parsed =
+            Request::parse("STORE SANDBOX SET org.gnome.Builder host-filesystem off CONFIRM")
+                .expect("a confirmed override");
+        assert!(matches!(
+            parsed,
+            Request::Action {
+                action: SystemAction::Sandbox(SandboxAction::Set {
+                    id,
+                    key: SandboxKey::HostFilesystem,
+                    on: false,
+                }),
+                consent: true,
+            } if id == "org.gnome.Builder"
+        ));
+        let parsed = Request::parse("STORE SANDBOX RESET org.gnome.Builder CONFIRM")
+            .expect("a confirmed reset");
+        assert!(matches!(
+            parsed,
+            Request::Action {
+                action: SystemAction::Sandbox(SandboxAction::Reset { id }),
+                consent: true,
+            } if id == "org.gnome.Builder"
+        ));
+
+        for (line, name) in [
+            (
+                "STORE SANDBOX SET org.gnome.Builder filesystem on CONFIRM",
+                "sandbox key",
+            ),
+            (
+                "STORE SANDBOX SET org.gnome.Builder network maybe CONFIRM",
+                "sandbox state",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    Request::parse(line),
+                    Err(ProtoError::BadArgument { name: got, .. }) if got == name
+                ),
+                "{line}"
+            );
+        }
+        assert!(matches!(
+            Request::parse("STORE SANDBOX SET org.gnome.Builder network off"),
+            Err(ProtoError::BadArity {
+                verb: "STORE SANDBOX SET",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("STORE SANDBOX RESET org.gnome.Builder yes"),
+            Err(ProtoError::BadArgument {
+                name: "sandbox confirmation",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("STORE UPDATE org.gnome.Builder"),
+            Err(ProtoError::BadArity {
+                verb: "STORE UPDATE",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("STORE SANDBOX"),
+            Err(ProtoError::BadArity {
+                verb: "STORE SANDBOX",
                 ..
             })
         ));

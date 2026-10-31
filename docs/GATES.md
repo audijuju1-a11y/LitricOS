@@ -3532,3 +3532,42 @@ not enabled, and Polkit policy handling is untouched.
 
 Revert the S89 commit. The store provider, protocol actions, `app.manage`, the
 App Store page, tests and `44-settings-app-store` disappear; S88 remains.
+
+## 2026-10-31 — S90: Flatpak updates and system sandbox permissions
+
+`litric-sysd` now reads the system app updates Flatpak offers and one application's
+effective sandbox permissions, from `flatpak info --show-permissions` plus the global
+and per-app system override views. Permission entries are discrete, attributed facts;
+`!entry` removals are reported as `unshare` facts and applied in Flatpak's own order.
+`STORE UPDATE`, `STORE SANDBOX SET` and `STORE SANDBOX RESET` are fixed
+`--noninteractive --assumeyes` plans behind the new scoped `app.update` and
+`sandbox.control` capabilities, both live-consent and High risk. Settings has an
+**App Sandbox** page with updates, effective permissions, two overrides, a reset and
+a confirmation for each write.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | **2,046 passed, 0 failed, 0 ignored** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all --check` | exit 0 |
+| golden frames | 44 fixture frames + 1 real; new `45-settings-app-sandbox`; 10 required screens pass |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| image build / boot | **NOT RUN**; no `mkosi` or `qemu-system-x86_64` |
+| real Flatpak remote / override | **NOT EXERCISED**; no `flatpak` on this host |
+
+### Limits
+
+Only the system installation is managed. Updates and permissions are proven against
+Flatpak's documented output and fixtures, not a live remote or a live override. The
+page draws four effective facts before a count line; the daemon returns up to 128 and
+the evidence frame shows all four of its effective facts. The image and boot claims
+remain pending. NetworkManager is still not enabled, and Polkit policy handling is
+untouched.
+
+### Rollback
+
+Revert the S90 commit. The sandbox provider, protocol actions, `app.update` and
+`sandbox.control`, the App Sandbox page, tests and `45-settings-app-sandbox`
+disappear; S89 remains.

@@ -75,7 +75,7 @@ pub type Timestamp = u64;
 /// read. `iface://` and `wifi://` are two grants of one capability: a link and a
 /// network are different resources with different consequences, and a single
 /// grant covering both would make narrowing one impossible later.
-pub const PROVIDER_GRANTS: [(CapabilityId, &str); 15] = [
+pub const PROVIDER_GRANTS: [(CapabilityId, &str); 17] = [
     (CapabilityId::AudioSet, "audio://"),
     (CapabilityId::NetConfigure, "iface://"),
     (CapabilityId::NetConfigure, "wifi://"),
@@ -94,6 +94,13 @@ pub const PROVIDER_GRANTS: [(CapabilityId, &str); 15] = [
     // the exact app and remote by `StoreAction::capability`, and the broker
     // checks that narrower scope against this one.
     (CapabilityId::AppManage, "appmanage://"),
+    // The same shape for the App Sandbox surface. Updates and overrides are
+    // separate capabilities because fetching new code and widening what an app
+    // can reach are different authorities. The broad roots below are policy;
+    // every request carries `appupdate://<id>`, `appupdate://all` or
+    // `sandbox://<id>` and is checked at that narrow scope.
+    (CapabilityId::AppUpdate, "appupdate://"),
+    (CapabilityId::SandboxControl, "sandbox://"),
 ];
 
 /// The whole daemon, minus its transport.
@@ -532,6 +539,8 @@ impl Sysd {
             Request::BtStatus => self.bt_status(),
             Request::StoreList => self.store_list(),
             Request::StoreSearch { query } => self.store_search(query),
+            Request::StoreUpdates => self.store_updates(),
+            Request::StoreSandbox { id } => self.store_permissions(id),
             Request::EnvList => Response::ok(self.env_list()),
             Request::EnvPlan(token) => self.env_plan(token),
             Request::EnvSwitch(token) => self.env_switch(token),
@@ -925,6 +934,80 @@ impl Sysd {
         )
     }
 
+    /// Read the available updates for installed system applications.
+    ///
+    /// A read, so it needs no capability. The deterministic `sandbox.update`
+    /// rows are one per app id; a missing Flatpak is `sandbox.state=unavailable`
+    /// rather than an error or an empty list that reads as "up to date".
+    fn store_updates(&mut self) -> Response {
+        match self.provider.store_updates(self.runner.as_ref()) {
+            Ok(updates) => {
+                let mut lines = vec![
+                    "sandbox.state=ready".to_owned(),
+                    format!("sandbox.updates={}", updates.len()),
+                ];
+                for update in updates {
+                    lines.push(format!(
+                        "sandbox.update {}|{}|{}|{}|{}",
+                        crate::facts::escape_field(&update.id),
+                        crate::facts::escape_field(&update.name),
+                        crate::facts::escape_field(&update.version),
+                        crate::facts::escape_field(&update.branch),
+                        crate::facts::escape_field(&update.origin)
+                    ));
+                }
+                Response::ok(lines)
+            }
+            Err(StoreReadError::BadArgument(detail)) => Response::err("bad-argument", detail),
+            Err(error) => Response::ok(vec![
+                format!("sandbox.state={}", error.token()),
+                "sandbox.updates=0".to_owned(),
+                format!(
+                    "sandbox.error={}",
+                    crate::facts::escape_field(error.detail())
+                ),
+            ]),
+        }
+    }
+
+    /// Read one application's effective system sandbox permissions.
+    ///
+    /// One fact per line, with its source (`base`, `global`, `app` or
+    /// `effective`) so the answer never collapses the three Flatpak views into
+    /// an unattributed blob. The id is validated by the provider before any
+    /// process runs; a bad id is the caller's error while a missing tool is a
+    /// state.
+    fn store_permissions(&mut self, id: &str) -> Response {
+        match self.provider.store_permissions(self.runner.as_ref(), id) {
+            Ok(facts) => {
+                let mut lines = vec![
+                    "sandbox.state=ready".to_owned(),
+                    format!("sandbox.app={}", crate::facts::escape_field(id)),
+                    format!("sandbox.permissions={}", facts.len()),
+                ];
+                for fact in facts {
+                    lines.push(format!(
+                        "sandbox.perm {}|{}|{}",
+                        fact.source.token(),
+                        crate::facts::escape_field(&fact.kind),
+                        crate::facts::escape_field(&fact.value)
+                    ));
+                }
+                Response::ok(lines)
+            }
+            Err(StoreReadError::BadArgument(detail)) => Response::err("bad-argument", detail),
+            Err(error) => Response::ok(vec![
+                format!("sandbox.state={}", error.token()),
+                format!("sandbox.app={}", crate::facts::escape_field(id)),
+                "sandbox.permissions=0".to_owned(),
+                format!(
+                    "sandbox.error={}",
+                    crate::facts::escape_field(error.detail())
+                ),
+            ]),
+        }
+    }
+
     fn store_reply(result: Result<Vec<StoreApp>, StoreReadError>, query: &str) -> Response {
         match result {
             Ok(apps) => {
@@ -1102,6 +1185,7 @@ impl Sysd {
             SystemAction::Service(s) => self.provider.service(s, self.runner.as_ref(), &self.root),
             SystemAction::Auth(a) => self.provider.auth(a, self.runner.as_ref(), &self.root),
             SystemAction::Store(s) => self.provider.store(s, self.runner.as_ref(), &self.root),
+            SystemAction::Sandbox(s) => self.provider.sandbox(s, self.runner.as_ref(), &self.root),
         };
         // Only a helper that ran and rejected the password counts as a guess.
         // A missing tool, a timeout or a refusal is the daemon failing, and
@@ -2729,6 +2813,187 @@ mod tests {
         );
         assert!(line(&reply, "store.error=").is_some());
         let _ = StoreReadError::Failed(String::new());
+    }
+
+    #[test]
+    fn sandbox_reads_use_the_provider_and_keep_unavailable_as_a_state() {
+        use crate::provider_contract::FakeProvider;
+        use crate::sandbox::{AppUpdate, PermissionFact, PermissionSource};
+        let fake = FakeProvider::new()
+            .with_sandbox_updates(vec![AppUpdate {
+                id: "org.gnome.Builder".to_owned(),
+                name: "Builder".to_owned(),
+                version: "46.2".to_owned(),
+                branch: "stable".to_owned(),
+                origin: "flathub".to_owned(),
+            }])
+            .with_sandbox_permissions(vec![PermissionFact {
+                source: PermissionSource::Effective,
+                kind: "filesystem".to_owned(),
+                value: "host".to_owned(),
+            }]);
+        let mut s = sysd().with_provider(Box::new(fake));
+        let reply = s.handle(&Request::StoreUpdates, NOW);
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(
+            line(&reply, "sandbox.state="),
+            Some(&"sandbox.state=ready".to_owned())
+        );
+        assert!(
+            reply
+                .lines()
+                .iter()
+                .any(|line| line == "sandbox.update org.gnome.Builder|Builder|46.2|stable|flathub"),
+            "{:?}",
+            reply.lines()
+        );
+
+        let reply = s.handle(
+            &Request::StoreSandbox {
+                id: "org.gnome.Builder".to_owned(),
+            },
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert!(
+            reply
+                .lines()
+                .iter()
+                .any(|line| line == "sandbox.perm effective|filesystem|host"),
+            "{:?}",
+            reply.lines()
+        );
+
+        let mut s = sysd().with_provider(Box::new(FakeProvider::new()));
+        let reply = s.handle(&Request::StoreUpdates, NOW);
+        assert_eq!(
+            line(&reply, "sandbox.state="),
+            Some(&"sandbox.state=unavailable".to_owned())
+        );
+        assert!(line(&reply, "sandbox.error=").is_some());
+        let reply = s.handle(
+            &Request::StoreSandbox {
+                id: "org.gnome.Builder".to_owned(),
+            },
+            NOW,
+        );
+        assert_eq!(
+            line(&reply, "sandbox.state="),
+            Some(&"sandbox.state=unavailable".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_sandbox_override_grant_authorises_its_narrow_scope() {
+        use crate::providers::SystemAction;
+        use crate::sandbox::{SandboxAction, SandboxKey};
+        let runner = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&runner);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Sandbox(SandboxAction::Set {
+                    id: "org.gnome.Builder".to_owned(),
+                    key: SandboxKey::Network,
+                    on: false,
+                }),
+                consent: true,
+            },
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(
+            line(&reply, "command="),
+            Some(
+                &"command=flatpak override --system --unshare=network org.gnome.Builder".to_owned()
+            ),
+            "{:?}",
+            reply.lines()
+        );
+        assert_eq!(runner.calls().len(), 1, "the tool ran exactly once");
+    }
+
+    #[test]
+    fn a_sandbox_update_grant_authorises_one_app_and_all_listed_updates() {
+        let runner = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&runner);
+        let reply = s.handle(
+            &Request::parse("STORE UPDATE all CONFIRM").expect("update"),
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(
+            line(&reply, "command="),
+            Some(&"command=flatpak update --system --noninteractive --assumeyes --app".to_owned()),
+            "{:?}",
+            reply.lines()
+        );
+        let reply = s.handle(
+            &Request::parse("STORE UPDATE org.gnome.Builder CONFIRM").expect("update"),
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(
+            line(&reply, "command="),
+            Some(
+                &"command=flatpak update --system --noninteractive --assumeyes --app org.gnome.Builder"
+                    .to_owned()
+            ),
+            "{:?}",
+            reply.lines()
+        );
+        assert_eq!(runner.calls().len(), 2);
+    }
+
+    #[test]
+    fn a_sandbox_write_without_live_consent_is_refused_before_flatpak_runs() {
+        use crate::providers::SystemAction;
+        use crate::sandbox::SandboxAction;
+        let runner = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&runner);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Sandbox(SandboxAction::Update {
+                    id: Some("org.gnome.Builder".to_owned()),
+                }),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(!reply.is_ok(), "{}", reply.encode());
+        assert!(
+            reply.encode().contains("needs-live-consent"),
+            "{}",
+            reply.encode()
+        );
+        assert!(
+            runner.calls().is_empty(),
+            "no process may run without consent"
+        );
+    }
+
+    #[test]
+    fn a_sandbox_write_without_the_sandbox_grant_runs_nothing() {
+        use crate::providers::SystemAction;
+        use crate::sandbox::SandboxAction;
+        let runner = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&runner);
+        let client = s.client().expect("client").clone();
+        s.caps_mut().revoke_all(&client, NOW);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Sandbox(SandboxAction::Reset {
+                    id: "org.gnome.Builder".to_owned(),
+                }),
+                consent: true,
+            },
+            NOW,
+        );
+        assert!(!reply.is_ok(), "{}", reply.encode());
+        assert!(reply.encode().contains("revoked"), "{}", reply.encode());
+        assert!(
+            runner.calls().is_empty(),
+            "no process may run without a grant"
+        );
     }
 
     // ---- the write half: providers ----------------------------------------

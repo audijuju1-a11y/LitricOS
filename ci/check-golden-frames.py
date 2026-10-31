@@ -102,6 +102,7 @@ OPTIONAL: list[str] = [
     "38-settings-diagnostics",
     "43-settings-services",
     "44-settings-app-store",
+    "45-settings-app-sandbox",
 ]
 
 GRID_W = 64

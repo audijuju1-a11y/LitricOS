@@ -474,6 +474,20 @@ pub enum Hot {
     StoreConfirm,
     /// Cancel the pending App Store write.
     StoreCancel,
+    /// Apply every listed Flatpak update.
+    SandboxUpdateAll,
+    /// Select one update row and ask to apply it.
+    SandboxUpdate(usize),
+    /// Select one installed application for the sandbox view.
+    SandboxApp(usize),
+    /// Ask to flip one sandbox access for the selected application.
+    SandboxToggle(crate::sandbox::Key),
+    /// Ask to reset the selected application's system overrides.
+    SandboxReset,
+    /// Confirm the pending App Sandbox write.
+    SandboxConfirm,
+    /// Cancel the pending App Sandbox write.
+    SandboxCancel,
     /// Keep the scale that is on screen and let the countdown go.
     ScaleKeep,
     /// Put the previous scale back now, without waiting out the countdown.
@@ -1606,6 +1620,8 @@ pub enum Effect {
     Service(ServiceCommand),
     /// Ask the App Store provider for a read or a confirmed write.
     Store(crate::store::Request),
+    /// Ask the App Sandbox provider for a read or a confirmed write.
+    Sandbox(crate::sandbox::Request),
     /// A power transition was confirmed by the user and must be carried out.
     ///
     /// This effect only exists after the confirm step has been answered, so the
@@ -3694,6 +3710,8 @@ pub struct Shell {
     pub services_note: String,
     /// App Store catalog, selection and confirmation state.
     pub store: crate::store::View,
+    /// The App Sandbox page's rows, selection and pending write.
+    pub sandbox: crate::sandbox::View,
     /// The backup service's last answer, read on the same action and shown as a
     /// reading; the schedule itself belongs to `litric-sysd`.
     pub backup_status: crate::backupstatus::Status,
@@ -4476,6 +4494,7 @@ impl Shell {
             update_status: crate::updatestatus::Status::default(),
             services_note: String::new(),
             store: crate::store::View::default(),
+            sandbox: crate::sandbox::View::default(),
             backup_status: crate::backupstatus::Status::default(),
             activity: crate::taskmgr::TaskManager::new(),
             activity_end_confirm: None,
@@ -7265,6 +7284,11 @@ impl Shell {
                         self.store.loaded = false;
                         effects.push(Effect::Store(crate::store::Request::List));
                     }
+                    if page == crate::settings::Page::AppSandbox {
+                        self.sandbox.loaded = false;
+                        effects.push(Effect::Sandbox(crate::sandbox::Request::Updates));
+                        effects.push(Effect::Sandbox(crate::sandbox::Request::Apps));
+                    }
                 }
                 effects
             }
@@ -7327,6 +7351,55 @@ impl Shell {
             Hot::StoreCancel => {
                 self.store.confirm = None;
                 self.store.note = "Nothing was changed.".to_owned();
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::SandboxUpdateAll => {
+                self.sandbox.ask_update_all();
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::SandboxUpdate(index) => {
+                self.sandbox.ask_update(index);
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::SandboxApp(index) => {
+                self.sandbox.selected_app = Some(index);
+                self.sandbox.confirm = None;
+                // The old app's facts belong to the old app; clearing them is
+                // what stops a switch being drawn from another sandbox while
+                // the new read is in flight.
+                self.sandbox.permissions.clear();
+                self.sandbox.perm_state.clear();
+                self.request_full_redraw();
+                match self.sandbox.app().map(|app| app.id.clone()) {
+                    Some(id) => vec![Effect::Sandbox(crate::sandbox::Request::Permissions(id))],
+                    None => Vec::new(),
+                }
+            }
+            Hot::SandboxToggle(key) => {
+                self.sandbox.ask_toggle(key);
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::SandboxReset => {
+                self.sandbox.ask_reset();
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::SandboxConfirm => {
+                let Some(request) = self.sandbox.confirmed_request() else {
+                    self.sandbox.note = "Nothing is waiting for confirmation.".to_owned();
+                    return Vec::new();
+                };
+                self.sandbox.note = request.progress();
+                self.request_full_redraw();
+                vec![Effect::Sandbox(request)]
+            }
+            Hot::SandboxCancel => {
+                self.sandbox.confirm = None;
+                self.sandbox.note = "Nothing was changed.".to_owned();
                 self.request_full_redraw();
                 Vec::new()
             }

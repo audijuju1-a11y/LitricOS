@@ -271,11 +271,13 @@ pub enum Page {
     Services,
     /// Search, install and remove Flatpak applications.
     AppStore,
+    /// Flatpak updates and one application's system sandbox permissions.
+    AppSandbox,
 }
 
 impl Page {
     /// Pages shown by Settings in sidebar order.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Appearance,
         Self::Display,
         Self::Input,
@@ -293,6 +295,7 @@ impl Page {
         Self::Updates,
         Self::Services,
         Self::AppStore,
+        Self::AppSandbox,
     ];
 
     /// Stable user-facing English title (translated by the text catalog).
@@ -316,6 +319,7 @@ impl Page {
             Self::Updates => "Updates",
             Self::Services => "Services",
             Self::AppStore => "App Store",
+            Self::AppSandbox => "App Sandbox",
         }
     }
 
@@ -350,6 +354,7 @@ impl Page {
             Self::Updates => "updates",
             Self::Services => "services",
             Self::AppStore => "app-store",
+            Self::AppSandbox => "app-sandbox",
         }
     }
 

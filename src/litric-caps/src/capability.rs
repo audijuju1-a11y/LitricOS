@@ -134,6 +134,21 @@ pub enum CapabilityId {
     /// `appmanage://<id>` for a removal, so permission for one app is not
     /// permission for another and one remote is not another.
     AppManage,
+    /// Apply Flatpak updates to one application or to every listed update.
+    ///
+    /// Separate from [`Self::AppManage`], which installs or removes an app:
+    /// fetching an update is neither, and it brings new code into an
+    /// application that is already trusted to be present. The scope is
+    /// `appupdate://<id>` or `appupdate://all`, so authority over one
+    /// application's update is not authority over every application's.
+    AppUpdate,
+    /// Change the system sandbox overrides Flatpak applies to one application.
+    ///
+    /// This is the permission that decides whether an app can reach the host's
+    /// filesystem or the network, so it is separate from every other app
+    /// capability. The scope is `sandbox://<id>`: a grant names one
+    /// application and can never widen another one or the host.
+    SandboxControl,
 }
 
 impl CapabilityId {
@@ -177,6 +192,8 @@ impl CapabilityId {
             Self::BackupControl => "backup.control",
             Self::ServiceControl => "service.control",
             Self::AppManage => "app.manage",
+            Self::AppUpdate => "app.update",
+            Self::SandboxControl => "sandbox.control",
         }
     }
 
@@ -220,6 +237,8 @@ impl CapabilityId {
             "backup.control" => Self::BackupControl,
             "service.control" => Self::ServiceControl,
             "app.manage" => Self::AppManage,
+            "app.update" => Self::AppUpdate,
+            "sandbox.control" => Self::SandboxControl,
             _ => return None,
         })
     }
@@ -264,6 +283,8 @@ impl CapabilityId {
             Self::BackupControl,
             Self::ServiceControl,
             Self::AppManage,
+            Self::AppUpdate,
+            Self::SandboxControl,
         ]
     }
 
@@ -293,6 +314,8 @@ impl CapabilityId {
                 | Self::BackupControl
                 | Self::ServiceControl
                 | Self::AppManage
+                | Self::AppUpdate
+                | Self::SandboxControl
         )
     }
 
@@ -344,7 +367,9 @@ impl CapabilityId {
             | Self::UpdateControl
             | Self::BackupControl
             | Self::ServiceControl
-            | Self::AppManage => Scoping::Optional,
+            | Self::AppManage
+            | Self::AppUpdate
+            | Self::SandboxControl => Scoping::Optional,
             _ => Scoping::Never,
         }
     }
@@ -392,6 +417,8 @@ impl CapabilityId {
             Self::BackupControl => "create a backup of your application state",
             Self::ServiceControl => "reload a system service",
             Self::AppManage => "install or remove an application",
+            Self::AppUpdate => "install updates for an application",
+            Self::SandboxControl => "change what an application can reach outside its sandbox",
         }
     }
 
@@ -413,7 +440,9 @@ impl CapabilityId {
             | Self::UpdateControl
             | Self::BackupControl
             | Self::ServiceControl
-            | Self::AppManage => Risk::High,
+            | Self::AppManage
+            | Self::AppUpdate
+            | Self::SandboxControl => Risk::High,
             Self::FsRead
             | Self::FsList
             | Self::NetServer
@@ -555,6 +584,8 @@ const RESOURCE_SCHEMES: &[&str] = &[
     "backup://",
     "service://",
     "appmanage://",
+    "appupdate://",
+    "sandbox://",
 ];
 
 /// Storage URI schemes, from RUNTIME section 17.

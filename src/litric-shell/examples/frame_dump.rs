@@ -523,6 +523,107 @@ fn scene_settings_app_store(rig: &mut Rig) {
     scene_settings_page(rig, litric_shell::settings::Page::AppStore);
 }
 
+/// The App Sandbox page with the QEMU machine's Flatpak facts: two updates and
+/// three installed applications, with the first application's effective
+/// permissions read from the daemon's answer.
+///
+/// The values are the fixture values the daemon tests use. A frame recorded
+/// without them would show empty lists and could not be reviewed for the
+/// clipping and elision this frame exists to catch.
+fn scene_settings_app_sandbox(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::AppSandbox);
+    let services = &mut rig.shell.facts.services;
+    services.flatpak_state = "ready".to_owned();
+    services.flatpak_tool = true;
+    services.flatpak_sandbox = true;
+    services.flatpak_apps = Some(3);
+    services.flatpak_remotes = Some(2);
+    let app = |id: &str, name: &str, version: &str| litric_shell::store::StoreApp {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        version: version.to_owned(),
+        origin: "flathub".to_owned(),
+        size: String::new(),
+        remote: "flathub".to_owned(),
+    };
+    rig.shell.sandbox = litric_shell::sandbox::View {
+        state: "ready".to_owned(),
+        error: String::new(),
+        note: "2 updates are available.".to_owned(),
+        updates: vec![
+            litric_shell::sandbox::Update {
+                id: "org.gnome.Builder".to_owned(),
+                name: "Builder".to_owned(),
+                version: "46.2".to_owned(),
+                branch: "stable".to_owned(),
+                origin: "flathub".to_owned(),
+            },
+            litric_shell::sandbox::Update {
+                id: "org.videolan.VLC".to_owned(),
+                name: "VLC".to_owned(),
+                version: "3.0.21".to_owned(),
+                branch: "stable".to_owned(),
+                origin: "flathub".to_owned(),
+            },
+        ],
+        apps: vec![
+            app("org.gnome.Builder", "Builder", "46.2"),
+            app("org.kde.krita", "Krita", "5.2.3"),
+            app("org.videolan.VLC", "VLC", "3.0.21"),
+        ],
+        selected_app: Some(0),
+        permissions: vec![
+            litric_shell::sandbox::Permission {
+                source: "base".to_owned(),
+                kind: "filesystem".to_owned(),
+                value: "/home/alice/Documents".to_owned(),
+            },
+            litric_shell::sandbox::Permission {
+                source: "base".to_owned(),
+                kind: "filesystem".to_owned(),
+                value: "host".to_owned(),
+            },
+            litric_shell::sandbox::Permission {
+                source: "base".to_owned(),
+                kind: "shared".to_owned(),
+                value: "network".to_owned(),
+            },
+            litric_shell::sandbox::Permission {
+                source: "global".to_owned(),
+                kind: "unshare".to_owned(),
+                value: "host".to_owned(),
+            },
+            litric_shell::sandbox::Permission {
+                source: "effective".to_owned(),
+                kind: "device".to_owned(),
+                value: "dri".to_owned(),
+            },
+            litric_shell::sandbox::Permission {
+                source: "effective".to_owned(),
+                kind: "filesystem".to_owned(),
+                value: "/home/alice/Documents".to_owned(),
+            },
+            litric_shell::sandbox::Permission {
+                source: "effective".to_owned(),
+                kind: "shared".to_owned(),
+                value: "network".to_owned(),
+            },
+            litric_shell::sandbox::Permission {
+                source: "effective".to_owned(),
+                kind: "socket".to_owned(),
+                value: "x11".to_owned(),
+            },
+        ],
+        perm_state: "ready".to_owned(),
+        perm_error: String::new(),
+        confirm: None,
+        loaded: true,
+    };
+    // The last sidebar row has to be on screen for the evidence frame to show
+    // which page was selected.
+    rig.shell.settings.sidebar_scroll = 170.0;
+}
+
 /// The danger dialog: deleting a file, with the object named and Cancel as the
 /// safe default (governance §2, screen 9).
 fn scene_danger_dialog(rig: &mut Rig) {
@@ -1025,7 +1126,7 @@ fn main() -> ExitCode {
     // (04-QA-LINT-GOVERNANCE §2) plus the frames this dump has always written:
     // the lock in three states, the launcher and its search, and the remaining
     // applications. `ci/check-golden-frames.py` names the required ten.
-    let scenes: [Scene; 35] = [
+    let scenes: [Scene; 36] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
         ("04-files", scene_files),
@@ -1047,6 +1148,7 @@ fn main() -> ExitCode {
         ("38-settings-diagnostics", scene_settings_diagnostics),
         ("43-settings-services", scene_settings_services),
         ("44-settings-app-store", scene_settings_app_store),
+        ("45-settings-app-sandbox", scene_settings_app_sandbox),
         ("17-control-centre", scene_control_centre),
         ("18-notifications", scene_notifications),
         ("19-dialog-danger", scene_danger_dialog),

@@ -9236,3 +9236,75 @@ catalogue.
 
 Revert the S89 commit. The store provider/protocol/capability, App Store page,
 shell model, tests and `44-settings-app-store` disappear; S88 remains.
+
+## 2026-10-31 — S90: App Sandbox reads and changes Flatpak updates and permissions
+
+The App Store could install an application but not say what Flatpak would update or
+what the application could reach. S90 makes both real. `STORE UPDATES` lists the
+system apps Flatpak offers updates for; `STORE SANDBOX <id>` reads the application's
+own context, the global system override and the app's system override, then merges
+them into discrete `effective` facts and reports each `!entry` as an `unshare` fact
+instead of folding it away. `STORE UPDATE … CONFIRM`, `STORE SANDBOX SET … CONFIRM`
+and `STORE SANDBOX RESET … CONFIRM` are fixed non-interactive plans behind two new
+High-risk, live-consent capabilities, each checked at `appupdate://…` or
+`sandbox://…`. Settings gains an **App Sandbox** page with updates, per-app effective
+permissions, two overrides and a reset, each behind a confirmation card.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-sysd/src/sandbox.rs` | New Flatpak update reader, three-source permission reader/merge, fixed update/override/reset plans, validation, caps and fixture tests. |
+| `src/litric-sysd/src/lib.rs` | Registers the new module. |
+| `src/litric-sysd/src/providers.rs` | `SystemAction::Sandbox`, family/token/consent and the two capability scopes. |
+| `src/litric-sysd/src/provider_contract.rs` | Provider contract gains the sandbox action, update and permission reads; `FakeProvider` scripts them without a process. |
+| `src/litric-sysd/src/proto.rs` | `STORE UPDATES`, `STORE UPDATE`, `STORE SANDBOX <id>`, `STORE SANDBOX SET …`, `STORE SANDBOX RESET …`, with refusal tests. |
+| `src/litric-sysd/src/state.rs` | Two reads, two policy grants, reply builders and daemon-authorised tests. |
+| `src/litric-sysd/src/action.rs` | The recording runner queues successive capture answers, so a three-call read is testable. |
+| `src/litric-caps/src/capability.rs` | Adds `app.update` and `sandbox.control`, `appupdate://` and `sandbox://`, risk High, live consent required. |
+| `src/litric-shell/src/sandbox.rs` | New shell model: update/permission parsers, selection, toggle direction, confirmations and progress text. |
+| `src/litric-shell/src/settings.rs` | Adds the `App Sandbox` page, slug `app-sandbox`; sidebar now has 18 pages. |
+| `src/litric-shell/src/shell.rs` | Update/override/reset hotspots, selection, confirm/cancel, and page-open reads. |
+| `src/litric-shell/src/main.rs` | Sends sandbox requests through the daemon and re-reads the affected list after a successful write. |
+| `src/litric-shell/src/views.rs` | Update rows, installed chooser, effective/removed facts, two toggles, reset and a centred confirmation card. |
+| `src/litric-shell/examples/frame_dump.rs` | Adds `45-settings-app-sandbox`. |
+| `docs/ui-review/2026-10-31/` | Adds the reviewed PNG, updates counts, index and contact sheet. |
+
+### User-visible outcomes
+
+| State | Result |
+|---|---|
+| Update list read | Named rows show id, version, branch and origin; the count is honest and deterministically ordered. |
+| Update all / one | A confirmation names the scope; confirming sends the fixed non-interactive plan. |
+| Sandbox read | Effective facts are shown as `kind` and value; removed entries say which overlay removed them. |
+| Override toggle | Says Allowed or Denied from the effective set; unknown disables the control rather than guessing. |
+| Reset | Confirms first and names the one application; other applications are not touched. |
+| Flatpak missing | **Flatpak is not installed in this image**; no update or sandbox controls are drawn. |
+| Read failure | The daemon's state/detail is shown; no rows or permissions are invented. |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | **2,046 passed, 0 failed, 0 ignored** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all --check` | exit 0 |
+| `frame_dump` + `ci/check-golden-frames.py` | 44 fixture frames + 1 real; new `45-settings-app-sandbox`; 10 required screens pass |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+
+### Limits
+
+* No real Flatpak remote or override was exercised: this host has no `flatpak`. Reads
+  and writes are fixture/runner tested, not run against a live installation.
+* Only the system installation is managed; per-user installations are excluded.
+* The image was not built or booted (`mkosi` and QEMU absent). The frame is a
+  composition of the shipping view, not a capture from a booted VM.
+* The page shows four effective facts before a count line; the daemon returns up to
+  128 and the evidence frame's four effective facts are all shown.
+* NetworkManager is installed but deliberately not enabled; Polkit policy handling is
+  unchanged.
+
+### Rollback
+
+Revert the S90 commit. The sandbox provider/protocol/capabilities, App Sandbox page,
+shell model, tests and `45-settings-app-sandbox` disappear; S89 remains.
