@@ -696,6 +696,19 @@ fn scene_install_dialog(rig: &mut Rig) {
     }
 }
 
+/// The uninstall confirmation: the same desktop dialog, scrim and spring as
+/// install, with the application's name and a destructive Uninstall action.
+fn scene_uninstall_dialog(rig: &mut Rig) {
+    scene_launcher(rig);
+    rig.shell.desktop_dialog = Some(litric_shell::apps::DesktopDialog::UninstallApp {
+        id: "com.example.weston".to_owned(),
+        name: "Weston Simple SHM".to_owned(),
+    });
+    for _ in 0..90 {
+        rig.shell.tick_after(16);
+    }
+}
+
 /// The launcher with a query typed: the panel as results and the field.
 fn scene_search(rig: &mut Rig) {
     scene_launcher(rig);
@@ -917,7 +930,7 @@ fn main() -> ExitCode {
     // (04-QA-LINT-GOVERNANCE §2) plus the frames this dump has always written:
     // the lock in three states, the launcher and its search, and the remaining
     // applications. `ci/check-golden-frames.py` names the required ten.
-    let scenes: [Scene; 31] = [
+    let scenes: [Scene; 32] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
         ("04-files", scene_files),
@@ -945,6 +958,7 @@ fn main() -> ExitCode {
         ("13-lock-customize", scene_locked_customize),
         ("14-launcher", scene_launcher),
         ("40-install-dialog", scene_install_dialog),
+        ("41-uninstall-dialog", scene_uninstall_dialog),
         ("21-mission-control", scene_mission_control),
         ("22-power-menu", scene_power_menu),
         ("23-litro-menu", scene_litro_menu),

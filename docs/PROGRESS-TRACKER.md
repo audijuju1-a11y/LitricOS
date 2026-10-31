@@ -8944,3 +8944,77 @@ and the idle-RAM/CPU/boot-timing platform absent.
 Revert the S85 commit. The launcher install entry, the install dialog, its
 worker and timeout, the two tests, and the two gallery frames disappear; the
 S82/S84 daemon install and launch paths remain unchanged.
+
+## 2026-10-31 — S86: removing an installed application from the Applications UI
+
+S85 put an application into the launcher but left removal on the daemon socket.
+S86 completes the pair: an installed tile has a visible context menu, the
+existing desktop dialog confirms the removal, and the unchanged
+`APP UNINSTALL <id>` request runs on a worker. The success and failure states are
+the same surfaces the rest of the desktop uses.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/apps.rs:260` | `DesktopDialog::UninstallApp { id, name }` carries the captured target. |
+| `src/litric-shell/src/apps.rs:2040` | `MenuAction::UninstallApp` is a real context-menu action. |
+| `src/litric-shell/src/apps.rs:2153` | An installed tile's menu offers **Uninstall application…**. |
+| `src/litric-shell/src/shell.rs:3022` | `open_uninstall_dialog` opens the existing dialog and closes the launcher. |
+| `src/litric-shell/src/shell.rs:3038` | `open_uninstall_from_menu` reads the menu's captured id, not a shifting tile index. |
+| `src/litric-shell/src/shell.rs:3262` | `start_uninstall` sends `APP UNINSTALL <id>` on a named worker thread. |
+| `src/litric-shell/src/shell.rs:3297` | `poll_uninstall` retires a hung worker at the existing 15 s UI deadline. |
+| `src/litric-shell/src/shell.rs:3338` | `finish_uninstall` closes on success, notifies under Applications, refreshes discovery and drops the stale list entry. |
+| `src/litric-shell/src/shell.rs:3791` | `uninstall_error_text` maps `bad-id`, `not-installed`, `unsafe-bundle`, `install-io` and `refused` separately. |
+| `src/litric-shell/src/views.rs:282` | The uninstall confirmation uses the existing dialog with a bad-tone action and busy shield. |
+| `src/litric-shell/src/shell.rs:477` | `Hot::DialogBusy` blocks both the buttons and the surface behind a running dialog. |
+| `src/litric-shell/src/e2e_app_install.rs:240` | The real-socket journey installs through the S85 UI, uninstalls through the tile menu, asserts busy/success/tile removal, then reaches `not-installed` through a stale external tile. |
+| `src/litric-shell/src/shell.rs:11837` | A worker that never replies clears the spinner at the UI deadline. |
+| `src/litric-shell/examples/frame_dump.rs:703` | `41-uninstall-dialog` is a rendered gallery scene. |
+
+### User-visible outcomes
+
+| Source/time | Result |
+|---|---|
+| Installed launcher tile, right-click | **Application → Uninstall application…** opens the confirmation; no change to an uninstalled or built-in tile. |
+| Confirmation, while the worker runs | Loading **Uninstall**, disabled **Cancel**, and a blocking panel; no second submit. |
+| Accepted | Dialog closes; **Uninstalled <name>** under Applications; the watched application directories reload and the tile disappears. |
+| `not-installed` | "That application is no longer installed."; the confirmation stays readable and enabled. |
+| `unsafe-bundle` / `install-io` / `refused` / `bad-id` | A distinct sentence for each; no success notification and no tile removal. |
+| Worker closed, silent or hung | "The system service closed the uninstall request." / "The system service did not answer." / "The uninstall did not finish in time. Try again."; spinner cleared, dialog no longer disabled. |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test -p litric-shell --lib e2e_app_install::journey_install_through_the_launcher_ui_is_visible_and_launchable -- --nocapture` | 1 passed; real Unix socket, UI install, tile menu, busy shield, success notification, tile removal, stale-tile `not-installed` |
+| `cargo test -p litric-shell --lib shell::scan_worker_tests::an_uninstall_worker_that_never_replies_stops_after_the_deadline -- --nocapture` | 1 passed; busy before the deadline, visible timeout and no job at 15 s |
+| `cargo test --workspace` | **1,988 passed, 0 failed, 0 ignored** |
+| `frame_dump` | 40 fixture frames; only new `41-uninstall-dialog`; 39 prior fixture frames byte-identical |
+| `ci/check-golden-frames.py --frames build/frames-s86 --update` | PASS; recorded 40 frames including the new optional `41-uninstall-dialog` |
+| Committed gallery | `docs/ui-review/2026-10-31/` — 41 PNGs, index, contact sheet, README |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+
+The three skips remain the environment limits: `mkosi` absent, QEMU absent,
+and the idle-RAM/CPU/boot-timing platform absent.
+
+### Limits
+
+* Removal is the existing daemon contract: the desktop entry and the installed
+  bundle under `litric/apps/<id>`; there is no package-manager, signature,
+  running-process or user-data management.
+* The e2e reaches `not-installed` through a stale external desktop entry,
+  because a normal UI tile disappears once its bundle is gone. The failure is
+  still driven through the visible tile menu and the real socket.
+* The installed app's window/compositor path is unchanged from S82.
+* Real-card C2 KMS modeset/page-flip claims remain **NOT MADE**: no `/dev/dri`,
+  no `/sys/class/drm`, `CONFIG_DRM` unset. VM/image gates remain blocked by the
+  absent `mkosi` and `qemu-system-x86_64`.
+
+### Rollback
+
+Revert the S86 commit. The tile menu, uninstall dialog, worker, timeout, the two
+tests and `41-uninstall-dialog` disappear; the S85 install UI and the daemon's
+install/uninstall paths remain unchanged.

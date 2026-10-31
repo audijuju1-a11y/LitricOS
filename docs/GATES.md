@@ -3378,3 +3378,45 @@ unproven and are not made here.
 Revert the S85 commit. The launcher entry, install dialog, worker, timeout,
 real-socket UI journey and the two affected gallery frames disappear; the
 existing daemon install and launch paths remain.
+
+## 2026-10-31 — S86: the Applications uninstall UI
+
+The Applications launcher now removes an installed application through the same
+desktop dialog system it uses to install one. Right-clicking an installed tile
+offers **Uninstall application…**; the confirmation names the app, runs the
+unchanged `APP UNINSTALL <id>` request on a worker, and uses the same 15 s UI
+deadline. Success closes the dialog, posts `Uninstalled <name>` under
+Applications and refreshes the watched application directories so the tile
+disappears. `not-installed`, unsafe/IO/refused failures and a dead worker each
+have a distinct sentence.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| UI real-socket journey | 1 passed: UI install, tile context menu, busy shield, success notification, tile removal, stale-tile `not-installed` |
+| Worker deadline test | 1 passed: spinner clears at 15 s with a visible error |
+| `cargo test --workspace` | **1,988 passed, 0 failed, 0 ignored** |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| gallery | 41 screens; only new `41-uninstall-dialog`; 39 prior fixture frames byte-identical |
+| real card / KMS / page flip | **NOT RUN**; no DRM card node or `/sys/class/drm` on this host |
+| VM/image gates | **NOT RUN**; no `mkosi`, no `qemu-system-x86_64` |
+
+The three skips are the pre-existing environment limits: image build, boot smoke
+and idle measurement. No gate was weakened or skipped for this batch.
+
+### Limits
+
+The uninstall uses the existing desktop-entry and bundle paths. It does not stop
+a running application, remove user data, verify signatures or invoke a package
+manager. The not-installed path is reached through a stale external desktop
+entry because a normal tile is already gone after success. Real-card C2 KMS
+modeset/page-flip claims remain unproven and are not made here.
+
+### Rollback
+
+Revert the S86 commit. The tile menu, uninstall dialog, worker, timeout,
+real-socket journey, deadline test and `41-uninstall-dialog` disappear; S85's
+install UI and the existing daemon paths remain.

@@ -279,6 +279,8 @@ fn draw_desktop_dialog_panel(
     // the affirmative button, and its tone. One table, so a dialog cannot be
     // drawn with a button that has nothing behind it.
     let install = matches!(dialog, DesktopDialog::InstallApp);
+    let uninstall = matches!(dialog, DesktopDialog::UninstallApp { .. });
+    let busy = (install && shell.install_busy) || (uninstall && shell.uninstall_busy);
     let (title, mut detail, field_hint, ok_label, tone) = match &dialog {
         DesktopDialog::NewFolder => (
             "New folder".to_owned(),
@@ -293,6 +295,13 @@ fn draw_desktop_dialog_panel(
             None,
             "Install",
             Tone::Accent,
+        ),
+        DesktopDialog::UninstallApp { name, .. } => (
+            "Uninstall application".to_owned(),
+            format!("Remove {name}? Its files and launcher tile will be deleted."),
+            None,
+            "Uninstall",
+            Tone::Bad,
         ),
         DesktopDialog::PowerConfirm { command } => (
             command.question().to_owned(),
@@ -316,6 +325,15 @@ fn draw_desktop_dialog_panel(
         ),
     };
 
+    if uninstall {
+        detail = shell.uninstall_error.clone().unwrap_or_else(|| {
+            if shell.uninstall_busy {
+                "Removing the application and its launcher tile…".to_owned()
+            } else {
+                detail
+            }
+        });
+    }
     if install {
         detail = shell.install_error.clone().unwrap_or_else(|| {
             if shell.install_busy {
@@ -356,7 +374,14 @@ fn draw_desktop_dialog_panel(
     // The click-away hotspot goes in FIRST so the buttons, registered later,
     // win the hit test (`hit` picks the last registration). Clicking away
     // cancels: dismissing a confirmation must never be able to perform one.
-    shell.hotspots_mut().push(panel, Hot::DialogCancel);
+    shell.hotspots_mut().push(
+        panel,
+        if busy {
+            Hot::DialogBusy
+        } else {
+            Hot::DialogCancel
+        },
+    );
 
     let s_title = t.style_label();
     font::draw(
@@ -367,7 +392,9 @@ fn draw_desktop_dialog_panel(
         &s_title,
     );
     if !detail.is_empty() {
-        let color = if install && shell.install_error.is_some() {
+        let color = if (install && shell.install_error.is_some())
+            || (uninstall && shell.uninstall_error.is_some())
+        {
             t.tone(Tone::Bad)
         } else {
             t.text_dim()
@@ -453,7 +480,6 @@ fn draw_desktop_dialog_panel(
         );
         ui::text_field(canvas, &t, field, &shell.desktop_dialog_field, hint, true);
     }
-    let busy = install && shell.install_busy;
     let ok = Rect::new(
         panel.right() - t.px(112.0),
         panel.bottom() - t.px(40.0),

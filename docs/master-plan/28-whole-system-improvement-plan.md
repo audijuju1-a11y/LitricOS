@@ -261,6 +261,7 @@ end to end rather than half-built.
 
 | 84 | An installed application that exits before mapping is visible | bounded pending-launch check, window cancellation, real-socket unsafe-install/early-exit/stale-launch journey (**landed 2026-10-31**, 1,985 workspace tests; see tracker §84) | here |
 | 85 | User-facing Applications install UI | launcher entry, existing-dialog install form, worker with a 15 s UI deadline, distinct empty/missing/unsafe/duplicate outcomes, success notification and immediate discovery, real-socket UI install-and-launch journey (**landed 2026-10-31**, 1,987 workspace tests; see tracker §85) | here |
+| 86 | User-facing Applications uninstall UI | installed-tile context menu, existing-dialog confirmation, worker with the same 15 s deadline, distinct not-installed/unsafe/IO/refused outcomes, success notification and immediate discovery, real-socket UI uninstall journey (**landed 2026-10-31**, 1,988 workspace tests; see tracker §86) | here |
 
 Image-level rows (A1, the real-card half of C2, and every `VM E2E` claim) stay
 in `docs/GATES.md` as `NOT RUN` until a builder exists. That is a scheduling fact, not an excuse: the

@@ -256,6 +256,13 @@ pub enum DesktopDialog {
     NewFolder,
     /// Install a local application bundle from `litric/incoming`.
     InstallApp,
+    /// Remove an installed application after the user confirms it.
+    UninstallApp {
+        /// The reverse-DNS id the daemon installed it under.
+        id: String,
+        /// The name the launcher showed for it.
+        name: String,
+    },
     /// Confirm a power transition named by the user.
     PowerConfirm {
         /// Which transition, from [`crate::shell::PowerCommand::ALL`].
@@ -2029,6 +2036,8 @@ pub enum MenuAction {
     PurgeTrashItem,
     /// Open the selected desktop icon.
     OpenSelection,
+    /// Ask to remove the launcher tile's installed application.
+    UninstallApp,
     /// Change the wallpaper (desktop). Cycles themes.
     NextWallpaper,
     /// Use Google for omnibox searches.
@@ -2055,6 +2064,13 @@ pub struct ContextMenu {
     /// `BrowserApp::active` when the row runs: it has to be recorded here,
     /// while the pointer still says which tab it was.
     pub tab: Option<usize>,
+    /// The installed application a launcher-tile menu belongs to.
+    ///
+    /// The menu row runs after the menu has closed, when the launcher may have
+    /// reloaded and the tile's index no longer names the same application. The
+    /// id is captured while the pointer is still over the tile, just as `tab`
+    /// is for a browser tab.
+    pub app_id: Option<String>,
     /// The rows, in order.
     pub items: Vec<MenuItem>,
 }
@@ -2074,6 +2090,8 @@ pub enum MenuSurface {
     BrowserTab,
     /// The Trash window's list.
     Trash,
+    /// An installed application's launcher tile.
+    LauncherTile,
 }
 
 impl ContextMenu {
@@ -2130,13 +2148,26 @@ impl ContextMenu {
                 MenuItem::Item("Delete permanently", MenuAction::PurgeTrashItem),
                 MenuItem::Item("Empty trash", MenuAction::EmptyTrash),
             ],
+            MenuSurface::LauncherTile => vec![
+                MenuItem::Section("Application"),
+                MenuItem::Item("Uninstall application…", MenuAction::UninstallApp),
+            ],
         };
         Self {
             at,
             surface,
             tab: None,
+            app_id: None,
             items,
         }
+    }
+
+    /// The menu for an installed application's launcher tile.
+    #[must_use]
+    pub fn for_launcher(app_id: &str, at: (f32, f32)) -> Self {
+        let mut menu = Self::for_surface(MenuSurface::LauncherTile, at);
+        menu.app_id = Some(app_id.to_owned());
+        menu
     }
 
     /// Point this menu at the tab it was opened for.

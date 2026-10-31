@@ -472,6 +472,9 @@ pub enum Hot {
     DialogConfirm,
     /// A dialog's cancel button.
     DialogCancel,
+    /// The panel of a dialog whose worker is running: it swallows clicks so
+    /// neither the buttons nor the surface behind it can be pressed.
+    DialogBusy,
     /// A notification.
     NotificationItem(usize),
     /// A banner's body: opens the centre, where the whole note is.
@@ -2805,6 +2808,7 @@ impl Shell {
                     return self.open_files_entry(&p);
                 }
             }
+            MA::UninstallApp => self.open_uninstall_from_menu(),
             // The row says "Next wallpaper"; it used to cycle the theme, which
             // made the menu item a lie about the thing it changed.
             MA::NextWallpaper => {
@@ -3011,9 +3015,78 @@ impl Shell {
         self.request_full_redraw();
     }
 
-    /// Keys the install dialog owns before the shared focus order or a
+    /// Open the uninstall confirmation from an installed tile. The launcher
+    /// closes, exactly as it does for install, and the dialog keeps the id
+    /// captured by the context menu so a later directory refresh cannot
+    /// retarget the confirmation.
+    fn open_uninstall_dialog(&mut self, id: &str, name: &str) {
+        if self.install_job.is_some() || self.uninstall_job.is_some() {
+            return;
+        }
+        self.uninstall_busy = false;
+        self.uninstall_error = None;
+        self.set_overlay(Overlay::None);
+        self.overlay_damage();
+        self.set_desktop_dialog(Some(crate::apps::DesktopDialog::UninstallApp {
+            id: id.to_owned(),
+            name: name.to_owned(),
+        }));
+        self.request_full_redraw();
+    }
+
+    /// Turn the context menu's captured application into the confirmation.
+    fn open_uninstall_from_menu(&mut self) {
+        let id = self
+            .context_menu
+            .as_ref()
+            .or(self.retiring_context_menu.as_ref())
+            .and_then(|menu| menu.app_id.clone());
+        let Some(id) = id else {
+            return;
+        };
+        let Some(name) = self
+            .desktop_apps
+            .iter()
+            .find(|app| app.id == id)
+            .map(|app| app.name.clone())
+        else {
+            self.app_status = Some("Could not uninstall the application".to_owned());
+            self.notify(
+                "Applications",
+                "Could not uninstall the application",
+                "That application is no longer installed.",
+                Priority::High,
+                Some(6_000),
+            );
+            return;
+        };
+        self.open_uninstall_dialog(&id, &name);
+    }
+
+    /// Keys the app-management dialogs own before the shared focus order or a
     /// window's keyboard model can see them.
     fn install_dialog_key(&mut self, key: Key) -> Option<Vec<Effect>> {
+        if matches!(
+            self.desktop_dialog,
+            Some(crate::apps::DesktopDialog::UninstallApp { .. })
+        ) {
+            return match key {
+                Key::Escape => {
+                    if !self.uninstall_busy {
+                        self.set_desktop_dialog(None);
+                    }
+                    Some(Vec::new())
+                }
+                Key::Enter => {
+                    if self.uninstall_busy {
+                        Some(Vec::new())
+                    } else {
+                        Some(self.submit_desktop_dialog())
+                    }
+                }
+                _ => Some(Vec::new()),
+            };
+        }
         if !matches!(
             self.desktop_dialog,
             Some(crate::apps::DesktopDialog::InstallApp)
@@ -3183,6 +3256,114 @@ impl Shell {
         self.request_full_redraw();
     }
 
+    /// Start one real `APP UNINSTALL` on its own worker thread. Like install,
+    /// the dialog remains the only busy surface and is retired by the same
+    /// bounded deadline even when the worker never answers.
+    fn start_uninstall(&mut self) {
+        use crate::apps::DesktopDialog;
+        if self.uninstall_busy || self.install_busy {
+            return;
+        }
+        let Some(DesktopDialog::UninstallApp { id, name }) = self.desktop_dialog.clone() else {
+            return;
+        };
+        let request = format!("APP UNINSTALL {id}");
+        let socket = self.sysd_socket.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("litric-shell-uninstall".to_owned())
+            .spawn(move || {
+                let reply = crate::facts::ask(&socket, &request);
+                let _ = send.send(reply);
+            });
+        if let Err(error) = spawned {
+            self.uninstall_error = Some(format!("Could not start the uninstall: {error}"));
+            self.request_full_redraw();
+            return;
+        }
+        self.uninstall_job = Some(UninstallJob {
+            reply: receive,
+            started_ms: self.now_ms,
+            id,
+            name,
+        });
+        self.uninstall_busy = true;
+        self.uninstall_error = None;
+        self.request_full_redraw();
+    }
+
+    /// Take one uninstall reply, if there is one. A worker that never answers
+    /// is retired at the same UI deadline as install.
+    fn poll_uninstall(&mut self, now_ms: u64) {
+        let (id, name, started_ms, received) = {
+            let Some(job) = self.uninstall_job.as_ref() else {
+                return;
+            };
+            (
+                job.id.clone(),
+                job.name.clone(),
+                job.started_ms,
+                job.reply.try_recv(),
+            )
+        };
+        match received {
+            Ok(reply) => {
+                self.uninstall_job = None;
+                self.uninstall_busy = false;
+                self.finish_uninstall(reply, &id, &name);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.uninstall_job = None;
+                self.uninstall_busy = false;
+                self.uninstall_error =
+                    Some("The system service closed the uninstall request.".to_owned());
+                self.request_full_redraw();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty)
+                if now_ms.saturating_sub(started_ms) >= INSTALL_TIMEOUT_MS =>
+            {
+                self.uninstall_job = None;
+                self.uninstall_busy = false;
+                self.uninstall_error =
+                    Some("The uninstall did not finish in time. Try again.".to_owned());
+                self.request_full_redraw();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    /// Apply the daemon's uninstall answer. Success drops the tile as well as
+    /// closing the dialog; a refusal keeps the confirmation open with the
+    /// daemon's specific reason beside it.
+    fn finish_uninstall(&mut self, reply: Option<String>, id: &str, name: &str) {
+        let Some(reply) = reply else {
+            self.uninstall_error = Some("The system service did not answer.".to_owned());
+            self.request_full_redraw();
+            return;
+        };
+        if reply.starts_with("OK ") {
+            self.refresh_installed_apps();
+            // A fixture-held list has no watch to reload, so the successful
+            // removal is applied here as well. A stale entry must not survive
+            // a successful uninstall even for one frame.
+            self.desktop_apps.retain(|app| app.id != id);
+            self.uninstall_busy = false;
+            self.uninstall_error = None;
+            self.set_desktop_dialog(None);
+            self.app_status = Some(format!("Uninstalled {name}"));
+            self.notify(
+                "Applications",
+                &format!("Uninstalled {name}"),
+                "The application and its launcher tile were removed.",
+                Priority::Normal,
+                Some(5_000),
+            );
+        } else {
+            self.uninstall_error = Some(uninstall_error_text(&reply));
+        }
+        self.request_full_redraw();
+    }
+
     /// Re-read the watched application directories immediately after a
     /// successful install. The normal watch remains the path for changes made
     /// outside the shell; this one is the shell's own write and should not make
@@ -3207,6 +3388,13 @@ impl Shell {
         use crate::apps::DesktopDialog;
         if matches!(self.desktop_dialog, Some(DesktopDialog::InstallApp)) {
             self.start_install();
+            return Vec::new();
+        }
+        if matches!(
+            self.desktop_dialog,
+            Some(DesktopDialog::UninstallApp { .. })
+        ) {
+            self.start_uninstall();
             return Vec::new();
         }
         if let Some(DesktopDialog::NewFolder) = self.desktop_dialog {
@@ -3392,6 +3580,12 @@ pub struct Shell {
     pub install_error: Option<String>,
     /// The one install worker. Dropped on success, failure or timeout.
     install_job: Option<InstallJob>,
+    /// Whether the uninstall confirmation is waiting for its worker.
+    pub uninstall_busy: bool,
+    /// The last uninstall refusal, kept beside the confirmation.
+    pub uninstall_error: Option<String>,
+    /// The one uninstall worker. Dropped on success, failure or timeout.
+    uninstall_job: Option<UninstallJob>,
     /// The browser engine session, when one has been started.
     pub browser_session: Option<crate::link::Link>,
     /// Foreign applications: the Wayland server, their surfaces and their
@@ -3515,9 +3709,9 @@ pub const BOOT_COVER_MS: u64 = 1_950;
 /// appears first cancels the check.
 pub const APP_EXIT_GRACE_MS: u64 = 2_000;
 
-/// How long the install dialog waits for the daemon before giving the spinner
-/// up as failed. This is a UI bound, not a daemon timeout: the install worker
-/// may still finish, but it can no longer leave the dialog busy.
+/// How long an install or uninstall dialog waits for the daemon before giving
+/// the spinner up as failed. This is a UI bound, not a daemon timeout: the
+/// worker may still finish, but it can no longer leave the dialog busy.
 pub const INSTALL_TIMEOUT_MS: u64 = 15_000;
 
 /// One in-flight `APP INSTALL` started from the install dialog.
@@ -3526,6 +3720,15 @@ struct InstallJob {
     reply: std::sync::mpsc::Receiver<Option<String>>,
     started_ms: u64,
     id: String,
+}
+
+/// One in-flight `APP UNINSTALL` started from the confirmation.
+#[derive(Debug)]
+struct UninstallJob {
+    reply: std::sync::mpsc::Receiver<Option<String>>,
+    started_ms: u64,
+    id: String,
+    name: String,
 }
 
 /// A launcher start that has not yet had time to map a window.
@@ -3578,6 +3781,26 @@ fn install_error_text(reply: &str) -> String {
         "install-io" => "The system could not write the application.",
         "refused" => "The system service refused the install.",
         _ => "The system service refused the install.",
+    }
+    .to_owned()
+}
+
+/// A person-readable uninstall refusal. `not-installed` is separate from a
+/// general refusal: the application the tile named is already gone, which is a
+/// different correction from a service that would not remove it.
+fn uninstall_error_text(reply: &str) -> String {
+    let kind = reply
+        .lines()
+        .find_map(|line| line.strip_prefix("ERR "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or("unknown");
+    match kind {
+        "bad-id" => "The application id is not a valid reverse-DNS id.",
+        "not-installed" => "That application is no longer installed.",
+        "unsafe-bundle" => "The system refused to remove an application with unsafe files.",
+        "install-io" => "The system could not remove the application.",
+        "refused" => "The system service refused to uninstall the application.",
+        _ => "The system service refused to uninstall the application.",
     }
     .to_owned()
 }
@@ -4057,6 +4280,9 @@ impl Shell {
             install_busy: false,
             install_error: None,
             install_job: None,
+            uninstall_busy: false,
+            uninstall_error: None,
+            uninstall_job: None,
             browser_session: None,
             clients: None,
             browser_frame: None,
@@ -5103,6 +5329,7 @@ impl Shell {
         // window the user closed all arrive here, not through input.
         self.pump_clients();
         self.poll_install(now_ms);
+        self.poll_uninstall(now_ms);
         self.check_pending_launch(now_ms);
         // An outside change reaches the open folder without a click. This is
         // the only periodic filesystem read in the shell, and it is bounded to
@@ -6119,6 +6346,12 @@ impl Shell {
             }
             return;
         }
+        if matches!(
+            self.desktop_dialog,
+            Some(crate::apps::DesktopDialog::UninstallApp { .. })
+        ) {
+            return;
+        }
         if self.desktop_dialog.is_some() && !clean.is_empty() {
             self.desktop_dialog_field.push_str(&clean);
             return;
@@ -6360,6 +6593,28 @@ impl Shell {
         }
 
         if button == PointerButton::Secondary {
+            // A launcher tile for an installed application has its own menu.
+            // Handle it before the generic overlay close below: closing the
+            // launcher first would remove the tile the menu names.
+            if matches!(&self.overlay, Overlay::Launcher { query, .. } if query.trim().is_empty()) {
+                if let Some(Hot::LauncherItem(index)) = self.hot.hit(at.x, at.y) {
+                    let app_id = self
+                        .launcher_item(index)
+                        .and_then(|hit| match hit {
+                            crate::seek::Hit::Desktop(i) => self.desktop_apps.get(i),
+                            _ => None,
+                        })
+                        .map(|app| app.id.clone());
+                    if let Some(app_id) = app_id {
+                        self.set_context_menu(Some(crate::apps::ContextMenu::for_launcher(
+                            &app_id,
+                            (at.x, at.y),
+                        )));
+                        self.request_full_redraw();
+                        return Vec::new();
+                    }
+                }
+            }
             // A right-click opens the context menu for whatever surface the
             // pointer is on: wallpaper, Files, Browser, Trash. Menus are the
             // shell's own actions, so a row can never exist that does nothing.
@@ -7127,7 +7382,7 @@ impl Shell {
             }
             Hot::DialogCancel => {
                 if self.desktop_dialog.is_some() {
-                    if !self.install_busy {
+                    if !self.install_busy && !self.uninstall_busy {
                         self.set_desktop_dialog(None);
                         self.request_full_redraw();
                     }
@@ -7137,6 +7392,9 @@ impl Shell {
                 }
                 Vec::new()
             }
+            // A running worker owns the dialog. The panel is the shield: no
+            // click reaches the buttons or the desktop under the scrim.
+            Hot::DialogBusy => Vec::new(),
         }
     }
 
@@ -11566,6 +11824,53 @@ mod scan_worker_tests {
             s.install_error
         );
     }
+
+    #[test]
+    fn an_uninstall_worker_that_never_replies_stops_after_the_deadline() {
+        let mut s = Shell::new(
+            crate::ui::Tokens::new(Theme::of(ThemeKind::Dark), 1.0),
+            1280.0,
+            800.0,
+            litric_locale::Regional::fallback("uninstall-timeout"),
+        );
+        s.mode = DesktopMode::Ready;
+        s.set_desktop_dialog(Some(crate::apps::DesktopDialog::UninstallApp {
+            id: "com.example.slow".to_owned(),
+            name: "Slow Fixture".to_owned(),
+        }));
+        let (_keep_sender, receive) = std::sync::mpsc::channel();
+        s.uninstall_job = Some(UninstallJob {
+            reply: receive,
+            started_ms: 0,
+            id: "com.example.slow".to_owned(),
+            name: "Slow Fixture".to_owned(),
+        });
+        s.uninstall_busy = true;
+
+        s.poll_uninstall(INSTALL_TIMEOUT_MS.saturating_sub(1));
+        assert!(
+            s.uninstall_busy,
+            "the spinner must still be live before the UI deadline"
+        );
+
+        s.poll_uninstall(INSTALL_TIMEOUT_MS);
+        assert!(!s.uninstall_busy, "the spinner stops at the UI deadline");
+        assert!(s.uninstall_job.is_none());
+        assert!(
+            s.uninstall_error
+                .as_deref()
+                .is_some_and(|error| error.contains("did not finish in time")),
+            "the timeout is a visible failure: {:?}",
+            s.uninstall_error
+        );
+        assert!(
+            matches!(
+                s.desktop_dialog,
+                Some(crate::apps::DesktopDialog::UninstallApp { .. })
+            ),
+            "the confirmation stays readable and no longer disabled"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -12450,6 +12755,7 @@ impl Shell {
                 _ => None,
             },
             Hot::DialogCancel => literal(Role::Button, "Cancel"),
+            Hot::DialogBusy => literal(Role::ProgressBar, "Working"),
             Hot::BrowserOmnibox => literal(Role::Text, "Address"),
             Hot::BrowserBack => literal(Role::Button, "Back"),
             Hot::BrowserForward => literal(Role::Button, "Forward"),

@@ -181,5 +181,25 @@ kinds (`not-found`, `unsafe-bundle`, `bad-executable`, `bad-desktop`, `exists`,
 answers is retired at `INSTALL_TIMEOUT_MS` (15 s), so a loading button cannot
 become permanent. This is a UI deadline, not a daemon timeout.
 
-The entry point does not add a download, signature verifier, package manager,
-root operation or uninstall surface.
+The entry point does not add a download, signature verifier, package manager or
+root operation.
+
+## User-facing uninstall (S86)
+
+An installed application's launcher tile has a context menu with **Uninstall
+application…**. That opens the same desktop dialog surface with a destructive
+**Uninstall** action and the application's discovered name. The daemon request
+is the existing `APP UNINSTALL <id>`; there is no second protocol.
+
+The dialog shows a loading action and blocks its panel while the worker runs, so
+neither Cancel nor a second submit can be reached. Success closes the dialog,
+posts `Uninstalled <name>` under Applications, reloads the watched application
+directories and drops the stale in-memory entry. The daemon's `not-installed`,
+`unsafe-bundle`, `install-io`, `bad-id` and `refused` kinds each have a distinct
+sentence. A worker that never answers is retired at the same
+`INSTALL_TIMEOUT_MS` (15 s) bound as install, with a visible timeout and an
+enabled dialog.
+
+A normal tile disappears with its bundle. The e2e reaches the missing-id path by
+restoring a stale desktop entry in an external application directory, then
+using the same visible tile menu; the daemon correctly reports `not-installed`.

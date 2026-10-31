@@ -1,10 +1,22 @@
-# LitricOS UI review — 2026-10-31 (S82, updated in S85)
+# LitricOS UI review — 2026-10-31 (S82, updated in S86)
 
-This directory holds **40 screens**, each **1280×800 px**. Thirty-nine are the
+This directory holds **41 screens**, each **1280×800 px**. Forty are the
 fixture gallery regenerated through the shipping `litric-shell/examples/frame_dump.rs`
-and `litric_shell::views::draw`. The fortieth is not a fixture: it is the frame composed during the S82
+and `litric_shell::views::draw`. The forty-first is not a fixture: it is the frame composed during the S82
 real-socket e2e after `weston-simple-shm` was installed through `APP INSTALL`,
 launched by the shell through `litric-sysd`, and mapped as a Wayland client.
+
+## What changed in S86
+
+- An installed application's launcher tile now has a real context menu entry,
+  **Uninstall application…**. It opens the same desktop dialog, scrim, spring and
+  popover material as install, with a destructive **Uninstall** action.
+- `41-uninstall-dialog` is new. It shows the confirmation state, not a mock:
+  the name comes from the same discovered desktop entry the launcher drew.
+- The other 39 fixture frames are byte-identical to S85; `39-linux-app` is
+  unchanged. The golden set now records the new `41-uninstall-dialog` frame.
+- The dialog's busy state replaces Cancel with a blocking panel, so a running
+  worker cannot be dismissed or retried through the UI.
 
 ## What changed in S85
 
@@ -43,8 +55,8 @@ deterministic: two independent e2e runs produced identical SHA-256
 export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$PATH"
 cd src
 cargo run -q -p litric-shell --example frame_dump -- \
-  --fonts ../build/fonts ../build/frames-s85
-for p in ../build/frames-s85/*.ppm; do
+  --fonts ../build/fonts ../build/frames-s86
+for p in ../build/frames-s86/*.ppm; do
   python3 ../tools/ppm2png.py "$p" "${p%.ppm}.png"
 done
 LITRIC_E2E_PNG=build/s82-linux-app.png \
@@ -58,7 +70,7 @@ dump and rebuild `all-screens.png` with a 4-column labelled contact sheet. `buil
 
 ## What this is not
 
-The 39 fixture frames prove what `views::draw` composes from fixed facts. The
+The 40 fixture frames prove what `views::draw` composes from fixed facts. The
 real-app frame proves one genuine `wl_shm` client was installed, spawned,
 connected to the LitricOS Wayland socket, mapped by the compositor, and painted
 by `views::draw`. None of these frames prove a booted VM, a framebuffer/scanout

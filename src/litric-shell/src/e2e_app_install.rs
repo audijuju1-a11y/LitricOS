@@ -451,12 +451,147 @@ fn journey_install_through_the_launcher_ui_is_visible_and_launchable() {
         shell.app_status
     );
 
-    let removed = litric_sysd::server::query(&socket, "APP UNINSTALL com.litric.ui-fixture")
-        .expect("uninstall over the socket");
-    assert_eq!(removed, "OK 2\nid=com.litric.ui-fixture\nstate=removed\n");
-    assert!(!data
-        .join("applications/com.litric.ui-fixture.desktop")
-        .exists());
+    // 6. Uninstall through the installed tile's visible context menu.
+    ui_install_open_launcher(&mut shell, &mut now);
+    let tile = shell
+        .hotspots()
+        .rect_of(Hot::LauncherItem(App::ALL.len()))
+        .expect("the installed app tile is visible before uninstalling");
+    ui_install_right_click(&mut shell, tile, now);
+    assert!(
+        shell.context_menu.is_some(),
+        "right-clicking the installed tile opens its menu"
+    );
+    ui_install_settle(&mut shell, &mut now, 60);
+    ui_install_draw(&mut shell);
+    let uninstall = shell
+        .hotspots()
+        .rect_of(Hot::MenuRow(crate::apps::MenuAction::UninstallApp))
+        .expect("the tile menu exposes Uninstall application");
+    ui_install_click(&mut shell, uninstall, now);
+    assert!(
+        matches!(
+            shell.desktop_dialog,
+            Some(crate::apps::DesktopDialog::UninstallApp { .. })
+        ),
+        "the visible tile action opens the uninstall confirmation"
+    );
+    ui_install_settle(&mut shell, &mut now, 60);
+    ui_install_draw(&mut shell);
+    let confirm = shell
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the uninstall confirmation has an Uninstall button");
+    ui_install_click(&mut shell, confirm, now);
+    assert!(
+        shell.uninstall_busy,
+        "the confirmation shows a real in-progress state"
+    );
+    ui_install_draw(&mut shell);
+    assert!(
+        shell.hotspots().rect_of(Hot::DialogConfirm).is_none(),
+        "the Uninstall button cannot be pressed twice while the worker runs"
+    );
+    assert!(
+        shell.hotspots().rect_of(Hot::DialogCancel).is_none(),
+        "Cancel is disabled while the uninstall worker runs"
+    );
+    ui_install_wait_uninstall(&mut shell, &mut now);
+    assert!(
+        shell.desktop_dialog.is_none(),
+        "a successful uninstall closes the dialog"
+    );
+    assert_eq!(
+        shell.app_status.as_deref(),
+        Some("Uninstalled UI Fixture"),
+        "the launcher reports the successful uninstall"
+    );
+    assert!(
+        shell
+            .notifications
+            .items()
+            .iter()
+            .any(|note| note.title == "Uninstalled UI Fixture" && note.source == "Applications"),
+        "a successful uninstall posts the Applications notification"
+    );
+    assert_eq!(
+        shell.desktop_apps.len(),
+        0,
+        "the removed desktop entry is no longer discovered"
+    );
+    assert!(
+        !data
+            .join("applications/com.litric.ui-fixture.desktop")
+            .exists(),
+        "the daemon removed the desktop entry"
+    );
+    ui_install_open_launcher(&mut shell, &mut now);
+    assert!(
+        shell
+            .hotspots()
+            .rect_of(Hot::LauncherItem(App::ALL.len()))
+            .is_none(),
+        "the tile disappears from the launcher"
+    );
+    ui_install_press(&mut shell, Key::Escape, now);
+
+    // 7. A stale desktop entry is exactly the missing-id state a user can
+    // meet after an interrupted package removal. The same visible tile action
+    // must report not-installed instead of pretending the app is still there.
+    let stale_apps = root.join("stale-applications");
+    std::fs::create_dir_all(&stale_apps).expect("a stale application directory");
+    std::fs::write(
+        stale_apps.join("com.litric.ui-fixture.desktop"),
+        "[Desktop Entry]\nType=Application\nName=UI Fixture\nExec=/bin/true\n",
+    )
+    .expect("a stale desktop entry");
+    shell.load_desktop_apps_from(&[stale_apps], &[], now);
+    assert_eq!(
+        shell.desktop_apps.len(),
+        1,
+        "the stale entry is visible so the failure can be reached through the UI"
+    );
+    ui_install_open_launcher(&mut shell, &mut now);
+    let tile = shell
+        .hotspots()
+        .rect_of(Hot::LauncherItem(App::ALL.len()))
+        .expect("the stale tile is visible");
+    ui_install_right_click(&mut shell, tile, now);
+    ui_install_settle(&mut shell, &mut now, 60);
+    ui_install_draw(&mut shell);
+    let uninstall = shell
+        .hotspots()
+        .rect_of(Hot::MenuRow(crate::apps::MenuAction::UninstallApp))
+        .expect("the stale tile still exposes the uninstall action");
+    ui_install_click(&mut shell, uninstall, now);
+    ui_install_settle(&mut shell, &mut now, 60);
+    ui_install_draw(&mut shell);
+    let confirm = shell
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the stale tile has a confirmation");
+    ui_install_click(&mut shell, confirm, now);
+    ui_install_wait_uninstall(&mut shell, &mut now);
+    assert!(
+        shell
+            .uninstall_error
+            .as_deref()
+            .is_some_and(|error| error.contains("no longer installed")),
+        "the second uninstall reports not-installed: {:?}",
+        shell.uninstall_error
+    );
+    assert!(
+        !shell.uninstall_busy,
+        "the not-installed refusal clears the spinner"
+    );
+    assert!(
+        matches!(
+            shell.desktop_dialog,
+            Some(crate::apps::DesktopDialog::UninstallApp { .. })
+        ),
+        "the failure leaves the confirmation readable"
+    );
+    ui_install_press(&mut shell, Key::Escape, now);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -468,7 +603,27 @@ fn ui_install_draw(shell: &mut crate::shell::Shell) {
 
 #[cfg(unix)]
 fn ui_install_click(shell: &mut crate::shell::Shell, rect: crate::canvas::Rect, at: u64) {
-    use litric_input::event::{InputEvent, Point, PointerButton};
+    ui_install_button(shell, rect, at, litric_input::event::PointerButton::Primary);
+}
+
+#[cfg(unix)]
+fn ui_install_right_click(shell: &mut crate::shell::Shell, rect: crate::canvas::Rect, at: u64) {
+    ui_install_button(
+        shell,
+        rect,
+        at,
+        litric_input::event::PointerButton::Secondary,
+    );
+}
+
+#[cfg(unix)]
+fn ui_install_button(
+    shell: &mut crate::shell::Shell,
+    rect: crate::canvas::Rect,
+    at: u64,
+    button: litric_input::event::PointerButton,
+) {
+    use litric_input::event::{InputEvent, Point};
     use litric_input::keys::Modifiers;
     let point = Point::new(rect.center().0, rect.center().1);
     let _ = shell.handle(
@@ -481,7 +636,7 @@ fn ui_install_click(shell: &mut crate::shell::Shell, rect: crate::canvas::Rect, 
     for pressed in [true, false] {
         let _ = shell.handle(
             &InputEvent::PointerButton {
-                button: PointerButton::Primary,
+                button,
                 pressed,
                 at: point,
                 clicks: 1,
@@ -489,6 +644,14 @@ fn ui_install_click(shell: &mut crate::shell::Shell, rect: crate::canvas::Rect, 
             },
             at.saturating_add(1),
         );
+    }
+}
+
+#[cfg(unix)]
+fn ui_install_settle(shell: &mut crate::shell::Shell, now: &mut u64, frames: u32) {
+    for _ in 0..frames {
+        *now = now.saturating_add(16);
+        shell.tick(*now);
     }
 }
 
@@ -511,6 +674,21 @@ fn ui_install_wait(shell: &mut crate::shell::Shell, now: &mut u64) {
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "the install worker left the dialog busy for more than five seconds"
+        );
+        *now = now.saturating_add(16);
+        shell.tick(*now);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn ui_install_wait_uninstall(shell: &mut crate::shell::Shell, now: &mut u64) {
+    use std::time::{Duration, Instant};
+    let started = Instant::now();
+    while shell.uninstall_busy {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the uninstall worker left the dialog busy for more than five seconds"
         );
         *now = now.saturating_add(16);
         shell.tick(*now);
