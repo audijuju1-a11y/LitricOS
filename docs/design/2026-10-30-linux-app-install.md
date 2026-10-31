@@ -144,3 +144,13 @@ constant, not a request field.
 A production image must run this operation as the session user. Running the
 daemon as root would leave root-owned files in the user's data root, which is a
 deployment error rather than a property of this contract.
+
+## Failure visibility (S84)
+
+The shell now keeps a bounded `PendingLaunch` after an `OK pid` reply. If the
+process is gone before any client window appears, the launcher replaces its
+optimistic `Started` status with `<name> exited before opening a window` and
+posts a high-priority Applications notification. A process still alive at the
+two-second deadline is left alone; this is not a supervisor. The real-socket
+journey in `src/litric-shell/src/e2e_app_install.rs` also covers an unsafe
+install refusal and a launch whose executable disappeared after discovery.

@@ -259,6 +259,8 @@ end to end rather than half-built.
 
 | 83 | C2 provider lifecycle, card discovery and status contract | actual C helper compiles and refuses a non-card; start/present/state/failure/shutdown protocol tests; card2/3 startup conditions; explicit `drm.mode`/`drm.connector` and `present=none` status (**landed 2026-10-31**, 1,984 workspace tests; real card remains NOT RUN; see tracker §83) | here (host only) |
 
+| 84 | An installed application that exits before mapping is visible | bounded pending-launch check, window cancellation, real-socket unsafe-install/early-exit/stale-launch journey (**landed 2026-10-31**, 1,985 workspace tests; see tracker §84) | here |
+
 Image-level rows (A1, the real-card half of C2, and every `VM E2E` claim) stay
 in `docs/GATES.md` as `NOT RUN` until a builder exists. That is a scheduling fact, not an excuse: the
 plan is ordered so that nine of the next twelve batches are provable here.

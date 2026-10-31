@@ -109,6 +109,125 @@ fn journey_app_install_launch_uninstall_through_sysd() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Failure paths through the same real socket: a refused install, an app that
+/// exits before mapping, and a launch whose executable disappeared after
+/// discovery. The first is a daemon error, the second a shell liveness result,
+/// and the third the existing `Could not start` path.
+#[cfg(unix)]
+#[test]
+fn journey_bad_install_and_an_app_that_exits_are_reported() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+
+    let root = std::env::temp_dir().join(format!(
+        "litric-shell-e2e-app-failure-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("a fixture root");
+
+    let data = root.join("data");
+    let incoming = data.join("litric/incoming/exiting");
+    std::fs::create_dir_all(&incoming).expect("incoming bundle");
+    let app = incoming.join("app");
+    std::fs::write(&app, "#!/bin/sh\nexit 0\n").expect("the early-exit program");
+    std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    std::fs::write(
+        incoming.join("app.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Exiting Fixture\nExec=app\n",
+    )
+    .expect("the bundle description");
+
+    let socket = root.join("sysd.sock");
+    let listener = litric_sysd::server::bind(&socket).expect("bind sysd");
+    let state = litric_sysd::state::Sysd::new(2, 512, "/tmp", std::path::Path::new("/"))
+        .with_application_root(&data);
+    std::thread::spawn(move || {
+        let _ = litric_sysd::server::serve(&listener, state);
+    });
+
+    let refused = litric_sysd::server::query(&socket, "APP INSTALL com.example.bad ../escape")
+        .expect("install refusal over the socket");
+    assert!(
+        refused.starts_with("ERR "),
+        "an unsafe bundle is refused, not installed: {refused}"
+    );
+    assert!(
+        !data.join("applications/com.example.bad.desktop").exists(),
+        "a refused install writes no desktop entry"
+    );
+    assert!(
+        !data.join("litric/apps/com.example.bad").exists(),
+        "a refused install writes no application directory"
+    );
+
+    let installed = litric_sysd::server::query(&socket, "APP INSTALL com.example.exiting exiting")
+        .expect("install over the socket");
+    assert_eq!(installed, "OK 2\nid=com.example.exiting\nstate=installed\n");
+    let installed_app = data.join("litric/apps/com.example.exiting/app");
+    assert!(installed_app.is_file(), "the installed executable exists");
+
+    let apps = crate::desktop_entry::discover_in(&[data.join("applications")]);
+    assert_eq!(apps.len(), 1, "the installed entry is discovered: {apps:?}");
+    let mut shell = crate::shell::Shell::new(
+        crate::ui::Tokens::new(
+            litric_design::Theme::of(litric_design::ThemeKind::Dark),
+            1.0,
+        ),
+        1280.0,
+        800.0,
+        litric_locale::Regional::fallback("test"),
+    );
+    shell.mode = crate::shell::DesktopMode::Ready;
+    shell.sysd_socket = socket.clone();
+    shell.load_desktop_apps(apps);
+
+    let effects = shell.seek_open(crate::seek::Hit::Desktop(0));
+    assert!(effects.is_empty(), "launching is an effect, not a window");
+    assert!(
+        shell
+            .app_status
+            .as_deref()
+            .is_some_and(|status| status.starts_with("Started Exiting Fixture")),
+        "the launcher first reports a real start: {:?}",
+        shell.app_status
+    );
+
+    // The daemon reaps the child; the shell's bounded liveness check must then
+    // replace the optimistic start with the observed exit.
+    std::thread::sleep(Duration::from_millis(250));
+    shell.tick(2_100);
+    assert_eq!(
+        shell.app_status.as_deref(),
+        Some("Exiting Fixture exited before opening a window"),
+        "an app that never mapped is not left looking started"
+    );
+    assert!(
+        shell
+            .notifications
+            .items()
+            .iter()
+            .any(|note| note.title == "Exiting Fixture exited"),
+        "the exit is a visible notification, not only a variable"
+    );
+
+    // Discovery still holds the entry, but the executable is gone. The daemon
+    // refuses the stale launch and the launcher must say so.
+    std::fs::remove_file(&installed_app).expect("remove the installed executable");
+    let effects = shell.seek_open(crate::seek::Hit::Desktop(0));
+    assert!(effects.is_empty());
+    assert_eq!(
+        shell.app_status.as_deref(),
+        Some("Could not start Exiting Fixture"),
+        "a stale launch is refused visibly"
+    );
+
+    let removed = litric_sysd::server::query(&socket, "APP UNINSTALL com.example.exiting")
+        .expect("uninstall over the socket");
+    assert_eq!(removed, "OK 2\nid=com.example.exiting\nstate=removed\n");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The real third-party application this repository's e2e installs.
 ///
 /// Provenance and hashes are in `tests/fixtures/README.md`. The binary is the

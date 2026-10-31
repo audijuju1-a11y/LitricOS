@@ -3135,6 +3135,9 @@ pub struct Shell {
     /// The last launch outcome, shown in the launcher's title row. `None`
     /// before anything has been started.
     pub app_status: Option<String>,
+    /// A launcher start whose process may exit before it maps a window. The
+    /// check is bounded so an idle desktop does not stat `/proc` forever.
+    pending_launch: Option<PendingLaunch>,
     /// A page opened from this machine, drawn by the shell itself.
     pub reader: Option<crate::reader::Reader>,
     /// The Defender application model and its scan state.
@@ -3278,6 +3281,21 @@ pub const BOOT_WRITE_MS: u64 = 1_600;
 /// When the intro starts to give way: the finished mark is held until here,
 /// and the rest of [`BOOT_INTRO_MS`] is the cross-fade.
 pub const BOOT_COVER_MS: u64 = 1_950;
+
+/// How long a launcher-started process gets to map a window before its absence
+/// is reported. This is a liveness check, not a supervision system: a process
+/// that is still alive at the deadline is left alone, and a client window that
+/// appears first cancels the check.
+pub const APP_EXIT_GRACE_MS: u64 = 2_000;
+
+/// A launcher start that has not yet had time to map a window.
+#[derive(Debug)]
+struct PendingLaunch {
+    name: String,
+    pid: u32,
+    started_ms: u64,
+    clients_before: usize,
+}
 
 /// The theme a preference record resolves to: the chosen theme with the chosen
 /// accent applied.
@@ -3734,6 +3752,7 @@ impl Shell {
             desktop_icons_validated: 0,
             desktop_icon_names: crate::desktop_entry::IconNames::default(),
             app_status: None,
+            pending_launch: None,
             reader: None,
             defender: DefenderState::default(),
             trash: crate::apps::TrashApp::default(),
@@ -4791,6 +4810,7 @@ impl Shell {
         // Client surfaces: mapping, titles, frames, a dead application and a
         // window the user closed all arrive here, not through input.
         self.pump_clients();
+        self.check_pending_launch(now_ms);
         // An outside change reaches the open folder without a click. This is
         // the only periodic filesystem read in the shell, and it is bounded to
         // one a second by `filewatch`.
@@ -7525,6 +7545,7 @@ impl Shell {
             return Vec::new();
         };
         let name = app.name.clone();
+        self.pending_launch = None;
         // The daemon is not inside this session: it has no WAYLAND_DISPLAY of
         // its own. Name the socket this shell is serving, or a graphical
         // application starts without a display and exits before it maps.
@@ -7554,6 +7575,14 @@ impl Shell {
                     .find_map(|line| line.strip_prefix("pid="))
                     .unwrap_or("?");
                 self.app_status = Some(format!("Started {name} (pid {pid})"));
+                if let Ok(pid) = pid.parse::<u32>() {
+                    self.pending_launch = Some(PendingLaunch {
+                        name: name.clone(),
+                        pid,
+                        started_ms: self.now_ms,
+                        clients_before: self.client_window_count(),
+                    });
+                }
                 self.notify(
                     "Applications",
                     &format!("Started {name}"),
@@ -7594,6 +7623,50 @@ impl Shell {
             }
         }
         Vec::new()
+    }
+
+    /// How many client windows are on the desktop now.
+    fn client_window_count(&self) -> usize {
+        self.wm
+            .all()
+            .iter()
+            .filter(|window| window.app_id == "litric.client")
+            .count()
+    }
+
+    /// Report a launcher start that exited before it could map a window.
+    ///
+    /// The check runs only while a start is pending and stops at the first
+    /// window or at [`APP_EXIT_GRACE_MS`]. A process still alive at the deadline
+    /// is not called a failure: many programs take longer than two seconds to
+    /// start, and a false alarm is worse than a missed one here.
+    fn check_pending_launch(&mut self, now_ms: u64) {
+        let Some(pending) = self.pending_launch.as_ref() else {
+            return;
+        };
+        if self.client_window_count() > pending.clients_before {
+            self.pending_launch = None;
+            return;
+        }
+        if now_ms.saturating_sub(pending.started_ms) < APP_EXIT_GRACE_MS {
+            return;
+        }
+        let name = pending.name.clone();
+        let pid = pending.pid;
+        let alive = std::path::Path::new("/proc").join(pid.to_string()).exists();
+        self.pending_launch = None;
+        if alive {
+            return;
+        }
+        self.app_status = Some(format!("{name} exited before opening a window"));
+        self.notify(
+            "Applications",
+            &format!("{name} exited"),
+            "The program exited before it opened a window. The reason is in the journal.",
+            Priority::High,
+            Some(8_000),
+        );
+        self.request_full_redraw();
     }
 
     /// Run one system-wide search result.

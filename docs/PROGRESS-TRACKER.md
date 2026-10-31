@@ -8811,3 +8811,59 @@ Revert the S83 commit. The real-helper test, card2/3 conditions, explicit
 mode/connector status, headless `present=none` line and display-ledger reason
 disappear. The existing DRM helper, provider selection, fbdev fallback and
 gallery remain unchanged.
+
+## 2026-10-31 — S84: an installed app that dies before mapping is visible
+
+The success path is S82: a real Weston client installs, launches through
+`litric-sysd`, maps and renders. This batch closes the adjacent failure path:
+`launch_desktop` used to call any `OK pid` start successful and never notice
+that the child exited before it could open a window.
+
+### The gap
+
+| Gap | Evidence |
+|---|---|
+| A successful spawn was the final word; no liveness check followed | `src/litric-shell/src/shell.rs:7556` set `Started …` and returned |
+| The only failure visible in the launcher was a refused request | `src/litric-shell/src/shell.rs:7572` handled `ERR` and a missing daemon |
+| Install refusal was tested at the daemon layer, but not through the shell-facing socket journey | `docs/design/2026-10-30-linux-app-install.md`; the new journey closes this as one observation |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/shell.rs` | keep a bounded `PendingLaunch`; count client windows before the launch, cancel on a map, and after 2 s report an exited process with `/proc/<pid>` absent |
+| `src/litric-shell/src/e2e_app_install.rs` | real-socket journey: refused unsafe install, valid install of an early-exit executable, observed notification/status, then stale-launch refusal and uninstall |
+| `ci/lint-file-safety.py` | reviewed cleanup entry for the new journey's pid-tagged temp root |
+
+The new message is “`<name> exited before opening a window`”, with a
+high-priority Applications notification. A process still alive at the deadline
+is left alone; the check is not a supervisor and does not claim to catch every
+late crash.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test -p litric-shell --lib e2e_app_install::journey_bad_install_and_an_app_that_exits_are_reported -- --nocapture` | 1 passed; real `litric-sysd` Unix socket, real installed script, refusal, early-exit notification, stale launch refusal |
+| `cargo test --workspace` | **1,985 passed, 0 failed, 0 ignored** |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+
+The three skips remain the pre-existing environment limits: `mkosi` absent,
+QEMU absent, and the idle-RAM/CPU/boot-timing platform absent.
+
+### Limits
+
+* This is not process supervision: a process still alive after 2 s is not
+  reported, and a daemonised child can outlive the pid the shell checks.
+* No install UI exists; install refusal is observed through the daemon's real
+  socket, not a settings page.
+* The real KMS/card and VM hops remain unproven as recorded in S83.
+* No UI screen was added, so the committed gallery is unchanged.
+
+### Rollback
+
+Revert the S84 commit. The pending-launch check, its notification and the
+real-socket failure journey disappear; successful install/launch/uninstall
+behaviour remains.

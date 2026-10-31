@@ -3310,3 +3310,34 @@ pretending the ioctl path ran.
 Revert the S83 commit. The real-helper test, card2/3 startup condition,
 explicit mode/connector status and headless `present=none` line disappear.
 Existing KMS helper, fallback, scope and gallery remain.
+
+## 2026-10-31 — S84: an installed app that dies before mapping is visible
+
+The launcher now distinguishes “request accepted” from “the program is still
+there”. A bounded, window-aware liveness check turns an early exit into a
+visible status and notification, while a process still alive at the deadline is
+left alone.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test -p litric-shell --lib e2e_app_install::journey_bad_install_and_an_app_that_exits_are_reported -- --nocapture` | 1 passed: real Unix socket, unsafe install refusal, valid install, early exit, stale launch refusal, uninstall |
+| `cargo test --workspace` | 1,985 passed, 0 failed, 0 ignored |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| gallery | unchanged; the existing launcher status and notification surfaces were used |
+
+### What it does not prove
+
+| Claim | Why not |
+|---|---|
+| that every crashed or daemonised application is caught | the check is one bounded `/proc/<pid>` look after a launch, not a supervisor |
+| that an install UI exists | none was added; refusal is proven through the daemon socket |
+| that a real KMS card or VM boot was exercised | still the S83 environment limit |
+
+### Rollback
+
+Revert the S84 commit. The pending-launch check, failure journey and their
+reviewed cleanup entry disappear; S82's success path is unchanged.
