@@ -668,6 +668,14 @@ mod tests {
             Some(dir.join("dev/dri/card0")),
             "card0 wins"
         );
+        fs::remove_file(dir.join("dev/dri/card0")).expect("remove card0");
+        fs::remove_file(dir.join("dev/dri/card1")).expect("remove card1");
+        fs::write(dir.join("dev/dri/card3"), b"").expect("card3");
+        assert_eq!(
+            discover_card(&dir),
+            Some(dir.join("dev/dri/card3")),
+            "a machine whose panel is on card3 is still discovered"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 }

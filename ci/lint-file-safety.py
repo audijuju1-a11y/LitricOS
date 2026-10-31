@@ -129,6 +129,10 @@ ALLOWED = {
         "scratch": "test helper: removes the scratch installer root this test module is about to recreate; the name is tagged with this process's id and lives under the system temp directory",
         "cleanup": "test helper: removes the scratch installer root this test created under the system temp directory, after its assertions",
     },
+    "src/litric-shell/tests/drm_provider.rs": {
+        "scratch": "test helper: removes a stale pid-tagged scratch directory before recreating it; the name is tagged with this process's id and lives under the system temp directory",
+        "cleanup": "removes the pid-tagged scratch directory this provider test created under the system temp directory, after compiling the real helper and asserting it refuses a regular file as a card",
+    },
     "src/litric-shell/src/e2e_backup.rs": {
         "journey_auto_backup_verify_and_tamper_refusal": "removes the pid-tagged temporary application and backup root this journey created under the system temp directory, after asserting the timer-created snapshot, independent hashes, source mutation, tamper refusal, repair and manual create",
     },

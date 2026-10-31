@@ -8746,3 +8746,68 @@ Revert the S82 commit. `LAUNCHENV`, the two allowlisted variables, the launcher
 environment, the real-client fixture and its e2e disappear. The argv-only
 `LAUNCH` path, install/discovery and the compositor remain as they were. No file
 outside a test's temporary root is touched.
+
+## 2026-10-31 — S83: C2 provider lifecycle, card discovery and status
+
+C2 is the **KMS output path** in ADR-0026, not a remote command-and-control
+service. Its provider is `litric-drmpresent`, the audited C helper that owns
+the ioctls; the shell-side adapter is `DrmPresenter`. The C1 `Provider` trait
+in `src/litric-sysd/src/provider_contract.rs` covers audio, network, Bluetooth
+and authentication; it is not a KMS interface, and no parallel provider trait
+was invented for C2.
+
+### The gap list, before this batch
+
+| Gap | Evidence |
+|---|---|
+| The real C helper was compiled manually in the image build, but no `cargo test` compiled or ran it | `tools/build.sh:243`; the Rust protocol tests used the shell stand-in at `src/litric-shell/src/drm.rs:421` |
+| A card on `card2` or `card3` could not start the shell even though discovery scans those nodes | `src/litric-shell/src/drm.rs:137` scans 0–3; the unit's `ConditionPathExists` list stopped at card1 (now lines 41-45 cover card0–3) |
+| The status did not expose the mode and connector as separate fields | `src/litric-shell/src/present.rs:219` wrote `present=drm` and a combined `drm=` summary only |
+| A headless shell omitted `present=` entirely, contradicting ADR-0026's “always one present line” contract | `src/litric-shell/src/main.rs:1451`, the `run_display` return before `headless_lines` |
+| No real card was available for the mode/flip hop | `/dev/dri` and `/sys/class/drm` absent; `/proc/config.gz` reports `# CONFIG_DRM is not set`; no QEMU |
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/tests/drm_provider.rs` | new real-provider test: compile `drmpresent.c` and run its `--check` against a regular file; assert exit 1 and the exact ioctl refusal without a hang or mode set |
+| `src/litric-shell/src/present.rs` | `drm.mode=WxH` and `drm.connector=...` lines beside `present=drm`; the card test asserts them |
+| `src/litric-shell/src/main.rs` | `headless_lines` always emits `present=none(<reason>)`; a unit test fixes the four-line status contract |
+| `src/litric-shell/src/drm.rs` | card discovery test now removes card0/1 and proves card3 is found |
+| `image/mkosi.extra/usr/lib/systemd/system/litric-shell.service` | startup conditions cover card0–3, matching `discover_card` |
+| `ci/lint-file-safety.py` | reviewed entry for the provider test's pid-tagged temp-root cleanup |
+| `docs/parity/ledger.csv` | display row reason no longer says DRM is forbidden; it states that live mode changes are not exposed |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test -p litric-shell --test drm_provider -- --nocapture` | 1 passed: actual C helper compiled and refused a regular file in 0.31 s |
+| `litric-shell --check` on the fixture file | exit 1; stderr `get resources: Inappropriate ioctl for device`; no `SETCRTC`/master attempt |
+| `cargo test -p litric-shell --lib drm::tests` | 14 passed |
+| `cargo test -p litric-shell --lib present::tests` | 11 passed, including `drm.mode=64x48` and `drm.connector=eDP-1` |
+| `cargo test -p litric-shell --bin litric-shell headless_status` | 1 passed |
+| `cargo test --workspace` | **1,984 passed, 0 failed, 0 ignored** |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| real KMS card, `present=drm`, `SETCRTC`, page flip | **NOT RUN** — this kernel has no DRM subsystem and no card node |
+| gallery | **unchanged** — no user-visible surface was added, so no frames were regenerated |
+
+The three skips are the pre-existing environment limits: `mkosi` absent, QEMU
+absent, and the idle-RAM/CPU/boot-timing platform absent.
+
+### What remains unproven
+
+| Claim | Why not |
+|---|---|
+| that a card enumerates a connector and mode and accepts `SETCRTC` | no `/dev/dri`; `CONFIG_DRM` is unset, and no booted image was available |
+| that a page flip completes at vblank on hardware | the flip path is compiled and the protocol is tested; no real event was observed |
+| that the virtual-KMS success path works | a test would have to fake the card, which would be evidence of a fake, not of KMS |
+| that a remote C2 control plane exists | the tree has no such protocol; adding one would be a new architecture, not this batch |
+| that all displays, multi-monitor, VRR or HDR work | ADR-0026 explicitly excludes them |
+
+### Rollback
+
+Revert the S83 commit. The real-helper test, card2/3 conditions, explicit
+mode/connector status, headless `present=none` line and display-ledger reason
+disappear. The existing DRM helper, provider selection, fbdev fallback and
+gallery remain unchanged.

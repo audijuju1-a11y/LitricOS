@@ -3273,3 +3273,40 @@ path for its one shared library.
 Revert the S82 commit. `LAUNCHENV`, the allowlist, the launcher environment, the
 real-client fixture and the real-socket journey disappear. `LAUNCH`,
 install/discovery and the compositor remain.
+
+## 2026-10-31 — S83: C2 provider lifecycle, card discovery and status
+
+C2 is the KMS output path in ADR-0026. This batch does not invent a second
+provider interface: it closes the host-side integration gaps around the
+existing `litric-drmpresent` helper and states the hardware gap instead of
+pretending the ioctl path ran.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test -p litric-shell --test drm_provider -- --nocapture` | 1 passed: actual C helper compiled and `--check` on a regular file exited 1 with `get resources: Inappropriate ioctl for device` |
+| `cargo test -p litric-shell --lib drm::tests` | 14 passed, including card3 discovery |
+| `cargo test -p litric-shell --lib present::tests` | 11 passed, including `drm.mode` and `drm.connector` |
+| `cargo test -p litric-shell --bin litric-shell headless_status` | 1 passed: `present=none(<reason>)` is always present |
+| `cargo test --workspace` | 1,984 passed, 0 failed, 0 ignored |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| real card / `present=drm` / `SETCRTC` / page flip | **NOT RUN**; no `/dev/dri`, no `/sys/class/drm`, `CONFIG_DRM` unset |
+| user-visible gallery | **unchanged**; this adds status/provider plumbing, not a screen |
+
+### What it does not prove
+
+| Claim | Why not |
+|---|---|
+| that KMS modesetting works on hardware | no DRM subsystem or card exists in this host kernel |
+| that a page flip is observed at vblank | the helper's flip protocol is tested, but the event is not |
+| that a remote C2/KMS control plane exists | no such protocol exists in this tree; C2 is local output |
+| that GATE 05 passes | it still requires a booted image on a card |
+
+### Rollback
+
+Revert the S83 commit. The real-helper test, card2/3 startup condition,
+explicit mode/connector status and headless `present=none` line disappear.
+Existing KMS helper, fallback, scope and gallery remain.

@@ -1434,6 +1434,20 @@ fn run_png(args: &Args) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
+/// The status of a shell that found no surface it can present to.
+///
+/// Headless is a valid state, not a reason to omit the output line: ADR-0026
+/// promises that a reader can always tell which presenter was chosen, and an
+/// absent line is indistinguishable from an old or truncated status file.
+fn headless_lines(why: &str) -> Vec<String> {
+    vec![
+        "target=none".to_owned(),
+        format!("present=none({why})"),
+        format!("mode=headless({why})"),
+        "drawn=0".to_owned(),
+    ]
+}
+
 fn run_display(args: &Args) -> Result<Vec<String>, String> {
     let console = take_console(&args.root);
     // The surface is chosen before anything is composed, because its geometry
@@ -1445,11 +1459,7 @@ fn run_display(args: &Args) -> Result<Vec<String>, String> {
         Err(why) => {
             // Headless is not a failure. The machine boots, the daemon runs,
             // and the shell says why there is nothing to look at.
-            return Ok(vec![
-                "target=none".to_owned(),
-                format!("mode=headless({why})"),
-                "drawn=0".to_owned(),
-            ]);
+            return Ok(headless_lines(&why));
         }
     };
     let present::Opened {
@@ -2336,6 +2346,20 @@ mod tests {
         fs::write(bat.join("status"), "Discharging\n").expect("status");
         assert_eq!(read_battery(&root), (Some(73), Some(false)));
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn headless_status_names_the_presenter_and_the_reason() {
+        let lines = headless_lines("no card node under /dev/dri");
+        assert_eq!(
+            lines,
+            vec![
+                "target=none",
+                "present=none(no card node under /dev/dri)",
+                "mode=headless(no card node under /dev/dri)",
+                "drawn=0",
+            ]
+        );
     }
 
     #[test]

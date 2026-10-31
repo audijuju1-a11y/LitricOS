@@ -218,6 +218,12 @@ pub fn open_with(
                 }
                 lines.push("present=drm".to_owned());
                 lines.push(format!("drm.card={}", card.display()));
+                lines.push(format!(
+                    "drm.mode={}x{}",
+                    presenter.info().width,
+                    presenter.info().height
+                ));
+                lines.push(format!("drm.connector={}", presenter.info().connector));
                 lines.push(format!("drm={}", presenter.info().summary()));
                 lines.push("target=drm-kms".to_owned());
                 return Ok(Opened {
@@ -344,6 +350,8 @@ mod tests {
         assert_eq!(opened.output.kind(), "drm");
         assert_eq!((opened.width(), opened.height()), (64, 48));
         assert_eq!(opened.lines[0], "present=drm");
+        assert!(opened.lines.iter().any(|l| l == "drm.mode=64x48"));
+        assert!(opened.lines.iter().any(|l| l == "drm.connector=eDP-1"));
         assert!(opened.lines.iter().any(|l| l.contains("connector=eDP-1")));
         assert!(
             !opened.lines.iter().any(|l| l.starts_with("present=fbdev")),

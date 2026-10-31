@@ -1,7 +1,8 @@
 # ADR-0026 — The screen is scanned out over KMS, and the raster stays software
 
-- **Status:** Accepted, implemented on the host; **not** verified on a booted
-  image and never run against a real card
+- **Status:** Accepted; the host provider lifecycle and refusal path were
+  integrated and tested on 2026-10-31; **not** verified on a booted image and
+  never run against a real card
 - **Date:** 2026-10-27
 - **Extends:** ADR-0017 (framebuffer shell), ADR-0005 (compositor)
 - **Answers:** W8 in [the execution plan](../master-plan/26-execution-plan.md),
@@ -77,8 +78,9 @@ set, and the shell refuses to use it if that line is not exactly this protocol.
 
 - `--presenter auto|drm|fbdev`, defaulting to `auto`.
 - The status file always contains one `present=` line: `present=drm`,
-  `present=fbdev`, or `present=drm-skipped(<reason the machine gave>)` followed
-  by the path that was used.
+  `present=fbdev`, `present=drm-skipped(<reason the machine gave>)`, or
+  `present=none(<reason>)` when neither surface opened. A status file with no
+  presenter line cannot be distinguished from a truncated one.
 - `litric-drmpresent --check /dev/dri/cardN` reports connector, mode and pitch
   without taking DRM master or touching the screen, and the image's selftest
   prints both `drm.presenter` and `drm.mode`.
@@ -124,9 +126,10 @@ before.
   guess, it warns in the build log that `litric-drmpresent` will not be in the
   image and that the shell will present through fbdev.
 - `litric-shell.service` no longer requires `/dev/fb0`. The condition is an OR
-  over `/dev/fb0` and `/dev/dri/card0|1`, because a machine with KMS and no
-  fbdev node is exactly the machine this path is for. The unit already allowed
-  `char-drm rw`; nothing wider was opened.
+  over `/dev/fb0` and `/dev/dri/card0` through `card3`, matching
+  `drm::discover_card`; a machine with KMS and no fbdev node is exactly the
+  machine this path is for. The unit already allowed `char-drm rw`; nothing
+  wider was opened.
 - Damage-only presents are now genuinely cheap in bytes: a pointer move sends
   the rows it touched instead of 4 MB. The status file's `rows_presented`
   counts what was sent, so the claim is checkable.
@@ -147,8 +150,12 @@ before.
 | `cargo test -p litric-shell --lib drm::` | 14 pass: handshake parsing and refusals, band merging and clipping, pitch-correct encoding, protocol capture against a stand-in helper, a silent helper timing out, an exiting helper and a nonsense handshake being refused, card discovery |
 | `cargo test -p litric-shell --lib present::` | 7 pass: DRM preferred when card and helper exist, fbdev fallback with the recorded reason, a required path that is missing being an error, a broken helper degrading, a forced framebuffer never starting the card |
 | fixture root, `--presenter auto --once` | status contains `present=drm-skipped(no card node under /dev/dri)` then `present=fbdev`, and 256,000 bytes of real pixels reach the fixture device |
-| `cargo test -p litric-shell` | 555 lib + 32 + 4 + 10 + 3 pass |
-| booted image on a real card | **NOT RUN.** No card node exists on the build host and no image was booted with this path |
+| `cargo test -p litric-shell` | 555 lib + 32 + 4 + 10 + 3 pass (2026-10-27 baseline) |
+| `cargo test -p litric-shell --test drm_provider` (2026-10-31) | 1 pass: the actual C helper compiles and `--check` on a regular file exits 1 with `get resources: Inappropriate ioctl for device` |
+| `cargo test -p litric-shell --lib present::` (2026-10-31) | 11 pass, including `drm.mode` and `drm.connector` status lines |
+| headless status (2026-10-31) | `present=none(<reason>)` is tested; the headless shell no longer omits the present line |
+| `cargo test --workspace` (2026-10-31) | 1,984 passed, 0 failed, 0 ignored |
+| booted image on a real card | **NOT RUN.** `/dev/dri` and `/sys/class/drm` do not exist on this host and `/proc/config.gz` reports `# CONFIG_DRM is not set`; no image was booted with this path |
 
 The protocol is verified end to end against a stand-in process, which is a real
 test of everything the shell controls. The ioctl sequence is *compiled*, not

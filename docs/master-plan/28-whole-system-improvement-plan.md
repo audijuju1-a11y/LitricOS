@@ -124,7 +124,7 @@ remains open because this host has no builder, QEMU or booted desktop.
 | Batch | Outcome | Where |
 |---|---|---|
 | **C1** | A provider contract layer (trait + fake) for network, Bluetooth and audio; the shell holds no D-Bus client; a sentinel password never reaches a log (**landed 2026-10-30**: `Provider`/`ToolProvider`/`FakeProvider`, `Sysd::with_provider`, `[3m]` boundary gate with planted `zbus` negative controls; real iwd/BlueZ integration remains absent) | here (contract) |
-| **C2** | The KMS output path from ADR-0026 runs: mode enumerated and set, `present=drm` in the status file | builder |
+| **C2** | The KMS output path from ADR-0026 runs: mode enumerated and set, `present=drm` in the status file (**host provider lifecycle, status and refusal path landed 2026-10-31**; a real card is still required for the modeset/flip hop) | here (host) / builder (card) |
 
 ### Stage D — Shell correctness, RAM and idle discipline
 
@@ -257,8 +257,10 @@ end to end rather than half-built.
 | 80 | Automatic local backup with a checksummed manifest and verification | real timer-created snapshot, independent hashes, retention, source mutation, tamper refusal, `BACKUP LIST` and shell status over a real socket (**landed 2026-10-30**, 1,974 workspace tests; see tracker §80) | here |
 | 82 | A real Linux application installs, launches and reaches `views::draw` through the real daemon | genuine Weston `weston-simple-shm` installed via `APP INSTALL`, launched by the shell with `LAUNCHENV`, mapped as a `litric.client` window, pixels asserted through `views::draw`, closed and uninstalled over a real Unix socket (**landed 2026-10-31**, 1,982 workspace tests; see tracker §82) | here |
 
-Image-level rows (A1, C2, and every `VM E2E` claim) stay in `docs/GATES.md` as
-`NOT RUN` until a builder exists. That is a scheduling fact, not an excuse: the
+| 83 | C2 provider lifecycle, card discovery and status contract | actual C helper compiles and refuses a non-card; start/present/state/failure/shutdown protocol tests; card2/3 startup conditions; explicit `drm.mode`/`drm.connector` and `present=none` status (**landed 2026-10-31**, 1,984 workspace tests; real card remains NOT RUN; see tracker §83) | here (host only) |
+
+Image-level rows (A1, the real-card half of C2, and every `VM E2E` claim) stay
+in `docs/GATES.md` as `NOT RUN` until a builder exists. That is a scheduling fact, not an excuse: the
 plan is ordered so that nine of the next twelve batches are provable here.
 
 ---

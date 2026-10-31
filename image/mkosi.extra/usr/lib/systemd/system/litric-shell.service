@@ -35,9 +35,14 @@ Conflicts=getty@tty1.service
 # The leading pipe makes these OR rather than AND. A machine whose card has a
 # KMS driver and no fbdev node is exactly the machine the DRM/KMS path exists
 # for (ADR-0026); requiring /dev/fb0 would refuse to start the desktop on it.
+# Match the four nodes `drm::discover_card` actually scans. Stopping at card1
+# would leave a desktop that never starts on a machine whose panel is card2/3,
+# even though the provider could drive it.
 ConditionPathExists=|/dev/fb0
 ConditionPathExists=|/dev/dri/card0
 ConditionPathExists=|/dev/dri/card1
+ConditionPathExists=|/dev/dri/card2
+ConditionPathExists=|/dev/dri/card3
 
 [Service]
 Type=simple
