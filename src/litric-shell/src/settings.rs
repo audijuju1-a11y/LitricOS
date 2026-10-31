@@ -269,11 +269,13 @@ pub enum Page {
     Updates,
     /// AppArmor, Polkit, firewalld, Flatpak/App Store and NetworkManager.
     Services,
+    /// Search, install and remove Flatpak applications.
+    AppStore,
 }
 
 impl Page {
     /// Pages shown by Settings in sidebar order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Appearance,
         Self::Display,
         Self::Input,
@@ -290,6 +292,7 @@ impl Page {
         Self::Diagnostics,
         Self::Updates,
         Self::Services,
+        Self::AppStore,
     ];
 
     /// Stable user-facing English title (translated by the text catalog).
@@ -312,6 +315,7 @@ impl Page {
             Self::Diagnostics => "Diagnostics",
             Self::Updates => "Updates",
             Self::Services => "Services",
+            Self::AppStore => "App Store",
         }
     }
 
@@ -345,6 +349,7 @@ impl Page {
             Self::Diagnostics => "diagnostics",
             Self::Updates => "updates",
             Self::Services => "services",
+            Self::AppStore => "app-store",
         }
     }
 

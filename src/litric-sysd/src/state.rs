@@ -31,6 +31,7 @@ use crate::install::{self, Installed};
 use crate::proto::{AccessWord, Request, Response};
 use crate::provider_contract::{AudioLevel, Provider, ToolProvider};
 use crate::providers::{BtAction, SystemAction};
+use crate::store::{StoreApp, StoreReadError};
 use crate::update::{HealthSignal, UpdateService};
 
 /// The application the local session client is, for capability purposes.
@@ -74,7 +75,7 @@ pub type Timestamp = u64;
 /// read. `iface://` and `wifi://` are two grants of one capability: a link and a
 /// network are different resources with different consequences, and a single
 /// grant covering both would make narrowing one impossible later.
-pub const PROVIDER_GRANTS: [(CapabilityId, &str); 14] = [
+pub const PROVIDER_GRANTS: [(CapabilityId, &str); 15] = [
     (CapabilityId::AudioSet, "audio://"),
     (CapabilityId::NetConfigure, "iface://"),
     (CapabilityId::NetConfigure, "wifi://"),
@@ -89,6 +90,10 @@ pub const PROVIDER_GRANTS: [(CapabilityId, &str); 14] = [
     (CapabilityId::ServiceControl, "service://firewall"),
     (CapabilityId::ServiceControl, "service://store"),
     (CapabilityId::ServiceControl, "service://networkmanager"),
+    // One broad grant covers the store surface; each request is still scoped to
+    // the exact app and remote by `StoreAction::capability`, and the broker
+    // checks that narrower scope against this one.
+    (CapabilityId::AppManage, "appmanage://"),
 ];
 
 /// The whole daemon, minus its transport.
@@ -525,6 +530,8 @@ impl Sysd {
             }
             Request::AudioLevel => self.audio_level(),
             Request::BtStatus => self.bt_status(),
+            Request::StoreList => self.store_list(),
+            Request::StoreSearch { query } => self.store_search(query),
             Request::EnvList => Response::ok(self.env_list()),
             Request::EnvPlan(token) => self.env_plan(token),
             Request::EnvSwitch(token) => self.env_switch(token),
@@ -896,6 +903,62 @@ impl Sysd {
         }
     }
 
+    /// Read the installed system applications.
+    ///
+    /// A read is not an action: it changes nothing, needs no capability, and
+    /// reports a missing Flatpak as `store.state=unavailable` rather than as a
+    /// refusal. The daemon never reads this in `FACTS`; each request is one
+    /// bounded process.
+    fn store_list(&mut self) -> Response {
+        Self::store_reply(self.provider.store_list(self.runner.as_ref()), "")
+    }
+
+    /// Search the configured system remotes.
+    ///
+    /// The query is validated by the store provider before a process starts;
+    /// a bad query is the caller's error, while a tool that is absent is a
+    /// state.
+    fn store_search(&mut self, query: &str) -> Response {
+        Self::store_reply(
+            self.provider.store_search(self.runner.as_ref(), query),
+            query,
+        )
+    }
+
+    fn store_reply(result: Result<Vec<StoreApp>, StoreReadError>, query: &str) -> Response {
+        match result {
+            Ok(apps) => {
+                let mut lines = vec![
+                    "store.state=ready".to_owned(),
+                    format!("store.query={}", crate::facts::escape_field(query)),
+                    format!("store.count={}", apps.len()),
+                ];
+                for app in apps {
+                    lines.push(format!(
+                        "store.app {}|{}|{}|{}|{}|{}",
+                        crate::facts::escape_field(&app.id),
+                        crate::facts::escape_field(&app.name),
+                        crate::facts::escape_field(&app.version),
+                        crate::facts::escape_field(&app.origin),
+                        crate::facts::escape_field(&app.size),
+                        crate::facts::escape_field(&app.remote)
+                    ));
+                }
+                Response::ok(lines)
+            }
+            Err(StoreReadError::BadArgument(detail)) => Response::err("bad-argument", detail),
+            Err(error) => {
+                let state = error.token();
+                Response::ok(vec![
+                    format!("store.state={state}"),
+                    format!("store.query={}", crate::facts::escape_field(query)),
+                    "store.count=0".to_owned(),
+                    format!("store.error={}", crate::facts::escape_field(error.detail())),
+                ])
+            }
+        }
+    }
+
     /// Ask the sound server where the volume is, and remember the answer.
     ///
     /// Allowed to anyone who can reach the socket, like [`Request::Facts`]: it
@@ -1038,6 +1101,7 @@ impl Sysd {
             }
             SystemAction::Service(s) => self.provider.service(s, self.runner.as_ref(), &self.root),
             SystemAction::Auth(a) => self.provider.auth(a, self.runner.as_ref(), &self.root),
+            SystemAction::Store(s) => self.provider.store(s, self.runner.as_ref(), &self.root),
         };
         // Only a helper that ran and rejected the password counts as a guess.
         // A missing tool, a timeout or a refusal is the daemon failing, and
@@ -2546,6 +2610,125 @@ mod tests {
         let log = s.caps.audit_log();
         assert_eq!(log.len(), before + 1, "a refusal is a decision too");
         assert!(log.last().is_some_and(|e| !e.allowed));
+    }
+
+    #[test]
+    fn a_store_grant_authorises_its_narrow_scope_instead_of_being_ignored() {
+        use crate::providers::SystemAction;
+        use crate::store::StoreAction;
+        let runner = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&runner);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Store(StoreAction::Uninstall {
+                    id: "org.gnome.Builder".to_owned(),
+                }),
+                consent: true,
+            },
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(
+            line(&reply, "command="),
+            Some(&"command=flatpak uninstall --system --noninteractive --assumeyes org.gnome.Builder".to_owned()),
+            "{:?}",
+            reply.lines()
+        );
+        assert_eq!(runner.calls().len(), 1);
+    }
+
+    #[test]
+    fn a_store_write_without_live_consent_is_refused_before_flatpak_runs() {
+        use crate::providers::SystemAction;
+        use crate::store::StoreAction;
+        let runner = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&runner);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Store(StoreAction::Install {
+                    id: "org.gnome.Builder".to_owned(),
+                    remote: "flathub".to_owned(),
+                }),
+                consent: false,
+            },
+            NOW,
+        );
+        assert!(!reply.is_ok(), "{}", reply.encode());
+        assert!(
+            reply.encode().contains("needs-live-consent"),
+            "{}",
+            reply.encode()
+        );
+        assert!(
+            runner.calls().is_empty(),
+            "no process may run without consent"
+        );
+    }
+
+    #[test]
+    fn a_store_write_without_the_app_manage_grant_runs_nothing() {
+        use crate::providers::SystemAction;
+        use crate::store::StoreAction;
+        let runner = RecordingRunner::succeeding(0);
+        let mut s = sysd_with(&runner);
+        let client = s.client().expect("client").clone();
+        s.caps_mut().revoke_all(&client, NOW);
+        let reply = s.handle(
+            &Request::Action {
+                action: SystemAction::Store(StoreAction::Uninstall {
+                    id: "org.gnome.Builder".to_owned(),
+                }),
+                consent: true,
+            },
+            NOW,
+        );
+        assert!(!reply.is_ok(), "{}", reply.encode());
+        assert!(reply.encode().contains("revoked"), "{}", reply.encode());
+        assert!(
+            runner.calls().is_empty(),
+            "no process may run without a grant"
+        );
+    }
+
+    #[test]
+    fn a_store_read_uses_the_provider_and_keeps_unavailable_as_a_state() {
+        use crate::provider_contract::FakeProvider;
+        use crate::store::{StoreApp, StoreReadError};
+        let fake = FakeProvider::new().with_store_installed(vec![StoreApp {
+            id: "org.gnome.Builder".to_owned(),
+            name: "Builder".to_owned(),
+            version: "46.1".to_owned(),
+            origin: "flathub".to_owned(),
+            size: "1.2 GB".to_owned(),
+            remote: "flathub".to_owned(),
+        }]);
+        let mut s = sysd().with_provider(Box::new(fake));
+        let reply = s.handle(&Request::StoreList, NOW);
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(
+            line(&reply, "store.state="),
+            Some(&"store.state=ready".to_owned())
+        );
+        assert!(reply
+            .lines()
+            .iter()
+            .any(|line| line == "store.app org.gnome.Builder|Builder|46.1|flathub|1.2 GB|flathub"));
+
+        let fake = FakeProvider::new();
+        let mut s = sysd().with_provider(Box::new(fake));
+        let reply = s.handle(
+            &Request::StoreSearch {
+                query: "builder".to_owned(),
+            },
+            NOW,
+        );
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert_eq!(
+            line(&reply, "store.state="),
+            Some(&"store.state=unavailable".to_owned())
+        );
+        assert!(line(&reply, "store.error=").is_some());
+        let _ = StoreReadError::Failed(String::new());
     }
 
     // ---- the write half: providers ----------------------------------------

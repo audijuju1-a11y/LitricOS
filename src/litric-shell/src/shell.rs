@@ -458,6 +458,22 @@ pub enum Hot {
     SettingsUpdatesRefresh,
     /// Reload one installed system service through the daemon.
     ServiceAction(ServiceCommand),
+    /// The App Store's search field.
+    StoreSearchField,
+    /// Run the App Store search.
+    StoreSearchButton,
+    /// Select one search result.
+    StoreResult(usize),
+    /// Select one installed application.
+    StoreInstalled(usize),
+    /// Ask for confirmation to install the selected result.
+    StoreInstall,
+    /// Ask for confirmation to remove the selected installed app.
+    StoreUninstall,
+    /// Confirm the pending App Store write.
+    StoreConfirm,
+    /// Cancel the pending App Store write.
+    StoreCancel,
     /// Keep the scale that is on screen and let the countdown go.
     ScaleKeep,
     /// Put the previous scale back now, without waiting out the countdown.
@@ -1588,6 +1604,8 @@ pub enum Effect {
     /// Reload one system service. The command's fixed arguments are validated
     /// by the daemon, and the request carries the click's confirmation.
     Service(ServiceCommand),
+    /// Ask the App Store provider for a read or a confirmed write.
+    Store(crate::store::Request),
     /// A power transition was confirmed by the user and must be carried out.
     ///
     /// This effect only exists after the confirm step has been answered, so the
@@ -3674,6 +3692,8 @@ pub struct Shell {
     pub update_status: crate::updatestatus::Status,
     /// The last service reload's answer, shown on the System services page.
     pub services_note: String,
+    /// App Store catalog, selection and confirmation state.
+    pub store: crate::store::View,
     /// The backup service's last answer, read on the same action and shown as a
     /// reading; the schedule itself belongs to `litric-sysd`.
     pub backup_status: crate::backupstatus::Status,
@@ -4455,6 +4475,7 @@ impl Shell {
             facts: SystemFacts::default(),
             update_status: crate::updatestatus::Status::default(),
             services_note: String::new(),
+            store: crate::store::View::default(),
             backup_status: crate::backupstatus::Status::default(),
             activity: crate::taskmgr::TaskManager::new(),
             activity_end_confirm: None,
@@ -4657,8 +4678,13 @@ impl Shell {
     fn keyboard_focus_is_text_field(&self) -> bool {
         matches!(
             self.keyboard_focus,
-            Some(Hot::TerminalInput | Hot::BrowserOmnibox | Hot::TrashFilter | Hot::ActivityFilter)
-                | Some(Hot::Files(crate::apps::FilesHot::Filter))
+            Some(
+                Hot::TerminalInput
+                    | Hot::BrowserOmnibox
+                    | Hot::TrashFilter
+                    | Hot::ActivityFilter
+                    | Hot::StoreSearchField
+            ) | Some(Hot::Files(crate::apps::FilesHot::Filter))
                 | Some(Hot::LauncherSearch)
                 | Some(Hot::InstallSource | Hot::InstallId)
         )
@@ -6214,18 +6240,46 @@ impl Shell {
             .and_then(|id| self.wm.window(id))
             .map(|w| w.app_id.clone())?;
         match app_id.as_str() {
-            "com.litric.settings" => match key {
-                Key::Char('l') if mods.ctrl => Some(self.toggle_language()),
-                // Ctrl+T is the browser's new tab, on every platform and in
-                // every browser. A theme cycle that answered the same chord in
-                // the window next door taught the wrong reflex, so it moved to
-                // Ctrl+Alt+T.
-                Key::Char('t') if mods.ctrl && mods.alt => Some(self.cycle_theme()),
-                Key::Char('a') if mods.ctrl => Some(self.cycle_accent()),
-                Key::Char('w') if mods.ctrl => Some(self.cycle_wallpaper()),
-                Key::Char('m') if mods.ctrl => Some(self.toggle_reduced_motion()),
-                _ => None,
-            },
+            "com.litric.settings" => {
+                if self.settings.page == crate::settings::Page::AppStore && self.store.search_focus
+                {
+                    match key {
+                        Key::Char(c) if !mods.ctrl && !mods.alt => {
+                            if !c.is_control() {
+                                self.store.query.push(c);
+                            }
+                            self.request_full_redraw();
+                            return Some(Vec::new());
+                        }
+                        Key::Backspace => {
+                            self.store.query.pop();
+                            self.request_full_redraw();
+                            return Some(Vec::new());
+                        }
+                        Key::Enter => {
+                            return Some(self.activate(Hot::StoreSearchButton));
+                        }
+                        Key::Escape => {
+                            self.store.search_focus = false;
+                            self.request_full_redraw();
+                            return Some(Vec::new());
+                        }
+                        _ => {}
+                    }
+                }
+                match key {
+                    Key::Char('l') if mods.ctrl => Some(self.toggle_language()),
+                    // Ctrl+T is the browser's new tab, on every platform and in
+                    // every browser. A theme cycle that answered the same chord in
+                    // the window next door taught the wrong reflex, so it moved to
+                    // Ctrl+Alt+T.
+                    Key::Char('t') if mods.ctrl && mods.alt => Some(self.cycle_theme()),
+                    Key::Char('a') if mods.ctrl => Some(self.cycle_accent()),
+                    Key::Char('w') if mods.ctrl => Some(self.cycle_wallpaper()),
+                    Key::Char('m') if mods.ctrl => Some(self.toggle_reduced_motion()),
+                    _ => None,
+                }
+            }
             "com.litric.browser" => match key {
                 // The tab keyboard model. Every pointer path below has a key
                 // here, so a tab can be opened, closed and chosen without a
@@ -7207,6 +7261,10 @@ impl Shell {
                     ) {
                         effects.push(Effect::ReadPanelState);
                     }
+                    if page == crate::settings::Page::AppStore {
+                        self.store.loaded = false;
+                        effects.push(Effect::Store(crate::store::Request::List));
+                    }
                 }
                 effects
             }
@@ -7217,6 +7275,60 @@ impl Shell {
             Hot::ServiceAction(command) => {
                 self.services_note = format!("Requesting {}…", command.title());
                 vec![Effect::Service(command)]
+            }
+            Hot::StoreSearchField => {
+                self.store.search_focus = true;
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::StoreSearchButton => {
+                let query = self.store.query.trim().to_owned();
+                if query.is_empty() {
+                    self.store.note = "Type what you want to find.".to_owned();
+                    self.request_full_redraw();
+                    return Vec::new();
+                }
+                self.store.search_focus = false;
+                self.store.note = crate::store::Request::Search(query.clone()).progress();
+                self.request_full_redraw();
+                vec![Effect::Store(crate::store::Request::Search(query))]
+            }
+            Hot::StoreResult(index) => {
+                self.store.selected_result = Some(index);
+                self.store.confirm = None;
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::StoreInstalled(index) => {
+                self.store.selected_installed = Some(index);
+                self.store.confirm = None;
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::StoreInstall => {
+                self.store.ask_install();
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::StoreUninstall => {
+                self.store.ask_uninstall();
+                self.request_full_redraw();
+                Vec::new()
+            }
+            Hot::StoreConfirm => {
+                let Some(request) = self.store.confirmed_request() else {
+                    self.store.note = "Nothing is waiting for confirmation.".to_owned();
+                    return Vec::new();
+                };
+                self.store.note = request.progress();
+                self.request_full_redraw();
+                vec![Effect::Store(request)]
+            }
+            Hot::StoreCancel => {
+                self.store.confirm = None;
+                self.store.note = "Nothing was changed.".to_owned();
+                self.request_full_redraw();
+                Vec::new()
             }
             // The pane itself is a scroll target, not a command: the wheel path
             // handles it before a click is considered.

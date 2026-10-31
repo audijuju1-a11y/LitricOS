@@ -55,6 +55,7 @@ use litric_caps::{Capability, CapabilityId, Scope};
 
 use crate::action::{Outcome, Runner};
 use crate::services::ServiceAction;
+use crate::store::StoreAction;
 
 /// WirePlumber's own client, which owns the PipeWire graph's default sink.
 pub const WPCTL: &str = "/usr/bin/wpctl";
@@ -121,7 +122,7 @@ pub struct Refusal {
 
 impl Refusal {
     /// A value that breaks a stated rule.
-    fn illegal(what: &str, why: &str) -> Self {
+    pub(crate) fn illegal(what: &str, why: &str) -> Self {
         Self {
             token: "bad-argument",
             detail: format!("{what} {why}"),
@@ -490,6 +491,8 @@ pub enum SystemAction {
     Service(ServiceAction),
     /// Authentication.
     Auth(AuthAction),
+    /// Install or remove a Flatpak application.
+    Store(StoreAction),
 }
 
 impl SystemAction {
@@ -509,6 +512,10 @@ impl SystemAction {
                 Capability::new(CapabilityId::ServiceControl, scope)
             }
             Self::Auth(a) => a.capability(),
+            Self::Store(s) => {
+                let scope = Scope::parse_resource(&s.scope()?).ok()?;
+                Capability::new(CapabilityId::AppManage, scope)
+            }
         }
     }
 
@@ -521,6 +528,7 @@ impl SystemAction {
             Self::Bluetooth(_) => "bluetooth",
             Self::Service(_) => "service",
             Self::Auth(_) => "auth",
+            Self::Store(_) => "store",
         }
     }
 
@@ -533,6 +541,7 @@ impl SystemAction {
             Self::Bluetooth(b) => b.token(),
             Self::Service(s) => s.token(),
             Self::Auth(a) => a.token(),
+            Self::Store(s) => s.token(),
         }
     }
 
@@ -546,7 +555,7 @@ impl SystemAction {
     /// toggle rather than a dialog.
     #[must_use]
     pub const fn requires_consent(&self) -> bool {
-        matches!(self, Self::Auth(_) | Self::Service(_))
+        matches!(self, Self::Auth(_) | Self::Service(_) | Self::Store(_))
     }
 }
 
@@ -737,6 +746,7 @@ impl SystemAction {
             Self::Bluetooth(b) => Self::bt_plan(b),
             Self::Service(s) => s.plan(),
             Self::Auth(a) => Self::auth_plan(a),
+            Self::Store(s) => s.plan(),
         }
     }
 

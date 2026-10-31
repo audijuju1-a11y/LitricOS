@@ -46,6 +46,7 @@ use litric_shell::fb::PixelFormat;
 use litric_shell::present::{self, Choice};
 use litric_shell::shell::{DesktopMode, Effect, EnvRow, Priority, ServiceCommand, Shell};
 use litric_shell::shortcuts::App;
+use litric_shell::store::Request as StoreRequest;
 use litric_shell::ui::Tokens;
 
 /// Version, reported on the console and in the status file.
@@ -669,6 +670,30 @@ fn apply_bluetooth_power(args: &Args, shell: &mut Shell, on: bool) {
     }
 }
 
+/// Carry out one App Store request through the daemon.
+///
+/// Reads and writes are protocol lines built from validated app ids and remote
+/// names. The shell never starts Flatpak itself and never treats a missing
+/// answer as an empty catalog. A successful write is followed by one installed
+/// list read, so the page shows the machine rather than the request it sent.
+fn apply_store(args: &Args, shell: &mut Shell, request: &StoreRequest) {
+    shell.store.note = request.progress();
+    let reply = ask(&args.socket, &request.line());
+    shell.store.apply(request, reply.as_deref());
+    if request.is_write()
+        && reply.as_deref().is_some_and(|text| {
+            !text.starts_with("ERR ") && text.lines().any(|line| line == "applied=true")
+        })
+    {
+        let terminal = shell.store.note.clone();
+        let listed = ask(&args.socket, "STORE LIST");
+        shell.store.apply(&StoreRequest::List, listed.as_deref());
+        shell.store.note = terminal;
+        shell.refresh_facts();
+    }
+    shell.request_full_redraw();
+}
+
 /// Carry out one service reload. The command is a closed enum, and the daemon
 /// validates the capability, scope and consent again; the shell never builds a
 /// command line from anything the user typed.
@@ -923,6 +948,7 @@ fn apply(args: &Args, shell: &mut Shell, effects: &[Effect]) {
                 }
             }
             Effect::Service(command) => apply_service(args, shell, *command),
+            Effect::Store(request) => apply_store(args, shell, request),
             Effect::Volume(step) => apply_volume(args, shell, *step),
             // The panel's two questions, asked together and only when somebody
             // is looking: both cost a process and both answers are measurements.

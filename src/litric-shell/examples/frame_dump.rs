@@ -401,6 +401,50 @@ fn scene_settings_page(rig: &mut Rig, page: litric_shell::settings::Page) {
                 "Asked the sound server for 40%; the level it reads back is what the panel shows."
                     .to_owned();
         }
+        litric_shell::settings::Page::AppStore => {
+            let services = &mut rig.shell.facts.services;
+            services.flatpak_state = "ready".to_owned();
+            services.flatpak_tool = true;
+            services.flatpak_sandbox = true;
+            services.flatpak_apps = Some(3);
+            services.flatpak_remotes = Some(2);
+            let app =
+                |id: &str, name: &str, version: &str, size: &str| litric_shell::store::StoreApp {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    version: version.to_owned(),
+                    origin: "flathub".to_owned(),
+                    size: size.to_owned(),
+                    remote: "flathub".to_owned(),
+                };
+            rig.shell.store = litric_shell::store::View {
+                state: "ready".to_owned(),
+                query: "photo".to_owned(),
+                results: vec![
+                    app("org.gimp.GIMP", "GIMP", "2.10.38", ""),
+                    app("org.gnome.Builder", "Builder", "46.1", ""),
+                    app("org.kde.krita", "Krita", "5.2.3", ""),
+                    app("org.inkscape.Inkscape", "Inkscape", "1.3.2", ""),
+                    app("org.darktable.Darktable", "Darktable", "4.8.0", ""),
+                ],
+                installed: vec![
+                    app("org.gnome.Builder", "Builder", "46.1", "1.2 GB"),
+                    app("org.kde.krita", "Krita", "5.2.3", "820 MB"),
+                    app("org.videolan.VLC", "VLC", "3.0.20", "120 MB"),
+                ],
+                selected_result: Some(1),
+                selected_installed: Some(0),
+                // The evidence frame shows the page's normal state. The
+                // confirmation card is exercised by the shell tests; drawing it
+                // here would cover the very rows the frame exists to review.
+                confirm: None,
+                note: "5 matching applications.".to_owned(),
+                search_focus: false,
+                loaded: true,
+                error: String::new(),
+            };
+            rig.shell.settings.sidebar_scroll = 132.0;
+        }
         litric_shell::settings::Page::Services => {
             let services = &mut rig.shell.facts.services;
             services.apparmor_state = "mixed".to_owned();
@@ -474,6 +518,9 @@ fn scene_settings_diagnostics(rig: &mut Rig) {
 }
 fn scene_settings_services(rig: &mut Rig) {
     scene_settings_page(rig, litric_shell::settings::Page::Services);
+}
+fn scene_settings_app_store(rig: &mut Rig) {
+    scene_settings_page(rig, litric_shell::settings::Page::AppStore);
 }
 
 /// The danger dialog: deleting a file, with the object named and Cancel as the
@@ -978,7 +1025,7 @@ fn main() -> ExitCode {
     // (04-QA-LINT-GOVERNANCE §2) plus the frames this dump has always written:
     // the lock in three states, the launcher and its search, and the remaining
     // applications. `ci/check-golden-frames.py` names the required ten.
-    let scenes: [Scene; 34] = [
+    let scenes: [Scene; 35] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
         ("04-files", scene_files),
@@ -999,6 +1046,7 @@ fn main() -> ExitCode {
         ("37-settings-accounts", scene_settings_accounts),
         ("38-settings-diagnostics", scene_settings_diagnostics),
         ("43-settings-services", scene_settings_services),
+        ("44-settings-app-store", scene_settings_app_store),
         ("17-control-centre", scene_control_centre),
         ("18-notifications", scene_notifications),
         ("19-dialog-danger", scene_danger_dialog),

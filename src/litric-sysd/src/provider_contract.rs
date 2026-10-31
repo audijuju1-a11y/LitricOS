@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use crate::action::{Outcome, Runner};
 use crate::providers::{self, AudioAction, AuthAction, BtAction, NetAction, SystemAction};
 use crate::services::ServiceAction;
+use crate::store::{self, StoreAction, StoreApp, StoreReadError};
 
 /// A measured default-sink volume and mute flag.
 ///
@@ -63,6 +64,28 @@ pub trait Provider: fmt::Debug + Send + Sync {
     fn service(&self, action: &ServiceAction, runner: &dyn Runner, root: &Path) -> Outcome {
         providers::perform(&SystemAction::Service(*action), runner, root)
     }
+
+    /// Install or remove one Flatpak application.
+    fn store(&self, action: &StoreAction, runner: &dyn Runner, root: &Path) -> Outcome {
+        providers::perform(&SystemAction::Store(action.clone()), runner, root)
+    }
+
+    /// Read the installed system applications.
+    ///
+    /// # Errors
+    /// See [`StoreReadError`]. A missing Flatpak is `Unavailable`, not an
+    /// empty catalog.
+    fn store_list(&self, runner: &dyn Runner) -> Result<Vec<StoreApp>, StoreReadError>;
+
+    /// Search the configured system remotes.
+    ///
+    /// # Errors
+    /// See [`StoreReadError`]. The query is validated before a process runs.
+    fn store_search(
+        &self,
+        runner: &dyn Runner,
+        query: &str,
+    ) -> Result<Vec<StoreApp>, StoreReadError>;
 
     /// Ask the sound server for the default sink's level.
     ///
@@ -105,6 +128,18 @@ impl Provider for ToolProvider {
     fn bt_powered(&self, runner: &dyn Runner) -> Result<bool, String> {
         providers::bt_powered(runner)
     }
+
+    fn store_list(&self, runner: &dyn Runner) -> Result<Vec<StoreApp>, StoreReadError> {
+        store::list(runner)
+    }
+
+    fn store_search(
+        &self,
+        runner: &dyn Runner,
+        query: &str,
+    ) -> Result<Vec<StoreApp>, StoreReadError> {
+        store::search(runner, query)
+    }
 }
 
 /// The state shared by every clone of a [`FakeProvider`].
@@ -114,6 +149,8 @@ struct FakeState {
     bluetooth: Mutex<Option<bool>>,
     outcomes: Mutex<VecDeque<Outcome>>,
     calls: Mutex<Vec<String>>,
+    store_installed: Mutex<Option<Vec<StoreApp>>>,
+    store_results: Mutex<Option<Vec<StoreApp>>>,
 }
 
 /// A provider that answers without running a tool.
@@ -151,6 +188,28 @@ impl FakeProvider {
             .bluetooth
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(powered);
+        self
+    }
+
+    /// Script the installed list.
+    #[must_use]
+    pub fn with_store_installed(self, apps: Vec<StoreApp>) -> Self {
+        *self
+            .state
+            .store_installed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(apps);
+        self
+    }
+
+    /// Script the next search results.
+    #[must_use]
+    pub fn with_store_results(self, apps: Vec<StoreApp>) -> Self {
+        *self
+            .state
+            .store_results
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(apps);
         self
     }
 
@@ -235,6 +294,36 @@ impl Provider for FakeProvider {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .ok_or_else(|| "the fake has no Bluetooth state".to_owned())
+    }
+
+    fn store(&self, action: &StoreAction, _runner: &dyn Runner, _root: &Path) -> Outcome {
+        self.record(&SystemAction::Store(action.clone()))
+    }
+
+    fn store_list(&self, _runner: &dyn Runner) -> Result<Vec<StoreApp>, StoreReadError> {
+        self.state
+            .store_installed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| {
+                StoreReadError::Unavailable("the fake has no installed store list".to_owned())
+            })
+    }
+
+    fn store_search(
+        &self,
+        _runner: &dyn Runner,
+        _query: &str,
+    ) -> Result<Vec<StoreApp>, StoreReadError> {
+        self.state
+            .store_results
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or_else(|| {
+                StoreReadError::Unavailable("the fake has no store search results".to_owned())
+            })
     }
 }
 

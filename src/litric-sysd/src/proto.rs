@@ -25,6 +25,7 @@ use crate::action::PowerAction;
 use crate::launch::{MAX_ARGV, MAX_ENV};
 use crate::providers::{self, AudioAction, AuthAction, BtAction, NetAction, SystemAction};
 use crate::services::ServiceAction;
+use crate::store::StoreAction;
 use crate::update::HealthSignal;
 use litric_core::Version;
 
@@ -175,6 +176,16 @@ pub enum Request {
     AppUninstall {
         /// Reverse-DNS application id.
         id: String,
+    },
+    /// Read the installed system applications from Flatpak.
+    ///
+    /// A question, so it changes nothing and needs no capability. It costs one
+    /// bounded process, which is why it is on demand rather than in `FACTS`.
+    StoreList,
+    /// Search the configured Flatpak remotes.
+    StoreSearch {
+        /// The words to search for.
+        query: String,
     },
     /// The local backup service's scheduling and last-attempt state.
     BackupStatus,
@@ -746,6 +757,58 @@ impl Request {
                     consent: true,
                 })
             }
+            "store" => match arg(0).to_ascii_lowercase().as_str() {
+                "list" => {
+                    arity("STORE LIST", 1)?;
+                    Ok(Self::StoreList)
+                }
+                "search" => {
+                    if args.len() < 2 {
+                        return Err(ProtoError::BadArity {
+                            verb: "STORE SEARCH",
+                            expected: 2,
+                            got: args.len(),
+                        });
+                    }
+                    let query = args.get(1..).unwrap_or(&[]).join(" ");
+                    Ok(Self::StoreSearch { query })
+                }
+                "install" => {
+                    arity("STORE INSTALL", 4)?;
+                    if !arg(3).eq_ignore_ascii_case("confirm") {
+                        return Err(ProtoError::BadArgument {
+                            name: "store confirmation",
+                            value: arg(3).to_owned(),
+                        });
+                    }
+                    Ok(Self::Action {
+                        action: SystemAction::Store(StoreAction::Install {
+                            id: arg(1).to_owned(),
+                            remote: arg(2).to_owned(),
+                        }),
+                        consent: true,
+                    })
+                }
+                "uninstall" => {
+                    arity("STORE UNINSTALL", 3)?;
+                    if !arg(2).eq_ignore_ascii_case("confirm") {
+                        return Err(ProtoError::BadArgument {
+                            name: "store confirmation",
+                            value: arg(2).to_owned(),
+                        });
+                    }
+                    Ok(Self::Action {
+                        action: SystemAction::Store(StoreAction::Uninstall {
+                            id: arg(1).to_owned(),
+                        }),
+                        consent: true,
+                    })
+                }
+                other => Err(ProtoError::BadArgument {
+                    name: "STORE subcommand",
+                    value: other.to_owned(),
+                }),
+            },
             "app" => match arg(0).to_ascii_lowercase().as_str() {
                 "install" => {
                     arity("APP INSTALL", 3)?;
@@ -1793,6 +1856,56 @@ mod tests {
             Request::parse("UPDATE NONSENSE"),
             Err(ProtoError::BadArgument {
                 name: "UPDATE subcommand",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn store_reads_and_confirmed_writes_parse_without_guessing() {
+        assert_eq!(Request::parse("STORE LIST"), Ok(Request::StoreList));
+        assert_eq!(
+            Request::parse("STORE SEARCH photo editor"),
+            Ok(Request::StoreSearch {
+                query: "photo editor".to_owned()
+            })
+        );
+        let parsed = Request::parse("STORE INSTALL org.gnome.Builder flathub CONFIRM")
+            .expect("a confirmed install");
+        assert!(matches!(
+            parsed,
+            Request::Action {
+                action: SystemAction::Store(StoreAction::Install { id, remote }),
+                consent: true,
+            } if id == "org.gnome.Builder" && remote == "flathub"
+        ));
+        let parsed = Request::parse("STORE UNINSTALL org.gnome.Builder CONFIRM")
+            .expect("a confirmed uninstall");
+        assert!(matches!(
+            parsed,
+            Request::Action {
+                action: SystemAction::Store(StoreAction::Uninstall { id }),
+                consent: true,
+            } if id == "org.gnome.Builder"
+        ));
+        assert!(matches!(
+            Request::parse("STORE INSTALL org.gnome.Builder flathub"),
+            Err(ProtoError::BadArity {
+                verb: "STORE INSTALL",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("STORE UNINSTALL org.gnome.Builder yes"),
+            Err(ProtoError::BadArgument {
+                name: "store confirmation",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Request::parse("STORE SEARCH"),
+            Err(ProtoError::BadArity {
+                verb: "STORE SEARCH",
                 ..
             })
         ));

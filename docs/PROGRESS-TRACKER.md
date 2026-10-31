@@ -9172,3 +9172,67 @@ Revert the S88 commit. The service facts, `Services` page, `service.control`
 capability, four reload plans, image packages/units, AppArmor kernel enablement,
 the new tests and `43-settings-services` disappear. The existing
 networkd/iwd, Flatpak install/uninstall and Settings pages remain unchanged.
+
+## 2026-10-31 — S89: the App Store installs and removes Flatpak applications
+
+Settings' App Store was a status row until S89. It now searches the configured
+Flatpak remotes, lists installed system applications with version, origin and
+size, and installs or removes a chosen app through `litric-sysd`. The daemon
+owns the catalogue and every write: `STORE LIST` and `STORE SEARCH` are bounded
+reads, while `STORE INSTALL … CONFIRM` and `STORE UNINSTALL … CONFIRM` become
+fixed non-interactive Flatpak plans behind the new scoped `app.manage`
+capability. A missing Flatpak is reported as `unavailable`, never as an empty
+catalogue.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-sysd/src/store.rs` | New Flatpak reader and fixed install/uninstall plans; tabular parser, validation, 24-row cap and fixture tests. |
+| `src/litric-sysd/src/provider_contract.rs` | Provider contract gains store reads and writes; `FakeProvider` scripts them without spawning. |
+| `src/litric-sysd/src/proto.rs` | `STORE LIST`, `STORE SEARCH`, `STORE INSTALL … CONFIRM`, `STORE UNINSTALL … CONFIRM`, with refusal tests. |
+| `src/litric-sysd/src/state.rs` | Store reads, scoped grant and the daemon-authorised plan path. |
+| `src/litric-caps/src/capability.rs` | Adds `app.manage`, `appmanage://…`, risk High, live consent required. |
+| `src/litric-shell/src/store.rs` | New shell model: reply parser, rows, selection, confirmation and progress text. |
+| `src/litric-shell/src/settings.rs` | Adds the `App Store` page, slug `app-store`; sidebar now has 17 pages. |
+| `src/litric-shell/src/shell.rs` | Search field, row selection, install/remove actions, confirm/cancel and text entry. |
+| `src/litric-shell/src/main.rs` | Sends store requests through the daemon, applies the answer and re-reads installed apps after a successful write. |
+| `src/litric-shell/src/views.rs` | Search/results/installed controls and a centred confirmation card. |
+| `src/litric-shell/examples/frame_dump.rs` | Adds `44-settings-app-store`. |
+| `docs/ui-review/2026-10-31/` | Adds the reviewed App Store PNG and updates counts, index and contact sheet. |
+
+### User-visible outcomes
+
+| State | Result |
+|---|---|
+| Flatpak present | Search across system remotes; installed list shows id, version, origin and size when reported. |
+| Install selected | A confirmation card names the app and remote; confirming sends `STORE INSTALL … CONFIRM`. |
+| Remove selected | A confirmation card names the app; confirming sends `STORE UNINSTALL … CONFIRM`. |
+| Flatpak missing | **Flatpak is not installed in this image**; no search or install controls are drawn. |
+| Empty search | **No applications matched**; the previous catalogue rows are not retained. |
+| Read failure | The daemon's state/detail is shown; no rows are invented. |
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | **2,018 passed, 0 failed, 0 ignored** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all --check` | exit 0 |
+| `frame_dump` + `ci/check-golden-frames.py` | 43 frames recorded; new `44-settings-app-store`; 10 required screens pass |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+
+### Limits
+
+* No real Flatpak remote was exercised: this host has no `flatpak`. The store
+  reads and write plans are fixture/runner tested, not downloaded from a remote.
+* Only the system installation is managed; per-user installations are excluded.
+* The image was not built or booted (`mkosi` and QEMU absent). The frame is a
+  composition of the shipping view, not a capture from a booted VM.
+* NetworkManager is installed but deliberately not enabled; Polkit policy
+  handling is unchanged.
+
+### Rollback
+
+Revert the S89 commit. The store provider/protocol/capability, App Store page,
+shell model, tests and `44-settings-app-store` disappear; S88 remains.

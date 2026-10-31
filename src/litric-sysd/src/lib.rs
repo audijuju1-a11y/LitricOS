@@ -51,6 +51,7 @@ pub mod provider_contract;
 pub mod providers;
 pub mod services;
 pub mod state;
+pub mod store;
 pub mod update;
 mod update_health;
 pub mod update_lock;

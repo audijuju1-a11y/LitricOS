@@ -1,10 +1,21 @@
-# LitricOS UI review — 2026-10-31 (S82, updated in S88)
+# LitricOS UI review — 2026-10-31 (S82, updated in S89)
 
-This directory holds **43 screens**, each **1280×800 px**. Forty-two are the
+This directory holds **44 screens**, each **1280×800 px**. Forty-three are the
 fixture gallery regenerated through the shipping `litric-shell/examples/frame_dump.rs`
-and `litric_shell::views::draw`. The forty-third is not a fixture: it is the frame composed during the S82
+and `litric_shell::views::draw`. The forty-fourth is not a fixture: it is the frame composed during the S82
 real-socket e2e after `weston-simple-shm` was installed through `APP INSTALL`,
 launched by the shell through `litric-sysd`, and mapped as a Wayland client.
+
+## What changed in S89
+
+- Settings has an **App Store** page backed by `litric-sysd`: Flatpak search,
+  installed system applications with version/origin/size, and confirmed install
+  or remove actions. A missing Flatpak is an explicit unavailable state.
+- `44-settings-app-store` is new and was reviewed as an image before recording.
+  It shows the search field, four catalogue rows, two installed rows and both
+  actions without clipping or elided values.
+- The other 42 fixture frames remain within the golden threshold; `39-linux-app`
+  is unchanged. The golden set now records 43 fixture frames.
 
 ## What changed in S88
 

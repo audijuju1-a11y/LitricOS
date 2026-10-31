@@ -125,6 +125,15 @@ pub enum CapabilityId {
     /// consent because reloading security or network policy is an
     /// administrative act, even though it does not overwrite user data.
     ServiceControl,
+    /// Install or remove an application through Flatpak.
+    ///
+    /// Separate from [`Self::ProcessSpawn`] and [`Self::SystemSettings`]: an app
+    /// install writes new code into the system installation and fetches it from
+    /// a named remote, while a window launch only starts something already
+    /// present. The scope is `appmanage://<id>/<remote>` for an install and
+    /// `appmanage://<id>` for a removal, so permission for one app is not
+    /// permission for another and one remote is not another.
+    AppManage,
 }
 
 impl CapabilityId {
@@ -167,6 +176,7 @@ impl CapabilityId {
             Self::UpdateControl => "update.control",
             Self::BackupControl => "backup.control",
             Self::ServiceControl => "service.control",
+            Self::AppManage => "app.manage",
         }
     }
 
@@ -209,6 +219,7 @@ impl CapabilityId {
             "update.control" => Self::UpdateControl,
             "backup.control" => Self::BackupControl,
             "service.control" => Self::ServiceControl,
+            "app.manage" => Self::AppManage,
             _ => return None,
         })
     }
@@ -252,6 +263,7 @@ impl CapabilityId {
             Self::UpdateControl,
             Self::BackupControl,
             Self::ServiceControl,
+            Self::AppManage,
         ]
     }
 
@@ -280,6 +292,7 @@ impl CapabilityId {
                 | Self::UpdateControl
                 | Self::BackupControl
                 | Self::ServiceControl
+                | Self::AppManage
         )
     }
 
@@ -330,7 +343,8 @@ impl CapabilityId {
             | Self::ProcessSpawn
             | Self::UpdateControl
             | Self::BackupControl
-            | Self::ServiceControl => Scoping::Optional,
+            | Self::ServiceControl
+            | Self::AppManage => Scoping::Optional,
             _ => Scoping::Never,
         }
     }
@@ -377,6 +391,7 @@ impl CapabilityId {
             Self::UpdateControl => "install a system update or roll it back",
             Self::BackupControl => "create a backup of your application state",
             Self::ServiceControl => "reload a system service",
+            Self::AppManage => "install or remove an application",
         }
     }
 
@@ -397,7 +412,8 @@ impl CapabilityId {
             | Self::ProcessSpawn
             | Self::UpdateControl
             | Self::BackupControl
-            | Self::ServiceControl => Risk::High,
+            | Self::ServiceControl
+            | Self::AppManage => Risk::High,
             Self::FsRead
             | Self::FsList
             | Self::NetServer
@@ -538,6 +554,7 @@ const RESOURCE_SCHEMES: &[&str] = &[
     "update://",
     "backup://",
     "service://",
+    "appmanage://",
 ];
 
 /// Storage URI schemes, from RUNTIME section 17.

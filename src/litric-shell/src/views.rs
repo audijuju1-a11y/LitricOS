@@ -3096,6 +3096,7 @@ fn settings_icon(page: crate::settings::Page) -> Icon {
         Page::Diagnostics => Icon::Activity,
         Page::Updates => Icon::Info,
         Page::Services => Icon::Shield,
+        Page::AppStore => Icon::Grid,
     }
 }
 
@@ -4041,6 +4042,7 @@ fn draw_settings_page(
             }
             settings_rows_from(canvas, t, pane, y + t.px(10.0), &rows);
         }
+        Page::AppStore => draw_store_page(canvas, shell, pane, t),
     }
     if matches!(
         page,
@@ -4085,6 +4087,286 @@ fn draw_settings_page(
             pane.bottom() - t.px(8.0),
             &hint,
         );
+    }
+}
+
+/// The App Store page: a search field, available results, installed apps, and
+/// one confirmation step for every write.
+///
+/// Flatpak does the work in the daemon. This function only draws rows and
+/// registers hotspots; it never runs a command or invents a catalog. The
+/// confirmation is a centred card rather than another row at the bottom: the
+/// page is taller than a short Settings window, and a confirmation that can be
+/// clipped is not a confirmation.
+fn draw_store_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tokens) {
+    let mut y = pane.y + t.px(48.0);
+    let x = pane.x + t.sp(Space::Lg);
+    let width = pane.w - t.sp(Space::Lg) * 2.0;
+    let dim = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+    let body = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    let caption = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+
+    if !shell.facts.services.flatpak_tool && shell.store.state != "ready" {
+        font::draw(
+            canvas,
+            "Flatpak is not installed in this image.",
+            x,
+            y + t.px(18.0),
+            &body,
+        );
+        y += t.px(28.0);
+        font::draw(
+            canvas,
+            "There is no app catalog to search and no app can be installed.",
+            x,
+            y + t.px(16.0),
+            &dim,
+        );
+        return;
+    }
+
+    let field = Rect::new(x, y, (width - t.px(88.0)).max(t.px(120.0)), t.px(32.0));
+    ui::text_field(
+        canvas,
+        t,
+        field,
+        &shell.store.query,
+        "Search Flatpak applications",
+        shell.store.search_focus,
+    );
+    shell.hotspots_mut().push(field, Hot::StoreSearchField);
+    let search = Rect::new(field.right() + t.px(8.0), field.y, t.px(80.0), t.px(32.0));
+    ui::button(canvas, t, search, "Search", State::Normal, Tone::Accent);
+    shell.hotspots_mut().push(search, Hot::StoreSearchButton);
+    y += t.px(38.0);
+
+    let state = if shell.store.state.is_empty() {
+        "The catalog has not been read yet."
+    } else {
+        &shell.store.state
+    };
+    let status = if shell.store.error.is_empty() {
+        format!("Catalog · {state}")
+    } else {
+        format!("Catalog · {state} · {}", shell.store.error)
+    };
+    font::draw(canvas, &status, x, y + t.px(12.0), &dim);
+    y += t.px(18.0);
+    if !shell.store.note.is_empty() {
+        let note = ui::elide(&shell.store.note, &dim, width);
+        font::draw(canvas, &note, x, y + t.px(12.0), &dim);
+        // The next drawing is a section label with its own baseline. Eighteen
+        // pixels put the two runs two pixels inside each other at this type
+        // size; the gap is a layout decision, not a rounding accident.
+        y += t.px(24.0);
+    }
+
+    let results = shell.store.results.clone();
+    ui::section_label(canvas, t, (x, y + t.px(9.0)), "AVAILABLE APPLICATIONS");
+    y += t.px(18.0);
+    if results.is_empty() {
+        font::draw(
+            canvas,
+            if shell.store.state == "ready" {
+                "No results to show. Type a search above."
+            } else {
+                "No catalog rows are available."
+            },
+            x,
+            y + t.px(13.0),
+            &dim,
+        );
+        y += t.px(20.0);
+    } else {
+        for (i, app) in results.iter().take(4).enumerate() {
+            let row = Rect::new(x, y, width, t.px(26.0));
+            if shell.store.selected_result == Some(i) {
+                canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.accent(), 0.16));
+            }
+            font::draw(
+                canvas,
+                &app.name,
+                row.x + t.px(8.0),
+                row.y + t.px(16.0),
+                &body,
+            );
+            let detail = if app.size.is_empty() {
+                format!("{} · {}", app.id, app.origin)
+            } else {
+                format!("{} · {} · {}", app.id, app.version, app.size)
+            };
+            let shown = ui::elide(&detail, &caption, (row.w * 0.62).max(t.px(120.0)));
+            let dw = font::measure(&shown, &caption);
+            font::draw(
+                canvas,
+                &shown,
+                row.right() - dw - t.px(8.0),
+                row.y + t.px(16.0),
+                &caption,
+            );
+            shell.hotspots_mut().push(row, Hot::StoreResult(i));
+            y += t.px(26.0);
+        }
+    }
+
+    let install = Rect::new(x, y + t.px(2.0), t.px(136.0), t.px(26.0));
+    let can_install = shell
+        .store
+        .result()
+        .is_some_and(|app| !app.remote.is_empty());
+    ui::button(
+        canvas,
+        t,
+        install,
+        "Install selected",
+        if can_install {
+            State::Normal
+        } else {
+            State::Disabled
+        },
+        Tone::Accent,
+    );
+    if can_install {
+        shell.hotspots_mut().push(install, Hot::StoreInstall);
+    }
+    y += t.px(34.0);
+
+    let installed = shell.store.installed.clone();
+    ui::section_label(
+        canvas,
+        t,
+        (x, y + t.px(9.0)),
+        "INSTALLED SYSTEM APPLICATIONS",
+    );
+    y += t.px(18.0);
+    if installed.is_empty() {
+        font::draw(
+            canvas,
+            "No system applications are installed.",
+            x,
+            y + t.px(13.0),
+            &dim,
+        );
+        y += t.px(20.0);
+    } else {
+        for (i, app) in installed.iter().take(2).enumerate() {
+            let row = Rect::new(x, y, width, t.px(26.0));
+            if shell.store.selected_installed == Some(i) {
+                canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.accent(), 0.16));
+            }
+            font::draw(
+                canvas,
+                &app.name,
+                row.x + t.px(8.0),
+                row.y + t.px(16.0),
+                &body,
+            );
+            let detail = if app.size.is_empty() {
+                format!("{} · {} · {}", app.id, app.version, app.origin)
+            } else {
+                format!(
+                    "{} · {} · {} · {}",
+                    app.id, app.version, app.origin, app.size
+                )
+            };
+            let shown = ui::elide(&detail, &caption, (row.w * 0.62).max(t.px(120.0)));
+            let dw = font::measure(&shown, &caption);
+            font::draw(
+                canvas,
+                &shown,
+                row.right() - dw - t.px(8.0),
+                row.y + t.px(16.0),
+                &caption,
+            );
+            shell.hotspots_mut().push(row, Hot::StoreInstalled(i));
+            y += t.px(26.0);
+        }
+    }
+    let remove = Rect::new(x, y + t.px(2.0), t.px(146.0), t.px(26.0));
+    let can_remove = shell.store.installed_app().is_some();
+    ui::button(
+        canvas,
+        t,
+        remove,
+        "Remove selected",
+        if can_remove {
+            State::Normal
+        } else {
+            State::Disabled
+        },
+        Tone::Neutral,
+    );
+    if can_remove {
+        shell.hotspots_mut().push(remove, Hot::StoreUninstall);
+    }
+
+    // The confirmation card is drawn last and centred over the page. It is
+    // deliberately not appended below the installed list: the Settings window
+    // is shorter than this page, and the previous layout clipped the one
+    // control whose whole purpose is to be read before a destructive write.
+    if let Some(confirm) = shell.store.confirm.clone() {
+        canvas.fill_round_rect(pane, 0.0, with_alpha(rgb(0x000000), 0.62));
+        let (verb, app) = match confirm {
+            crate::store::Confirm::Install(app) => ("Install", app),
+            crate::store::Confirm::Uninstall(app) => ("Remove", app),
+        };
+        let panel_w = pane.w.min(t.px(430.0));
+        let panel = Rect::new(
+            pane.x + (pane.w - panel_w) / 2.0,
+            pane.y + (pane.h - t.px(112.0)) / 2.0,
+            panel_w,
+            t.px(112.0),
+        );
+        ui::surface(
+            canvas,
+            t,
+            panel,
+            t.radius(Radius::Md),
+            ui::Material::Elevated,
+        );
+        canvas.stroke_round_rect(panel, t.radius(Radius::Md), 1.0, t.tone(Tone::Bad));
+        font::draw(
+            canvas,
+            &format!("{verb} {}?", app.name),
+            panel.x + t.px(16.0),
+            panel.y + t.px(30.0),
+            &t.style_bold(TypeStep::Title3),
+        );
+        font::draw(
+            canvas,
+            &format!("{} · {}", app.id, app.origin),
+            panel.x + t.px(16.0),
+            panel.y + t.px(52.0),
+            &caption,
+        );
+        let detail = if verb == "Install" {
+            format!("Install from {} into the system installation.", app.remote)
+        } else {
+            "The application and its data will be removed.".to_owned()
+        };
+        font::draw(
+            canvas,
+            &detail,
+            panel.x + t.px(16.0),
+            panel.y + t.px(72.0),
+            &dim,
+        );
+        let no = Rect::new(
+            panel.right() - t.px(176.0),
+            panel.y + t.px(82.0),
+            t.px(74.0),
+            t.px(24.0),
+        );
+        let yes = Rect::new(
+            panel.right() - t.px(94.0),
+            panel.y + t.px(82.0),
+            t.px(84.0),
+            t.px(24.0),
+        );
+        ui::button(canvas, t, no, "Cancel", State::Normal, Tone::Neutral);
+        ui::button(canvas, t, yes, "Confirm", State::Normal, Tone::Bad);
+        shell.hotspots_mut().push(no, Hot::StoreCancel);
+        shell.hotspots_mut().push(yes, Hot::StoreConfirm);
     }
 }
 

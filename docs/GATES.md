@@ -3500,3 +3500,35 @@ Revert the S88 commit. The facts, page, capability, reload plans, image
 packages/units, kernel AppArmor enablement, new tests and `43-settings-services`
 disappear. networkd/iwd, Flatpak install/uninstall and all earlier Settings
 pages remain.
+
+## 2026-10-31 — S89: Flatpak App Store search, install and remove
+
+`litric-sysd` now owns Flatpak catalogue reads and writes. `STORE LIST` and
+`STORE SEARCH` return bounded, deterministic rows; `STORE INSTALL` and
+`STORE UNINSTALL` are fixed `--noninteractive --assumeyes` plans behind the new
+scoped `app.manage` capability with live consent. Settings has an **App Store**
+page with search, installed rows and confirmation for each write.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | **2,018 passed, 0 failed, 0 ignored** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all --check` | exit 0 |
+| golden frames | 43 recorded; new `44-settings-app-store`; 10 required screens pass |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| image build / boot | **NOT RUN**; no `mkosi` or `qemu-system-x86_64` |
+| real Flatpak remote | **NOT EXERCISED**; no `flatpak` on this host |
+
+### Limits
+
+The store manages the system installation only. Search and installed rows are
+proven against Flatpak's documented tabular columns and fixtures, not against a
+live remote. The image and boot claims remain pending. NetworkManager is still
+not enabled, and Polkit policy handling is untouched.
+
+### Rollback
+
+Revert the S89 commit. The store provider, protocol actions, `app.manage`, the
+App Store page, tests and `44-settings-app-store` disappear; S88 remains.

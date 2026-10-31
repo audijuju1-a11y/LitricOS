@@ -76,6 +76,7 @@ pub mod seek;
 pub mod settings;
 pub mod shell;
 pub mod shortcuts;
+pub mod store;
 pub mod taskmgr;
 pub mod textaudit;
 pub mod textedit;
