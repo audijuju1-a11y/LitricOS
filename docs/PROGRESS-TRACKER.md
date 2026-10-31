@@ -8867,3 +8867,80 @@ QEMU absent, and the idle-RAM/CPU/boot-timing platform absent.
 Revert the S84 commit. The pending-launch check, its notification and the
 real-socket failure journey disappear; successful install/launch/uninstall
 behaviour remains.
+
+## 2026-10-31 — S85: the user-facing install UI
+
+S82 and S84 proved the daemon path: a local bundle installs, an installed
+program launches, and an app that dies before mapping is visible. The missing
+part was the person in front of the machine. The launcher could start an
+application, but it could not put one there; `APP INSTALL` existed only on the
+socket and in tests. S85 adds the entry point and keeps every outcome on the
+same surfaces the shell already uses.
+
+### What changed
+
+| File | Change |
+|---|---|
+| `src/litric-shell/src/shell.rs:305` | `Hot::LauncherInstall`, `Hot::InstallSource` and `Hot::InstallId`. |
+| `src/litric-shell/src/shell.rs:2999` | `open_install_dialog` uses the existing desktop dialog, scrim and spring. |
+| `src/litric-shell/src/shell.rs:3063` | `start_install` sends the existing `APP INSTALL <id> <bundle>` request on a worker; the frame loop never blocks on the socket. |
+| `src/litric-shell/src/shell.rs:3122` | `poll_install` drains the worker and retires it at `INSTALL_TIMEOUT_MS` (`:3521`, 15 s). |
+| `src/litric-shell/src/shell.rs:3158` | `finish_install` closes on success, posts the Applications notification, reloads the watched application directories immediately, and keeps the dialog plus a typed error on refusal. |
+| `src/litric-shell/src/shell.rs:3543` | `default_install_id` derives `com.litric.<bundle-slug>` only when the optional id field is blank; the generated value is not retained into a later attempt with a different source. |
+| `src/litric-shell/src/shell.rs:3564` | `install_error_text` maps the daemon's stable refusal kinds to distinct sentences. |
+| `src/litric-shell/src/views.rs:290` | The install dialog draws two real fields, a busy loading button, disabled inputs and an error line in the existing popover language. |
+| `src/litric-shell/src/views.rs:4316` | The launcher title row draws **Install app** beside **Lock screen**. |
+| `src/litric-shell/src/apps.rs:258` | `DesktopDialog::InstallApp` is a desktop-owned dialog variant, not a second modal system. |
+| `src/litric-shell/src/e2e_app_install.rs:240` | Real-socket UI journey: click the launcher entry, type into the dialog, observe busy, empty/missing/duplicate refusals, successful discovery and a launch from the new tile. |
+| `src/litric-shell/src/shell.rs:11535` | A worker that never replies clears the spinner at the UI deadline. |
+| `src/litric-shell/examples/frame_dump.rs` | `40-install-dialog` is a rendered gallery scene. |
+
+### User-visible outcomes
+
+| Source/time | Result |
+|---|---|
+| Empty bundle field | Local sentence, no request, dialog stays open; no spinner. |
+| Missing bundle | Daemon `not-found`, "No bundle folder with that name exists."; dialog stays open. |
+| Unsafe or malformed bundle | Daemon `unsafe-bundle`, `bad-executable` or `bad-desktop`, each with its own sentence. A path is refused locally with a field-specific sentence. |
+| Duplicate id | Daemon `exists`, "An application with this id is already installed." |
+| Accepted | Dialog closes; **Installed <name>** notification; launcher list refreshes and the new tile can start the program. |
+| Worker dies or hangs | The UI deadline replaces the loading button with "The install did not finish in time. Try again." |
+
+The install source is one bundle folder name under `litric/incoming`, which is
+the existing daemon contract. The shell does not pretend an arbitrary path is a
+source it can read; a `/` or `\` is refused before a request is sent.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test -p litric-shell --lib e2e_app_install::journey_install_through_the_launcher_ui_is_visible_and_launchable -- --nocapture` | 1 passed; real Unix socket, real bundle, UI entry point, empty/missing/duplicate refusals, busy state, success notification, discovered tile, installed program marker |
+| `cargo test -p litric-shell --lib shell::scan_worker_tests::an_install_worker_that_never_replies_stops_after_the_deadline -- --nocapture` | 1 passed; busy before the deadline, error and no job at the deadline |
+| `cargo test --workspace` | **1,987 passed, 0 failed, 0 ignored** |
+| `frame_dump` | 39 fixture frames; `14-launcher` changed and `40-install-dialog` added, 37 other fixture frames byte-identical |
+| `ci/check-golden-frames.py --frames build/frames-s85` | PASS; re-recorded `14-launcher` and added optional `40-install-dialog` |
+| Committed gallery | `docs/ui-review/2026-10-31/` — 40 PNGs, index, contact sheet, README |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+
+The three skips are still the environment limits: `mkosi` absent, QEMU absent,
+and the idle-RAM/CPU/boot-timing platform absent.
+
+### Limits
+
+* The source is a local bundle name under `litric/incoming`; there is no file
+  picker, download, signature check, package manager or root install.
+* The UI installs and launches; uninstall still uses the existing daemon path
+  and has no shell surface of its own.
+* The installed app's window/compositor path is still the S82 path; this batch
+  proves the UI-driven install and the discovered tile, not a new renderer.
+* Real-card C2 KMS modeset/page-flip claims remain **NOT MADE**: no `/dev/dri`,
+  no `/sys/class/drm`, `CONFIG_DRM` unset. VM/image gates remain blocked by the
+  absent `mkosi` and `qemu-system-x86_64`.
+
+### Rollback
+
+Revert the S85 commit. The launcher install entry, the install dialog, its
+worker and timeout, the two tests, and the two gallery frames disappear; the
+S82/S84 daemon install and launch paths remain unchanged.

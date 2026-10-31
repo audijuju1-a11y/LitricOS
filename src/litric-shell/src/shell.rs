@@ -301,6 +301,12 @@ pub enum Hot {
     LauncherItem(usize),
     /// The launcher's search field.
     LauncherSearch,
+    /// The launcher's install-an-application button.
+    LauncherInstall,
+    /// The install dialog's bundle-folder field.
+    InstallSource,
+    /// The install dialog's optional application-id field.
+    InstallId,
     /// A row in the window switcher.
     SwitcherItem(usize),
     /// A window card in Mission Control.
@@ -2987,6 +2993,210 @@ impl Shell {
         }
     }
 
+    /// Open the install dialog from the launcher. It is the same desktop
+    /// dialog surface as the new-folder prompt, so the scrim, spring, buttons
+    /// and keyboard ownership do not fork into a second modal system.
+    fn open_install_dialog(&mut self) {
+        if self.install_job.is_some() {
+            return;
+        }
+        self.install_source.clear();
+        self.install_id.clear();
+        self.install_source_focused = true;
+        self.install_busy = false;
+        self.install_error = None;
+        self.set_overlay(Overlay::None);
+        self.overlay_damage();
+        self.set_desktop_dialog(Some(crate::apps::DesktopDialog::InstallApp));
+        self.request_full_redraw();
+    }
+
+    /// Keys the install dialog owns before the shared focus order or a
+    /// window's keyboard model can see them.
+    fn install_dialog_key(&mut self, key: Key) -> Option<Vec<Effect>> {
+        if !matches!(
+            self.desktop_dialog,
+            Some(crate::apps::DesktopDialog::InstallApp)
+        ) {
+            return None;
+        }
+        match key {
+            Key::Escape => {
+                if !self.install_busy {
+                    self.set_desktop_dialog(None);
+                }
+                Some(Vec::new())
+            }
+            Key::Tab => {
+                if !self.install_busy {
+                    self.install_source_focused = !self.install_source_focused;
+                    self.request_full_redraw();
+                }
+                Some(Vec::new())
+            }
+            Key::Enter => {
+                if self.install_busy {
+                    Some(Vec::new())
+                } else {
+                    Some(self.submit_desktop_dialog())
+                }
+            }
+            Key::Backspace => {
+                if !self.install_busy {
+                    if self.install_source_focused {
+                        self.install_source.pop();
+                    } else {
+                        self.install_id.pop();
+                    }
+                    self.install_error = None;
+                    self.request_full_redraw();
+                }
+                Some(Vec::new())
+            }
+            _ => None,
+        }
+    }
+
+    /// Start one real `APP INSTALL` on a worker thread. The dialog stays open
+    /// and busy until the reply arrives or [`INSTALL_TIMEOUT_MS`] expires; the
+    /// frame loop never blocks on the socket.
+    fn start_install(&mut self) {
+        use crate::apps::DesktopDialog;
+        if self.install_busy || !matches!(self.desktop_dialog, Some(DesktopDialog::InstallApp)) {
+            return;
+        }
+        let source = self.install_source.trim().to_owned();
+        if source.is_empty() {
+            self.install_error = Some("Enter a bundle folder under litric/incoming.".to_owned());
+            self.request_full_redraw();
+            return;
+        }
+        // The daemon names one directory below its own incoming root. A path
+        // syntax would imply the shell can choose that root, which it cannot.
+        if source.contains('/') || source.contains('\\') {
+            self.install_error =
+                Some("Enter one bundle folder name; paths are not accepted.".to_owned());
+            self.request_full_redraw();
+            return;
+        }
+        let id = if self.install_id.trim().is_empty() {
+            default_install_id(&source)
+        } else {
+            self.install_id.trim().to_owned()
+        };
+        if litric_core::AppId::parse(&id).is_err() {
+            self.install_error = Some("Use a reverse-DNS id such as com.example.app.".to_owned());
+            self.request_full_redraw();
+            return;
+        }
+        let request = format!("APP INSTALL {id} {source}");
+        let socket = self.sysd_socket.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("litric-shell-install".to_owned())
+            .spawn(move || {
+                let reply = crate::facts::ask(&socket, &request);
+                let _ = send.send(reply);
+            });
+        if let Err(error) = spawned {
+            self.install_error = Some(format!("Could not start the installer: {error}"));
+            self.request_full_redraw();
+            return;
+        }
+        self.install_source = source.clone();
+        // A generated id is per request, not a value that should survive into
+        // the next attempt with a different bundle. The optional field stays
+        // blank unless the user typed an id explicitly.
+        self.install_job = Some(InstallJob {
+            reply: receive,
+            started_ms: self.now_ms,
+            id,
+        });
+        self.install_busy = true;
+        self.install_error = None;
+        self.request_full_redraw();
+    }
+
+    /// Take one install reply, if there is one. A worker that never answers is
+    /// retired at the deadline so the loading button cannot remain forever.
+    fn poll_install(&mut self, now_ms: u64) {
+        let (id, started_ms, received) = {
+            let Some(job) = self.install_job.as_ref() else {
+                return;
+            };
+            (job.id.clone(), job.started_ms, job.reply.try_recv())
+        };
+        match received {
+            Ok(reply) => {
+                self.install_job = None;
+                self.install_busy = false;
+                self.finish_install(reply, &id);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.install_job = None;
+                self.install_busy = false;
+                self.install_error =
+                    Some("The system service closed the install request.".to_owned());
+                self.request_full_redraw();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty)
+                if now_ms.saturating_sub(started_ms) >= INSTALL_TIMEOUT_MS =>
+            {
+                self.install_job = None;
+                self.install_busy = false;
+                self.install_error =
+                    Some("The install did not finish in time. Try again.".to_owned());
+                self.request_full_redraw();
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    /// Apply the daemon's answer. A refusal keeps the dialog open beside the
+    /// fields the user can correct; a success closes it and makes the new app
+    /// visible through the same discovery watch the launcher already uses.
+    fn finish_install(&mut self, reply: Option<String>, id: &str) {
+        let Some(reply) = reply else {
+            self.install_error = Some("The system service did not answer.".to_owned());
+            self.request_full_redraw();
+            return;
+        };
+        if reply.starts_with("OK ") {
+            self.refresh_installed_apps();
+            let name = self
+                .desktop_apps
+                .iter()
+                .find(|app| app.id == id)
+                .map_or_else(|| id.to_owned(), |app| app.name.clone());
+            self.set_desktop_dialog(None);
+            self.app_status = Some(format!("Installed {name}"));
+            self.notify(
+                "Applications",
+                &format!("Installed {name}"),
+                "The application is ready to open.",
+                Priority::Normal,
+                Some(5_000),
+            );
+        } else {
+            self.install_error = Some(install_error_text(&reply));
+        }
+        self.request_full_redraw();
+    }
+
+    /// Re-read the watched application directories immediately after a
+    /// successful install. The normal watch remains the path for changes made
+    /// outside the shell; this one is the shell's own write and should not make
+    /// the app wait for the next interval.
+    fn refresh_installed_apps(&mut self) {
+        let Some(watch) = self.desktop_watch.as_ref() else {
+            return;
+        };
+        let (app_dirs, icon_dirs) = watch.dirs();
+        let app_dirs = app_dirs.to_vec();
+        let icon_dirs = icon_dirs.to_vec();
+        self.load_desktop_apps_from(&app_dirs, &icon_dirs, self.now_ms);
+    }
+
     /// Submit the desktop's own dialog.
     ///
     /// Returns the effects the submission produced, which is what makes the
@@ -2995,6 +3205,10 @@ impl Shell {
     /// action.
     fn submit_desktop_dialog(&mut self) -> Vec<Effect> {
         use crate::apps::DesktopDialog;
+        if matches!(self.desktop_dialog, Some(DesktopDialog::InstallApp)) {
+            self.start_install();
+            return Vec::new();
+        }
         if let Some(DesktopDialog::NewFolder) = self.desktop_dialog {
             let name = self.desktop_dialog_field.clone();
             let zone = self.regional.zone.clone();
@@ -3165,6 +3379,19 @@ pub struct Shell {
     pub desktop_dialog_field: String,
     /// The desktop dialog field's selection.
     pub desktop_dialog_selection: Option<(usize, usize)>,
+    /// The install dialog's bundle-folder text.
+    pub install_source: String,
+    /// The install dialog's optional reverse-DNS id. Blank means the generated
+    /// `com.litric.<bundle-slug>` id.
+    pub install_id: String,
+    /// Which install field owns the keyboard: the bundle source when true.
+    pub install_source_focused: bool,
+    /// Whether the dialog is waiting for the install worker.
+    pub install_busy: bool,
+    /// The last install refusal, kept beside the fields the user can correct.
+    pub install_error: Option<String>,
+    /// The one install worker. Dropped on success, failure or timeout.
+    install_job: Option<InstallJob>,
     /// The browser engine session, when one has been started.
     pub browser_session: Option<crate::link::Link>,
     /// Foreign applications: the Wayland server, their surfaces and their
@@ -3288,6 +3515,19 @@ pub const BOOT_COVER_MS: u64 = 1_950;
 /// appears first cancels the check.
 pub const APP_EXIT_GRACE_MS: u64 = 2_000;
 
+/// How long the install dialog waits for the daemon before giving the spinner
+/// up as failed. This is a UI bound, not a daemon timeout: the install worker
+/// may still finish, but it can no longer leave the dialog busy.
+pub const INSTALL_TIMEOUT_MS: u64 = 15_000;
+
+/// One in-flight `APP INSTALL` started from the install dialog.
+#[derive(Debug)]
+struct InstallJob {
+    reply: std::sync::mpsc::Receiver<Option<String>>,
+    started_ms: u64,
+    id: String,
+}
+
 /// A launcher start that has not yet had time to map a window.
 #[derive(Debug)]
 struct PendingLaunch {
@@ -3295,6 +3535,51 @@ struct PendingLaunch {
     pid: u32,
     started_ms: u64,
     clients_before: usize,
+}
+
+/// The id generated when the install dialog's application-id field is blank.
+/// The bundle name is reduced to a safe slug; the daemon still performs the
+/// authoritative bundle and id validation.
+fn default_install_id(bundle: &str) -> String {
+    let mut slug = String::new();
+    let mut last_dash = false;
+    for ch in bundle.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash && !slug.is_empty() {
+            slug.push('-');
+            last_dash = true;
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    format!(
+        "com.litric.{}",
+        if slug.is_empty() { "bundle" } else { slug }
+    )
+}
+
+/// A person-readable install refusal. The daemon's stable kind is preserved in
+/// the mapping rather than replaced by a single generic failure sentence.
+fn install_error_text(reply: &str) -> String {
+    let kind = reply
+        .lines()
+        .find_map(|line| line.strip_prefix("ERR "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or("unknown");
+    match kind {
+        "bad-id" => "The application id is not a valid reverse-DNS id.",
+        "bad-bundle" => "Enter one bundle folder name, without a path.",
+        "not-found" => "No bundle folder with that name exists.",
+        "unsafe-bundle" => "The bundle contains a link or an unsupported entry.",
+        "bad-executable" => "The bundle's app is missing or not executable.",
+        "bad-desktop" => "The bundle's app.desktop is not a usable application.",
+        "exists" => "An application with this id is already installed.",
+        "install-io" => "The system could not write the application.",
+        "refused" => "The system service refused the install.",
+        _ => "The system service refused the install.",
+    }
+    .to_owned()
 }
 
 /// The theme a preference record resolves to: the chosen theme with the chosen
@@ -3766,6 +4051,12 @@ impl Shell {
             retiring_desktop_dialog: None,
             desktop_dialog_field: String::new(),
             desktop_dialog_selection: None,
+            install_source: String::new(),
+            install_id: String::new(),
+            install_source_focused: true,
+            install_busy: false,
+            install_error: None,
+            install_job: None,
             browser_session: None,
             clients: None,
             browser_frame: None,
@@ -3930,6 +4221,7 @@ impl Shell {
             Some(Hot::TerminalInput | Hot::BrowserOmnibox | Hot::TrashFilter | Hot::ActivityFilter)
                 | Some(Hot::Files(crate::apps::FilesHot::Filter))
                 | Some(Hot::LauncherSearch)
+                | Some(Hot::InstallSource | Hot::InstallId)
         )
     }
 
@@ -4810,6 +5102,7 @@ impl Shell {
         // Client surfaces: mapping, titles, frames, a dead application and a
         // window the user closed all arrive here, not through input.
         self.pump_clients();
+        self.poll_install(now_ms);
         self.check_pending_launch(now_ms);
         // An outside change reaches the open folder without a click. This is
         // the only periodic filesystem read in the shell, and it is bounded to
@@ -5232,6 +5525,10 @@ impl Shell {
             return Vec::new();
         }
         self.meta_tap.interfere();
+
+        if let Some(handled) = self.install_dialog_key(key) {
+            return handled;
+        }
 
         // One focus order for the controls each frame actually drew. Tab and
         // Shift+Tab work across app chrome and panel controls; Enter activates
@@ -5807,6 +6104,21 @@ impl Shell {
         // `journey_right_click_desktop_menu_creates_a_folder_via_dialog`, which
         // is the only test that opens a desktop dialog without a window first.
         let clean: String = text.chars().filter(|c| !c.is_control()).collect();
+        if matches!(
+            self.desktop_dialog,
+            Some(crate::apps::DesktopDialog::InstallApp)
+        ) {
+            if !self.install_busy && !clean.is_empty() {
+                if self.install_source_focused {
+                    self.install_source.push_str(&clean);
+                } else {
+                    self.install_id.push_str(&clean);
+                }
+                self.install_error = None;
+                self.request_full_redraw();
+            }
+            return;
+        }
         if self.desktop_dialog.is_some() && !clean.is_empty() {
             self.desktop_dialog_field.push_str(&clean);
             return;
@@ -6355,6 +6667,24 @@ impl Shell {
                 vec![Effect::RequestLock]
             }
             Hot::LauncherSearch => Vec::new(),
+            Hot::LauncherInstall => {
+                self.open_install_dialog();
+                Vec::new()
+            }
+            Hot::InstallSource => {
+                if !self.install_busy {
+                    self.install_source_focused = true;
+                    self.request_full_redraw();
+                }
+                Vec::new()
+            }
+            Hot::InstallId => {
+                if !self.install_busy {
+                    self.install_source_focused = false;
+                    self.request_full_redraw();
+                }
+                Vec::new()
+            }
             Hot::LockWake => {
                 self.lock.wake();
                 Vec::new()
@@ -6797,8 +7127,10 @@ impl Shell {
             }
             Hot::DialogCancel => {
                 if self.desktop_dialog.is_some() {
-                    self.set_desktop_dialog(None);
-                    self.request_full_redraw();
+                    if !self.install_busy {
+                        self.set_desktop_dialog(None);
+                        self.request_full_redraw();
+                    }
                 } else {
                     self.files.close_dialog();
                     self.request_full_redraw();
@@ -11198,6 +11530,42 @@ mod scan_worker_tests {
             "opening the centre dismissed the note it was asked to show"
         );
     }
+
+    #[test]
+    fn an_install_worker_that_never_replies_stops_after_the_deadline() {
+        let mut s = Shell::new(
+            crate::ui::Tokens::new(Theme::of(ThemeKind::Dark), 1.0),
+            1280.0,
+            800.0,
+            litric_locale::Regional::fallback("install-timeout"),
+        );
+        s.mode = DesktopMode::Ready;
+        s.set_desktop_dialog(Some(crate::apps::DesktopDialog::InstallApp));
+        let (_keep_sender, receive) = std::sync::mpsc::channel();
+        s.install_job = Some(InstallJob {
+            reply: receive,
+            started_ms: 0,
+            id: "com.example.slow".to_owned(),
+        });
+        s.install_busy = true;
+
+        s.poll_install(INSTALL_TIMEOUT_MS.saturating_sub(1));
+        assert!(
+            s.install_busy,
+            "the spinner must still be live before the UI deadline"
+        );
+
+        s.poll_install(INSTALL_TIMEOUT_MS);
+        assert!(!s.install_busy, "the spinner stops at the UI deadline");
+        assert!(s.install_job.is_none());
+        assert!(
+            s.install_error
+                .as_deref()
+                .is_some_and(|error| error.contains("did not finish in time")),
+            "the timeout is a visible failure: {:?}",
+            s.install_error
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -12014,6 +12382,9 @@ impl Shell {
                 _ => None,
             },
             Hot::LauncherSearch => literal(Role::Text, "Search applications"),
+            Hot::LauncherInstall => literal(Role::Button, "Install application"),
+            Hot::InstallSource => literal(Role::Text, "Bundle folder"),
+            Hot::InstallId => literal(Role::Text, "Application id"),
             Hot::DockItem(index) => crate::views::DOCK_PINNED
                 .get(usize::from(index))
                 .and_then(|app| crate::shortcuts::App::ALL.get(*app))

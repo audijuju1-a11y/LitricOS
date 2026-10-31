@@ -1,11 +1,22 @@
-# LitricOS UI review — 2026-10-31 (S82)
+# LitricOS UI review — 2026-10-31 (S82, updated in S85)
 
-This directory holds **39 screens**, each **1280×800 px**. Thirty-eight are the
-S81 gallery regenerated through the shipping `litric-shell/examples/frame_dump.rs`
-and `litric_shell::views::draw`; they are byte-identical to the S81 PNGs. The
-thirty-ninth is not a fixture: it is the frame composed during the S82
+This directory holds **40 screens**, each **1280×800 px**. Thirty-nine are the
+fixture gallery regenerated through the shipping `litric-shell/examples/frame_dump.rs`
+and `litric_shell::views::draw`. The fortieth is not a fixture: it is the frame composed during the S82
 real-socket e2e after `weston-simple-shm` was installed through `APP INSTALL`,
 launched by the shell through `litric-sysd`, and mapped as a Wayland client.
+
+## What changed in S85
+
+- The launcher now has an **Install app** entry beside Lock screen. The screen
+  `14-launcher` was regenerated because that button is part of the rendered
+  surface.
+- `40-install-dialog` is new: the existing desktop dialog with the bundle-folder
+  field, optional reverse-DNS id, Install/Cancel actions and the same scrim,
+  spring and popover material as every other desktop dialog.
+- The other 37 fixture frames are byte-identical to S82; `39-linux-app` is
+  unchanged. The golden set now records the changed `14-launcher` and the new
+  `40-install-dialog`.
 
 ## What changed in S82
 
@@ -32,8 +43,8 @@ deterministic: two independent e2e runs produced identical SHA-256
 export PATH="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$PATH"
 cd src
 cargo run -q -p litric-shell --example frame_dump -- \
-  --fonts ../build/fonts ../build/frames-s82
-for p in ../build/frames-s82/*.ppm; do
+  --fonts ../build/fonts ../build/frames-s85
+for p in ../build/frames-s85/*.ppm; do
   python3 ../tools/ppm2png.py "$p" "${p%.ppm}.png"
 done
 LITRIC_E2E_PNG=build/s82-linux-app.png \
@@ -42,12 +53,12 @@ LITRIC_E2E_PNG=build/s82-linux-app.png \
 ```
 
 The e2e writes `build/s82-linux-app.png` relative to the repository root; copy
-it to `png/39-linux-app.png` and rebuild `all-screens.png` with a 4-column
-labelled contact sheet. `build/` is gitignored.
+it to `png/39-linux-app.png`; keep `png/40-install-dialog.png` from the fixture
+dump and rebuild `all-screens.png` with a 4-column labelled contact sheet. `build/` is gitignored.
 
 ## What this is not
 
-The 38 fixture frames prove what `views::draw` composes from fixed facts. The
+The 39 fixture frames prove what `views::draw` composes from fixed facts. The
 real-app frame proves one genuine `wl_shm` client was installed, spawned,
 connected to the LitricOS Wayland socket, mapped by the compositor, and painted
 by `views::draw`. None of these frames prove a booted VM, a framebuffer/scanout

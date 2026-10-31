@@ -3341,3 +3341,40 @@ left alone.
 
 Revert the S84 commit. The pending-launch check, failure journey and their
 reviewed cleanup entry disappear; S82's success path is unchanged.
+
+## 2026-10-31 — S85: the Applications install UI
+
+The daemon install path from S82/S84 now has a user-facing entry point in the
+Applications launcher. The dialog is the existing desktop dialog surface: a
+bundle-folder field, an optional reverse-DNS id, a real loading button and an
+error line. The request is the unchanged `APP INSTALL <id> <bundle>` protocol.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| UI real-socket journey | 1 passed: empty, missing, busy, success notification, discovery, duplicate refusal, launch from the new tile |
+| Worker deadline test | 1 passed: spinner clears at 15 s with a visible error |
+| `cargo test --workspace` | **1,987 passed, 0 failed, 0 ignored** |
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `bash ci/verify.sh` | 39 pass, 0 fail, 3 skipped |
+| gallery | 40 screens; `14-launcher` changed, `40-install-dialog` added |
+| real card / KMS / page flip | **NOT RUN**; no DRM card node or `/sys/class/drm` on this host |
+| VM/image gates | **NOT RUN**; no `mkosi`, no `qemu-system-x86_64` |
+
+The three skips are the pre-existing environment limits: image build, boot smoke
+and idle measurement. No gate was weakened or skipped for this batch.
+
+### Limits
+
+The source is one bundle folder under the daemon's `litric/incoming` root, not an
+arbitrary path or a downloaded package. There is no signature verifier, package
+manager or uninstall UI. Real-card C2 KMS modeset/page-flip claims remain
+unproven and are not made here.
+
+### Rollback
+
+Revert the S85 commit. The launcher entry, install dialog, worker, timeout,
+real-socket UI journey and the two affected gallery frames disappear; the
+existing daemon install and launch paths remain.

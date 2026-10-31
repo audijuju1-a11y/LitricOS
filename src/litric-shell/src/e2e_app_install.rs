@@ -228,6 +228,353 @@ fn journey_bad_install_and_an_app_that_exits_are_reported() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// S85: the Applications UI drives the real `APP INSTALL` path end to end.
+///
+/// The source is a real bundle in the daemon's incoming directory, the action
+/// is the launcher's visible Install app entry, and the reply is read by the
+/// shell's own bounded worker. The journey covers an empty source, a missing
+/// bundle, a successful install whose new tile appears, a duplicate refusal,
+/// and a launch of the installed program from that new tile.
+#[cfg(unix)]
+#[test]
+fn journey_install_through_the_launcher_ui_is_visible_and_launchable() {
+    use litric_design::{Theme, ThemeKind};
+    use litric_input::keys::Key;
+    use litric_locale::Regional;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    use crate::shell::{DesktopMode, Hot, Shell};
+    use crate::shortcuts::App;
+    use crate::ui::Tokens;
+
+    let root = std::env::temp_dir().join(format!(
+        "litric-shell-e2e-ui-install-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("a fixture root");
+
+    let data = root.join("data");
+    let incoming = data.join("litric/incoming/ui-fixture");
+    std::fs::create_dir_all(&incoming).expect("incoming bundle");
+    let marker = root.join("ui-installed-ran");
+    std::fs::write(
+        incoming.join("app"),
+        format!(
+            "#!/bin/sh\nprintf '%s' 'ui-installed-ran' > '{}'\n",
+            marker.display()
+        ),
+    )
+    .expect("the fixture program");
+    std::fs::set_permissions(incoming.join("app"), std::fs::Permissions::from_mode(0o755))
+        .expect("chmod");
+    std::fs::write(
+        incoming.join("app.desktop"),
+        "[Desktop Entry]\nType=Application\nName=UI Fixture\nExec=app\n",
+    )
+    .expect("the bundle description");
+
+    let socket = root.join("sysd.sock");
+    let listener = litric_sysd::server::bind(&socket).expect("bind sysd");
+    let state = litric_sysd::state::Sysd::new(2, 512, "/tmp", std::path::Path::new("/"))
+        .with_application_root(&data);
+    std::thread::spawn(move || {
+        let _ = litric_sysd::server::serve(&listener, state);
+    });
+
+    let mut shell = Shell::new(
+        Tokens::new(Theme::of(ThemeKind::Dark), 1.0),
+        1280.0,
+        800.0,
+        Regional::fallback("test"),
+    );
+    shell.mode = DesktopMode::Ready;
+    shell.sysd_socket = socket.clone();
+    shell.load_desktop_apps_from(&[data.join("applications")], &[], 1_000);
+
+    let mut now = 1_000_u64;
+    ui_install_open_dialog(&mut shell, &mut now);
+    assert!(
+        shell.hotspots().rect_of(Hot::InstallSource).is_some(),
+        "the bundle source field is visible"
+    );
+
+    // 1. An empty source is refused before any request is sent.
+    let confirm = shell
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the install dialog has an Install button");
+    ui_install_click(&mut shell, confirm, now);
+    assert!(
+        !shell.install_busy,
+        "an empty source must not start a request"
+    );
+    assert!(
+        shell
+            .install_error
+            .as_deref()
+            .is_some_and(|error| error.contains("Enter a bundle folder")),
+        "empty source error: {:?}",
+        shell.install_error
+    );
+    assert!(
+        matches!(
+            shell.desktop_dialog,
+            Some(crate::apps::DesktopDialog::InstallApp)
+        ),
+        "a refusal leaves the fields available for correction"
+    );
+
+    // 2. A source the daemon cannot find is a distinct refusal.
+    ui_install_type(&mut shell, "missing", now);
+    ui_install_draw(&mut shell);
+    let confirm = shell
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the Install button after correcting the source");
+    ui_install_click(&mut shell, confirm, now);
+    ui_install_wait(&mut shell, &mut now);
+    assert!(
+        shell
+            .install_error
+            .as_deref()
+            .is_some_and(|error| error.contains("No bundle folder")),
+        "missing source error: {:?}",
+        shell.install_error
+    );
+    assert!(!shell.install_busy, "a refused source clears the spinner");
+
+    // 3. Correct the real bundle name and install it through the dialog.
+    for _ in 0.."missing".len() {
+        ui_install_press(&mut shell, Key::Backspace, now);
+    }
+    ui_install_type(&mut shell, "ui-fixture", now);
+    ui_install_draw(&mut shell);
+    let confirm = shell
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the Install button for the real bundle");
+    ui_install_click(&mut shell, confirm, now);
+    assert!(
+        shell.install_busy,
+        "the dialog shows a real in-progress state"
+    );
+    ui_install_draw(&mut shell);
+    assert!(
+        shell.hotspots().rect_of(Hot::DialogConfirm).is_none(),
+        "the Install button cannot be pressed twice while the worker runs"
+    );
+    assert!(
+        shell.hotspots().rect_of(Hot::InstallSource).is_none(),
+        "the fields are not editable behind the installing state"
+    );
+    ui_install_wait(&mut shell, &mut now);
+    assert!(
+        shell.desktop_dialog.is_none(),
+        "a successful install closes the dialog"
+    );
+    assert_eq!(
+        shell.app_status.as_deref(),
+        Some("Installed UI Fixture"),
+        "the launcher reports the successful install"
+    );
+    assert!(
+        shell
+            .notifications
+            .items()
+            .iter()
+            .any(|note| { note.title == "Installed UI Fixture" && note.source == "Applications" }),
+        "a successful install posts the Applications notification"
+    );
+    assert_eq!(
+        shell.desktop_apps.len(),
+        1,
+        "the installed desktop entry is discovered: {:?}",
+        shell.desktop_apps
+    );
+    assert_eq!(shell.launcher_len(), App::ALL.len().saturating_add(1));
+
+    // 4. Installing the same id again is a duplicate, not a second install.
+    ui_install_open_dialog(&mut shell, &mut now);
+    ui_install_type(&mut shell, "ui-fixture", now);
+    ui_install_draw(&mut shell);
+    let confirm = shell
+        .hotspots()
+        .rect_of(Hot::DialogConfirm)
+        .expect("the Install button for the duplicate");
+    ui_install_click(&mut shell, confirm, now);
+    ui_install_wait(&mut shell, &mut now);
+    assert!(
+        shell
+            .install_error
+            .as_deref()
+            .is_some_and(|error| error.contains("already installed")),
+        "duplicate install error: {:?}",
+        shell.install_error
+    );
+    assert!(
+        !shell.install_busy,
+        "the duplicate refusal clears the spinner"
+    );
+    ui_install_press(&mut shell, Key::Escape, now);
+
+    // 5. Launch the installed app from the tile the install created.
+    ui_install_open_launcher(&mut shell, &mut now);
+    let tile = shell
+        .hotspots()
+        .rect_of(Hot::LauncherItem(App::ALL.len()))
+        .expect("the installed app has a launcher tile");
+    ui_install_click(&mut shell, tile, now);
+    let started = Instant::now();
+    while !marker.exists() {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the UI-installed app never ran: {:?}",
+            shell.app_status
+        );
+        now = now.saturating_add(16);
+        shell.tick(now);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("the marker"),
+        "ui-installed-ran",
+        "the installed copy ran"
+    );
+    assert!(
+        shell
+            .app_status
+            .as_deref()
+            .is_some_and(|status| status.starts_with("Started UI Fixture")),
+        "the launcher reports the start: {:?}",
+        shell.app_status
+    );
+
+    let removed = litric_sysd::server::query(&socket, "APP UNINSTALL com.litric.ui-fixture")
+        .expect("uninstall over the socket");
+    assert_eq!(removed, "OK 2\nid=com.litric.ui-fixture\nstate=removed\n");
+    assert!(!data
+        .join("applications/com.litric.ui-fixture.desktop")
+        .exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+fn ui_install_draw(shell: &mut crate::shell::Shell) {
+    let mut canvas = crate::canvas::Canvas::new(1280, 800, 0x101820);
+    crate::views::draw(&mut canvas, shell);
+}
+
+#[cfg(unix)]
+fn ui_install_click(shell: &mut crate::shell::Shell, rect: crate::canvas::Rect, at: u64) {
+    use litric_input::event::{InputEvent, Point, PointerButton};
+    use litric_input::keys::Modifiers;
+    let point = Point::new(rect.center().0, rect.center().1);
+    let _ = shell.handle(
+        &InputEvent::PointerMove {
+            at: point,
+            delta: Point::new(1.0, 1.0),
+        },
+        at,
+    );
+    for pressed in [true, false] {
+        let _ = shell.handle(
+            &InputEvent::PointerButton {
+                button: PointerButton::Primary,
+                pressed,
+                at: point,
+                clicks: 1,
+                mods: Modifiers::NONE,
+            },
+            at.saturating_add(1),
+        );
+    }
+}
+
+#[cfg(unix)]
+fn ui_install_open_launcher(shell: &mut crate::shell::Shell, now: &mut u64) {
+    use crate::shortcuts::Action;
+    let _ = shell.perform(Action::ToggleLauncher);
+    for _ in 0..60 {
+        *now = now.saturating_add(16);
+        shell.tick(*now);
+    }
+    ui_install_draw(shell);
+}
+
+#[cfg(unix)]
+fn ui_install_wait(shell: &mut crate::shell::Shell, now: &mut u64) {
+    use std::time::{Duration, Instant};
+    let started = Instant::now();
+    while shell.install_busy {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the install worker left the dialog busy for more than five seconds"
+        );
+        *now = now.saturating_add(16);
+        shell.tick(*now);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn ui_install_type(shell: &mut crate::shell::Shell, text: &str, now: u64) {
+    use litric_input::event::InputEvent;
+    let _ = shell.handle(
+        &InputEvent::TextInput {
+            text: text.to_owned(),
+        },
+        now,
+    );
+}
+
+#[cfg(unix)]
+fn ui_install_press(shell: &mut crate::shell::Shell, key: litric_input::keys::Key, now: u64) {
+    use litric_input::event::InputEvent;
+    use litric_input::keys::Modifiers;
+    let _ = shell.handle(
+        &InputEvent::KeyDown {
+            key,
+            code: 0,
+            mods: Modifiers::NONE,
+            repeat: false,
+        },
+        now,
+    );
+    let _ = shell.handle(
+        &InputEvent::KeyUp {
+            key,
+            code: 0,
+            mods: Modifiers::NONE,
+        },
+        now.saturating_add(1),
+    );
+}
+
+#[cfg(unix)]
+fn ui_install_open_dialog(shell: &mut crate::shell::Shell, now: &mut u64) {
+    use crate::shell::Hot;
+    ui_install_open_launcher(shell, now);
+    let install = shell
+        .hotspots()
+        .rect_of(Hot::LauncherInstall)
+        .expect("the Applications UI exposes the install entry point");
+    ui_install_click(shell, install, *now);
+    assert!(
+        matches!(
+            shell.desktop_dialog,
+            Some(crate::apps::DesktopDialog::InstallApp)
+        ),
+        "the install entry point opens the install dialog"
+    );
+    for _ in 0..60 {
+        *now = now.saturating_add(16);
+        shell.tick(*now);
+    }
+    ui_install_draw(shell);
+}
+
 /// The real third-party application this repository's e2e installs.
 ///
 /// Provenance and hashes are in `tests/fixtures/README.md`. The binary is the

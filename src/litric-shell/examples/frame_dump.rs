@@ -46,12 +46,12 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use litric_design::{Theme, ThemeKind};
-use litric_input::event::{InputEvent, Point};
+use litric_input::event::{InputEvent, Point, PointerButton};
 use litric_locale::Regional;
 use litric_shell::canvas::{rgb, Canvas, Rect};
 use litric_shell::desktop;
 use litric_shell::lock::Stage;
-use litric_shell::shell::{DesktopMode, EnvRow, NetIface, ProcRow, Shell};
+use litric_shell::shell::{DesktopMode, EnvRow, Hot, NetIface, ProcRow, Shell};
 use litric_shell::shortcuts::{Action, App};
 use litric_shell::ui::Tokens;
 use litric_shell::views;
@@ -659,6 +659,43 @@ fn scene_launcher(rig: &mut Rig) {
     }
 }
 
+/// The install entry point: the launcher's Install app button opens the
+/// dialog, with the same scrim and spring as the other desktop dialogs.
+fn scene_install_dialog(rig: &mut Rig) {
+    scene_launcher(rig);
+    // The button's rectangle exists only after a frame has registered it.
+    let _ = compose(rig);
+    let Some(button) = rig.shell.hotspots().rect_of(Hot::LauncherInstall) else {
+        return;
+    };
+    let at = Point::new(button.center().0, button.center().1);
+    let _ = rig.shell.handle(
+        &InputEvent::PointerMove {
+            at,
+            delta: Point::new(1.0, 1.0),
+        },
+        2_000,
+    );
+    for pressed in [true, false] {
+        let _ = rig.shell.handle(
+            &InputEvent::PointerButton {
+                button: PointerButton::Primary,
+                pressed,
+                at,
+                clicks: 1,
+                mods: litric_input::keys::Modifiers::NONE,
+            },
+            2_010,
+        );
+    }
+    // Show the dialog with a plausible local bundle, not an empty test form.
+    rig.shell.install_source = "weston".to_owned();
+    rig.shell.install_id = "com.example.weston".to_owned();
+    for _ in 0..90 {
+        rig.shell.tick_after(16);
+    }
+}
+
 /// The launcher with a query typed: the panel as results and the field.
 fn scene_search(rig: &mut Rig) {
     scene_launcher(rig);
@@ -880,7 +917,7 @@ fn main() -> ExitCode {
     // (04-QA-LINT-GOVERNANCE §2) plus the frames this dump has always written:
     // the lock in three states, the launcher and its search, and the remaining
     // applications. `ci/check-golden-frames.py` names the required ten.
-    let scenes: [Scene; 30] = [
+    let scenes: [Scene; 31] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
         ("04-files", scene_files),
@@ -907,6 +944,7 @@ fn main() -> ExitCode {
         ("12-lock-password", scene_locked_entry),
         ("13-lock-customize", scene_locked_customize),
         ("14-launcher", scene_launcher),
+        ("40-install-dialog", scene_install_dialog),
         ("21-mission-control", scene_mission_control),
         ("22-power-menu", scene_power_menu),
         ("23-litro-menu", scene_litro_menu),

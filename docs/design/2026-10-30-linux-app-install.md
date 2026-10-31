@@ -154,3 +154,32 @@ posts a high-priority Applications notification. A process still alive at the
 two-second deadline is left alone; this is not a supervisor. The real-socket
 journey in `src/litric-shell/src/e2e_app_install.rs` also covers an unsafe
 install refusal and a launch whose executable disappeared after discovery.
+
+## User-facing install (S85)
+
+The launcher's Applications surface exposes **Install app**. It opens the
+shell's existing desktop dialog with two fields:
+
+* **Bundle folder (litric/incoming)** — the one bundle name the daemon already
+  accepts. A path is refused locally rather than silently reduced to a name.
+* **Application id (optional)** — a reverse-DNS id. When blank, the shell sends
+  `com.litric.<bundle-slug>`; the generated id is not retained into a later
+  attempt with a different bundle.
+
+The request remains the existing `APP INSTALL <id> <bundle>` message. It runs on
+one worker thread so the compositor never blocks on the socket. The dialog shows
+a real loading button and disables both fields and Cancel while the request is
+in flight. A reply either:
+
+* closes the dialog, posts `Installed <name>` under Applications, and reloads the
+  watched application directories so the new tile is present immediately; or
+* keeps the dialog open and shows the refusal beside the fields.
+
+Empty and path-like sources are refused before the request. The daemon's stable
+kinds (`not-found`, `unsafe-bundle`, `bad-executable`, `bad-desktop`, `exists`,
+`bad-id`, `install-io`, `refused`) map to distinct sentences. A worker that never
+answers is retired at `INSTALL_TIMEOUT_MS` (15 s), so a loading button cannot
+become permanent. This is a UI deadline, not a daemon timeout.
+
+The entry point does not add a download, signature verifier, package manager,
+root operation or uninstall surface.

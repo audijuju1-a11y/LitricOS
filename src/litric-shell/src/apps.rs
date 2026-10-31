@@ -254,6 +254,8 @@ pub enum DialogKind {
 pub enum DesktopDialog {
     /// Create a folder under `/Documents`.
     NewFolder,
+    /// Install a local application bundle from `litric/incoming`.
+    InstallApp,
     /// Confirm a power transition named by the user.
     PowerConfirm {
         /// Which transition, from [`crate::shell::PowerCommand::ALL`].

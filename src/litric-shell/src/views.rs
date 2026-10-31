@@ -278,12 +278,20 @@ fn draw_desktop_dialog_panel(
     // The title, the detail line, whether there is a text field, the word on
     // the affirmative button, and its tone. One table, so a dialog cannot be
     // drawn with a button that has nothing behind it.
-    let (title, detail, field_hint, ok_label, tone) = match &dialog {
+    let install = matches!(dialog, DesktopDialog::InstallApp);
+    let (title, mut detail, field_hint, ok_label, tone) = match &dialog {
         DesktopDialog::NewFolder => (
             "New folder".to_owned(),
             String::new(),
             Some("Folder name"),
             "Create",
+            Tone::Accent,
+        ),
+        DesktopDialog::InstallApp => (
+            "Install application".to_owned(),
+            String::new(),
+            None,
+            "Install",
             Tone::Accent,
         ),
         DesktopDialog::PowerConfirm { command } => (
@@ -308,8 +316,28 @@ fn draw_desktop_dialog_panel(
         ),
     };
 
-    let w = t.px(360.0).min(screen.w * 0.9);
-    let h = if field_hint.is_some() {
+    if install {
+        detail = shell.install_error.clone().unwrap_or_else(|| {
+            if shell.install_busy {
+                if shell.install_id.trim().is_empty() {
+                    format!("Installing from litric/incoming/{}…", shell.install_source)
+                } else {
+                    format!(
+                        "Installing {} from litric/incoming/{}…",
+                        shell.install_id, shell.install_source
+                    )
+                }
+            } else {
+                "Install a local bundle from litric/incoming.".to_owned()
+            }
+        });
+    }
+    let w = t
+        .px(if install { 420.0 } else { 360.0 })
+        .min(screen.w * 0.9);
+    let h = if install {
+        t.px(250.0)
+    } else if field_hint.is_some() {
         t.px(150.0)
     } else {
         t.px(170.0)
@@ -339,7 +367,12 @@ fn draw_desktop_dialog_panel(
         &s_title,
     );
     if !detail.is_empty() {
-        let s_detail = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
+        let color = if install && shell.install_error.is_some() {
+            t.tone(Tone::Bad)
+        } else {
+            t.text_dim()
+        };
+        let s_detail = Style::new(t.text_px(TypeStep::Footnote), color);
         let shown = ui::elide(&detail, &s_detail, panel.w - t.sp(Space::Md) * 2.0);
         font::draw(
             canvas,
@@ -349,7 +382,69 @@ fn draw_desktop_dialog_panel(
             &s_detail,
         );
     }
-    if let Some(hint) = field_hint {
+    if install {
+        let label_style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+        let source_label = Rect::new(
+            panel.x + t.sp(Space::Md),
+            panel.y + t.px(76.0),
+            panel.w - t.sp(Space::Md) * 2.0,
+            t.px(16.0),
+        );
+        font::draw(
+            canvas,
+            "Bundle folder (litric/incoming)",
+            source_label.x,
+            source_label.y + t.px(11.0),
+            &label_style,
+        );
+        let source = Rect::new(
+            panel.x + t.sp(Space::Md),
+            panel.y + t.px(84.0),
+            panel.w - t.sp(Space::Md) * 2.0,
+            t.px(32.0),
+        );
+        ui::text_field(
+            canvas,
+            &t,
+            source,
+            &shell.install_source,
+            "fixture",
+            shell.install_source_focused && !shell.install_busy,
+        );
+        if !shell.install_busy {
+            shell.hotspots_mut().push(source, Hot::InstallSource);
+        }
+        let id_label = Rect::new(
+            panel.x + t.sp(Space::Md),
+            panel.y + t.px(126.0),
+            panel.w - t.sp(Space::Md) * 2.0,
+            t.px(16.0),
+        );
+        font::draw(
+            canvas,
+            "Application id (optional)",
+            id_label.x,
+            id_label.y + t.px(11.0),
+            &label_style,
+        );
+        let id = Rect::new(
+            panel.x + t.sp(Space::Md),
+            panel.y + t.px(134.0),
+            panel.w - t.sp(Space::Md) * 2.0,
+            t.px(32.0),
+        );
+        ui::text_field(
+            canvas,
+            &t,
+            id,
+            &shell.install_id,
+            "com.example.app",
+            !shell.install_source_focused && !shell.install_busy,
+        );
+        if !shell.install_busy {
+            shell.hotspots_mut().push(id, Hot::InstallId);
+        }
+    } else if let Some(hint) = field_hint {
         let field = Rect::new(
             panel.x + t.sp(Space::Md),
             panel.y + t.px(56.0),
@@ -358,17 +453,44 @@ fn draw_desktop_dialog_panel(
         );
         ui::text_field(canvas, &t, field, &shell.desktop_dialog_field, hint, true);
     }
+    let busy = install && shell.install_busy;
     let ok = Rect::new(
         panel.right() - t.px(112.0),
         panel.bottom() - t.px(40.0),
         t.px(100.0),
         t.px(28.0),
     );
-    ui::button(canvas, &t, ok, ok_label, ui::State::Normal, tone);
-    shell.hotspots_mut().push(ok, Hot::DialogConfirm);
+    ui::button(
+        canvas,
+        &t,
+        ok,
+        ok_label,
+        if busy {
+            ui::State::Loading
+        } else {
+            ui::State::Normal
+        },
+        tone,
+    );
+    if !busy {
+        shell.hotspots_mut().push(ok, Hot::DialogConfirm);
+    }
     let no = Rect::new(ok.x - t.px(108.0), ok.y, t.px(100.0), t.px(28.0));
-    ui::button(canvas, &t, no, "Cancel", ui::State::Normal, Tone::Neutral);
-    shell.hotspots_mut().push(no, Hot::DialogCancel);
+    ui::button(
+        canvas,
+        &t,
+        no,
+        "Cancel",
+        if busy {
+            ui::State::Disabled
+        } else {
+            ui::State::Normal
+        },
+        Tone::Neutral,
+    );
+    if !busy {
+        shell.hotspots_mut().push(no, Hot::DialogCancel);
+    }
     canvas.set_clip(saved);
 }
 
@@ -4189,6 +4311,22 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
                 lock_w,
                 t.px(36.0),
             );
+            let install_w = font::measure("Install app", &lock_style) + t.px(28.0);
+            let install = Rect::new(lock.x - t.px(10.0) - install_w, lock.y, install_w, lock.h);
+            let install_hover = shell.is_highlighted(Hot::LauncherInstall);
+            canvas.fill_round_rect(
+                install,
+                install.h / 2.0,
+                with_alpha(rgb(0xFFFFFF), if install_hover { 0.16 } else { 0.09 }),
+            );
+            font::draw(
+                canvas,
+                "Install app",
+                install.x + t.px(14.0),
+                install.y + t.px(23.0),
+                &lock_style,
+            );
+            shell.hotspots_mut().push(install, Hot::LauncherInstall);
             let lock_hover = shell.is_highlighted(Hot::DockLock);
             canvas.fill_round_rect(
                 lock,
