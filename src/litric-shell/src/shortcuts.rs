@@ -241,14 +241,18 @@ impl App {
             // overview and process table enough room to coexist at the default
             // size on a 1280x800 display; the shell clips each section to its
             // own pane on smaller displays.
-            Self::Activity => (620.0, 620.0),
-            Self::Environments => (420.0, 300.0),
-            Self::Settings => (720.0, 520.0),
-            Self::Files => (760.0, 500.0),
-            Self::Browser => (900.0, 600.0),
-            Self::Terminal => (640.0, 400.0),
-            Self::Trash => (560.0, 380.0),
-            Self::Defender => (560.0, 420.0),
+            // The Ledger review widened the working windows: at 1280x800 the
+            // old defaults left two thirds of the desktop empty while clipping
+            // Settings' own sidebar. These sizes keep a 16 px air gap above the
+            // resting dock and still leave a readable slice of wallpaper.
+            Self::Activity => (920.0, 620.0),
+            Self::Environments => (760.0, 520.0),
+            Self::Settings => (980.0, 620.0),
+            Self::Files => (980.0, 600.0),
+            Self::Browser => (1000.0, 620.0),
+            Self::Terminal => (820.0, 480.0),
+            Self::Trash => (780.0, 520.0),
+            Self::Defender => (780.0, 560.0),
         }
     }
 

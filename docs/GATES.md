@@ -3618,3 +3618,53 @@ small so its pixels are deterministic; the session path, not its content, is the
 Revert the S91 commit. The Games page, category parsing, installer round-trip, fullscreen
 toggle, overlay, test package, golden `46-settings-games` and S91 records disappear; S90
 and earlier work remain.
+
+
+---
+
+## S92 — Litric Ledger redesign (2026-11-01)
+
+### Gate
+
+- [x] One semantic token set drives every application and both dark/light themes.
+- [x] Window chrome uses monochrome glyph controls, a left title and a full reserved title run.
+- [x] Settings exposes all 19 pages in a readable sidebar; selection and primary actions use the
+  accent, ordinary actions do not.
+- [x] Files, Activity, App Store, App Sandbox, Games, dialogs and lock spacing were reviewed in
+  rendered frames.
+- [x] Terminal renders Thai text without missing-glyph boxes while keeping ASCII output monospaced.
+- [x] The 46 after screens, 46 before screens and 5 light-theme screens exist and were reviewed.
+- [x] 45 fixture golden fingerprints were re-recorded and the golden gate passes.
+- [x] The text audit reports no overlapping runs.
+- [x] `39-linux-app` is a real third-party Wayland client composed by `views::draw`, not a mock.
+- [x] `cargo test --workspace` and `bash ci/verify.sh` pass on the final tree.
+- [ ] A booted image, framebuffer/scanout, physical display, GPU, audio or input device was tested.
+- [ ] High-contrast themes were photographed (tokens/contrast tests only).
+- [ ] `.deb`, `.rpm`, `.AppImage`, downloaded packages, Steam/Proton or anti-cheat were tested.
+- [ ] No RAM, frame-time or power benchmark was run for S92.
+
+### Commands and results
+
+```text
+$ (cd src && cargo test --workspace)
+TESTS passed=2049 failed=0 ignored=0
+$ (cd src && cargo fmt --all --check)
+exit 0
+$ (cd src && cargo clippy --workspace --all-targets -- -D warnings)
+exit 0
+$ python3 ci/check-golden-frames.py --frames build/frames
+golden-frames: PASS -- every frame is within the threshold of its golden
+$ bash ci/verify.sh
+PASS -- 39 pass, 0 fail, 3 skipped
+```
+
+### Limits
+
+The screenshot evidence proves the composition path, not a booted machine or a real display. The
+only real third-party client is the small deterministic `weston-simple-shm` test application. No
+performance claim accompanies the visual rewrite.
+
+### Rollback
+
+Revert the S92 commit. The token palette, ledger wallpaper, window chrome, page layouts, screenshot
+sets and S92 records disappear; S91 functionality, including the Games page, remains.

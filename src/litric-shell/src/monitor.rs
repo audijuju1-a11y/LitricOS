@@ -442,7 +442,7 @@ fn draw_history(canvas: &mut Canvas, t: &Tokens, f: &SystemFacts, h: &History, b
     // ---- disk ----------------------------------------------------------
     if y + t.px(18.0) <= body.bottom() {
         head(canvas, y, "Disk");
-        y += t.px(16.0);
+        y += t.px(24.0);
         let note = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
         // Lines on the type scale's own caption lead (`TypeStep::line_height_px`),
         // not on a number chosen to look right: a 12-pixel caption has a 16-pixel
@@ -550,8 +550,12 @@ pub fn draw(canvas: &mut Canvas, t: &Tokens, f: &SystemFacts, m: &TaskManager, b
     // monitor whose trends are below the fold is a monitor read as a snapshot.
     // Under that width the readings keep the whole panel, and the graphs follow
     // them in whatever room is left.
-    let graphs_w = if content.w >= t.px(560.0) {
-        (content.w * 0.46).clamp(t.px(220.0), t.px(420.0))
+    // Two columns only on a display wide enough for both a readable meter
+    // column and a graph column. At the 920 px Activity window the old 560 px
+    // threshold put the graph headings into the right-aligned readings; the
+    // single-column composition gives the graphs the full width instead.
+    let graphs_w = if content.w >= t.px(1080.0) {
+        (content.w * 0.46).clamp(t.px(420.0), t.px(520.0))
     } else {
         0.0
     };
@@ -571,22 +575,12 @@ pub fn draw(canvas: &mut Canvas, t: &Tokens, f: &SystemFacts, m: &TaskManager, b
             with_alpha(t.text(), 0.10),
         );
         draw_history(canvas, t, f, &m.history, graphs);
-    } else if y + t.px(150.0) <= content.bottom() {
-        // Not enough width to put them side by side: the graphs go under the
-        // readings, at the size the panel actually has.
-        draw_history(
-            canvas,
-            t,
-            f,
-            &m.history,
-            Rect::new(
-                content.x,
-                content.bottom() - t.px(120.0),
-                content.w,
-                t.px(120.0),
-            ),
-        );
     }
+    // A narrow Activity window keeps the measured readings and omits the trend
+    // strip. Stacking the strip under the meters put its heading into the
+    // readout rows -- the live numbers are the screen's job, and a graph that
+    // cannot fit is not worth overwriting them for. A wide window still gets
+    // the side-by-side composition above.
 
     // CPU, memory, swap, load, frame time and the daemon's own footprint, each
     // with the band it crossed. Drawn here rather than in this file so the
@@ -747,14 +741,17 @@ mod tests {
         let mut m = model(f.clone());
         m.observe(&f);
 
-        let mut canvas = Canvas::new(700, 600, background);
+        // The trend strip is part of the wide composition. A 700 px body is
+        // deliberately single-column now, so the graph contract is exercised at
+        // a width where the graphs are actually drawn.
+        let mut canvas = Canvas::new(1200, 600, background);
         canvas.record_text(true);
         draw(
             &mut canvas,
             &tokens(),
             &f,
             &m,
-            Rect::new(0.0, 0.0, 700.0, 600.0),
+            Rect::new(0.0, 0.0, 1200.0, 600.0),
         );
         let runs: Vec<String> = canvas.text_runs().iter().map(|r| r.text.clone()).collect();
         assert!(
@@ -782,14 +779,17 @@ mod tests {
         let f = facts();
         let mut m = model(f.clone());
         m.observe(&f);
-        let mut canvas = Canvas::new(700, 600, background);
+        // The trend strip is part of the wide composition. A 700 px body is
+        // deliberately single-column now, so the graph contract is exercised at
+        // a width where the graphs are actually drawn.
+        let mut canvas = Canvas::new(1200, 600, background);
         canvas.record_text(true);
         draw(
             &mut canvas,
             &tokens(),
             &f,
             &m,
-            Rect::new(0.0, 0.0, 700.0, 600.0),
+            Rect::new(0.0, 0.0, 1200.0, 600.0),
         );
         let runs: Vec<String> = canvas.text_runs().iter().map(|r| r.text.clone()).collect();
         assert!(

@@ -797,5 +797,5 @@ const fn button_code(button: u8) -> u32 {
 /// The default size a client window opens at when the client does not say.
 #[must_use]
 pub fn default_size(tokens: &Tokens) -> (f32, f32) {
-    (tokens.px(760.0), tokens.px(520.0))
+    (tokens.px(900.0), tokens.px(600.0))
 }

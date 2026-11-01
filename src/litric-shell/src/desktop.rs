@@ -24,7 +24,7 @@
 //! already on screen: re-blurring whatever the last frame left behind a panel
 //! is what made panels darken a little more with every pointer move.
 
-use litric_design::{Glass, Rgb, Theme, ThemeKind};
+use litric_design::{Glass, Rgb, Theme};
 
 use crate::canvas::{blend, luminance, rgb, rgba, with_alpha, Canvas, Rect, Repaint};
 use crate::font::{self, Style};
@@ -384,8 +384,12 @@ impl Compositor {
     }
 }
 
-/// The dark wallpaper: an original LitricOS PNG, embedded in the binary so it
-/// cannot be missing at boot. Source: `assets/wallpapers/`.
+/// The legacy wave, kept only for the decoder's regression tests. The shipping
+/// wallpaper is drawn from tokens and does not depend on an image asset.
+#[cfg(test)]
+use litric_design::ThemeKind;
+
+#[cfg(test)]
 const WAVE_PNG: &[u8] =
     include_bytes!("../../../assets/wallpapers/litric-obsidian-wave-1920x1080.png");
 
@@ -393,6 +397,7 @@ const WAVE_PNG: &[u8] =
 ///
 /// `None` for anything else, so an unreadable file falls back to a solid colour
 /// instead of taking the shell down.
+#[cfg(test)]
 fn decode_png(bytes: &[u8]) -> Option<(u32, u32, Vec<u32>)> {
     let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
         .read_info()
@@ -425,6 +430,7 @@ fn decode_png(bytes: &[u8]) -> Option<(u32, u32, Vec<u32>)> {
 ///
 /// Proportions are kept at every aspect ratio: the overflow is cropped, never
 /// stretched.
+#[cfg(test)]
 fn paint_cover(canvas: &mut Canvas, iw: u32, ih: u32, pixels: &[u32]) {
     let (cw, ch) = (canvas.width(), canvas.height());
     let scale = (cw as f32 / iw as f32).max(ch as f32 / ih as f32);
@@ -458,8 +464,9 @@ fn paint_cover(canvas: &mut Canvas, iw: u32, ih: u32, pixels: &[u32]) {
 /// problem (ADR-0009 keeps untrusted decoding out of the shell).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Wallpaper {
-    /// What ships: the embedded obsidian wave on the dark themes, a solid pearl
-    /// field on the light ones.
+    /// What ships: the Litric Ledger field, drawn from theme tokens. A wide
+    /// mineral margin, a fired-clay spine, and quiet horizontal rules give the
+    /// desktop a place without competing with the windows on it.
     #[default]
     System,
     /// One flat field of the theme's own base colour. No image, no wash.
@@ -501,25 +508,24 @@ fn argb(c: litric_design::Rgb) -> u32 {
     rgb((u32::from(c.r) << 16) | (u32::from(c.g) << 8) | u32::from(c.b))
 }
 
-/// Paint the wallpaper for `theme`.
+/// Paint the default wallpaper for `theme`.
 ///
-/// Dark uses the embedded wave. Light is a solid Pearl field: the wave is a dark
-/// image and would not read as a light desktop. Both are opaque, so the glass
-/// above them samples real content rather than a wash.
+/// The field is opaque and token-derived, so the glass above it samples real
+/// content and every theme keeps the same composition with its own ink and
+/// paper.
 pub fn wallpaper(canvas: &mut Canvas, theme: &Theme) {
     wallpaper_for(canvas, theme, Wallpaper::System);
 }
 
 /// Paint the chosen wallpaper.
 ///
-/// [`Wallpaper::System`] is byte-for-byte what this desktop painted before the
-/// choice existed, so the default changes no pixel. The other two are drawn from
-/// the theme's own tokens: a wallpaper cannot introduce a colour the contrast
-/// gate has never seen.
+/// Every choice is drawn from the theme's own tokens: a wallpaper cannot
+/// introduce a colour the contrast gate has never seen. The system field is a
+/// flat composition, not a gradient or a glow, so windows keep their edge.
 pub fn wallpaper_for(canvas: &mut Canvas, theme: &Theme, choice: Wallpaper) {
     let field = Rect::new(0.0, 0.0, canvas.width() as f32, canvas.height() as f32);
     match choice {
-        Wallpaper::System => paint_wallpaper(canvas, theme, WAVE_PNG),
+        Wallpaper::System => paint_ledger(canvas, theme),
         Wallpaper::Flat => canvas.fill_round_rect(field, 0.0, argb(theme.palette.bg_base)),
         Wallpaper::Glow => {
             canvas.fill_vertical_gradient(
@@ -542,6 +548,83 @@ pub fn wallpaper_for(canvas: &mut Canvas, theme: &Theme, choice: Wallpaper) {
     }
 }
 
+/// The Litric Ledger field.
+///
+/// The visual idea is a technical ledger: a mineral margin at the left, one
+/// fired-clay registration spine, and rules that are legible as construction
+/// but too quiet to compete with text. Every mark is a rectangular fill from a
+/// semantic token, so no gradient or unscrimmed light source enters the
+/// composition.
+fn paint_ledger(canvas: &mut Canvas, theme: &Theme) {
+    let (w, h) = (canvas.width() as f32, canvas.height() as f32);
+    canvas.fill_round_rect(Rect::new(0.0, 0.0, w, h), 0.0, argb(theme.palette.bg_base));
+
+    let margin = (w * 0.052).round();
+    let top = (h * 0.11).round();
+    let bottom = (h * 0.90).round();
+    let ink = argb(theme.palette.text_primary);
+    let accent = argb(theme.palette.accent);
+    let elevated = argb(theme.palette.bg_elevated);
+
+    // The margin is a material change, not a shadow: one flat plane behind the
+    // windows, held to the left edge of the display.
+    canvas.fill_round_rect(
+        Rect::new(0.0, 0.0, margin - 8.0, h),
+        0.0,
+        with_alpha(elevated, 0.62),
+    );
+
+    // Horizontal ledger rules: one-pixel construction marks, never decoration
+    // that can be mistaken for a border around a window.
+    let rule_left = margin + 18.0;
+    let rule_right = (w - margin).max(rule_left);
+    let mut y = top;
+    while y < bottom {
+        canvas.fill_round_rect(
+            Rect::new(rule_left, y, rule_right - rule_left, 1.0),
+            0.0,
+            with_alpha(ink, 0.032),
+        );
+        y += 48.0;
+    }
+
+    // The registration spine. Two pixels is enough to place the eye at the
+    // left margin without turning the wallpaper into a coloured panel.
+    canvas.fill_round_rect(
+        Rect::new(margin, top, 2.0, (bottom - top).max(0.0)),
+        0.0,
+        with_alpha(accent, 0.58),
+    );
+    for tick_y in [top, (top + bottom) / 2.0, bottom] {
+        canvas.fill_round_rect(
+            Rect::new(margin - 7.0, tick_y, 16.0, 2.0),
+            0.0,
+            with_alpha(accent, 0.58),
+        );
+    }
+
+    // Index tabs at the right edge: a quiet nod to a bound ledger, and a way
+    // for the field to have a right side instead of fading into a vignette.
+    for i in 0..6 {
+        let ty = top + 34.0 + i as f32 * 34.0;
+        let tw = 16.0 + (i % 3) as f32 * 7.0;
+        canvas.fill_round_rect(
+            Rect::new(w - margin - tw, ty, tw, 2.0),
+            0.0,
+            with_alpha(ink, 0.13),
+        );
+    }
+
+    // A single wide band sits under the dock instead of a glow. It is flat,
+    // token-derived and deliberately too low-contrast to pull attention.
+    canvas.fill_round_rect(
+        Rect::new(0.0, h * 0.88, w, h * 0.12),
+        0.0,
+        with_alpha(elevated, 0.34),
+    );
+}
+
+#[cfg(test)]
 fn paint_wallpaper(canvas: &mut Canvas, theme: &Theme, png_bytes: &[u8]) {
     let (w, h) = (canvas.width() as f32, canvas.height() as f32);
     if theme.kind == ThemeKind::Light {
@@ -1356,10 +1439,13 @@ mod tests {
         // there and say nothing about the ribbon.
         let mut c = Canvas::new(320, 200, rgb(0x000000));
         wallpaper(&mut c, &Theme::of(ThemeKind::Dark));
+        // Sample densely enough to include the one-pixel ledger rules. A
+        // 16x10 grid lands on a rule only by accident now that the field is
+        // constructed from hairlines rather than a broad wave.
         let mut seen = std::collections::BTreeSet::new();
-        for gy in 0..10 {
-            for gx in 0..16 {
-                seen.insert(c.get(gx * 20 + 10, gy * 20 + 10).unwrap_or(0));
+        for y in 0..200 {
+            for x in 0..320 {
+                seen.insert(c.get(x, y).unwrap_or(0));
             }
         }
         assert!(
@@ -1438,12 +1524,25 @@ mod tests {
     }
 
     #[test]
-    fn the_light_wallpaper_is_solid_pearl() {
+    fn the_light_wallpaper_uses_the_same_ledger_composition_as_the_dark_one() {
         let mut c = Canvas::new(320, 200, rgb(0x000000));
         wallpaper(&mut c, &Theme::of(ThemeKind::Light));
-        for (x, y) in [(0, 0), (160, 100), (319, 199)] {
-            assert_eq!(c.get(x, y), Some(rgb(0xF4_F2_ED)), "at ({x}, {y})");
-        }
+        // The paper field is the light base, and the registration spine is
+        // present in the accent rather than disappearing with the old pearl
+        // fill. Both themes therefore share one composition, not two unrelated
+        // backgrounds.
+        assert_eq!(c.get(160, 10), Some(rgb(0xF2_EE_E4)));
+        let margin = (320.0_f32 * 0.052).round() as i64;
+        let spine = c.get(margin, 100).unwrap_or(0);
+        assert_ne!(
+            spine,
+            rgb(0xF2_EE_E4),
+            "the light ledger lost its registration spine"
+        );
+        assert!(
+            luminance(spine) < 0.55,
+            "the light spine should read as ink, not a pale wash"
+        );
     }
 
     // --- UI quality regression guards ------------------------------------

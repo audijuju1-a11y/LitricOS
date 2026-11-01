@@ -1019,7 +1019,7 @@ pub mod sidebar {
     pub const MAX_W: f32 = 280.0;
     /// A row's height. The shell's `list_item` uses 30 px; the Files pane's
     /// 20 px rows were below every published target, including WCAG's 24 px.
-    pub const ROW_H: f32 = 30.0;
+    pub const ROW_H: f32 = 26.0;
     /// Gap between rows.
     pub const GAP: f32 = 2.0;
     /// The narrowest the content beside the sidebar may become before the

@@ -141,9 +141,9 @@ impl Default for Chrome {
         Self {
             title_h: 34.0,
             resize_grip: 6.0,
-            button: 12.0,
-            button_gap: 8.0,
-            button_inset: 16.0,
+            button: 20.0,
+            button_gap: 3.0,
+            button_inset: 12.0,
             radius: 10.0,
         }
     }

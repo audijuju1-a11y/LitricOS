@@ -9347,3 +9347,58 @@ gamescope, anti-cheat, audio or GPU path is integrated. Local executable bundles
 the install format; `.deb`, `.rpm`, `.AppImage` and downloaded-package installation are
 not implemented. Only the first mapped window is fullscreen, and no booted-image or
 physical-display evidence exists on this host.
+
+
+---
+
+## S92 — Litric Ledger: system-wide redesign (2026-11-01)
+
+The desktop now uses one visual language, **Litric Ledger**: mineral/paper surfaces, a
+fired-clay registration accent, a working type scale, hairline rules, monochrome glyph window
+controls and a monochrome instrument dock. The wave wallpaper and blue selection language are
+gone. The redesign covers every screen and every application shell through shared tokens and
+components; Settings, Files, Activity, the dock/launcher, window chrome, lock and the app-store
+surfaces also received page-specific restructuring.
+
+### Completed
+
+- New dark/light palettes and semantic accents in `litric-design`, with a 13/14/16/18/22/26/32/42
+  type scale and a 5/8/12/16/20 radius family. All applications consume the same semantic tokens.
+- Procedural ledger wallpaper with margin, registration spine, measurement rules, crop marks and
+  edge ticks; the light theme uses the same composition on warm paper.
+- Window chrome replaced macOS-style coloured dots with monochrome close/minimise/maximise glyphs.
+  Title is left-aligned with a full reserved run; a 250 px client now shows `simple-shm`, not
+  `Si...`.
+- Settings: all 19 pages fit a 26 px sidebar, with `LITRIC / SETTINGS`, page counter, larger
+  titles and neutral ledger action rows. Only the selected row and primary action use accent.
+- Files: empty details guidance and consistent metadata line steps. Activity: single-column at
+  normal width, with no graph overdrawing meters. App Store, App Sandbox, Games, Mission Control,
+  quick settings, Bluetooth and lock spacing corrected.
+- Terminal: Thai-bearing lines select the Sans face, preserving readable Thai; ASCII output stays
+  monospaced. The default welcome line no longer renders as missing-glyph boxes.
+- `frame_dump` now attaches the same prepared glass backdrop as `Compositor::new`, removing the
+  grey-window artefact that appeared only in the light theme screenshots.
+- 46 after + 46 before dark screenshots and 5 light-theme screenshots were reviewed; 45 fixture
+  golden fingerprints were re-recorded. The text audit reports no overlapping runs.
+- `39-linux-app` is a real S82 real-socket e2e frame of `weston-simple-shm`, re-captured with the
+  new chrome and full title.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | **2,049 passed, 0 failed, 0 ignored** |
+| `cargo fmt --all --check` | exit 0 |
+| clippy | exit 0 |
+| golden frames | pass; 45 fixture frames recorded and compared |
+| text layout audit | no overlapping text runs across the fixture set |
+| screenshots | 46 dark after, 46 dark before, 5 light after; 39 is a real e2e frame |
+| `bash ci/verify.sh` | **PASS — 39 pass, 0 fail, 3 skipped** |
+
+### Limits
+
+No `mkosi`/`qemu-system-x86_64` on this host, so no image build, boot, framebuffer/scanout, GPU,
+audio or physical-display test. No Steam/Proton, anti-cheat or playable commercial game was run.
+`.deb`, `.rpm`, `.AppImage` and downloaded-package installation remain unimplemented. High-contrast
+themes have token/contrast tests but no screenshot. No RAM or performance measurement was taken for
+S92, so no speed or memory improvement is claimed.

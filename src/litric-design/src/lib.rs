@@ -196,34 +196,43 @@ impl Theme {
             ThemeKind::Dark => Self {
                 kind,
                 palette: Palette {
-                    bg_base: Rgb::hex(0x0B0C0F),
-                    bg_elevated: Rgb::hex(0x15171D),
-                    glass_tint: Rgb::hex(0x14161B),
-                    text_primary: Rgb::hex(0xF2F4F8),
-                    text_secondary: Rgb::hex(0xA9B1BF),
-                    accent: Rgb::hex(0x6AA6FF),
-                    on_accent: Rgb::hex(0x06080C),
-                    border: Rgb::hex(0x646A75),
-                    danger: Rgb::hex(0xFF6B6B),
-                    success: Rgb::hex(0x5BD9A4),
-                    warning: Rgb::hex(0xFFC66D),
+                    // Litric Ledger: a mineral green-black ground, warm paper
+                    // text and one fired-clay accent. The green cast keeps the
+                    // dark theme from reading as a generic blue-black dashboard;
+                    // the accent is reserved for the current place and the one
+                    // primary action on a surface.
+                    bg_base: Rgb::hex(0x0C1210),
+                    bg_elevated: Rgb::hex(0x16201B),
+                    glass_tint: Rgb::hex(0x141D18),
+                    text_primary: Rgb::hex(0xF4F0E6),
+                    text_secondary: Rgb::hex(0xB5BDB5),
+                    accent: Rgb::hex(0xFF9A6B),
+                    on_accent: Rgb::hex(0x1C0C05),
+                    border: Rgb::hex(0x6C776F),
+                    danger: Rgb::hex(0xFF8D82),
+                    success: Rgb::hex(0x7ED9B0),
+                    warning: Rgb::hex(0xF2C66D),
                 },
                 glass: Glass::DARK,
             },
             ThemeKind::Light => Self {
                 kind,
                 palette: Palette {
-                    bg_base: Rgb::hex(0xF6F7F9),
-                    bg_elevated: Rgb::hex(0xFFFFFF),
-                    glass_tint: Rgb::hex(0xFFFFFF),
-                    text_primary: Rgb::hex(0x0E1116),
-                    text_secondary: Rgb::hex(0x4C5563),
-                    accent: Rgb::hex(0x1D5FD6),
+                    // Warm paper, not blue-white: surfaces separate by a slight
+                    // warmth change rather than by a drop shadow. The accent is
+                    // the same fired clay, darkened until it reads as text on
+                    // paper and still passes AA with white on it.
+                    bg_base: Rgb::hex(0xF2EEE4),
+                    bg_elevated: Rgb::hex(0xFFFCF5),
+                    glass_tint: Rgb::hex(0xFBF7EE),
+                    text_primary: Rgb::hex(0x19211C),
+                    text_secondary: Rgb::hex(0x465149),
+                    accent: Rgb::hex(0xA93D17),
                     on_accent: Rgb::hex(0xFFFFFF),
-                    border: Rgb::hex(0x7C828C),
-                    danger: Rgb::hex(0xC42B2B),
-                    success: Rgb::hex(0x1B7A4F),
-                    warning: Rgb::hex(0x8A5A00),
+                    border: Rgb::hex(0x757E75),
+                    danger: Rgb::hex(0xA52822),
+                    success: Rgb::hex(0x1B6847),
+                    warning: Rgb::hex(0x765000),
                 },
                 glass: Glass::LIGHT,
             },
@@ -279,16 +288,16 @@ impl Theme {
         let (accent, on_accent) = match (self.kind, accent) {
             (ThemeKind::HighContrastDark | ThemeKind::HighContrastLight, _)
             | (_, Accent::Default) => return self,
-            (ThemeKind::Dark, Accent::Sky) => (Rgb::hex(0x6AA6FF), Rgb::hex(0x06080C)),
-            (ThemeKind::Dark, Accent::Violet) => (Rgb::hex(0xB79CFF), Rgb::hex(0x0B0714)),
-            (ThemeKind::Dark, Accent::Teal) => (Rgb::hex(0x63E0C8), Rgb::hex(0x041712)),
-            (ThemeKind::Dark, Accent::Amber) => (Rgb::hex(0xFFC46B), Rgb::hex(0x1A1000)),
-            (ThemeKind::Dark, Accent::Rose) => (Rgb::hex(0xFFA3C7), Rgb::hex(0x1A0710)),
-            (ThemeKind::Light, Accent::Sky) => (Rgb::hex(0x1D5FD6), Rgb::hex(0xFFFFFF)),
-            (ThemeKind::Light, Accent::Violet) => (Rgb::hex(0x5B32C4), Rgb::hex(0xFFFFFF)),
-            (ThemeKind::Light, Accent::Teal) => (Rgb::hex(0x046B5E), Rgb::hex(0xFFFFFF)),
-            (ThemeKind::Light, Accent::Amber) => (Rgb::hex(0x7A4E00), Rgb::hex(0xFFFFFF)),
-            (ThemeKind::Light, Accent::Rose) => (Rgb::hex(0xA3215C), Rgb::hex(0xFFFFFF)),
+            (ThemeKind::Dark, Accent::Sky) => (Rgb::hex(0x8FC3FF), Rgb::hex(0x07120B)),
+            (ThemeKind::Dark, Accent::Violet) => (Rgb::hex(0xC8AEFF), Rgb::hex(0x10071A)),
+            (ThemeKind::Dark, Accent::Teal) => (Rgb::hex(0x79E0C7), Rgb::hex(0x041712)),
+            (ThemeKind::Dark, Accent::Amber) => (Rgb::hex(0xF8C66A), Rgb::hex(0x1A1000)),
+            (ThemeKind::Dark, Accent::Rose) => (Rgb::hex(0xFFA6BE), Rgb::hex(0x1A0710)),
+            (ThemeKind::Light, Accent::Sky) => (Rgb::hex(0x1B55C0), Rgb::hex(0xFFFFFF)),
+            (ThemeKind::Light, Accent::Violet) => (Rgb::hex(0x5C35B8), Rgb::hex(0xFFFFFF)),
+            (ThemeKind::Light, Accent::Teal) => (Rgb::hex(0x046657), Rgb::hex(0xFFFFFF)),
+            (ThemeKind::Light, Accent::Amber) => (Rgb::hex(0x744A00), Rgb::hex(0xFFFFFF)),
+            (ThemeKind::Light, Accent::Rose) => (Rgb::hex(0x9C1E50), Rgb::hex(0xFFFFFF)),
         };
         Self {
             kind: self.kind,
@@ -520,21 +529,21 @@ impl Glass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum TypeStep {
-    /// 12 — timestamps, dense metadata.
+    /// 13 — timestamps, dense metadata.
     Caption,
-    /// 13 — footnotes.
+    /// 14 — footnotes.
     Footnote,
-    /// 15 — body. The size everything else is judged against.
+    /// 16 — body. The size everything else is judged against.
     Body,
-    /// 17 — emphasised body, list headers.
+    /// 18 — emphasised body, list headers.
     Headline,
-    /// 20 — section titles.
+    /// 22 — section titles.
     Title3,
-    /// 24 — view titles.
+    /// 26 — view titles.
     Title2,
-    /// 30 — page titles.
+    /// 32 — page titles.
     Title1,
-    /// 38 — the largest, used sparingly.
+    /// 42 — the largest, used sparingly.
     Display,
 }
 
@@ -558,14 +567,14 @@ impl TypeStep {
     #[must_use]
     pub const fn px(self) -> u16 {
         match self {
-            Self::Caption => 12,
-            Self::Footnote => 13,
-            Self::Body => 15,
-            Self::Headline => 17,
-            Self::Title3 => 20,
-            Self::Title2 => 24,
-            Self::Title1 => 30,
-            Self::Display => 38,
+            Self::Caption => 13,
+            Self::Footnote => 14,
+            Self::Body => 16,
+            Self::Headline => 18,
+            Self::Title3 => 22,
+            Self::Title2 => 26,
+            Self::Title1 => 32,
+            Self::Display => 42,
         }
     }
 
@@ -576,14 +585,14 @@ impl TypeStep {
     #[must_use]
     pub const fn line_height_px(self) -> u16 {
         match self {
-            Self::Caption => 16,
-            Self::Footnote => 18,
-            Self::Body => 22,
-            Self::Headline => 24,
-            Self::Title3 => 26,
-            Self::Title2 => 30,
-            Self::Title1 => 36,
-            Self::Display => 44,
+            Self::Caption => 18,
+            Self::Footnote => 19,
+            Self::Body => 23,
+            Self::Headline => 25,
+            Self::Title3 => 28,
+            Self::Title2 => 32,
+            Self::Title1 => 38,
+            Self::Display => 48,
         }
     }
 
@@ -656,15 +665,15 @@ impl Space {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum Radius {
-    /// 6 — inputs, small controls.
+    /// 5 — inputs, small controls.
     Sm,
-    /// 10 — buttons, chips.
+    /// 8 — buttons, chips.
     Md,
-    /// 14 — cards, popovers.
+    /// 12 — cards, popovers.
     Lg,
-    /// 20 — sheets, panels.
+    /// 16 — sheets, panels.
     Xl,
-    /// 28 — windows.
+    /// 20 — windows, deliberately squarer than a phone sheet.
     Window,
     /// Fully rounded.
     Full,
@@ -688,11 +697,11 @@ impl Radius {
     #[must_use]
     pub const fn px(self) -> u16 {
         match self {
-            Self::Sm => 6,
-            Self::Md => 10,
-            Self::Lg => 14,
-            Self::Xl => 20,
-            Self::Window => 28,
+            Self::Sm => 5,
+            Self::Md => 8,
+            Self::Lg => 12,
+            Self::Xl => 16,
+            Self::Window => 20,
             Self::Full => 9999,
         }
     }

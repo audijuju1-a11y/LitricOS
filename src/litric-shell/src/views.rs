@@ -431,7 +431,7 @@ fn draw_desktop_dialog_panel(
         );
         let source = Rect::new(
             panel.x + t.sp(Space::Md),
-            panel.y + t.px(84.0),
+            panel.y + t.px(90.0),
             panel.w - t.sp(Space::Md) * 2.0,
             t.px(32.0),
         );
@@ -448,7 +448,7 @@ fn draw_desktop_dialog_panel(
         }
         let id_label = Rect::new(
             panel.x + t.sp(Space::Md),
-            panel.y + t.px(126.0),
+            panel.y + t.px(132.0),
             panel.w - t.sp(Space::Md) * 2.0,
             t.px(16.0),
         );
@@ -461,7 +461,7 @@ fn draw_desktop_dialog_panel(
         );
         let id = Rect::new(
             panel.x + t.sp(Space::Md),
-            panel.y + t.px(134.0),
+            panel.y + t.px(146.0),
             panel.w - t.sp(Space::Md) * 2.0,
             t.px(32.0),
         );
@@ -925,43 +925,85 @@ fn draw_windows(canvas: &mut Canvas, shell: &mut Shell) {
             with_alpha(rgb(0xFFFFFF), 0.08),
         );
 
-        for (n, icon, tone) in [
-            (0u32, Icon::Close, Tone::Bad),
-            (1, Icon::Minimize, Tone::Warning),
-            (2, Icon::Maximize, Tone::Good),
+        let pointer = shell.pointer();
+        for (n, icon) in [
+            (0u32, Icon::Close),
+            (1, Icon::Minimize),
+            (2, Icon::Maximize),
         ] {
             let b = chrome.button_rect(&to_wm(frame), n);
             let br = Rect::new(b.x, b.y, b.w, b.h);
-            canvas.fill_circle(
-                br.x + br.w / 2.0,
-                br.y + br.h / 2.0,
-                br.w / 2.0,
-                if focused {
-                    t.tone(tone)
-                } else {
-                    with_alpha(rgb(0xFFFFFF), 0.20)
-                },
-            );
-            // The glyph appears on hover, the way every desktop that uses
-            // coloured dots does it: colour at rest, symbol when aimed at.
-            let p = shell.pointer();
-            if br.inflate(t.px(4.0)).contains(p.x, p.y) {
-                icons::draw(canvas, icon, br.inflate(-br.w * 0.22), rgb(0x101010), 1.4);
+            let hovered = br.inflate(t.px(3.0)).contains(pointer.x, pointer.y);
+            let close = n == 0;
+            if hovered {
+                canvas.fill_round_rect(
+                    br,
+                    t.radius(Radius::Sm),
+                    with_alpha(t.tone(if close { Tone::Bad } else { Tone::Accent }), 0.18),
+                );
+            } else {
+                canvas.fill_round_rect(
+                    br,
+                    t.radius(Radius::Sm),
+                    with_alpha(t.text(), if focused { 0.075 } else { 0.035 }),
+                );
             }
+            let glyph = if hovered && close {
+                t.tone(Tone::Bad)
+            } else if hovered {
+                t.accent()
+            } else if focused {
+                t.text()
+            } else {
+                t.text_dim()
+            };
+            // Glyph-only square controls, not coloured traffic lights: the
+            // close action is marked by its cross at rest and by the danger
+            // hue on hover, so colour is never the only signal.
+            icons::draw(canvas, icon, br.inflate(-t.px(5.0)), glyph, 1.25);
         }
+        // A hairline closes the control rail, and a short accent register sits
+        // under the title. Both are the window's identity, not decoration that
+        // changes with the application.
+        canvas.fill_round_rect(
+            Rect::new(
+                frame.x + t.px(82.0),
+                title_r.y + t.px(10.0),
+                1.0,
+                title_r.h - t.px(20.0),
+            ),
+            0.5,
+            with_alpha(t.text(), 0.16),
+        );
+        canvas.fill_round_rect(
+            Rect::new(
+                frame.x + t.px(96.0),
+                title_r.bottom() - 2.0,
+                t.px(24.0),
+                2.0,
+            ),
+            0.0,
+            with_alpha(t.accent(), 0.85),
+        );
 
         let ts = Style::new(
-            t.text_px(TypeStep::Footnote),
+            t.text_px(TypeStep::Body),
             if focused { t.text() } else { t.text_dim() },
-        );
-        let max_w = frame.w - t.px(150.0);
+        )
+        .tracked(t.px(0.15));
+        let reserved_right = if state == WindowState::Normal {
+            t.px(24.0)
+        } else {
+            t.px(128.0)
+        };
+        let max_w = frame.w - t.px(96.0) - reserved_right;
         let shown = ui::elide(&title, &ts, max_w.max(t.px(40.0)));
-        // Centred in the bar, as macOS sets it, but never under the traffic lights.
-        let shown_w = font::measure(&shown, &ts);
+        // The title is an address, not a caption: set from the left after the
+        // control rail, where a document title belongs.
         font::draw(
             canvas,
             &shown,
-            frame.x + ((frame.w - shown_w) / 2.0).max(t.px(74.0)),
+            frame.x + t.px(96.0),
             title_r.y + title_r.h / 2.0 + ts.size * 0.36,
             &ts,
         );
@@ -1605,12 +1647,34 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         );
         let s_meta = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
         let Some(sel) = app.selection() else {
+            icons::draw(
+                canvas,
+                Icon::Files,
+                Rect::new(
+                    dr.x + dr.w / 2.0 - t.px(18.0),
+                    dr.y + t.px(52.0),
+                    t.px(36.0),
+                    t.px(36.0),
+                ),
+                with_alpha(t.text(), 0.22),
+                1.0,
+            );
+            let empty = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+            let a = "Nothing selected";
+            let b = "Choose a file to inspect it.";
             font::draw(
                 canvas,
-                "Nothing selected",
-                dr.x + t.sp(Space::Sm),
-                dr.y + t.px(40.0),
-                &s_meta,
+                a,
+                dr.x + (dr.w - font::measure(a, &empty)) / 2.0,
+                dr.y + t.px(112.0),
+                &empty,
+            );
+            font::draw(
+                canvas,
+                b,
+                dr.x + (dr.w - font::measure(b, &empty)) / 2.0,
+                dr.y + t.px(132.0),
+                &empty,
             );
             // No row to describe is the pane's own empty state, not the end of
             // the window: returning here skipped the modal dialog and the text
@@ -1644,7 +1708,7 @@ fn draw_files(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
                     &s_meta,
                 );
             }
-            ly += t.px(16.0);
+            ly += t.px(20.0);
         }
     }
 
@@ -2900,7 +2964,14 @@ fn draw_settings(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         shell.settings.reveal_page = false;
     }
     shell.settings.sidebar_scroll = scroll;
-    for (i, row) in ui::sidebar::draw(canvas, &t, sidebar, Some("Settings"), &items, scroll) {
+    for (i, row) in ui::sidebar::draw(
+        canvas,
+        &t,
+        sidebar,
+        Some("LITRIC / SETTINGS"),
+        &items,
+        scroll,
+    ) {
         shell
             .hotspots_mut()
             .push(row, Hot::SettingsCategory(i as u8));
@@ -2909,16 +2980,35 @@ fn draw_settings(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let pane = Rect::new(body.x + sidebar_w, body.y, body.w - sidebar_w, body.h);
     let selected_page = shell.settings.page;
     let mut c = ui::Column::new(pane, t.sp(Space::Lg), t.sp(Space::Sm));
-    let title_style = t.style_bold(TypeStep::Title3);
+    let title_style = t.style_bold(TypeStep::Title2);
     font::draw(
         canvas,
         selected_page.title(),
         c.x,
-        c.cursor + t.px(24.0),
+        c.cursor + t.px(25.0),
         &title_style,
     );
+    // A page address makes the nineteen-page sidebar legible as a sequence,
+    // not an undifferentiated list. It is metadata, so it stays quiet.
+    let page_index = crate::settings::Page::ALL
+        .iter()
+        .position(|page| *page == selected_page)
+        .map_or(0, |i| i.saturating_add(1));
+    let index = format!("{page_index:02} / {:02}", crate::settings::Page::ALL.len());
+    let index_style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    font::draw(
+        canvas,
+        &index,
+        pane.right() - t.px(24.0) - font::measure(&index, &index_style),
+        c.cursor + t.px(21.0),
+        &index_style,
+    );
+    canvas.fill_round_rect(
+        Rect::new(c.x, pane.y + t.px(36.0), t.px(32.0), 2.0),
+        0.0,
+        with_alpha(t.accent(), 0.9),
+    );
     c.space(t.px(38.0));
-
     if selected_page != crate::settings::Page::Region {
         draw_settings_page(canvas, shell, pane, selected_page, &t);
         return;
@@ -3149,16 +3239,52 @@ fn settings_button(
     let r = Rect::new(
         pane.x + t.sp(Space::Lg),
         y,
-        (pane.w - t.sp(Space::Lg) * 2.0).min(t.px(230.0)),
-        t.px(30.0),
+        pane.w - t.sp(Space::Lg) * 2.0,
+        t.px(34.0),
     );
-    // A row a `litric://settings/<page>/<key>` link named is marked with a ring
-    // rather than a different fill: the accent fill already means "this is a
-    // control", and a second fill would read as a different kind of control.
+    // Settings is a ledger, not a launchpad: a preference row is a neutral
+    // surface with one trailing chevron. The accent appears only as the 2 px
+    // marker under the pointer or keyboard focus, so a page full of settings
+    // does not become a page full of primary actions.
     let focused = shell.settings.focus == Some(row.key);
-    ui::button(canvas, t, r, row.label, State::Normal, Tone::Accent);
+    let hovered = shell.is_highlighted(row.hot);
+    ui::surface(canvas, t, r, t.radius(Radius::Sm), ui::Material::Elevated);
+    canvas.stroke_round_rect(
+        r,
+        t.radius(Radius::Sm),
+        1.0,
+        with_alpha(t.border(), if hovered { 0.62 } else { 0.36 }),
+    );
+    if hovered || focused {
+        canvas.fill_round_rect(
+            Rect::new(r.x, r.y + t.px(7.0), 2.0, r.h - t.px(14.0)),
+            1.0,
+            t.accent(),
+        );
+    }
+    let label_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
+    let label = ui::elide(row.label, &label_style, r.w - t.px(52.0));
+    font::draw(
+        canvas,
+        &label,
+        r.x + t.px(12.0),
+        r.y + r.h / 2.0 + label_style.size * 0.36,
+        &label_style,
+    );
+    icons::draw(
+        canvas,
+        Icon::ChevronRight,
+        Rect::new(
+            r.right() - t.px(24.0),
+            r.center().1 - t.px(8.0),
+            t.px(16.0),
+            t.px(16.0),
+        ),
+        with_alpha(t.text(), 0.55),
+        1.0,
+    );
     if focused {
-        canvas.stroke_round_rect(r, t.radius(Radius::Sm), t.px(2.0), t.text());
+        ui::focus_ring(canvas, t, r, t.radius(Radius::Sm));
     }
     shell.hotspots_mut().push(r, row.hot);
 }
@@ -4180,14 +4306,13 @@ fn draw_store_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Token
         format!("Catalog · {state} · {}", shell.store.error)
     };
     font::draw(canvas, &status, x, y + t.px(12.0), &dim);
-    y += t.px(18.0);
+    y += t.px(23.0);
     if !shell.store.note.is_empty() {
         let note = ui::elide(&shell.store.note, &dim, width);
         font::draw(canvas, &note, x, y + t.px(12.0), &dim);
-        // The next drawing is a section label with its own baseline. Eighteen
-        // pixels put the two runs two pixels inside each other at this type
-        // size; the gap is a layout decision, not a rounding accident.
-        y += t.px(24.0);
+        // The first list label is a separate baseline; leave a full line step
+        // instead of depending on the old 12 px caption metric.
+        y += t.px(29.0);
     }
 
     let results = shell.store.results.clone();
@@ -4408,7 +4533,7 @@ fn draw_store_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Token
 fn draw_sandbox_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tokens) {
     use crate::sandbox::{Confirm, Key};
 
-    let mut y = pane.y + t.px(44.0);
+    let mut y = pane.y + t.px(62.0);
     let x = pane.x + t.sp(Space::Lg);
     let width = pane.w - t.sp(Space::Lg) * 2.0;
     let dim = Style::new(t.text_px(TypeStep::Footnote), t.text_dim());
@@ -4449,10 +4574,10 @@ fn draw_sandbox_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tok
         )
     };
     font::draw(canvas, &status, x, y + t.px(12.0), &dim);
-    y += t.px(20.0);
+    y += t.px(24.0);
     if !shell.sandbox.note.is_empty() {
-        font::draw(canvas, &shell.sandbox.note, x, y + t.px(11.0), &dim);
-        y += t.px(21.0);
+        font::draw(canvas, &shell.sandbox.note, x, y + t.px(12.0), &dim);
+        y += t.px(26.0);
     }
 
     ui::section_label(canvas, t, (x, y + t.px(9.0)), "AVAILABLE UPDATES");
@@ -4496,7 +4621,7 @@ fn draw_sandbox_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tok
     } else {
         let updates = shell.sandbox.updates.clone();
         for (i, update) in updates.iter().take(2).enumerate() {
-            let row = Rect::new(x, y, width, t.px(32.0));
+            let row = Rect::new(x, y, width, t.px(38.0));
             font::draw(
                 canvas,
                 &update.name,
@@ -4518,11 +4643,11 @@ fn draw_sandbox_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tok
                 canvas,
                 &detail,
                 row.x + t.px(6.0),
-                row.y + t.px(27.0),
+                row.y + t.px(33.0),
                 &caption,
             );
             shell.hotspots_mut().push(row, Hot::SandboxUpdate(i));
-            y += t.px(34.0);
+            y += t.px(42.0);
         }
     }
 
@@ -4541,7 +4666,7 @@ fn draw_sandbox_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tok
     }
 
     ui::section_label(canvas, t, (x, y + t.px(9.0)), "INSTALLED APPLICATIONS");
-    y += t.px(18.0);
+    y += t.px(24.0);
     if shell.sandbox.apps.is_empty() {
         font::draw(
             canvas,
@@ -4554,7 +4679,7 @@ fn draw_sandbox_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tok
     } else {
         let apps = shell.sandbox.apps.clone();
         for (i, app) in apps.iter().take(3).enumerate() {
-            let row = Rect::new(x, y, width, t.px(22.0));
+            let row = Rect::new(x, y, width, t.px(26.0));
             if shell.sandbox.selected_app == Some(i) {
                 canvas.fill_round_rect(row, t.radius(Radius::Sm), with_alpha(t.accent(), 0.16));
             }
@@ -4562,7 +4687,7 @@ fn draw_sandbox_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tok
                 canvas,
                 &app.name,
                 row.x + t.px(6.0),
-                row.y + t.px(14.0),
+                row.y + t.px(17.0),
                 &body,
             );
             let detail = format!("{} · {}", app.id, app.version);
@@ -4571,11 +4696,11 @@ fn draw_sandbox_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tok
                 canvas,
                 &detail,
                 row.right() - dw - t.px(6.0),
-                row.y + t.px(14.0),
+                row.y + t.px(17.0),
                 &caption,
             );
             shell.hotspots_mut().push(row, Hot::SandboxApp(i));
-            y += t.px(22.0);
+            y += t.px(28.0);
         }
     }
 
@@ -4638,22 +4763,22 @@ fn draw_sandbox_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tok
             y += t.px(18.0);
         } else {
             for fact in effective.iter().take(4) {
-                let row = Rect::new(x, y, width, t.px(19.0));
+                let row = Rect::new(x, y, width, t.px(24.0));
                 font::draw(
                     canvas,
                     &fact.kind,
                     row.x + t.px(6.0),
-                    row.y + t.px(13.0),
+                    row.y + t.px(16.0),
                     &caption,
                 );
                 font::draw(
                     canvas,
                     &fact.value,
                     row.x + t.px(92.0),
-                    row.y + t.px(13.0),
+                    row.y + t.px(16.0),
                     &body,
                 );
-                y += t.px(19.0);
+                y += t.px(24.0);
             }
         }
         if effective.len() > 4 {
@@ -4929,7 +5054,7 @@ fn draw_game_overlay(canvas: &mut Canvas, shell: &mut Shell) {
 /// No game runtime is invented; a machine with no game entries says so.
 fn draw_games_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tokens) {
     let caption = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
-    let mut y = pane.y + t.px(48.0);
+    let mut y = pane.y + t.px(64.0);
     font::draw(
         canvas,
         "Applications that declare the Game category. Play opens the real program",
@@ -4941,10 +5066,10 @@ fn draw_games_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Token
         canvas,
         "and gives its first window the whole display.",
         pane.x + t.sp(Space::Lg),
-        y + t.px(28.0),
+        y + t.px(32.0),
         &caption,
     );
-    y += t.px(56.0);
+    y += t.px(62.0);
     let games: Vec<(usize, String, Option<std::path::PathBuf>, bool)> = shell
         .desktop_apps
         .iter()
@@ -4981,10 +5106,15 @@ fn draw_games_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Token
             pane.x + t.sp(Space::Md),
             y,
             pane.w - t.sp(Space::Md) * 2.0,
-            t.px(52.0),
+            t.px(62.0),
         );
         ui::surface(canvas, t, row, t.radius(Radius::Sm), ui::Material::Elevated);
-        let chip = Rect::new(row.x + t.px(8.0), row.y + t.px(6.0), t.px(40.0), t.px(40.0));
+        let chip = Rect::new(
+            row.x + t.px(8.0),
+            row.y + t.px(11.0),
+            t.px(40.0),
+            t.px(40.0),
+        );
         let drew = icon_path
             .as_deref()
             .is_some_and(|path| crate::themeicons::draw(canvas, path, chip, 1.0));
@@ -5022,7 +5152,7 @@ fn draw_games_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Token
                 "Ready to play"
             },
             row.x + t.px(58.0),
-            row.y + t.px(38.0),
+            row.y + t.px(44.0),
             &sub,
         );
         let hot = if playing {
@@ -5032,7 +5162,7 @@ fn draw_games_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Token
         };
         let button = Rect::new(
             row.right() - t.px(94.0),
-            row.y + t.px(10.0),
+            row.y + t.px(15.0),
             t.px(86.0),
             t.px(32.0),
         );
@@ -5049,7 +5179,7 @@ fn draw_games_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Token
             if playing { Tone::Neutral } else { Tone::Accent },
         );
         shell.hotspots_mut().push(button, hot);
-        y += t.px(58.0);
+        y += t.px(68.0);
     }
     if shell.game_window.is_some() {
         font::draw(
@@ -5197,6 +5327,53 @@ pub fn dock_magnification(distance: f32) -> f32 {
 /// that had to be summoned -- and whose clicks had to be withheld until it had
 /// finished sliding -- could not show which applications are running, because
 /// the indicator was the thing being hidden.
+fn dock_glyph(app: crate::shortcuts::App) -> Icon {
+    use crate::shortcuts::App;
+    match app {
+        App::Activity => Icon::Activity,
+        App::Environments => Icon::Environment,
+        App::Settings => Icon::Settings,
+        App::Files => Icon::Files,
+        App::Browser => Icon::Browser,
+        App::Terminal => Icon::Terminal,
+        App::Trash => Icon::Trash,
+        App::Defender => Icon::Shield,
+    }
+}
+
+/// A single icon grammar for the dock and the launcher: one neutral plate, one
+/// monoline glyph, and the accent reserved for the running or primary item.
+/// Third-party artwork still sits inside the same plate, so a downloaded app
+/// does not break the strip.
+fn draw_app_plate(
+    canvas: &mut Canvas,
+    t: &crate::ui::Tokens,
+    icon: Icon,
+    r: Rect,
+    primary: bool,
+    hovered: bool,
+    opacity: f32,
+) {
+    let radius = t.radius(Radius::Md);
+    if primary {
+        canvas.fill_round_rect(r, radius, with_alpha(t.accent(), 0.94 * opacity));
+    } else if hovered {
+        canvas.fill_round_rect(r, radius, with_alpha(t.accent(), 0.18 * opacity));
+        canvas.stroke_round_rect(r, radius, 1.0, with_alpha(t.accent(), 0.62 * opacity));
+    } else {
+        canvas.fill_round_rect(r, radius, with_alpha(t.text(), 0.06 * opacity));
+        canvas.stroke_round_rect(r, radius, 1.0, with_alpha(t.text(), 0.15 * opacity));
+    }
+    let glyph = if primary {
+        ui::rgb_of(t.theme.palette.on_accent)
+    } else if hovered {
+        with_alpha(t.accent(), opacity)
+    } else {
+        with_alpha(t.text(), 0.82 * opacity)
+    };
+    icons::draw(canvas, icon, r.inflate(-r.w * 0.30), glyph, 1.1);
+}
+
 fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
     let t = shell.tokens.clone();
     let screen = shell.wm.screen();
@@ -5470,10 +5647,13 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
             r
         }
     };
-    appicons::draw(
+    draw_app_plate(
         canvas,
-        appicons::Slot::Launcher,
+        &t,
+        Icon::Grid,
         grown(button_r, button_hover),
+        button_hover,
+        button_hover,
         1.0,
     );
     shell.hotspots_mut().push(button, Hot::DockToggle);
@@ -5507,11 +5687,11 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
                 if hovered {
                     tip = Some((r, name.clone()));
                 }
+                draw_app_plate(canvas, &t, Icon::Application, r, false, hovered, 1.0);
                 let drew = icon_path.as_deref().is_some_and(|path| {
-                    crate::themeicons::draw(canvas, path, r.inflate(-t.px(4.0)), 1.0)
+                    crate::themeicons::draw(canvas, path, r.inflate(-t.px(8.0)), 1.0)
                 });
                 if !drew {
-                    canvas.fill_round_rect(r, t.px(8.0), with_alpha(rgb(0xFFFFFF), 0.10));
                     icons::draw(
                         canvas,
                         Icon::Application,
@@ -5551,11 +5731,19 @@ fn draw_dock(canvas: &mut Canvas, shell: &mut Shell) {
         if hovered {
             tip = Some((r, app.title().to_owned()));
         }
-        // Original artwork, scaled once and kept: see `appicons`.
-        appicons::draw(canvas, appicons::Slot::App(*app), grown(r, hovered), 1.0);
+        let running = shell.wm.all().iter().any(|w| w.app_id == app.app_id());
+        draw_app_plate(
+            canvas,
+            &t,
+            dock_glyph(*app),
+            grown(r, hovered),
+            running,
+            hovered,
+            1.0,
+        );
         // Running indicator: one dot under a running app, in paper white, on
         // the strip's own padding below the tile.
-        if shell.wm.all().iter().any(|w| w.app_id == app.app_id()) {
+        if running {
             canvas.fill_circle(
                 home.center().0,
                 home.bottom() + t.px(4.0),
@@ -5769,7 +5957,7 @@ fn launcher_tiles(
         };
         match item {
             crate::seek::Hit::App(app) => {
-                appicons::draw(canvas, appicons::Slot::App(app), chip, opacity);
+                draw_app_plate(canvas, t, dock_glyph(app), chip, false, hovered, opacity);
             }
             crate::seek::Hit::Desktop(index) => {
                 // The icon the desktop entry named, resolved against this
@@ -5951,6 +6139,18 @@ fn launcher_rows(
 }
 
 /// The Terminal: a real command line against the guest OS.
+/// Terminal text is monospaced where the text is ASCII, but a line that carries
+/// Thai must use the Sans face: the installed Mono face has no Thai glyphs and
+/// drawing it as boxes made the terminal's own welcome line unreadable.
+fn terminal_text_style(t: &Tokens, step: TypeStep, color: u32, text: &str) -> Style {
+    let style = Style::new(t.text_px(step), color);
+    if text.is_ascii() {
+        style.monospace()
+    } else {
+        style
+    }
+}
+
 fn draw_terminal(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let t = shell.tokens.clone();
     let term = shell.terminal.clone();
@@ -6030,14 +6230,14 @@ fn draw_terminal(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let visible = ((body.bottom() - y) / line_h) as usize;
     let visible = visible.saturating_sub(prompt_row).max(1);
     let start = term.lines.len().saturating_sub(visible);
-    let s_out = Style::new(t.text_px(TypeStep::Footnote), t.text_dim()).monospace();
     for line in term.lines.iter().skip(start) {
+        let s_out = terminal_text_style(&t, TypeStep::Footnote, t.text_dim(), line);
         font::draw(canvas, line, body.x + t.px(10.0), y + line_h, &s_out);
         y += line_h;
     }
     // Prompt + input, with the caret when the field holds the keyboard.
     let prompt = if term.busy { "… " } else { "~ $ " };
-    let s_in = Style::new(t.text_px(TypeStep::Body), t.text()).monospace();
+    let s_in = terminal_text_style(&t, TypeStep::Body, t.text(), &term.input);
     let in_x = body.x + t.px(10.0);
     let in_y = body.bottom() - t.px(10.0);
     font::draw(canvas, prompt, in_x, in_y, &s_in);
@@ -6198,7 +6398,7 @@ fn draw_defender(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
 
     // Results table: detections always; clean files as a bounded sample.
     ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "RESULTS");
-    col.space(t.px(16.0));
+    col.space(t.px(24.0));
     let saved = canvas.push_clip(Rect::new(
         body.x,
         col.cursor,
@@ -6271,7 +6471,7 @@ fn draw_defender(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     // for an entry that is actually there; the list is never a memory of what
     // was once removed.
     ui::section_label(canvas, &t, (col.x, col.cursor + t.px(10.0)), "QUARANTINED");
-    col.space(t.px(16.0));
+    col.space(t.px(24.0));
     let saved = canvas.push_clip(Rect::new(
         body.x,
         col.cursor,
@@ -6702,16 +6902,16 @@ fn draw_overview(canvas: &mut Canvas, shell: &mut Shell, selected: usize) {
             state_label
         );
         let sub_style = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
-        font::draw(canvas, &sub, name_x, icon_box.y + t.px(32.0), &sub_style);
+        font::draw(canvas, &sub, name_x, icon_box.y + t.px(37.0), &sub_style);
 
         // The map of the window: a title bar with its three controls, then a
         // few content lines whose widths differ so it reads as a document
         // rather than a loading skeleton.
         let preview = Rect::new(
             cell.x + inset,
-            icon_box.bottom() + t.px(12.0),
+            icon_box.bottom() + t.px(22.0),
             cell.w - inset * 2.0,
-            cell.bottom() - icon_box.bottom() - t.px(26.0),
+            cell.bottom() - icon_box.bottom() - t.px(36.0),
         );
         if preview.h > t.px(24.0) {
             canvas.fill_round_rect(preview, t.px(8.0), with_alpha(rgb(0x000000), 0.28));
@@ -7217,14 +7417,14 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
             canvas,
             "Network",
             row.x + t.px(8.0),
-            row.y + t.px(16.0),
+            row.y + t.px(14.0),
             &value,
         );
         font::draw(
             canvas,
             &ui::elide(&summary, &footer, room.max(t.px(40.0))),
             row.x + t.px(8.0),
-            row.y + row.h - t.px(5.0),
+            row.y + row.h - t.px(2.0),
             &footer,
         );
         let sw = Rect::new(
@@ -7296,7 +7496,7 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
             canvas,
             "Bluetooth",
             row.x + t.px(8.0),
-            row.y + t.px(16.0),
+            row.y + t.px(14.0),
             &value,
         );
         // The row has one control, not two: the state line gets the width the
@@ -7306,7 +7506,7 @@ fn draw_quick_settings(canvas: &mut Canvas, shell: &mut Shell) {
             canvas,
             &ui::elide(&summary, &footer, row.w - t.px(60.0)),
             row.x + t.px(8.0),
-            row.y + row.h - t.px(5.0),
+            row.y + row.h - t.px(2.0),
             &footer,
         );
         let sw = Rect::new(

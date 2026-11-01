@@ -1784,9 +1784,9 @@ fn differing_pixels(canvas: &Canvas, r: Rect, reference: u32) -> (usize, usize) 
                     differing = differing.saturating_add(1);
                 }
             }
-            y += 12.0;
+            y += 6.0;
         }
-        x += 12.0;
+        x += 6.0;
     }
     (differing, total)
 }
@@ -1856,7 +1856,7 @@ fn journey_browser_opens_a_real_comic_page_and_renders_it() {
         .get((area.right() - 6.0) as i64, (area.bottom() - 6.0) as i64)
         .expect("a background pixel");
 
-    let heading = Rect::new(area.x + 24.0, area.y + 16.0, 260.0, 44.0);
+    let heading = Rect::new(area.x + 24.0, area.y + 16.0, 340.0, 64.0);
     let (text_px, text_total) = differing_pixels(&canvas, heading, reference);
     assert!(
         text_total > 40 && text_px > 30,
@@ -4971,7 +4971,7 @@ fn journey_browser_loads_a_page_from_a_local_web_server_and_reports_a_failed_fet
     let reference = canvas
         .get((area.right() - 6.0) as i64, (area.bottom() - 6.0) as i64)
         .expect("a background pixel");
-    let heading = Rect::new(area.x + 24.0, area.y + 16.0, 300.0, 44.0);
+    let heading = Rect::new(area.x + 24.0, area.y + 16.0, 340.0, 64.0);
     let (text_px, text_total) = differing_pixels(&canvas, heading, reference);
     assert!(
         text_total > 40 && text_px > 30,

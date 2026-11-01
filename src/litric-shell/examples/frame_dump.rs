@@ -221,7 +221,14 @@ fn build() -> Rig {
     ];
     let mut wallpaper = Canvas::new(width(), height(), rgb(0x000000));
     desktop::wallpaper(&mut wallpaper, &theme);
-    let scene = wallpaper.clone();
+    // Match `Compositor::new`: glass samples this prepared wallpaper backdrop,
+    // not the live shadow just painted under a window. Without it a light window
+    // frame blends 15% of the frame's own black shadow and turns grey, which is
+    // a harness artefact rather than the shipped composition.
+    let (blur, saturation) = desktop::glass_params(&theme);
+    let source = std::rc::Rc::new(wallpaper.glass_source(blur, saturation));
+    let mut scene = wallpaper.clone();
+    let _ = scene.set_backdrop(Some(source));
     Rig {
         shell,
         theme,

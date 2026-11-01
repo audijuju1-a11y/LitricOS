@@ -1719,10 +1719,10 @@ fn widgets(
         }
         let text_x = chip.right() + t.px(12.0);
         let label_style = Style::new(t.text_px(TypeStep::Caption), with_alpha(rgb(0xFFFFFF), 0.7));
-        font::draw(canvas, label, text_x, r.y + t.px(22.0), &label_style);
+        font::draw(canvas, label, text_x, r.y + t.px(24.0), &label_style);
         let value_style = Style::new(t.text_px(TypeStep::Headline), rgb(0xFFFFFF));
         let shown_value = ui::elide(&value, &value_style, r.right() - t.px(12.0) - text_x);
-        font::draw(canvas, &shown_value, text_x, r.y + t.px(46.0), &value_style);
+        font::draw(canvas, &shown_value, text_x, r.y + t.px(48.0), &value_style);
         x += card_w + gap;
     }
 }
@@ -1980,8 +1980,12 @@ fn entry(
 
     // One dot per character typed, and an explicit placeholder when empty.
     if v.state.typed() == 0 {
+        // The idle instruction is longer than a password hint. At the footnote
+        // step the larger type scale elided it inside the field, which removed
+        // the one sentence that tells a first-time user what to do; the caption
+        // step keeps the complete instruction and still reads over the field.
         let style = Style::new(
-            t.text_px(TypeStep::Footnote),
+            t.text_px(TypeStep::Caption),
             with_alpha(rgb(0xFFFFFF), 0.64),
         );
         let prompt = if v.state.stage == Stage::Idle {

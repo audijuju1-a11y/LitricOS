@@ -88,7 +88,7 @@ pub const LOCK_CHIP_W: f32 = 212.0;
 pub const LOCK_CHIP_H: f32 = 60.0;
 
 /// The room between the clock's baseline and the widget row.
-pub const LOCK_CLOCK_TO_CHIPS: f32 = 44.0;
+pub const LOCK_CLOCK_TO_CHIPS: f32 = 46.0;
 
 /// Pure white, for a hairline of light on glass and for a mark under the pointer.
 pub const WHITE: u32 = 0xFF_FF_FF_FF;
