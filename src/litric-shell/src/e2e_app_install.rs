@@ -1141,3 +1141,186 @@ fn journey_real_linux_app_is_installed_launched_mapped_rendered_and_removed() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// S91: a real test-game bundle travels through install, discovery, the Games
+/// page, `LAUNCHENV`, a real Wayland window, fullscreen composition and Stop.
+///
+/// The executable is the repository's real third-party `weston-simple-shm`
+/// fixture; the bundle and its `Categories=Game` entry are ours. This is the
+/// proof that a game is not a separate kind of application to the launcher.
+#[cfg(unix)]
+#[test]
+fn journey_test_game_plays_fullscreen_and_stops() {
+    use litric_design::{Theme, ThemeKind};
+    use litric_locale::Regional;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    use crate::canvas::Canvas;
+    use crate::desktop;
+    use crate::settings::Page;
+    use crate::shell::{DesktopMode, Hot, Shell};
+    use crate::shortcuts::App;
+    use crate::ui::Tokens;
+
+    let (client, libs) = weston_simple_shm();
+    assert!(client.is_file(), "the real Wayland fixture is present");
+    let mut loader = libs.into_os_string();
+    if let Some(existing) = std::env::var_os("LD_LIBRARY_PATH") {
+        loader.push(":");
+        loader.push(existing);
+    }
+    std::env::set_var("LD_LIBRARY_PATH", loader);
+
+    let root = std::env::temp_dir().join(format!("litric-shell-e2e-game-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let data = root.join("data");
+    let runtime = root.join("runtime");
+    std::fs::create_dir_all(&data).expect("data root");
+    std::fs::create_dir_all(&runtime).expect("runtime root");
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+
+    let incoming = data.join("litric/incoming/game");
+    std::fs::create_dir_all(&incoming).expect("incoming bundle");
+    std::fs::copy(&client, incoming.join("app")).expect("stage the real client");
+    std::fs::set_permissions(incoming.join("app"), std::fs::Permissions::from_mode(0o755))
+        .expect("chmod the client");
+    let desktop_fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/litric-test-game.desktop");
+    std::fs::copy(&desktop_fixture, incoming.join("app.desktop")).expect("game desktop entry");
+
+    let socket = root.join("sysd.sock");
+    let listener = litric_sysd::server::bind(&socket).expect("bind sysd");
+    let state = litric_sysd::state::Sysd::new(2, 512, "/tmp", std::path::Path::new("/"))
+        .with_application_root(&data);
+    std::thread::spawn(move || {
+        let _ = litric_sysd::server::serve(&listener, state);
+    });
+
+    let installed = litric_sysd::server::query(&socket, "APP INSTALL com.litric.test-game game")
+        .expect("install over the socket");
+    assert_eq!(
+        installed, "OK 2\nid=com.litric.test-game\nstate=installed\n",
+        "the test game installed through the ordinary application installer"
+    );
+    let apps = crate::desktop_entry::discover_in(&[data.join("applications")]);
+    assert_eq!(apps.len(), 1);
+    let game = apps.first().expect("the installed game");
+    assert_eq!(game.name, "Litric Test Game");
+    assert!(
+        game.is_game(),
+        "Categories=Game survives installation: {:?}",
+        game.categories
+    );
+
+    let mut shell = Shell::new(
+        Tokens::new(Theme::of(ThemeKind::Dark), 1.0),
+        1280.0,
+        800.0,
+        Regional::fallback("test"),
+    );
+    shell.mode = DesktopMode::Ready;
+    shell.sysd_socket = socket.clone();
+    shell.load_desktop_apps(apps);
+    shell
+        .attach_clients(&runtime)
+        .expect("the desktop hosts the game's Wayland window");
+    let _ = shell.open_app(App::Settings);
+    shell.settings.page = Page::Games;
+    shell.settings.reveal_page = true;
+    for _ in 0..60 {
+        shell.tick_after(16);
+    }
+    let mut canvas = Canvas::new(1280, 800, 0x101820);
+    desktop::wallpaper(&mut canvas, &Theme::of(ThemeKind::Dark));
+    crate::views::draw(&mut canvas, &mut shell);
+    let play = shell
+        .hotspots()
+        .rect_of(Hot::GamePlay(0))
+        .expect("the Games page shows a Play target for the installed game");
+    ui_install_click(&mut shell, play, 1000);
+    assert!(
+        shell
+            .app_status
+            .as_deref()
+            .is_some_and(|s| s.starts_with("Started Litric Test Game")),
+        "the real game launch was requested: {:?}",
+        shell.app_status
+    );
+
+    let start = Instant::now();
+    let mut now = 1000_u64;
+    let mut window = None;
+    while start.elapsed() < Duration::from_secs(20) {
+        now = now.saturating_add(16);
+        shell.tick(now);
+        if let Some(found) = shell.wm.all().iter().find(|w| w.app_id == "litric.client") {
+            window = Some((found.id, found.frame, found.state));
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let (id, frame, state) = window.expect("the real game mapped a window");
+    assert_eq!(state, litric_wm::WindowState::Fullscreen);
+    assert_eq!(
+        (frame.x, frame.y, frame.w, frame.h),
+        (0.0, 0.0, 1280.0, 800.0)
+    );
+    assert_eq!(shell.game_window, Some(id));
+    assert!(
+        shell.game_fullscreen(),
+        "the shell hides its bar and dock for the game"
+    );
+
+    // Compose through the shipping path and look for the reference client's
+    // own bright ring pixels in the fullscreen body.
+    let mut light = 0_u32;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        now = now.saturating_add(16);
+        shell.tick(now);
+        canvas = Canvas::new(1280, 800, 0x101820);
+        desktop::wallpaper(&mut canvas, &Theme::of(ThemeKind::Dark));
+        crate::views::draw(&mut canvas, &mut shell);
+        light = 0;
+        let mut y = 2.0;
+        while y < 798.0 {
+            let mut x = 2.0;
+            while x < 1278.0 {
+                if let Some(px) = canvas.get(x as i64, y as i64) {
+                    let (r, g, b) = ((px >> 16) & 0xFF, (px >> 8) & 0xFF, px & 0xFF);
+                    if r > 220 && g > 220 && b > 220 {
+                        light = light.saturating_add(1);
+                    }
+                }
+                x += 7.0;
+            }
+            y += 7.0;
+        }
+        if light > 5 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(light > 5, "the game's pixels filled the composed display");
+
+    let stop = shell
+        .hotspots()
+        .rect_of(Hot::GameStop)
+        .expect("Game Mode keeps a visible Stop control");
+    ui_install_click(&mut shell, stop, now);
+    assert_eq!(shell.game_status, "Game ended");
+    let stop_start = Instant::now();
+    while stop_start.elapsed() < Duration::from_secs(5) && shell.game_window.is_some() {
+        now = now.saturating_add(16);
+        shell.tick(now);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(shell.game_window, None);
+    assert!(!shell.game_fullscreen(), "the desktop returns after Stop");
+
+    let removed = litric_sysd::server::query(&socket, "APP UNINSTALL com.litric.test-game")
+        .expect("uninstall over the socket");
+    assert_eq!(removed, "OK 2\nid=com.litric.test-game\nstate=removed\n");
+    let _ = std::fs::remove_dir_all(&root);
+}

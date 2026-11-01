@@ -456,6 +456,10 @@ pub enum Hot {
     DisplayScale,
     /// Ask the update service for a fresh status snapshot.
     SettingsUpdatesRefresh,
+    /// Play one discovered game from the Games page.
+    GamePlay(usize),
+    /// Stop the game the shell is hosting.
+    GameStop,
     /// Reload one installed system service through the daemon.
     ServiceAction(ServiceCommand),
     /// The App Store's search field.
@@ -3774,6 +3778,14 @@ pub struct Shell {
     /// The last launch outcome, shown in the launcher's title row. `None`
     /// before anything has been started.
     pub app_status: Option<String>,
+    /// The client window a launched game received, once it mapped. `Some`
+    /// means a game session is live; the Games page reads it for its Stop row.
+    pub game_window: Option<u32>,
+    /// A human-readable game state: starting, playing, ended.
+    pub game_status: String,
+    /// A game launch is waiting for its first window. The next client window
+    /// to map is the game, because the shell starts one application at a time.
+    pub(crate) game_pending: bool,
     /// A launcher start whose process may exit before it maps a window. The
     /// check is bounded so an idle desktop does not stat `/proc` forever.
     pending_launch: Option<PendingLaunch>,
@@ -4513,6 +4525,9 @@ impl Shell {
             desktop_icons_validated: 0,
             desktop_icon_names: crate::desktop_entry::IconNames::default(),
             app_status: None,
+            game_window: None,
+            game_status: String::new(),
+            game_pending: false,
             pending_launch: None,
             reader: None,
             defender: DefenderState::default(),
@@ -4608,6 +4623,34 @@ impl Shell {
     pub fn top_bar(&self) -> Rect {
         let s = self.wm.screen();
         Rect::new(0.0, 0.0, s.w, self.tokens.px(Self::TOP_BAR_LOGICAL))
+    }
+
+    /// Whether a fullscreen game currently owns the display, so the shell's own
+    /// bar and dock must not paint over it.
+    ///
+    /// An open overlay (the launcher, quick settings) is a deliberate request
+    /// for the shell's surface and wins over the game, which is why this is
+    /// false while one is open.
+    #[must_use]
+    pub fn game_fullscreen(&self) -> bool {
+        if self.overlay.is_open() {
+            return false;
+        }
+        self.game_window.is_some_and(|id| {
+            self.wm
+                .window(id)
+                .is_some_and(|w| w.state == litric_wm::WindowState::Fullscreen)
+        })
+    }
+
+    /// End the game session when its window is gone.
+    pub(crate) fn end_game_window(&mut self, id: u32) {
+        if self.game_window == Some(id) {
+            self.game_window = None;
+            self.game_pending = false;
+            self.game_status = "Game ended".to_owned();
+            self.request_full_redraw();
+        }
     }
 
     /// The windows Mission Control shows, in card order: by workspace, then by
@@ -7262,7 +7305,7 @@ impl Shell {
             Hot::SettingsCategory(index) => {
                 let mut effects = Vec::new();
                 if let Some(page) = crate::settings::Page::from_index(index) {
-                    self.settings.page = page;
+                    self.settings.select(page);
                     // A deep link's highlight belongs to the page it named. A
                     // user who navigates away has moved on, and a ring around a
                     // row they did not ask for is noise on the next page.
@@ -7294,6 +7337,15 @@ impl Shell {
             }
             Hot::SettingsUpdatesRefresh => {
                 self.refresh_update_status();
+                Vec::new()
+            }
+            Hot::GamePlay(index) => self.launch_desktop(index),
+            Hot::GameStop => {
+                if let Some(id) = self.game_window.take() {
+                    self.wm.close(id);
+                    self.game_status = "Game ended".to_owned();
+                    self.request_full_redraw();
+                }
                 Vec::new()
             }
             Hot::ServiceAction(command) => {
@@ -8556,6 +8608,7 @@ impl Shell {
         let id = app.id.clone();
         let name = app.name.clone();
         let exec = app.exec.clone();
+        let is_game = app.is_game();
         if exec
             .first()
             .is_none_or(|program| !std::path::Path::new(program).is_file())
@@ -8592,6 +8645,12 @@ impl Shell {
                     .find_map(|line| line.strip_prefix("pid="))
                     .unwrap_or("?");
                 self.app_status = Some(format!("Started {name} (pid {pid})"));
+                if is_game {
+                    self.game_window = None;
+                    self.game_pending = true;
+                    self.game_status = format!("Starting {name}…");
+                    self.request_full_redraw();
+                }
                 if let Ok(pid) = pid.parse::<u32>() {
                     self.pending_launch = Some(PendingLaunch {
                         name: name.clone(),
@@ -8742,12 +8801,12 @@ impl Shell {
             crate::seek::Hit::App(app) => self.open_app(app),
             crate::seek::Hit::Action(action) => self.perform(action),
             crate::seek::Hit::Setting(page) => {
-                self.settings.page = page;
+                self.settings.select(page);
                 self.settings.focus = None;
                 self.open_app(App::Settings)
             }
             crate::seek::Hit::SettingRow(entry) => {
-                self.settings.page = entry.page;
+                self.settings.select(entry.page);
                 self.settings.focus = Some(entry.key);
                 self.open_app(App::Settings)
             }

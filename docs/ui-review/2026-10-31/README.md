@@ -1,10 +1,25 @@
-# LitricOS UI review — 2026-10-31 (S82, updated in S89)
+# LitricOS UI review — 2026-10-31 (S82, updated in S91)
 
-This directory holds **45 screens**, each **1280×800 px**. Forty-four are the
+This directory holds **46 screens**, each **1280×800 px**. Forty-five are the
 fixture gallery regenerated through the shipping `litric-shell/examples/frame_dump.rs`
-and `litric_shell::views::draw`. The forty-fifth is not a fixture: it is the frame composed during the S82
+and `litric_shell::views::draw`. The forty-sixth is not a fixture: it is the frame composed during the S82
 real-socket e2e after `weston-simple-shm` was installed through `APP INSTALL`,
 launched by the shell through `litric-sysd`, and mapped as a Wayland client.
+
+## What changed in S91
+
+- Settings has a **Games** page: applications whose desktop entries declare
+  `Categories=Game`, with Play, a fullscreen first-window session and a Game Mode
+  overlay that keeps Stop reachable. Play still uses the ordinary `LAUNCHENV` path.
+- `46-settings-games` is new and was reviewed as an image before recording. It shows the
+  selected Games row, the wrapped page copy, the installed test game and Play without
+  clipped text.
+- `44-settings-app-store` moved by 2.30% of cells because the sidebar gained the Games
+  row; `45-settings-app-sandbox` moved by 1.84% for the same reason. Both were inspected
+  and re-recorded. Every other Settings frame moved by at most 0.20%; the golden set now
+  records 45 fixture frames plus the real application frame.
+- The test game's executable is the same real `weston-simple-shm` client used by the
+  S82 real-app frame. It is not a playable game; it proves the session and composition.
 
 ## What changed in S90
 
@@ -118,7 +133,7 @@ dump and rebuild `all-screens.png` with a 4-column labelled contact sheet. `buil
 
 ## What this is not
 
-The 41 fixture frames prove what `views::draw` composes from fixed facts. The
+The 45 fixture frames prove what `views::draw` composes from fixed facts. The
 real-app frame proves one genuine `wl_shm` client was installed, spawned,
 connected to the LitricOS Wayland socket, mapped by the compositor, and painted
 by `views::draw`. None of these frames prove a booted VM, a framebuffer/scanout

@@ -519,6 +519,28 @@ fn scene_settings_diagnostics(rig: &mut Rig) {
 fn scene_settings_services(rig: &mut Rig) {
     scene_settings_page(rig, litric_shell::settings::Page::Services);
 }
+/// The Games page with the test bundle installed. The executable is the same
+/// real Wayland client the game journey launches; the page itself only claims
+/// what discovery reports, so the frame is not a mock game store.
+fn scene_settings_games(rig: &mut Rig) {
+    rig.shell
+        .load_desktop_apps(vec![litric_shell::desktop_entry::DesktopApp {
+            id: "com.litric.test-game".to_owned(),
+            name: "Litric Test Game".to_owned(),
+            exec: vec!["/bin/true".to_owned()],
+            icon: None,
+            icon_path: None,
+            categories: vec!["Game".to_owned()],
+            source: std::path::PathBuf::from("/tmp/com.litric.test-game.desktop"),
+        }]);
+    rig.shell.settings.page = litric_shell::settings::Page::Games;
+    rig.shell.settings.reveal_page = true;
+    let _ = rig.shell.open_app(litric_shell::shortcuts::App::Settings);
+    for _ in 0..60 {
+        rig.shell.tick_after(16);
+    }
+}
+
 fn scene_settings_app_store(rig: &mut Rig) {
     scene_settings_page(rig, litric_shell::settings::Page::AppStore);
 }
@@ -899,6 +921,7 @@ fn scene_pinned_dock(rig: &mut Rig) {
             exec: vec!["/bin/true".to_owned()],
             icon: None,
             icon_path: None,
+            categories: Vec::new(),
             source: std::path::PathBuf::from("/tmp/com.example.weston.desktop"),
         }]);
     rig.shell.desktop_pins.push("com.example.weston".to_owned());
@@ -1126,7 +1149,7 @@ fn main() -> ExitCode {
     // (04-QA-LINT-GOVERNANCE §2) plus the frames this dump has always written:
     // the lock in three states, the launcher and its search, and the remaining
     // applications. `ci/check-golden-frames.py` names the required ten.
-    let scenes: [Scene; 36] = [
+    let scenes: [Scene; 37] = [
         ("01-desktop-idle", scene_idle),
         ("02-desktop-start", scene_start),
         ("04-files", scene_files),
@@ -1149,6 +1172,7 @@ fn main() -> ExitCode {
         ("43-settings-services", scene_settings_services),
         ("44-settings-app-store", scene_settings_app_store),
         ("45-settings-app-sandbox", scene_settings_app_sandbox),
+        ("46-settings-games", scene_settings_games),
         ("17-control-centre", scene_control_centre),
         ("18-notifications", scene_notifications),
         ("19-dialog-danger", scene_danger_dialog),

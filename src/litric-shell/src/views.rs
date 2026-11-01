@@ -76,11 +76,16 @@ fn draw_surface(canvas: &mut Canvas, shell: &mut Shell) {
         // and below the shell's own overlays, which is where a popup belongs.
         shell.draw_client_popups(canvas);
     }
-    draw_top_bar(canvas, shell);
-    // The launcher is the dock's expanded state and the only state it has left:
-    // at rest it draws nothing (see `draw_dock`), so this call is the launcher
-    // surface and its closing animation.
-    draw_dock(canvas, shell);
+    if shell.game_fullscreen() {
+        draw_game_overlay(canvas, shell);
+    }
+    if !shell.game_fullscreen() {
+        draw_top_bar(canvas, shell);
+        // The launcher is the dock's expanded state and the only state it has
+        // left: at rest it draws nothing (see `draw_dock`), so this call is the
+        // launcher surface and its closing animation.
+        draw_dock(canvas, shell);
+    }
     // Overlays (launcher, switcher, quick settings, notifications) draw their own
     // opaque surfaces above everything else, so text under them is covered, not
     // collided with. Tagging them as their own surface lets the layout audit say
@@ -884,6 +889,17 @@ fn draw_windows(canvas: &mut Canvas, shell: &mut Shell) {
         // tell two stacked windows' text (expected) from two labels colliding
         // inside one window (a defect). Zero is reserved for the chrome.
         let saved_surface = canvas.set_surface(id.saturating_add(1));
+        // A fullscreen client owns every pixel of the display. It gets no
+        // shadow, glass frame, title bar or traffic lights: a game drawn inside
+        // a window chrome is not fullscreen, and its body is the whole frame.
+        if state == WindowState::Fullscreen {
+            shell.hotspots_mut().push(frame, Hot::Window(id));
+            let saved = canvas.push_clip(frame);
+            draw_window_body(canvas, shell, id, frame);
+            canvas.set_clip(saved);
+            canvas.set_surface(saved_surface);
+            continue;
+        }
         let radius = t.px(chrome.radius);
         // An unfocused window gets a softer shadow and a dimmer frame, so the
         // focused one is obvious without relying on the accent colour alone.
@@ -2873,7 +2889,16 @@ fn draw_settings(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         Hot::SettingsSidebarScroll,
     );
     let rows_area = ui::sidebar::rows_area(&t, sidebar, true);
-    let scroll = ui::sidebar::clamp(&t, rows_area, items.len(), shell.settings.sidebar_scroll);
+    let mut scroll = ui::sidebar::clamp(&t, rows_area, items.len(), shell.settings.sidebar_scroll);
+    if shell.settings.reveal_page {
+        if let Some(index) = crate::settings::Page::ALL
+            .iter()
+            .position(|page| *page == shell.settings.page)
+        {
+            scroll = ui::sidebar::reveal(&t, sidebar, items.len(), index, scroll);
+        }
+        shell.settings.reveal_page = false;
+    }
     shell.settings.sidebar_scroll = scroll;
     for (i, row) in ui::sidebar::draw(canvas, &t, sidebar, Some("Settings"), &items, scroll) {
         shell
@@ -3098,6 +3123,7 @@ fn settings_icon(page: crate::settings::Page) -> Icon {
         Page::Services => Icon::Shield,
         Page::AppStore => Icon::Grid,
         Page::AppSandbox => Icon::Shield,
+        Page::Games => Icon::Application,
     }
 }
 
@@ -4045,6 +4071,7 @@ fn draw_settings_page(
         }
         Page::AppStore => draw_store_page(canvas, shell, pane, t),
         Page::AppSandbox => draw_sandbox_page(canvas, shell, pane, t),
+        Page::Games => draw_games_page(canvas, shell, pane, t),
     }
     if matches!(
         page,
@@ -4846,6 +4873,195 @@ fn theme_name(theme: litric_design::ThemeKind) -> &'static str {
 ///
 /// It says exactly that. An empty panel looks like a bug; a panel that claims
 /// to be a file manager and lists nothing is worse.
+/// The only shell surface a fullscreen game keeps: a compact Game Mode pill
+/// with a way out. Without it a fullscreen game is a window with no close
+/// button, which is a trap rather than an immersive mode.
+fn draw_game_overlay(canvas: &mut Canvas, shell: &mut Shell) {
+    let t = shell.tokens.clone();
+    let status = if shell.game_status.is_empty() {
+        "Game Mode".to_owned()
+    } else {
+        shell.game_status.clone()
+    };
+    let style = Style::new(t.text_px(TypeStep::Caption), t.text());
+    let button_w = t.px(74.0);
+    let width = (font::measure(&status, &style) + button_w + t.px(28.0))
+        .min(shell.wm.screen().w - t.px(32.0));
+    let pill = Rect::new(
+        (shell.wm.screen().w - width) / 2.0,
+        t.px(10.0),
+        width,
+        t.px(32.0),
+    );
+    ui::surface(canvas, &t, pill, pill.h / 2.0, ui::Material::Popover);
+    font::draw(
+        canvas,
+        &ui::elide(&status, &style, pill.w - button_w - t.px(24.0)),
+        pill.x + t.px(12.0),
+        pill.y + t.px(20.0),
+        &style,
+    );
+    let stop = Rect::new(
+        pill.right() - button_w - t.px(4.0),
+        pill.y + t.px(4.0),
+        button_w,
+        t.px(24.0),
+    );
+    ui::button(
+        canvas,
+        &t,
+        stop,
+        "Stop",
+        if shell.is_highlighted(Hot::GameStop) {
+            State::Hover
+        } else {
+            State::Normal
+        },
+        Tone::Neutral,
+    );
+    shell.hotspots_mut().push(stop, Hot::GameStop);
+}
+
+/// The Games page: applications whose desktop entries declare `Game`.
+///
+/// It is a view of discovery, not a second catalog. Play uses the ordinary
+/// `LAUNCHENV` path, and the first window the program maps is made fullscreen.
+/// No game runtime is invented; a machine with no game entries says so.
+fn draw_games_page(canvas: &mut Canvas, shell: &mut Shell, pane: Rect, t: &Tokens) {
+    let caption = Style::new(t.text_px(TypeStep::Caption), t.text_dim());
+    let mut y = pane.y + t.px(48.0);
+    font::draw(
+        canvas,
+        "Applications that declare the Game category. Play opens the real program",
+        pane.x + t.sp(Space::Lg),
+        y + t.px(12.0),
+        &caption,
+    );
+    font::draw(
+        canvas,
+        "and gives its first window the whole display.",
+        pane.x + t.sp(Space::Lg),
+        y + t.px(28.0),
+        &caption,
+    );
+    y += t.px(56.0);
+    let games: Vec<(usize, String, Option<std::path::PathBuf>, bool)> = shell
+        .desktop_apps
+        .iter()
+        .enumerate()
+        .filter(|(_, app)| app.is_game())
+        .map(|(index, app)| {
+            (
+                index,
+                app.name.clone(),
+                app.icon_path.clone(),
+                shell.game_window.is_some() && shell.game_status == format!("Playing {}", app.name),
+            )
+        })
+        .collect();
+    if games.is_empty() {
+        font::draw(
+            canvas,
+            "No games are installed. A game is an application whose desktop entry",
+            pane.x + t.sp(Space::Lg),
+            y + t.px(13.0),
+            &caption,
+        );
+        font::draw(
+            canvas,
+            "declares Categories=Game; install one from a local bundle and it appears here.",
+            pane.x + t.sp(Space::Lg),
+            y + t.px(31.0),
+            &caption,
+        );
+        return;
+    }
+    for (index, name, icon_path, playing) in games {
+        let row = Rect::new(
+            pane.x + t.sp(Space::Md),
+            y,
+            pane.w - t.sp(Space::Md) * 2.0,
+            t.px(52.0),
+        );
+        ui::surface(canvas, t, row, t.radius(Radius::Sm), ui::Material::Elevated);
+        let chip = Rect::new(row.x + t.px(8.0), row.y + t.px(6.0), t.px(40.0), t.px(40.0));
+        let drew = icon_path
+            .as_deref()
+            .is_some_and(|path| crate::themeicons::draw(canvas, path, chip, 1.0));
+        if !drew {
+            canvas.fill_round_rect(chip, t.px(10.0), with_alpha(t.accent(), 0.16));
+            icons::draw(
+                canvas,
+                Icon::Application,
+                chip.inflate(-t.px(9.0)),
+                t.accent(),
+                1.0,
+            );
+        }
+        let title = Style::new(t.text_px(TypeStep::Body), t.text());
+        font::draw(
+            canvas,
+            &name,
+            row.x + t.px(58.0),
+            row.y + t.px(22.0),
+            &title,
+        );
+        let sub = Style::new(
+            t.text_px(TypeStep::Caption),
+            if playing {
+                t.tone(Tone::Good)
+            } else {
+                t.text_dim()
+            },
+        );
+        font::draw(
+            canvas,
+            if playing {
+                "Playing fullscreen"
+            } else {
+                "Ready to play"
+            },
+            row.x + t.px(58.0),
+            row.y + t.px(38.0),
+            &sub,
+        );
+        let hot = if playing {
+            Hot::GameStop
+        } else {
+            Hot::GamePlay(index)
+        };
+        let button = Rect::new(
+            row.right() - t.px(94.0),
+            row.y + t.px(10.0),
+            t.px(86.0),
+            t.px(32.0),
+        );
+        ui::button(
+            canvas,
+            t,
+            button,
+            if playing { "Stop" } else { "Play" },
+            if shell.is_highlighted(hot) {
+                State::Hover
+            } else {
+                State::Normal
+            },
+            if playing { Tone::Neutral } else { Tone::Accent },
+        );
+        shell.hotspots_mut().push(button, hot);
+        y += t.px(58.0);
+    }
+    if shell.game_window.is_some() {
+        font::draw(
+            canvas,
+            &shell.game_status,
+            pane.x + t.sp(Space::Lg),
+            pane.bottom() - t.px(18.0),
+            &caption,
+        );
+    }
+}
+
 fn draw_not_implemented(canvas: &mut Canvas, shell: &mut Shell, body: Rect, app_id: &str) {
     let t = shell.tokens.clone();
     let (title, detail) = match app_id {

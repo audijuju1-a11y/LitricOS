@@ -51,8 +51,22 @@ pub struct DesktopApp {
     pub icon: Option<String>,
     /// The PNG the icon name resolved to on this machine, when it resolved.
     pub icon_path: Option<PathBuf>,
+    /// The freedesktop categories the entry declares, e.g. `Game`.
+    pub categories: Vec<String>,
     /// The file this came from.
     pub source: PathBuf,
+}
+
+impl DesktopApp {
+    /// Whether this entry declares the freedesktop `Game` category.
+    ///
+    /// The category is the entry's own claim, not a guess from its name: a
+    /// game that does not say `Game` is not silently promoted, and a tool that
+    /// does is not silently hidden.
+    #[must_use]
+    pub fn is_game(&self) -> bool {
+        self.categories.iter().any(|category| category == "Game")
+    }
 }
 
 /// The directories a desktop entry may live in, in precedence order.
@@ -1544,8 +1558,41 @@ pub fn parse_entry(text: &str, source: PathBuf, id: String) -> Option<DesktopApp
         exec,
         icon: values.get("Icon").cloned(),
         icon_path: None,
+        categories: parse_categories(values.get("Categories")),
         source,
     })
+}
+
+/// Parse a freedesktop `Categories` list into at most [`MAX_CATEGORIES`]
+/// validated tokens.
+///
+/// The list is data from a file on disk; each token is bounded and limited to
+/// the characters the specification uses, and a malformed token is dropped
+/// rather than allowed to travel into a launcher query or a diagnostic.
+fn parse_categories(value: Option<&String>) -> Vec<String> {
+    const MAX_CATEGORIES: usize = 32;
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for raw in value.split(';') {
+        let token = raw.trim();
+        if token.is_empty()
+            || token.len() > 32
+            || !token
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'+'))
+        {
+            continue;
+        }
+        if !out.iter().any(|seen| seen == token) {
+            out.push(token.to_owned());
+        }
+        if out.len() >= MAX_CATEGORIES {
+            break;
+        }
+    }
+    out
 }
 
 /// Whether an INI boolean is on. Only the two spellings the specification
@@ -1712,6 +1759,28 @@ mod tests {
         std::fs::write(&path, b"#!/bin/sh\nexit 0\n").expect("write");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         path
+    }
+
+    #[test]
+    fn categories_are_parsed_and_game_is_exact() {
+        let dir = scratch("categories");
+        let program = program(&dir, "game");
+        let text = format!(
+            "[Desktop Entry]\nType=Application\nName=Game\nExec={}\nCategories=Game;ActionGame;\n",
+            program.display()
+        );
+        let app = parse_entry(&text, dir.join("game.desktop"), "game".to_owned()).expect("entry");
+        assert_eq!(app.categories, vec!["Game", "ActionGame"]);
+        assert!(app.is_game());
+
+        let text = text.replace(
+            "Categories=Game;ActionGame;",
+            "Categories=ActionGame;;bad/ token;",
+        );
+        let app = parse_entry(&text, dir.join("game.desktop"), "game".to_owned()).expect("entry");
+        assert_eq!(app.categories, vec!["ActionGame"]);
+        assert!(!app.is_game(), "a substring is not the Game category");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

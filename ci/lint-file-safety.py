@@ -141,6 +141,7 @@ ALLOWED = {
         "journey_bad_install_and_an_app_that_exits_are_reported": "removes the pid-tagged temporary installer root this journey created under the system temp directory, after asserting an unsafe install refusal, an early-exit notification and a refused stale launch",
         "journey_app_install_launch_uninstall_through_sysd": "removes the pid-tagged temporary installer root this journey created under the system temp directory, after asserting the installed program wrote its marker and uninstall removed both the executable and its desktop entry",
         "journey_real_linux_app_is_installed_launched_mapped_rendered_and_removed": "removes the pid-tagged temporary root this journey created under the system temp directory, after asserting the real installed client mapped a window, its pixels reached views::draw, closing it produced Gone, and uninstall removed the executable and entry",
+        "journey_test_game_plays_fullscreen_and_stops": "removes the pid-tagged temporary root this journey created under the system temp directory, after asserting the real test game installed, mapped a fullscreen window, painted its pixels, stopped, returned the desktop and uninstalled",
     },
     "src/litric-shell/src/e2e.rs": {
         "journey_settings_updates_reads_the_real_daemon_status": "removes the pid-tagged temporary fixture root this Settings journey created under the system temp directory, after asserting the real daemon reported an uninitialized update record and the page drew no Ready state",

@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Litric Test Game
+Exec=app
+Categories=Game;
+X-Litric-Test-App=true

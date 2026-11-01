@@ -9308,3 +9308,42 @@ permissions, two overrides and a reset, each behind a confirmation card.
 
 Revert the S90 commit. The sandbox provider/protocol/capabilities, App Sandbox page,
 shell model, tests and `45-settings-app-sandbox` disappear; S89 remains.
+
+## 2026-10-31 — S91: installed games play fullscreen from the Games page
+
+### What changed
+
+- `DesktopApp.categories` and `is_game()` read the exact `Game` token from a desktop
+  entry; the installer now carries the bundle's `Categories=` into the generated entry.
+- Settings gains **Games**, a view of discovery rather than a second catalog. Play uses
+  the existing `LAUNCHENV` path; no game daemon or runtime was added.
+- The first `litric.client` window mapped after a game launch becomes fullscreen. A Game
+  Mode overlay keeps a visible **Stop** control, because hiding all chrome without an exit
+  would trap the user.
+- Closing the client or losing its window ends the session and restores the desktop.
+- A real test package (`litric-test-game.desktop` + `weston-simple-shm`) proves install,
+  discovery, Play, mapping, fullscreen pixels, Stop and uninstall over the real sysd
+  socket.
+- Settings' longer sidebar now reveals a programmatically selected row once; pointer
+  scrolling can still leave it behind.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | **2,049 passed, 0 failed, 0 ignored** |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all --check` | exit 0 |
+| `journey_test_game_plays_fullscreen_and_stops` | passed, 1.7 s |
+| `journey_a_download_opens_in_files_and_is_scanned` | passed, 7.4 s |
+| golden frames | pass; `46-settings-games` recorded; every frame within threshold |
+| `bash ci/verify.sh` | PASS -- 39 pass, 0 fail, 3 skipped; skips are image build, boot smoke and idle measurement |
+| image build / boot | **NOT RUN**; no `mkosi` / `qemu-system-x86_64` |
+
+### Limits
+
+The tested executable is a real Wayland client, not a playable game. No Steam/Proton,
+gamescope, anti-cheat, audio or GPU path is integrated. Local executable bundles remain
+the install format; `.deb`, `.rpm`, `.AppImage` and downloaded-package installation are
+not implemented. Only the first mapped window is fullscreen, and no booted-image or
+physical-display evidence exists on this host.

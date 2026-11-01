@@ -1088,6 +1088,31 @@ pub mod sidebar {
         }
     }
 
+    /// Scroll as little as possible so row `index` is fully visible.
+    ///
+    /// This is for navigation, not for drawing: a pointer scroll must be able
+    /// to leave the selected row behind, while opening Settings on a deep link
+    /// to the last page must not open a pane that hides the page it selected.
+    #[must_use]
+    pub fn reveal(t: &Tokens, list: Rect, count: usize, index: usize, scroll: f32) -> f32 {
+        if count == 0 || index >= count {
+            return clamp(t, list, count, scroll);
+        }
+        let rows = rows_area(t, list, true);
+        let pad = t.sp(Space::Sm);
+        let row_top = pad + index as f32 * t.px(ROW_H + GAP);
+        let row_bottom = row_top + t.px(ROW_H);
+        let view = (rows.h - pad * 2.0).max(0.0);
+        let scroll = if row_top < scroll {
+            row_top
+        } else if row_bottom > scroll + view {
+            row_bottom - view
+        } else {
+            scroll
+        };
+        clamp(t, list, count, scroll)
+    }
+
     /// The area the scrolling rows occupy: `list` minus the fixed heading.
     ///
     /// Clamping and drawing both go through this, so a caller that stores the

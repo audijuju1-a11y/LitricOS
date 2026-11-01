@@ -546,6 +546,13 @@ impl Shell {
                             h,
                         ),
                     );
+                    if self.game_pending && self.game_window.is_none() {
+                        self.wm.toggle_fullscreen(id);
+                        self.game_window = Some(id);
+                        self.game_pending = false;
+                        self.game_status = format!("Playing {title}");
+                        self.request_full_redraw();
+                    }
                     if let Some(host) = self.clients.as_mut() {
                         if let Some(s) = host.surfaces.get_mut(&surface) {
                             s.window = Some(id);
@@ -597,6 +604,7 @@ impl Shell {
                         .and_then(|h| h.surface_of_window(surface));
                     if let Some(id) = window {
                         self.wm.close(id);
+                        self.end_game_window(id);
                     }
                     dirty = true;
                 }
@@ -629,6 +637,7 @@ impl Shell {
 
         // Windows closed by the shell must close their clients, and windows
         // that no longer exist must not keep a surface alive for ever.
+        let mut ended_game = None;
         if let Some(host) = self.clients.as_mut() {
             let stale: Vec<(WindowId, u32)> = host
                 .windows
@@ -637,6 +646,9 @@ impl Shell {
                 .map(|(w, s)| (*w, *s))
                 .collect();
             for (window, surface) in stale {
+                if self.game_window == Some(window) {
+                    ended_game = Some(window);
+                }
                 host.server.close(surface);
                 host.windows.remove(&window);
                 host.surfaces.remove(&surface);
@@ -659,8 +671,12 @@ impl Shell {
                         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                         let w = win.frame.w.max(1.0) as u32;
                         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        let h = (win.frame.h - self.tokens.px(self.wm.chrome().title_h)).max(1.0)
-                            as u32;
+                        let fullscreen = win.state == litric_wm::WindowState::Fullscreen;
+                        let h = if fullscreen {
+                            win.frame.h.max(1.0)
+                        } else {
+                            (win.frame.h - self.tokens.px(self.wm.chrome().title_h)).max(1.0)
+                        } as u32;
                         (*s, w, h)
                     })
                 })
@@ -672,6 +688,9 @@ impl Shell {
                 let extra = host.notes.len().saturating_sub(24);
                 host.notes.drain(..extra);
             }
+        }
+        if let Some(window) = ended_game {
+            self.end_game_window(window);
         }
         if dirty {
             self.request_full_redraw();

@@ -269,6 +269,8 @@ pub enum Page {
     Updates,
     /// AppArmor, Polkit, firewalld, Flatpak/App Store and NetworkManager.
     Services,
+    /// Games discovered from desktop entries; plays one fullscreen.
+    Games,
     /// Search, install and remove Flatpak applications.
     AppStore,
     /// Flatpak updates and one application's system sandbox permissions.
@@ -277,7 +279,7 @@ pub enum Page {
 
 impl Page {
     /// Pages shown by Settings in sidebar order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Appearance,
         Self::Display,
         Self::Input,
@@ -294,6 +296,7 @@ impl Page {
         Self::Diagnostics,
         Self::Updates,
         Self::Services,
+        Self::Games,
         Self::AppStore,
         Self::AppSandbox,
     ];
@@ -318,6 +321,7 @@ impl Page {
             Self::Diagnostics => "Diagnostics",
             Self::Updates => "Updates",
             Self::Services => "Services",
+            Self::Games => "Games",
             Self::AppStore => "App Store",
             Self::AppSandbox => "App Sandbox",
         }
@@ -353,6 +357,7 @@ impl Page {
             Self::Diagnostics => "diagnostics",
             Self::Updates => "updates",
             Self::Services => "services",
+            Self::Games => "games",
             Self::AppStore => "app-store",
             Self::AppSandbox => "app-sandbox",
         }
@@ -404,6 +409,10 @@ pub struct Model {
     /// no way to reach the last ones. The view clamps this against the pane's
     /// real height, which is the only place the height is known.
     pub sidebar_scroll: f32,
+    /// Set when a page is selected programmatically, so the view scrolls the
+    /// sidebar once to show the row it landed on. A pointer scroll does not set
+    /// it, and the view clears it after the next frame.
+    pub reveal_page: bool,
     previous: Option<Preferences>,
 }
 
@@ -414,6 +423,15 @@ impl Default for Preferences {
 }
 
 impl Model {
+    /// Select a page and ask the view to show its sidebar row.
+    ///
+    /// Direct assignments are for tests that construct a frame; navigation
+    /// goes through here so a page below the fold is never selected invisibly.
+    pub fn select(&mut self, page: Page) {
+        self.page = page;
+        self.reveal_page = true;
+    }
+
     /// Scroll the page list by `dy` wheel notches.
     ///
     /// The view clamps the result: only it knows the pane's height and how
@@ -435,6 +453,7 @@ impl Model {
             save: SaveState::Idle,
             focus: None,
             sidebar_scroll: 0.0,
+            reveal_page: false,
             previous: None,
         }
     }

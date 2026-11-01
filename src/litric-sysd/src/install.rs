@@ -109,6 +109,7 @@ impl InstallError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Description {
     name: String,
+    categories: Vec<String>,
 }
 
 /// A successfully installed application.
@@ -196,10 +197,16 @@ pub fn install(root: &Path, id: &str, bundle: &str) -> Result<Installed, Install
         fs::copy(&executable_source, &staged_app)
             .map_err(|error| io_error("copy executable", error))?;
         set_executable(&staged_app)?;
+        let categories = if description.categories.is_empty() {
+            String::new()
+        } else {
+            format!("Categories={};\n", description.categories.join(";"))
+        };
         let desktop_body = format!(
-            "[Desktop Entry]\nType=Application\nName={}\nExec={}\nX-Litric-AppId={}\n",
+            "[Desktop Entry]\nType=Application\nName={}\nExec={}\n{}X-Litric-AppId={}\n",
             description.name,
             quote_exec(&target.join("app")),
+            categories,
             id
         );
         write_new(&staging.join("app.desktop"), desktop_body.as_bytes(), 0o644)?;
@@ -353,9 +360,40 @@ fn parse_desktop(text: &str) -> Result<Description, InstallError> {
     {
         return Err(InstallError::BadDesktop);
     }
+    let categories = parse_categories(get("Categories"));
     Ok(Description {
         name: name.to_owned(),
+        categories,
     })
+}
+
+/// Parse the bundle's `Categories` value into the same bounded token set the
+/// launcher understands. The installer only needs to preserve the categories it
+/// can write safely; it does not interpret them.
+fn parse_categories(value: Option<&str>) -> Vec<String> {
+    const MAX_CATEGORIES: usize = 32;
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for raw in value.split(';') {
+        let token = raw.trim();
+        if token.is_empty()
+            || token.len() > 32
+            || !token
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'+'))
+        {
+            continue;
+        }
+        if !out.iter().any(|seen| seen == token) {
+            out.push(token.to_owned());
+        }
+        if out.len() >= MAX_CATEGORIES {
+            break;
+        }
+    }
+    out
 }
 
 fn is_executable(meta: &fs::Metadata) -> bool {
@@ -488,6 +526,7 @@ mod tests {
             .expect("desktop");
         assert!(desktop.contains("Exec=\""), "{desktop}");
         assert!(desktop.contains("Name=Fixture App"), "{desktop}");
+        assert!(!desktop.contains("Categories="), "{desktop}");
         cleanup(&root);
         Ok(())
     }
@@ -564,6 +603,25 @@ mod tests {
         assert_eq!(
             install(&root, "com.example.fixture", "fixture"),
             Err(InstallError::BadDesktop)
+        );
+        cleanup(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn a_bundle_category_reaches_the_generated_entry() -> Result<(), Box<dyn std::error::Error>> {
+        let root = scratch("categories")?;
+        let dir = bundle(&root, "game", "exit 0")?;
+        fs::write(
+            dir.join("app.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Test Game\nExec=app\nCategories=Game;ActionGame;\n",
+        )?;
+        install(&root, "com.example.game", "game").expect("install");
+        let desktop = fs::read_to_string(root.join("applications/com.example.game.desktop"))
+            .expect("desktop");
+        assert!(
+            desktop.contains("Categories=Game;ActionGame;\n"),
+            "{desktop}"
         );
         cleanup(&root);
         Ok(())

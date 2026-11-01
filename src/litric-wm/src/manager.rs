@@ -562,6 +562,31 @@ impl WindowManager {
         true
     }
 
+    /// Toggle a window between fullscreen and its previous placement.
+    ///
+    /// Fullscreen fills the whole display, including the top bar: a game that
+    /// leaves the shell's bar on top is not fullscreen. The previous frame is
+    /// kept in `restore`, so leaving fullscreen returns the window to where it
+    /// was rather than to a new default.
+    pub fn toggle_fullscreen(&mut self, id: WindowId) -> bool {
+        let screen = self.screen;
+        let Some(w) = self.windows.iter_mut().find(|w| w.id == id) else {
+            return false;
+        };
+        let (target, state) = match w.state {
+            WindowState::Fullscreen => (w.restore, WindowState::Normal),
+            _ => {
+                if w.state.is_free() {
+                    w.restore = w.frame;
+                }
+                (screen, WindowState::Fullscreen)
+            }
+        };
+        w.state = state;
+        self.set_frame(id, target);
+        true
+    }
+
     /// Snap a window to an edge.
     pub fn snap(&mut self, id: WindowId, edge: SnapEdge) -> bool {
         let work = self.work_area;

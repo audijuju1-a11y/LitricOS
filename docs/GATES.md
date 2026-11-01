@@ -3571,3 +3571,50 @@ untouched.
 Revert the S90 commit. The sandbox provider, protocol actions, `app.update` and
 `sandbox.control`, the App Sandbox page, tests and `45-settings-app-sandbox`
 disappear; S89 remains.
+
+---
+
+## 2026-10-31 — S91: installed games play fullscreen from the Games page
+
+- **Result:** PASS_WITH_LIMITATIONS
+- **Date:** 2026-10-31
+- **Conditions:** the shipping frame path and a real sysd socket on this host; no image
+  build, boot, physical display or real game runtime.
+- [x] `Categories=Game` survives bundle installation and is parsed as an exact token.
+- [x] Games is a view of discovery; Play uses the ordinary `LAUNCHENV` launch path.
+- [x] The first mapped client becomes fullscreen at 1280×800 and its pixels compose.
+- [x] Game Mode keeps a visible Stop control; Stop and client close restore the desktop.
+- [x] The real test package installs, launches, renders, stops and uninstalls.
+- [x] Browser download import and scan still pass their existing e2e journey.
+- [x] The new frame is reviewed and the golden set is re-recorded.
+- [ ] A playable commercial game, Steam/Proton, gamescope and anti-cheat were not tested.
+- [ ] `.deb`, `.rpm` and `.AppImage` installation were not implemented.
+- [ ] No image was built or booted; no physical display/GPU/audio was exercised.
+
+### Commands and results
+
+```text
+$ (cd src && cargo test --workspace)
+TESTS passed=2049 failed=0 ignored=0
+$ (cd src && cargo clippy --workspace --all-targets -- -D warnings)
+exit 0
+$ (cd src && cargo fmt --all --check)
+exit 0
+$ python3 ci/check-golden-frames.py --frames build/frames
+golden-frames: PASS -- every frame is within the threshold of its golden
+$ bash ci/verify.sh
+PASS -- 39 pass, 0 fail, 3 skipped; skips are image build, boot smoke and idle measurement
+```
+
+### Limits
+
+This gate proves the shell's own game session and one real third-party Wayland client. It
+does not prove a playable game, a game compatibility layer, package-manager formats, a
+booted image, a framebuffer/GPU path or an audio device. The test client is intentionally
+small so its pixels are deterministic; the session path, not its content, is the subject.
+
+### Rollback
+
+Revert the S91 commit. The Games page, category parsing, installer round-trip, fullscreen
+toggle, overlay, test package, golden `46-settings-games` and S91 records disappear; S90
+and earlier work remain.
