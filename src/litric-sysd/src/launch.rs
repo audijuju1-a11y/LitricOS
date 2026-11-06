@@ -218,8 +218,7 @@ pub fn launch_with_env(argv: &[String], env: &[(String, String)]) -> Result<u32,
     for (name, value) in env {
         command.env(name, value);
     }
-    let child = command
-        .spawn()
+    let child = spawn_retrying(&mut command)
         .map_err(|error| LaunchError::SpawnFailed(error.kind().to_string()))?;
     let pid = child.id();
     // Reap without blocking the request. The thread owns the child handle.
@@ -231,6 +230,42 @@ pub fn launch_with_env(argv: &[String], env: &[(String, String)]) -> Result<u32,
         })
         .map_err(|error| LaunchError::SpawnFailed(error.kind().to_string()))?;
     Ok(pid)
+}
+
+/// Start a command, retrying the one transient Unix spawn failure that is not
+/// the program's fault.
+///
+/// `ETXTBSY` means some process has the executable open for writing. That is
+/// normally the test fixture or an installer finishing a write, and it clears
+/// as soon as the other process closes the descriptor. Reporting it as
+/// "spawn failed" makes a launch depend on an unrelated writer's timing, so
+/// retry briefly before giving up.
+fn spawn_retrying(command: &mut Command) -> std::io::Result<std::process::Child> {
+    const ATTEMPTS: u32 = 20;
+    const WAIT: std::time::Duration = std::time::Duration::from_millis(5);
+    let mut attempt = 0;
+    loop {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(error) if executable_busy(&error) && attempt < ATTEMPTS => {
+                attempt = attempt.saturating_add(1);
+                std::thread::sleep(WAIT);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn executable_busy(error: &std::io::Error) -> bool {
+    // ETXTBSY. `ErrorKind::ExecutableFileBusy` is not available on every
+    // toolchain this workspace supports; the raw value is stable on Unix.
+    error.raw_os_error() == Some(26)
+}
+
+#[cfg(not(unix))]
+fn executable_busy(_error: &std::io::Error) -> bool {
+    false
 }
 
 /// Hex encoding for one protocol argument: the wire splits on whitespace, and
@@ -268,8 +303,14 @@ mod tests {
     fn script(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        // Write under a temporary name and rename into place. Tests run in
+        // parallel with other launches; a fork can inherit this file's write
+        // descriptor, and exec of a file still open for writing fails with
+        // ETXTBSY. The final path is therefore never opened for writing.
+        let temp = dir.join(format!(".{name}.tmp"));
+        std::fs::write(&temp, format!("#!/bin/sh\n{body}\n")).expect("write");
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        std::fs::rename(&temp, &path).expect("rename");
         path
     }
 

@@ -49,7 +49,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
-use wayland_server::protocol::{wl_callback, wl_keyboard, wl_pointer, wl_surface};
+use wayland_server::protocol::{wl_buffer, wl_callback, wl_keyboard, wl_pointer, wl_surface};
 use wayland_server::Resource;
 
 /// The largest buffer edge accepted from a client, in pixels.
@@ -615,7 +615,11 @@ struct Surface {
     popup: Option<wayland_protocols::xdg::shell::server::xdg_popup::XdgPopup>,
     parent: Option<u32>,
     pending_buffer: Option<BufferRef>,
+    pending_buffer_resource: Option<wl_buffer::WlBuffer>,
     buffer: Option<BufferRef>,
+    /// The resource for `buffer`. It is released once its pixels have been
+    /// copied, so a double-buffered client can reuse the slot.
+    buffer_resource: Option<wl_buffer::WlBuffer>,
     /// Serial of the last configure we sent that the client has not acked.
     configure_serial: Option<u32>,
     configured: bool,
@@ -637,7 +641,9 @@ impl Surface {
             popup: None,
             parent: None,
             pending_buffer: None,
+            pending_buffer_resource: None,
             buffer: None,
+            buffer_resource: None,
             configure_serial: None,
             configured: false,
             mapped: false,
@@ -1085,6 +1091,7 @@ impl State {
         };
         if let Some(buffer) = s.pending_buffer.take() {
             s.buffer = Some(buffer);
+            s.buffer_resource = s.pending_buffer_resource.take();
         }
 
         if s.xdg.is_some() && !s.configured && s.configure_serial.is_none() {
@@ -1109,6 +1116,10 @@ impl State {
         if !buffer.is_valid() {
             // A zero-sized or over-large buffer is not something to show. The
             // surface keeps its last good frame rather than flashing a hole.
+            // Release it so the client is not left waiting forever.
+            if let Some(resource) = s.buffer_resource.take() {
+                resource.release();
+            }
             return;
         }
         let (width, height) = (buffer.width, buffer.height);
@@ -1127,6 +1138,12 @@ impl State {
                 return;
             }
         };
+
+        // The pixels were copied into `frame`; the client may use this buffer
+        // again as soon as it sees the release, even before the next draw.
+        if let Some(resource) = s.buffer_resource.take() {
+            resource.release();
+        }
 
         let was_mapped = s.mapped;
         s.mapped = true;
@@ -1162,7 +1179,9 @@ impl State {
         s.toplevel = None;
         s.popup = None;
         s.buffer = None;
+        s.buffer_resource = None;
         s.pending_buffer = None;
+        s.pending_buffer_resource = None;
         s.configured = false;
         s.configure_serial = None;
         let was_mapped = s.mapped;

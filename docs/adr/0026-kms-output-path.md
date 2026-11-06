@@ -1,8 +1,8 @@
 # ADR-0026 — The screen is scanned out over KMS, and the raster stays software
 
 - **Status:** Accepted; the host provider lifecycle and refusal path were
-  integrated and tested on 2026-10-31; **not** verified on a booted image and
-  never run against a real card
+  integrated and tested on 2026-10-31; the virtual KMS path was booted on
+  2026-11-06 with QEMU's `bochs-drm`; **not** verified on a physical card
 - **Date:** 2026-10-27
 - **Extends:** ADR-0017 (framebuffer shell), ADR-0005 (compositor)
 - **Answers:** W8 in [the execution plan](../master-plan/26-execution-plan.md),
@@ -117,7 +117,7 @@ before.
 - **Not multi-monitor, VRR, HDR or plane composition.** One connector, one
   CRTC, one plane. Those need atomic modesetting, which needs more ioctls and a
   reason.
-- **Not verified on hardware.** See the evidence section.
+- **Not verified on a physical card.** The virtual QEMU card is covered below.
 
 ## Consequences
 
@@ -155,10 +155,13 @@ before.
 | `cargo test -p litric-shell --lib present::` (2026-10-31) | 11 pass, including `drm.mode` and `drm.connector` status lines |
 | headless status (2026-10-31) | `present=none(<reason>)` is tested; the headless shell no longer omits the present line |
 | `cargo test --workspace` (2026-10-31) | 1,984 passed, 0 failed, 0 ignored |
-| booted image on a real card | **NOT RUN.** `/dev/dri` and `/sys/class/drm` do not exist on this host and `/proc/config.gz` reports `# CONFIG_DRM is not set`; no image was booted with this path |
+| QEMU initramfs, virtual card (2026-11-06) | `present=drm`, `drm.mode=1280x800`, `drm.connector=Virtual-1`, `gpu.driver=bochs-drm`, `LITRIC_DRM_FLIP=ok`; `gpu.render=none`; browser `gpu=software`; 38/38 proof assertions in each of two consecutive boots |
+| booted image on a physical card | **NOT RUN.** No physical DRM card or render node exists in this environment |
 
 The protocol is verified end to end against a stand-in process, which is a real
-test of everything the shell controls. The ioctl sequence is *compiled*, not
-run. Until someone boots a desktop profile on a machine with a DRM card and
-reads `present=drm` plus `drm.mode` from the status file, the KMS path is
-`NOT VERIFIED` in this repository's sense, and GATE 05 stays open.
+test of everything the shell controls. The ioctl sequence was run on QEMU's
+virtual `bochs-drm` card: the guest reported `present=drm`, the requested mode
+and connector, and `LITRIC_DRM_FLIP=ok`. That establishes the virtual KMS path,
+not a physical GPU path. Until someone boots a desktop profile on a machine
+with a physical DRM card and a render node, physical KMS/GPU acceleration
+remains `NOT VERIFIED` and GATE 05 stays open.

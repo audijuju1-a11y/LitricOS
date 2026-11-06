@@ -9,7 +9,7 @@
 - **Severity:** S2 (HIGH)
 - **Impact:** Some major games will never run on Litric
 - **Details:** EAC and BattlEye require per-developer opt-in for Proton/Wine. Fortnite, GTA Online, Apex Legends have declined or withdrawn support. Litric cannot change this.
-- **Mitigation:** Document honestly in public docs. Game manager shows compatibility status per title. Never imply universal game support.
+- **Mitigation:** Document honestly in public docs. Game manager shows compatibility status per title. Never imply universal game support. Roblox is specifically `Verdict::Blocked`: Hyperion (Byfron) refuses translation layers, there is no official Linux client, and the terms do not authorise a bypass. The status changes only if Roblox publishes an official Linux client, or explicitly supports Hyperion under Wine/Proton and changes its terms; bypassing the anti-cheat is not an offered route.
 - **Status:** ACCEPTED — documented
 
 ### RISK-002: Windows-Host QEMU Cannot Do Accelerated Graphics

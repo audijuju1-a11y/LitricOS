@@ -26,7 +26,9 @@ the capability broker's supervision:
 |---|---|---|---|
 | Litric manifest (`.ilpkg`) | native runtime | native process, sandboxed | planning exists (`litric-manifest`) |
 | Windows `.exe` / `.msi` | Windows compatibility runtime | per-app bottle | **built, tested** (`litric-winbridge`) |
-| Linux executable | native — sandbox + portals | normal app process | decision trivial; sandbox profiles at Layer 3 |
+| Linux executable | native — sandbox + portals | normal app process | profile resolver/executor **built, tested** (`litric-sysd/src/compat.rs`) |
+| Flatpak application | Flatpak runtime | `flatpak run <id>` | profile resolver/executor **built, tested**; real Flatpak is hardware/environment-gated |
+| Steam title | Steam runtime, Proton chosen by Steam | `steam -applaunch <id>` | profile resolver/executor **built, tested** with a fake launcher; real Steam/Proton is hardware/environment-gated |
 | Needs a foreign kernel | full environment | KVM guest (ADR-0015) | `litric-env` policy **built, tested** |
 
 Escalation to a full VM requires recorded evidence (driver, anti-cheat,
@@ -46,6 +48,20 @@ undocumented interface) and states the resource cost before running.
    (master-plan/02 dependency direction).
 5. Windows binaries are untrusted regardless of publisher; signature presence
    is never reported as verification.
+
+## Implemented launch seam
+
+`litric-sysd` now owns the resolver and executor in `src/litric-sysd/src/compat.rs`.
+`LAUNCHENV` (the shell's Play path) is resolved as a native Linux profile; the
+new `LAUNCHPROFILE <linux|flatpak|steam> ...` request names a profile explicitly.
+The resolver validates the target, the launcher executable and the bounded
+argument vector before handing the plan to the existing `execve` path. Unit
+tests run real fixture scripts for all three profiles; the QEMU guest proof
+clicks Play and observes a real `litric.client` window and pixels.
+
+This is a route through the vendor's launcher, not a compatibility verdict.
+Flatpak and Steam were absent from the build host, so their executor tests use
+fake launcher scripts. No game was launched, and no anti-cheat is bypassed.
 
 ## Functional work
 

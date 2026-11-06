@@ -2,7 +2,8 @@
 
 - **Status:** Accepted (design). Partially implemented: Windows bottle planning
   exists and is tested (`litric-winbridge`), environment policy exists and is
-  tested (`litric-env`).
+  tested (`litric-env`), and the native/Flatpak/Steam launch resolver and
+  executor exist in `litric-sysd/src/compat.rs`.
 - **Date:** 2026-09-14
 - **Extends:** ADR-0009 (the shell owns the display), ADR-0015 (LitricOS hosts
   Windows and Linux as KVM guests)
@@ -44,6 +45,8 @@ chooses software, not plumbing:
 | Litric native app (manifest) | Native runtime — direct platform API access | native process |
 | Windows `.exe` | Windows compatibility runtime — per-app bottle (`litric-winbridge`) | bottle, inside this desktop |
 | Linux app | **Native** — standard sandbox + portals, no translation layer | normal app process |
+| Flatpak application | Flatpak runtime | `flatpak run <id>`, through the same broker and launch validator |
+| Steam title | Steam runtime; Proton is selected by Steam | `steam -applaunch <id>`, through the same broker and launch validator |
 | Anything requiring a real foreign kernel | Full environment (Windows VM / Linux VM) | KVM guest, per ADR-0015 |
 
 Escalation from bottle to full Windows VM happens **only on recorded evidence**
@@ -92,6 +95,38 @@ separate user-data domain) and each must be testable independently. The full
 ladder and its recovery consequences are ADR-0021's subject; this ADR claims
 only the first three rungs.
 
+### 3a. The launch seam is real, the runtime coverage is not universal
+
+`litric-sysd/src/compat.rs` resolves a native Linux executable, a Flatpak
+application id, or a Steam application id into an exact argument vector. The
+native path is used by the shell's existing Play request (`LAUNCHENV`); the
+explicit `LAUNCHPROFILE` request exposes Flatpak and Steam routes. Resolution
+rejects relative or non-executable native programs, malformed or option-like
+application ids, missing launchers, and arguments outside the existing launch
+bounds. Execution still goes through `litric-sysd/src/launch.rs`, so the
+capability broker and display-environment allowlist are not bypassed.
+
+The proof is deliberately scoped:
+
+* a real Linux GUI fixture was launched through the production shell → sysd →
+  compat → `execve` path in the QEMU guest, with QMP input and pixel evidence;
+* the Flatpak and Steam routes were executed with fake launcher scripts in unit
+  tests; neither runtime is installed on the build host, and no Steam game or
+  Proton prefix was run;
+* the guest network proof is QEMU user-mode networking to a host HTTP server,
+  not general Internet, DNS, multiplayer or anti-cheat connectivity.
+
+### Hardware-gated surfaces
+
+These are plumbing tests, not gameplay or device claims:
+
+| Surface | Testable plumbing | Not proved here |
+|---|---|---|
+| GPU / Vulkan | `litric-winbridge` models Proton's D3D-to-Vulkan translation and a bottle's `gpu` capability; those plans are unit-tested. | No `/dev/dri`, Vulkan device, GPU passthrough, frame pacing or game rendering. |
+| Audio device | `litric-sysd`'s `Provider` contract has a real `ToolProvider` and an injectable `FakeProvider`; audio-level and control tests run without hardware. | No physical sink, PipeWire playback, microphone, latency or audio gameplay. |
+| Steam / Proton | The Steam launch profile resolves to a real `steam -applaunch` vector and executes a fixture launcher. | No Steam installation, Proton prefix, shader compilation or commercial game. |
+| Roblox login / gameplay | The Windows planner returns `Verdict::Blocked` and the test checks the reason and the conditions for a status change. | No login, credential request, anti-cheat interaction or gameplay; the anti-cheat is never bypassed. |
+
 ## What is honestly not true yet
 
 - A VM guest's output is not a window yet — row 880 (`T`). Today `Win+N`
@@ -100,8 +135,16 @@ only the first three rungs.
   Litric desktop" is true only through the bottle path.
 - The bottle execution daemon does not exist (row 626, `T`). Install plans are
   specified and tested; nothing executes them.
-- Kernel anti-cheat games: RISK-001 stands. The Application Manager must show
-  per-title compatibility honestly, never imply support.
+- Kernel anti-cheat games: RISK-001 stands. Roblox remains
+  `Verdict::Blocked` because its Windows client uses Hyperion (Byfron), there is
+  no official Linux client, and the vendor's terms do not authorise a bypass.
+  The status changes only if Roblox publishes an official Linux client, or
+  explicitly supports Hyperion under Wine/Proton and changes its terms; a
+  bypass is not an offered route. The Application Manager must show per-title
+  compatibility honestly, never imply support.
+- Steam/Proton and Flatpak are launch routes, not guaranteed game support.
+  Steam chooses the Proton build and the title can still refuse; a title's
+  anti-cheat policy is not changed by this layer.
 - Single-GPU VM guests are good for desktop work, not demanding games —
   ADR-0015 constraint 1 carries over unchanged.
 
@@ -111,6 +154,7 @@ only the first three rungs.
 |---|---|---|
 | Runtime selection for Windows `.exe` (bottle + evidence-based components) | 6 | **built — `litric-winbridge`, tested** |
 | Environment policy, budgets, hotkeys | 2 | **built — `litric-env`, tested** |
+| Native/Flatpak/Steam launch profiles | 4 | **built — `litric-sysd/src/compat.rs`, tested; native path proved in QEMU** |
 | Bottle execution daemon | 6 | needs Layer 4 runtime services |
 | Linux-app sandbox profile catalogue | 3 | needs GATE 03/04 layer |
 | VM guest surfaces composited as windows | 5 | needs row 880 |

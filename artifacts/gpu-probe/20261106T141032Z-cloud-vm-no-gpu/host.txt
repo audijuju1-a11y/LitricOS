@@ -1,0 +1,15 @@
+{
+  "cmdline": "console=ttyS0 systemd.getty_auto=0 reboot=k panic=1 root=/dev/vda rw data=journal memhp_default_state=online clocksource=kvm-clock systemd.run=\"systemd-run --unit=freestyle-vms-agent --service-type=exec --property=Restart=always --property=RestartSec=1 /sbin/freestyle-vms-agent\" systemd.run=\"systemctl --no-block start multi-user.target\" systemd.run_success_action=none systemd.run_failure_action=none ip=169.254.77.2::169.254.77.1:255.255.255.252::eth0:off freestyle.ip6=fdf5:7700::/64,fe80::f5:77ff:fe00:1",
+  "cwd": "/workspace/chats/d7991b8c41a570fd94f0a9bc",
+  "git_head": "0af98d5c924a0f78643d08fdb5fb89bc3b5c02a6",
+  "os_release": "PRETTY_NAME=\"Ubuntu 24.04.5 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.5 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+  "python": "3.12.3",
+  "uid": 226170968,
+  "uname": {
+    "machine": "x86_64",
+    "node": "freestyle-vm",
+    "release": "6.1.102",
+    "system": "Linux",
+    "version": "#1 SMP PREEMPT_DYNAMIC Wed Aug 26 20:12:24 UTC 2026"
+  }
+}

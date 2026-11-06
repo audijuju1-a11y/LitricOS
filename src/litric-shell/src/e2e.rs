@@ -50,6 +50,7 @@ fn click(s: &mut Shell, x: f32, y: f32) -> Vec<Effect> {
         &InputEvent::PointerMove {
             at: Point::new(x, y),
             delta: Point::new(1.0, 1.0),
+            mods: litric_input::keys::Modifiers::NONE,
         },
         1_000,
     );
@@ -81,6 +82,7 @@ fn right_click(s: &mut Shell, x: f32, y: f32) {
         &InputEvent::PointerMove {
             at: Point::new(x, y),
             delta: Point::new(1.0, 1.0),
+            mods: litric_input::keys::Modifiers::NONE,
         },
         1_000,
     );
@@ -111,6 +113,7 @@ fn move_pointer(s: &mut Shell, x: f32, y: f32) {
         &InputEvent::PointerMove {
             at: Point::new(x, y),
             delta: Point::new(1.0, 1.0),
+            mods: litric_input::keys::Modifiers::NONE,
         },
         1_050,
     );
@@ -727,6 +730,7 @@ fn journey_chapter_f_picker_empty_state_grid_and_tooltip() {
         &InputEvent::PointerMove {
             at: Point::new(bell.center().0, bell.center().1),
             delta: Point::new(1.0, 1.0),
+            mods: litric_input::keys::Modifiers::NONE,
         },
         5_000,
     );

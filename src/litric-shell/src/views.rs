@@ -18,6 +18,7 @@ use crate::font::{self, Style};
 use crate::icons::{self, Icon};
 use crate::shell::{Hot, Overlay, PowerCommand, PowerProfile, Priority, Shell};
 use crate::shortcuts::App;
+use crate::terminal_screen::{CellStyle, Color};
 use crate::ui::{self, Material, State, Tokens, Tone};
 
 /// Draw the whole desktop.
@@ -29,6 +30,9 @@ use crate::ui::{self, Material, State, Tokens, Tone};
 pub fn draw(canvas: &mut Canvas, shell: &mut Shell) {
     crate::i18n::set_current(shell.settings.preferences.language);
     shell.hotspots_mut().clear();
+    // A pointer event is only allowed to use geometry the current frame drew.
+    // The Terminal view publishes its cell rectangle below when it is visible.
+    shell.set_terminal_grid(None);
     // The boot intro is its own surface: while it covers the screen nothing of
     // the desktop is drawn under it, so there is nothing to hit and nothing to
     // show through. Its last moments are a cross-fade into whatever comes
@@ -6151,11 +6155,53 @@ fn terminal_text_style(t: &Tokens, step: TypeStep, color: u32, text: &str) -> St
     }
 }
 
+/// Resolve one terminal cell into the shell's text style and its background.
+///
+/// Foreground and background are resolved before reverse video, so `reverse`
+/// with both colours at their defaults still gets a filled cell rather than a
+/// transparent one. Bold brightens an indexed 0–7 foreground before the swap;
+/// dim is applied to the final foreground, and italic is the font's synthetic
+/// oblique because the bundled faces have no italic cut.
+fn terminal_cell_style(t: &Tokens, size: f32, style: CellStyle, text: &str) -> (Style, u32) {
+    let mut fg_request = style.fg;
+    if style.attrs.bold {
+        if let Color::Indexed(index @ 0..=7) = fg_request {
+            fg_request = Color::Indexed(index.saturating_add(8));
+        }
+    }
+    let mut fg = fg_request.to_argb(t.text());
+    let mut bg = style.bg.to_argb(rgb(0x080A0D));
+    if style.attrs.reverse {
+        core::mem::swap(&mut fg, &mut bg);
+    }
+    if style.attrs.dim {
+        fg = with_alpha(fg, 0.55);
+    }
+    let mut out = Style::new(size, fg);
+    if text.is_ascii() {
+        out = out.monospace();
+    }
+    if style.attrs.bold {
+        out.weight = font::WEIGHT_BOLD;
+    }
+    if style.attrs.italic {
+        out = out.italic();
+    }
+    (out, bg)
+}
+
 fn draw_terminal(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     let t = shell.tokens.clone();
-    let term = shell.terminal.clone();
     canvas.fill_round_rect(body, 0.0, with_alpha(rgb(0x000000), 0.55));
     let line_h = t.px(17.0);
+    // The terminal's PTY size is the usable cell area, not the window's pixel
+    // size. Keep the model and the PTY in step on every layout pass; the helper
+    // only writes/ioctls when the numbers actually change.
+    let cell_w = t.px(8.0).max(1.0);
+    let viewport_cols = ((body.w - t.px(20.0)).max(0.0) / cell_w).floor() as usize;
+    let viewport_rows = ((body.h - t.px(70.0)).max(0.0) / line_h).floor() as usize;
+    shell.terminal_resize(viewport_cols, viewport_rows);
+    let term = shell.terminal.clone();
     let toolbar = Rect::new(body.x, body.y, body.w, t.px(32.0));
     canvas.fill_round_rect(toolbar, 0.0, with_alpha(rgb(0xFFFFFF), 0.045));
     let s_toolbar = Style::bold(t.text_px(TypeStep::Footnote), t.text());
@@ -6167,10 +6213,13 @@ fn draw_terminal(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         toolbar.y + t.px(20.0),
         &s_toolbar,
     );
-    let status = if term.busy {
-        "Process running"
+    let status = if term.alt_active() {
+        let (cols, rows) = term.viewport();
+        format!("Full-screen {cols}×{rows}")
+    } else if term.busy {
+        "Process running".to_owned()
     } else {
-        "Ready"
+        "Ready".to_owned()
     };
     let toolbar_button_style = Style::new(t.text_px(TypeStep::Footnote), t.text());
     let new_w = (font::measure("New session", &toolbar_button_style) + t.px(20.0)).max(t.px(86.0));
@@ -6193,7 +6242,7 @@ fn draw_terminal(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
     if status_room > t.px(12.0) {
         font::draw(
             canvas,
-            &ui::elide(status, &s_status, status_room),
+            &ui::elide(&status, &s_status, status_room),
             status_x,
             toolbar.y + t.px(19.0),
             &s_status,
@@ -6224,6 +6273,89 @@ fn draw_terminal(canvas: &mut Canvas, shell: &mut Shell, body: Rect) {
         let s = Style::new(t.text_px(TypeStep::Footnote), t.tone(Tone::Warning));
         font::draw(canvas, note, body.x + t.px(10.0), y + line_h, &s);
         y += line_h * 1.6;
+    }
+    let grid_x = body.x + t.px(10.0);
+    let max_rows = ((body.bottom() - y) / line_h).floor().max(0.0) as usize;
+    let visible_rows = term
+        .screen()
+        .map_or(viewport_rows, |screen| screen.rows())
+        .min(max_rows);
+    shell.set_terminal_grid(Some(crate::shell::TerminalGrid {
+        x: grid_x,
+        y,
+        cell_w,
+        line_h,
+        cols: term.screen().map_or(viewport_cols, |screen| screen.cols()),
+        rows: visible_rows,
+    }));
+    // A full-screen program owns the grid. Draw exactly what its parser saw;
+    // the primary scrollback below is not shown until it leaves `?1049l`.
+    if let Some(screen) = term.screen() {
+        let grid_y = y;
+        for row in 0..screen.rows().min(max_rows) {
+            for col in 0..screen.cols() {
+                let Some(cell) = screen.cell_at(row, col) else {
+                    continue;
+                };
+                if cell.width == 0 {
+                    continue;
+                }
+                let span = usize::from(cell.width).max(1);
+                let cell_x = grid_x + col as f32 * cell_w;
+                let cell_y = grid_y + row as f32 * line_h;
+                let (s_out, bg) =
+                    terminal_cell_style(&t, t.text_px(TypeStep::Footnote), cell.style, &cell.text);
+                if cell.style.bg != Color::Default || cell.style.attrs.reverse {
+                    canvas.fill_round_rect(
+                        Rect::new(cell_x, cell_y, cell_w * span as f32, line_h),
+                        0.0,
+                        bg,
+                    );
+                }
+                let previous =
+                    canvas.push_clip(Rect::new(cell_x, cell_y, cell_w * span as f32, line_h));
+                let measured = font::measure(&cell.text, &s_out);
+                let ink_x = if span > 1 {
+                    cell_x + ((cell_w * span as f32 - measured).max(0.0) / 2.0)
+                } else {
+                    cell_x
+                };
+                font::draw_literal(canvas, &cell.text, ink_x, cell_y + t.px(17.0), &s_out);
+                if cell.style.attrs.underline {
+                    canvas.stroke_line(
+                        cell_x,
+                        cell_y + line_h - t.px(2.0),
+                        cell_x + cell_w * span as f32,
+                        cell_y + line_h - t.px(2.0),
+                        1.0,
+                        s_out.color,
+                    );
+                }
+                canvas.set_clip(previous);
+            }
+        }
+        if term.cursor_visible()
+            && screen.cursor_row < max_rows
+            && screen.cursor_col < screen.cols()
+        {
+            let cursor_col = if screen
+                .cell_at(screen.cursor_row, screen.cursor_col)
+                .is_some_and(|cell| cell.width == 0)
+            {
+                screen.cursor_col.saturating_sub(1)
+            } else {
+                screen.cursor_col
+            };
+            let caret = Rect::new(
+                grid_x + cursor_col as f32 * cell_w,
+                grid_y + screen.cursor_row as f32 * line_h + t.px(3.0),
+                t.px(2.0),
+                (line_h - t.px(4.0)).max(1.0),
+            );
+            canvas.fill_round_rect(caret, 0.0, t.accent());
+        }
+        shell.hotspots_mut().push(body, Hot::TerminalInput);
+        return;
     }
     // Scrollback, newest at the bottom, only as many as fit.
     let prompt_row = 1usize;
@@ -8224,6 +8356,37 @@ fn setup_button(
 #[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
+    use crate::terminal_screen::Attrs;
+
+    #[test]
+    fn terminal_cell_styles_resolve_colour_weight_italic_and_reverse() {
+        let t = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
+        let style = CellStyle {
+            fg: Color::Indexed(1),
+            attrs: Attrs {
+                bold: true,
+                italic: true,
+                ..Attrs::default()
+            },
+            ..CellStyle::default()
+        };
+        let (out, bg) = terminal_cell_style(&t, 13.0, style, "A");
+        assert_eq!(out.color, rgb(0xFF0000), "bold brightens indexed red");
+        assert_eq!(out.weight, font::WEIGHT_BOLD);
+        assert!(out.italic);
+        assert_eq!(bg, rgb(0x080A0D));
+
+        let reverse = CellStyle {
+            attrs: Attrs {
+                reverse: true,
+                ..Attrs::default()
+            },
+            ..CellStyle::default()
+        };
+        let (out, bg) = terminal_cell_style(&t, 13.0, reverse, "A");
+        assert_eq!(bg, t.text(), "reverse uses the default foreground as fill");
+        assert_eq!(out.color, rgb(0x080A0D));
+    }
 
     #[test]
     fn dock_magnification_follows_smoothstep_golden_values() {
@@ -8555,6 +8718,7 @@ mod tests {
             &litric_input::InputEvent::PointerMove {
                 at: litric_input::event::Point::new(640.0, 795.0),
                 delta: litric_input::event::Point::new(1.0, 1.0),
+                mods: litric_input::keys::Modifiers::NONE,
             },
             1_000,
         );

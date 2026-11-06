@@ -1,0 +1,667 @@
+[    1.814607] mtrr: your CPUs had inconsistent fixed MTRR settings
+[    1.816820] mtrr: your CPUs had inconsistent variable MTRR settings
+[    1.817338] mtrr: your CPUs had inconsistent MTRRdefType settings
+[    2.941617] device-mapper: core: CONFIG_IMA_DISABLE_HTABLE is disabled. Duplicate IMA measurements will not be recorded in the IMA log.
+[    2.946322] amd_pstate: the _CPC object is not present in SBIOS or ACPI disabled
+[   24.876269] Unstable clock detected, switching default tracing clock to "global"
+[   24.876269] If you want to keep using the local clock, then add:
+[   24.876269]   "trace_clock=local"
+[   24.876269] on the kernel command line
+LITRIC_INIT_START
+LITRIC_MODULE_OK=ttm
+LITRIC_MODULE_OK=drm_ttm_helper
+LITRIC_MODULE_OK=drm_vram_helper
+LITRIC_MODULE_OK=bochs
+LITRIC_MODULE_OK=virtio_input
+LITRIC_MODULE_OK=e1000
+LITRIC_FB:
+1280,800
+LITRIC_GPU:
+total 0
+crw-------    1 root     root      226,   0 Nov  6 15:04 card0
+LITRIC_GPU_CARD=card0 driver=bochs-drm
+LITRIC_INPUT:
+event0  event1  event2  mice    mouse0
+LITRIC_NET_BEGIN
+LITRIC_NETWORK_OK
+litric-network-proof
+litric.sysd.version=0.2.0
+litric.sysd.socket=/run/litric/sysd.sock
+litric.sysd.grants=seeded store=/var/lib/litric-sysd/grants.conf records=20
+LITRIC_INSTALL:
+OK 2
+id=com.litric.test-game
+state=installed
+LITRIC_INSTALL_OK
+LITRIC_INSTALLED:
+/root/.local/share/litric/apps/com.litric.test-game/app.desktop
+/root/.local/share/litric/apps/com.litric.test-game/app
+/root/.local/share/litric/incoming/game/app
+/root/.local/share/litric/incoming/game/app.desktop
+/root/.local/share/applications/com.litric.test-game.desktop
+LITRIC_BROWSERD_BEGIN
+LITRIC_BROWSERD_READY
+browserd: gpu=software(no render node under /dev/dri)
+[125:144:1106/150425.481307:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory
+[125:147:1106/150425.587929:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory
+[125:147:1106/150425.589361:ERROR:bus.cc(407)] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory
+[125:144:1106/150425.813884:ERROR:bus.cc(407)] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[125:144:1106/150425.825304:ERROR:bus.cc(407)] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[125:144:1106/150425.826403:ERROR:bus.cc(407)] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[125:144:1106/150425.833908:ERROR:bus.cc(407)] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[125:144:1106/150425.834122:ERROR:bus.cc(407)] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[125:144:1106/150426.292303:ERROR:bus.cc(407)] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[125:144:1106/150428.311762:ERROR:bus.cc(407)] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[125:144:1106/150428.312365:ERROR:bus.cc(407)] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+
+(process:125): GLib-GIO-CRITICAL **: 15:04:30.389: g_settings_schema_source_lookup: assertion 'source != NULL' failed
+[125:125:1106/150434.538872:ERROR:object_proxy.cc(576)] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+browserd: engine = chromium (/opt/chrome/chrome)
+browserd: listening on /run/litric-browser/browser.sock
+LITRIC_BROWSERD_END
+LITRIC_FILESD_BEGIN
+LITRIC_FILESD_READY
+litric-filesd 0.2.0: serving /var/lib/litric-files/root on /run/litric/files.sock
+LITRIC_FILESD_END
+LITRIC_METRIC_BEGIN
+LITRIC_SHELL_PID=218
+LITRIC_METRIC uptime=41
+LITRIC_METRIC mem_total_kb=4008868
+LITRIC_METRIC mem_available_kb=3088376
+LITRIC_DOWNLOAD_LIST staging= saved=
+LITRIC_PROC pid=114 comm=litric-sysd rss_kb=3320 stat=114 (litric-sysd) S 1 0 0 0 -1 4194560 161 104 0 0 17 19 0 1 20 0 2 0 2864 142778368 800 18446744073709551615 104711622719984 104711623802304 140724059613360 0 0 0 0 4102 1088 0 0 0 17 1 0 0 0 0 0 104711623823120 104711623825776 104711625449472 140724059618939 140724059619095 140724059619095 140724059619299 0
+LITRIC_PROC pid=124 comm=litric-browserd rss_kb=2580 stat=124 (litric-browserd) S 1 0 0 0 -1 4194560 219 0 0 0 6 2 0 0 20 0 1 0 2905 4464640 640 18446744073709551615 107877714465232 107877714906192 140736725259104 0 0 0 0 4102 1088 1 0 0 17 1 0 0 0 0 0 107877714924344 107877714927024 107878159253504 140736725265950 140736725266055 140736725266055 140736725266399 0
+LITRIC_PROC pid=125 comm=chrome rss_kb=156264 stat=125 (chrome) R 124 0 0 0 -1 4194560 11175 136 0 0 898 178 0 3 20 0 30 0 2912 34920648704 39063 18446744073709551615 99372359720960 99372556166352 140734147415568 0 0 0 0 4096 1098990847 0 0 0 17 0 0 0 0 0 0 99372566302720 99372566966273 99373272920064 140734147423672 140734147423885 140734147423885 140734147424229 0
+LITRIC_PROC pid=133 comm=chrome rss_kb=61936 stat=133 (chrome) S 125 0 0 0 -1 4194304 4255 0 0 0 32 31 0 0 20 0 1 0 2985 35013242880 15424 18446744073709551615 97645981143040 97646177588432 140724064407520 0 0 0 0 4098 65536 1 0 0 17 0 0 0 0 0 0 97646187724800 97646188388353 97646367711232 140724064415101 140724064415338 140724064415338 140724064415717 0
+LITRIC_PROC pid=134 comm=chrome rss_kb=61192 stat=134 (chrome) S 125 0 0 0 -1 4194560 4196 0 0 0 32 30 0 0 20 0 1 0 2987 35013230592 15264 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 65536 1 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=136 comm=chrome rss_kb=16692 stat=136 (chrome) S 134 0 0 0 -1 4194624 262 0 0 0 1 5 0 0 20 0 1 0 3051 35013251072 4128 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 65536 1 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=157 comm=chrome rss_kb=59292 stat=157 (chrome) S 133 0 0 0 -1 4194368 2225 0 0 0 163 28 0 0 20 0 10 0 3140 35101818880 14748 18446744073709551615 97645981143040 97646177588432 140724064407520 0 0 0 0 4098 25232636 0 0 0 17 1 0 0 0 0 0 97646187724800 97646188388353 97646367711232 140724064415101 140724064415338 140724064415338 140724064415717 0
+LITRIC_PROC pid=158 comm=chrome rss_kb=96460 stat=158 (chrome) S 125 0 0 0 -1 4194304 5361 0 0 0 241 82 0 0 20 0 8 0 3156 34804187136 24064 18446744073709551615 104485916200960 104486112646352 140721992944672 0 0 0 0 4098 1098908924 0 0 0 17 0 0 0 0 0 0 104486122782720 104486123446273 104486647414784 140721992952892 140721992953454 140721992953454 140721992953833 0
+LITRIC_PROC pid=168 comm=chrome rss_kb=47784 stat=168 (chrome) S 136 0 0 0 -1 4194368 1416 0 0 0 68 17 0 0 20 0 6 0 3336 35055624192 11901 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 0 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=169 comm=chrome rss_kb=19268 stat=169 (chrome) S 158 0 0 0 -1 4194368 176 0 0 0 4 8 0 0 20 0 1 0 3376 34745073664 4769 18446744073709551615 104485916200960 104486112646352 140721992944672 0 0 0 0 4098 1098908924 1 0 0 17 1 0 0 0 0 0 104486122782720 104486123446273 104486647414784 140721992952892 140721992953454 140721992953454 140721992953833 0
+LITRIC_PROC pid=189 comm=chrome rss_kb=63904 stat=189 (chrome) S 136 0 0 0 -1 4194368 2486 0 0 0 109 38 0 0 20 0 9 0 3798 1241430540288 15948 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=190 comm=chrome rss_kb=72860 stat=190 (chrome) R 136 0 0 0 -1 4194368 2775 0 0 0 145 39 0 0 20 0 9 0 3818 1241430671360 18027 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 0 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=218 comm=litric-shell rss_kb=13688 stat=218 (litric-shell) R 1 0 0 0 -1 4194304 2617 0 0 0 37 26 0 0 20 0 1 0 4171 87162880 3352 18446744073709551615 96937756467152 96937760077424 140728745738256 0 0 0 0 4102 1088 0 0 0 17 1 0 0 0 0 0 96937760183336 96937760189064 96938735603712 140728745741948 140728745742049 140728745742049 140728745742306 0
+LITRIC_METRIC_END
+LITRIC_TICK=1
+LITRIC_PS_BEGIN
+  114 root     /usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock --home /root --root / --update-root /var/lib/litric/update --backup-root /var/lib/litric/backup
+  124 litric   /usr/bin/litric-browserd --profile /run/litric-browser/profile --downloads /run/litric-browser/Downloads
+  125 litric   /opt/chrome/chrome --headless=new --disable-dev-shm-usage --hide-scrollbars --mute-audio --no-first-run --no-default-browser-check --remote-debugging-pipe --disable-gpu --user-data-dir=/run/litric-browser/profile
+  127 litric   /opt/chrome/chrome_crashpad_handler --monitor-self --monitor-self-annotation=ptype=crashpad-handler --database=/home/litric/.config/google-chrome-for-testing/Crash Reports --annotation=lsb-release=Unknown --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=131.0.6778.204 --initial-client-fd=7 --shared-client-connection
+  129 litric   /opt/chrome/chrome_crashpad_handler --no-periodic-tasks --monitor-self-annotation=ptype=crashpad-handler --database=/home/litric/.config/google-chrome-for-testing/Crash Reports --annotation=lsb-release=Unknown --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=131.0.6778.204 --initial-client-fd=4 --shared-client-connection
+  133 litric   /opt/chrome/chrome --type=zygote --no-zygote-sandbox --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  134 litric   /opt/chrome/chrome --type=zygote --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  136 litric   /opt/chrome/chrome --type=zygote --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  157 litric   /opt/chrome/chrome --type=gpu-process --disable-dev-shm-usage --headless=new --ozone-platform=headless --use-angle=swiftshader-webgl --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --gpu-preferences=UAAAAAAAAAAgAAAEAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAA --use-gl=angle --use-angle=swiftshader-webgl --shared-files --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding 
+  158 litric   /opt/chrome/chrome --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=network --disable-dev-shm-usage --use-angle=swiftshader-webgl --mute-audio --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --shared-files=network_parent_dirs_pipe:100,v8_context_snapshot_data:101 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  168 litric   /opt/chrome/chrome --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-US --service-sandbox-type=utility --disable-dev-shm-usage --use-angle=swiftshader-webgl --mute-audio --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  169 litric   /opt/chrome/chrome --type=broker
+  189 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=6 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=37948587 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  190 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=5 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=38157567 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  209 root     /usr/bin/litric-filesd --socket /run/litric/files.sock --root /var/lib/litric-files/root --import-dir /run/litric-browser/Downloads
+  218 root     /usr/bin/litric-shell --socket /run/litric/sysd.sock --status /run/litric/shell.status --seconds 900
+  234 root     /usr/bin/litric-drmpresent /dev/dri/card0
+  344 root     grep -E litric|test-game
+LITRIC_PS_END
+LITRIC_DOWNLOAD_LIST staging= saved=
+LITRIC_METRIC_BEGIN
+LITRIC_METRIC uptime=50
+LITRIC_METRIC mem_total_kb=4008868
+LITRIC_METRIC mem_available_kb=3013844
+LITRIC_PROC pid=114 comm=litric-sysd rss_kb=3452 stat=114 (litric-sysd) S 1 0 0 0 -1 4194560 194 157 0 0 19 28 0 2 20 0 2 0 2864 142778368 800 18446744073709551615 104711622719984 104711623802304 140724059613360 0 0 0 0 4102 1088 0 0 0 17 1 0 0 0 0 0 104711623823120 104711623825776 104711625449472 140724059618939 140724059619095 140724059619095 140724059619299 0
+LITRIC_PROC pid=124 comm=litric-browserd rss_kb=2580 stat=124 (litric-browserd) S 1 0 0 0 -1 4194560 219 0 0 0 6 2 0 0 20 0 1 0 2905 4464640 640 18446744073709551615 107877714465232 107877714906192 140736725259104 0 0 0 0 4102 1088 1 0 0 17 1 0 0 0 0 0 107877714924344 107877714927024 107878159253504 140736725265950 140736725266055 140736725266055 140736725266399 0
+LITRIC_PROC pid=125 comm=chrome rss_kb=175848 stat=125 (chrome) R 124 0 0 0 -1 4194560 13736 136 0 0 1329 301 0 3 20 0 30 0 2912 34925191168 43863 18446744073709551615 99372359720960 99372556166352 140734147415568 0 0 0 0 4096 1098990847 0 0 0 17 1 0 0 0 0 0 99372566302720 99372566966273 99373272920064 140734147423672 140734147423885 140734147423885 140734147424229 0
+LITRIC_PROC pid=133 comm=chrome rss_kb=61936 stat=133 (chrome) S 125 0 0 0 -1 4194304 4255 0 0 0 32 31 0 0 20 0 1 0 2985 35013242880 15424 18446744073709551615 97645981143040 97646177588432 140724064407520 0 0 0 0 4098 65536 1 0 0 17 0 0 0 0 0 0 97646187724800 97646188388353 97646367711232 140724064415101 140724064415338 140724064415338 140724064415717 0
+LITRIC_PROC pid=134 comm=chrome rss_kb=61192 stat=134 (chrome) S 125 0 0 0 -1 4194560 4196 0 0 0 32 30 0 0 20 0 1 0 2987 35013230592 15264 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 65536 1 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=136 comm=chrome rss_kb=16692 stat=136 (chrome) S 134 0 0 0 -1 4194624 262 0 0 0 1 5 0 0 20 0 1 0 3051 35013251072 4128 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 65536 1 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=157 comm=chrome rss_kb=73956 stat=157 (chrome) S 133 0 0 0 -1 4194368 2997 0 0 0 244 54 0 0 20 0 11 0 3140 35113635840 18428 18446744073709551615 97645981143040 97646177588432 140724064407520 0 0 0 0 4098 25232636 0 0 0 17 0 0 0 0 0 0 97646187724800 97646188388353 97646367711232 140724064415101 140724064415338 140724064415338 140724064415717 0
+LITRIC_PROC pid=158 comm=chrome rss_kb=104576 stat=158 (chrome) S 125 0 0 0 -1 4194304 5766 0 0 0 329 105 0 0 20 0 8 0 3156 34804244480 26106 18446744073709551615 104485916200960 104486112646352 140721992944672 0 0 0 0 4098 1098908924 0 0 0 17 0 0 0 0 0 0 104486122782720 104486123446273 104486647414784 140721992952892 140721992953454 140721992953454 140721992953833 0
+LITRIC_PROC pid=168 comm=chrome rss_kb=47848 stat=168 (chrome) S 136 0 0 0 -1 4194368 1417 0 0 0 68 17 0 0 20 0 6 0 3336 35055624192 11933 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 0 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=169 comm=chrome rss_kb=19268 stat=169 (chrome) S 158 0 0 0 -1 4194368 176 0 0 0 4 11 0 0 20 0 1 0 3376 34745073664 4769 18446744073709551615 104485916200960 104486112646352 140721992944672 0 0 0 0 4098 1098908924 1 0 0 17 0 0 0 0 0 0 104486122782720 104486123446273 104486647414784 140721992952892 140721992953454 140721992953454 140721992953833 0
+LITRIC_TICK=2
+LITRIC_PS_BEGIN
+LITRIC_PROC pid=189 comm=chrome rss_kb=65296 stat=189 (chrome) S 136 0 0 0 -1 4194368 2534 0 0 0 125 45 0 0 20 0 9 0 3798 1241430540288 16268 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+  114 root     /usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock --home /root --root / --update-root /var/lib/litric/update --backup-root /var/lib/litric/backup
+  124 litric   /usr/bin/litric-browserd --profile /run/litric-browser/profile --downloads /run/litric-browser/Downloads
+  125 litric   /opt/chrome/chrome --headless=new --disable-dev-shm-usage --hide-scrollbars --mute-audio --no-first-run --no-default-browser-check --remote-debugging-pipe --disable-gpu --user-data-dir=/run/litric-browser/profile
+  127 litric   /opt/chrome/chrome_crashpad_handler --monitor-self --monitor-self-annotation=ptype=crashpad-handler --database=/home/litric/.config/google-chrome-for-testing/Crash Reports --annotation=lsb-release=Unknown --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=131.0.6778.204 --initial-client-fd=7 --shared-client-connection
+  129 litric   /opt/chrome/chrome_crashpad_handler --no-periodic-tasks --monitor-self-annotation=ptype=crashpad-handler --database=/home/litric/.config/google-chrome-for-testing/Crash Reports --annotation=lsb-release=Unknown --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=131.0.6778.204 --initial-client-fd=4 --shared-client-connection
+  133 litric   /opt/chrome/chrome --type=zygote --no-zygote-sandbox --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  134 litric   /opt/chrome/chrome --type=zygote --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  136 litric   /opt/chrome/chrome --type=zygote --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  157 litric   /opt/chrome/chrome --type=gpu-process --disable-dev-shm-usage --headless=new --ozone-platform=headless --use-angle=swiftshader-webgl --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --gpu-preferences=UAAAAAAAAAAgAAAEAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAA --use-gl=angle --use-angle=swiftshader-webgl --shared-files --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding 
+  158 litric   /opt/chrome/chrome --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=network --disable-dev-shm-usage --use-angle=swiftshader-webgl --mute-audio --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --shared-files=network_parent_dirs_pipe:100,v8_context_snapshot_data:101 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+LITRIC_PROC pid=190 comm=chrome rss_kb=108056 stat=190 (chrome) R 136 0 0 0 -1 4194368 5255 0 0 0 512 94 0 0 20 0 10 0 3818 1241440555008 26840 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 0 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+  168 litric   /opt/chrome/chrome --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-US --service-sandbox-type=utility --disable-dev-shm-usage --use-angle=swiftshader-webgl --mute-audio --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  169 litric   /opt/chrome/chrome --type=broker
+  189 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=6 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=37948587 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  190 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=5 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=38157567 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  209 root     /usr/bin/litric-filesd --socket /run/litric/files.sock --root /var/lib/litric-files/root --import-dir /run/litric-browser/Downloads
+  218 root     /usr/bin/litric-shell --socket /run/litric/sysd.sock --status /run/litric/shell.status --seconds 900
+  234 root     /usr/bin/litric-drmpresent /dev/dri/card0
+LITRIC_PS_END
+LITRIC_DOWNLOAD_LIST staging= saved=
+LITRIC_PROC pid=218 comm=litric-shell rss_kb=51784 stat=218 (litric-shell) R 1 0 0 0 -1 4194304 13022 0 0 0 273 120 0 0 20 0 4 0 4171 259342336 12916 18446744073709551615 96937756467152 96937760077424 140728745738256 0 0 0 0 4102 1088 0 0 0 17 1 0 0 0 0 0 96937760183336 96937760189064 96938735603712 140728745741948 140728745742049 140728745742049 140728745742306 0
+LITRIC_METRIC_END
+litric.shell.version=0.2.0
+litric.shell.canvas=1280x800
+litric.shell.scale=1.00
+litric.shell.theme=dark
+litric.shell.facts.source=litric-sysd
+litric.shell.environments=3
+litric.shell.files=daemon socket=/run/litric/files.sock
+litric.shell.regional.tz.name=UTC
+litric.shell.regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.regional.tz.offset=+00:00
+litric.shell.regional.tz.abbrev=UTC
+litric.shell.regional.tz.dst=false
+litric.shell.regional.tz.transitions=0
+litric.shell.regional.clock.local=00:00 UTC
+litric.shell.regional.clock.utc=00:00
+litric.shell.regional.locale.tag=C
+litric.shell.regional.locale.source=fallback-c(no locale configured)
+litric.shell.regional.locale.hour_cycle=24
+litric.shell.regional.locale.first_day=Mon
+litric.shell.regional.locale.measurement=metric
+litric.shell.regional.locale.keyboard=us
+litric.shell.present=drm
+litric.shell.drm.card=/dev/dri/card0
+litric.shell.drm.mode=1280x800
+litric.shell.drm.connector=Virtual-1
+litric.shell.drm=1280x800 pitch=5120 connector=Virtual-1 format=XRGB8888 flip=pageflip
+litric.shell.gpu.card=/dev/dri/card0
+litric.shell.gpu.driver=bochs-drm
+litric.shell.gpu.vendor=0x1234
+litric.shell.gpu.device=0x1111
+litric.shell.gpu=card=/dev/dri/card0 driver=bochs-drm vendor=0x1234 device=0x1111 render=none
+litric.shell.target=drm-kms
+litric.shell.fbcon=released=1
+litric.shell.input.found=3
+litric.shell.input.opened=2
+litric.shell.input.keyboard=true
+litric.shell.input.pointer=true
+litric.shell.input.absmax=32767x32767
+litric.shell.input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+litric.shell.input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+litric.shell.wayland.display=wayland-0
+litric.shell.wayland.socket=/run/litric/wayland-0
+litric.shell.mode=ready
+litric.shell.drawn=1
+LITRIC_DRM_FLIP=ok
+litric-shell: frame 1 took 937 ms, over the 500 ms budget for deep-idle (over budget 1 time(s))
+litric-shell: frame 2 took 1048 ms, over the 16 ms budget for active (over budget 2 time(s))
+LITRIC_TICK=3
+LITRIC_PS_BEGIN
+  114 root     /usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock --home /root --root / --update-root /var/lib/litric/update --backup-root /var/lib/litric/backup
+  124 litric   /usr/bin/litric-browserd --profile /run/litric-browser/profile --downloads /run/litric-browser/Downloads
+  125 litric   /opt/chrome/chrome --headless=new --disable-dev-shm-usage --hide-scrollbars --mute-audio --no-first-run --no-default-browser-check --remote-debugging-pipe --disable-gpu --user-data-dir=/run/litric-browser/profile
+  127 litric   /opt/chrome/chrome_crashpad_handler --monitor-self --monitor-self-annotation=ptype=crashpad-handler --database=/home/litric/.config/google-chrome-for-testing/Crash Reports --annotation=lsb-release=Unknown --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=131.0.6778.204 --initial-client-fd=7 --shared-client-connection
+  129 litric   /opt/chrome/chrome_crashpad_handler --no-periodic-tasks --monitor-self-annotation=ptype=crashpad-handler --database=/home/litric/.config/google-chrome-for-testing/Crash Reports --annotation=lsb-release=Unknown --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=131.0.6778.204 --initial-client-fd=4 --shared-client-connection
+  133 litric   /opt/chrome/chrome --type=zygote --no-zygote-sandbox --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  134 litric   /opt/chrome/chrome --type=zygote --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  136 litric   /opt/chrome/chrome --type=zygote --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  157 litric   /opt/chrome/chrome --type=gpu-process --disable-dev-shm-usage --headless=new --ozone-platform=headless --use-angle=swiftshader-webgl --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --gpu-preferences=UAAAAAAAAAAgAAAEAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAA --use-gl=angle --use-angle=swiftshader-webgl --shared-files --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding 
+  158 litric   /opt/chrome/chrome --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=network --disable-dev-shm-usage --use-angle=swiftshader-webgl --mute-audio --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --shared-files=network_parent_dirs_pipe:100,v8_context_snapshot_data:101 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  168 litric   /opt/chrome/chrome --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-US --service-sandbox-type=utility --disable-dev-shm-usage --use-angle=swiftshader-webgl --mute-audio --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  169 litric   /opt/chrome/chrome --type=broker
+  189 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=6 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=37948587 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  190 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=5 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=38157567 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  209 root     /usr/bin/litric-filesd --socket /run/litric/files.sock --root /var/lib/litric-files/root --import-dir /run/litric-browser/Downloads
+  218 root     /usr/bin/litric-shell --socket /run/litric/sysd.sock --status /run/litric/shell.status --seconds 900
+  234 root     /usr/bin/litric-drmpresent /dev/dri/card0
+  495 root     grep -E litric|test-game
+LITRIC_PS_END
+LITRIC_STATUS_BEGIN
+version=0.2.0
+canvas=1280x800
+scale=1.00
+theme=dark
+facts.source=litric-sysd
+environments=3
+files=daemon socket=/run/litric/files.sock
+regional.tz.name=UTC
+regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+regional.tz.offset=+00:00
+regional.tz.abbrev=UTC
+regional.tz.dst=false
+regional.tz.transitions=0
+regional.clock.local=00:00 UTC
+regional.clock.utc=00:00
+regional.locale.tag=C
+regional.locale.source=fallback-c(no locale configured)
+regional.locale.hour_cycle=24
+regional.locale.first_day=Mon
+regional.locale.measurement=metric
+regional.locale.keyboard=us
+present=drm
+drm.card=/dev/dri/card0
+drm.mode=1280x800
+drm.connector=Virtual-1
+drm=1280x800 pitch=5120 connector=Virtual-1 format=XRGB8888 flip=pageflip
+gpu.card=/dev/dri/card0
+gpu.driver=bochs-drm
+gpu.vendor=0x1234
+gpu.device=0x1111
+gpu=card=/dev/dri/card0 driver=bochs-drm vendor=0x1234 device=0x1111 render=none
+target=drm-kms
+fbcon=released=1
+input.found=3
+input.opened=2
+input.keyboard=true
+input.pointer=true
+input.absmax=32767x32767
+input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+wayland.display=wayland-0
+wayland.socket=/run/litric/wayland-0
+mode=ready
+drawn=1
+LITRIC_DOWNLOAD_LIST staging= saved=
+LITRIC_STATUS_END
+litric-shell: frame 3 took 1094 ms, over the 16 ms budget for active (over budget 3 time(s))
+litric-shell: frame 4 took 879 ms, over the 16 ms budget for active (over budget 4 time(s))
+LITRIC_METRIC_BEGIN
+LITRIC_METRIC uptime=58
+LITRIC_METRIC mem_total_kb=4008868
+LITRIC_METRIC mem_available_kb=2999656
+LITRIC_PROC pid=114 comm=litric-sysd rss_kb=3456 stat=114 (litric-sysd) S 1 0 0 0 -1 4194560 195 260 0 0 22 45 1 3 20 0 2 0 2864 142778368 800 18446744073709551615 104711622719984 104711623802304 140724059613360 0 0 0 0 4102 1088 0 0 0 17 1 0 0 0 0 0 104711623823120 104711623825776 104711625449472 140724059618939 140724059619095 140724059619095 140724059619299 0
+LITRIC_PROC pid=124 comm=litric-browserd rss_kb=2584 stat=124 (litric-browserd) S 1 0 0 0 -1 4194560 220 0 0 0 6 2 0 0 20 0 1 0 2905 4464640 640 18446744073709551615 107877714465232 107877714906192 140736725259104 0 0 0 0 4102 1088 1 0 0 17 1 0 0 0 0 0 107877714924344 107877714927024 107878159253504 140736725265950 140736725266055 140736725266055 140736725266399 0
+LITRIC_PROC pid=125 comm=chrome rss_kb=178016 stat=125 (chrome) R 124 0 0 0 -1 4194560 14372 136 0 0 1537 398 0 3 20 0 30 0 2912 34924371968 44458 18446744073709551615 99372359720960 99372556166352 140734147415568 0 0 0 0 4096 1098990847 0 0 0 17 0 0 0 0 0 0 99372566302720 99372566966273 99373272920064 140734147423672 140734147423885 140734147423885 140734147424229 0
+LITRIC_PROC pid=133 comm=chrome rss_kb=61936 stat=133 (chrome) S 125 0 0 0 -1 4194304 4255 0 0 0 32 31 0 0 20 0 1 0 2985 35013242880 15424 18446744073709551615 97645981143040 97646177588432 140724064407520 0 0 0 0 4098 65536 1 0 0 17 0 0 0 0 0 0 97646187724800 97646188388353 97646367711232 140724064415101 140724064415338 140724064415338 140724064415717 0
+LITRIC_PROC pid=134 comm=chrome rss_kb=61192 stat=134 (chrome) S 125 0 0 0 -1 4194560 4196 0 0 0 32 30 0 0 20 0 1 0 2987 35013230592 15264 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 65536 1 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=136 comm=chrome rss_kb=16692 stat=136 (chrome) S 134 0 0 0 -1 4194624 262 0 0 0 1 5 0 0 20 0 1 0 3051 35013251072 4128 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 65536 1 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=157 comm=chrome rss_kb=74056 stat=157 (chrome) S 133 0 0 0 -1 4194368 3035 0 0 0 361 102 0 0 20 0 11 0 3140 35115175936 18483 18446744073709551615 97645981143040 97646177588432 140724064407520 0 0 0 0 4098 25232636 0 0 0 17 0 0 0 0 0 0 97646187724800 97646188388353 97646367711232 140724064415101 140724064415338 140724064415338 140724064415717 0
+LITRIC_PROC pid=158 comm=chrome rss_kb=104596 stat=158 (chrome) S 125 0 0 0 -1 4194304 5771 0 0 0 338 109 0 0 20 0 8 0 3156 34804244480 26106 18446744073709551615 104485916200960 104486112646352 140721992944672 0 0 0 0 4098 1098908924 0 0 0 17 0 0 0 0 0 0 104486122782720 104486123446273 104486647414784 140721992952892 140721992953454 140721992953454 140721992953833 0
+LITRIC_PROC pid=168 comm=chrome rss_kb=47848 stat=168 (chrome) S 136 0 0 0 -1 4194368 1417 0 0 0 68 17 0 0 20 0 6 0 3336 35055624192 11933 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 0 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=169 comm=chrome rss_kb=19268 stat=169 (chrome) S 158 0 0 0 -1 4194368 176 0 0 0 4 11 0 0 20 0 1 0 3376 34745073664 4769 18446744073709551615 104485916200960 104486112646352 140721992944672 0 0 0 0 4098 1098908924 1 0 0 17 0 0 0 0 0 0 104486122782720 104486123446273 104486647414784 140721992952892 140721992953454 140721992953454 140721992953833 0
+litric-shell: frame 5 took 1935 ms, over the 16 ms budget for active (over budget 5 time(s))
+LITRIC_PROC pid=189 comm=chrome rss_kb=72764 stat=189 (chrome) R 136 0 0 0 -1 4194368 2711 0 0 0 131 48 0 0 20 0 9 0 3798 1241430540288 18124 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 0 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=190 comm=chrome rss_kb=131032 stat=190 (chrome) R 136 0 0 0 -1 4194368 8833 0 0 0 1074 177 0 0 20 0 10 0 3818 1241441685504 32818 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=218 comm=litric-shell rss_kb=57060 stat=218 (litric-shell) S 1 0 0 0 -1 4194560 14071 0 0 0 568 159 0 0 20 0 5 0 4171 331128832 14196 18446744073709551615 96937756467152 96937760077424 140728745738256 0 0 0 0 4102 1088 0 0 0 17 1 0 0 0 0 0 96937760183336 96937760189064 96938735603712 140728745741948 140728745742049 140728745742049 140728745742306 0
+LITRIC_TICK=4
+LITRIC_PS_BEGIN
+  114 root     /usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock --home /root --root / --update-root /var/lib/litric/update --backup-root /var/lib/litric/backup
+  124 litric   /usr/bin/litric-browserd --profile /run/litric-browser/profile --downloads /run/litric-browser/Downloads
+  125 litric   /opt/chrome/chrome --headless=new --disable-dev-shm-usage --hide-scrollbars --mute-audio --no-first-run --no-default-browser-check --remote-debugging-pipe --disable-gpu --user-data-dir=/run/litric-browser/profile
+  127 litric   /opt/chrome/chrome_crashpad_handler --monitor-self --monitor-self-annotation=ptype=crashpad-handler --database=/home/litric/.config/google-chrome-for-testing/Crash Reports --annotation=lsb-release=Unknown --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=131.0.6778.204 --initial-client-fd=7 --shared-client-connection
+  129 litric   /opt/chrome/chrome_crashpad_handler --no-periodic-tasks --monitor-self-annotation=ptype=crashpad-handler --database=/home/litric/.config/google-chrome-for-testing/Crash Reports --annotation=lsb-release=Unknown --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=131.0.6778.204 --initial-client-fd=4 --shared-client-connection
+  133 litric   /opt/chrome/chrome --type=zygote --no-zygote-sandbox --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  134 litric   /opt/chrome/chrome --type=zygote --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  136 litric   /opt/chrome/chrome --type=zygote --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  157 litric   /opt/chrome/chrome --type=gpu-process --disable-dev-shm-usage --headless=new --ozone-platform=headless --use-angle=swiftshader-webgl --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --gpu-preferences=UAAAAAAAAAAgAAAEAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAA --use-gl=angle --use-angle=swiftshader-webgl --shared-files --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding 
+  158 litric   /opt/chrome/chrome --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=network --disable-dev-shm-usage --use-angle=swiftshader-webgl --mute-audio --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --shared-files=network_parent_dirs_pipe:100,v8_context_snapshot_data:101 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  168 litric   /opt/chrome/chrome --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-US --service-sandbox-type=utility --disable-dev-shm-usage --use-angle=swiftshader-webgl --mute-audio --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  169 litric   /opt/chrome/chrome --type=broker
+  189 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=6 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=37948587 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  190 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=5 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=38157567 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  209 root     /usr/bin/litric-filesd --socket /run/litric/files.sock --root /var/lib/litric-files/root --import-dir /run/litric-browser/Downloads
+  218 root     /usr/bin/litric-shell --socket /run/litric/sysd.sock --status /run/litric/shell.status --seconds 900
+  234 root     /usr/bin/litric-drmpresent /dev/dri/card0
+  552 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=7 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=60338548 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  624 root     grep -E litric|test-game
+LITRIC_PS_END
+LITRIC_STATUS_BEGIN
+LITRIC_DOWNLOAD_LIST staging= saved=
+version=0.2.0
+canvas=1280x800
+scale=1.00
+theme=dark
+facts.source=litric-sysd
+environments=3
+files=daemon socket=/run/litric/files.sock
+regional.tz.name=UTC
+regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+regional.tz.offset=+00:00
+regional.tz.abbrev=UTC
+regional.tz.dst=false
+regional.tz.transitions=0
+regional.clock.local=00:00 UTC
+regional.clock.utc=00:00
+regional.locale.tag=C
+regional.locale.source=fallback-c(no locale configured)
+regional.locale.hour_cycle=24
+regional.locale.first_day=Mon
+regional.locale.measurement=metric
+regional.locale.keyboard=us
+present=drm
+drm.card=/dev/dri/card0
+drm.mode=1280x800
+drm.connector=Virtual-1
+drm=1280x800 pitch=5120 connector=Virtual-1 format=XRGB8888 flip=pageflip
+gpu.card=/dev/dri/card0
+gpu.driver=bochs-drm
+gpu.vendor=0x1234
+gpu.device=0x1111
+gpu=card=/dev/dri/card0 driver=bochs-drm vendor=0x1234 device=0x1111 render=none
+target=drm-kms
+fbcon=released=1
+input.found=3
+input.opened=2
+input.keyboard=true
+input.pointer=true
+input.absmax=32767x32767
+input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+wayland.display=wayland-0
+wayland.socket=/run/litric/wayland-0
+mode=ready
+drawn=1
+LITRIC_STATUS_END
+LITRIC_METRIC_END
+litric-shell: frame 6 took 1399 ms, over the 16 ms budget for active (over budget 6 time(s))
+litric.shell.version=0.2.0
+litric.shell.canvas=1280x800
+litric.shell.scale=1.00
+litric.shell.theme=dark
+litric.shell.facts.source=litric-sysd
+litric.shell.environments=3
+litric.shell.files=daemon socket=/run/litric/files.sock
+litric.shell.regional.tz.name=UTC
+litric.shell.regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.regional.tz.offset=+00:00
+litric.shell.regional.tz.abbrev=UTC
+litric.shell.regional.tz.dst=false
+litric.shell.regional.tz.transitions=0
+litric.shell.regional.clock.local=00:00 UTC
+litric.shell.regional.clock.utc=00:00
+litric.shell.regional.locale.tag=C
+litric.shell.regional.locale.source=fallback-c(no locale configured)
+litric.shell.regional.locale.hour_cycle=24
+litric.shell.regional.locale.first_day=Mon
+litric.shell.regional.locale.measurement=metric
+litric.shell.regional.locale.keyboard=us
+litric.shell.present=drm
+litric.shell.drm.card=/dev/dri/card0
+litric.shell.drm.mode=1280x800
+litric.shell.drm.connector=Virtual-1
+litric.shell.drm=1280x800 pitch=5120 connector=Virtual-1 format=XRGB8888 flip=pageflip
+litric.shell.gpu.card=/dev/dri/card0
+litric.shell.gpu.driver=bochs-drm
+litric.shell.gpu.vendor=0x1234
+litric.shell.gpu.device=0x1111
+litric.shell.gpu=card=/dev/dri/card0 driver=bochs-drm vendor=0x1234 device=0x1111 render=none
+litric.shell.target=drm-kms
+litric.shell.fbcon=released=1
+litric.shell.input.found=3
+litric.shell.input.opened=2
+litric.shell.input.keyboard=true
+litric.shell.input.pointer=true
+litric.shell.input.absmax=32767x32767
+litric.shell.input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+litric.shell.input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+litric.shell.wayland.display=wayland-0
+litric.shell.wayland.socket=/run/litric/wayland-0
+litric.shell.mode=ready
+litric.shell.drawn=1
+litric.shell.mode=ready
+litric.shell.life=active
+litric.shell.frame_interval_ms=16
+litric.shell.overlay=none
+litric.shell.frames=7
+litric.shell.hotspots=41
+litric.shell.notifications=0
+litric.shell.pointer=640,400
+litric.shell.facts.source=litric-sysd
+litric.shell.files.watch=none reads=0
+litric.shell.browser.status=the page could not be shown: no such tab
+litric.shell.browser.tab=litric://about
+litric.shell.browser.frame=none
+litric.shell.browser.viewport=none
+litric.shell.browser.omnibox=false
+litric.shell.browser.omnibox_fresh=false
+litric.shell.browser.omnibox_click=564,155
+litric.shell.browser.downloads_click=582,185
+litric.shell.browser.title=New Tab
+litric.shell.browser.tabs=1 active=0
+litric.shell.browser.panel=page
+litric.shell.browser.downloads=0
+litric.shell.net.probe=pending
+litric.shell.windows=1
+litric.shell.workspace=1/4
+litric.shell.focus=#1
+litric.shell.window=#1 com.litric.browser "Litric Browser" 1000x620+64+76 normal ws0
+litric.shell.tz.name=UTC
+litric.shell.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.tz.offset=+00:00
+litric.shell.tz.abbrev=UTC
+litric.shell.tz.dst=false
+litric.shell.tz.transitions=0
+litric.shell.clock.local=15:04 UTC
+litric.shell.clock.utc=15:04
+litric.shell.locale.tag=C
+litric.shell.locale.source=fallback-c(no locale configured)
+litric.shell.locale.hour_cycle=24
+litric.shell.locale.first_day=Mon
+litric.shell.locale.measurement=metric
+litric.shell.locale.keyboard=us
+litric.shell.rows_presented=4800
+litric.shell.frames=7
+litric.shell.frames_drawn=6
+litric.shell.frames_over_budget=6
+litric-shell: frame 7 took 1034 ms, over the 16 ms budget for active (over budget 7 time(s))
+litric-shell: frame 8 took 872 ms, over the 16 ms budget for active (over budget 8 time(s))
+litric-shell: frame 9 took 643 ms, over the 16 ms budget for active (over budget 9 time(s))
+litric.shell.version=0.2.0
+litric.shell.canvas=1280x800
+litric.shell.scale=1.00
+litric.shell.theme=dark
+litric.shell.facts.source=litric-sysd
+litric.shell.environments=3
+litric.shell.files=daemon socket=/run/litric/files.sock
+litric.shell.regional.tz.name=UTC
+litric.shell.regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.regional.tz.offset=+00:00
+litric.shell.regional.tz.abbrev=UTC
+litric.shell.regional.tz.dst=false
+litric.shell.regional.tz.transitions=0
+litric.shell.regional.clock.local=00:00 UTC
+LITRIC_TICK=5
+LITRIC_PS_BEGIN
+litric.shell.regional.clock.utc=00:00
+litric.shell.regional.locale.tag=C
+litric.shell.regional.locale.source=fallback-c(no locale configured)
+litric.shell.regional.locale.hour_cycle=24
+litric.shell.regional.locale.first_day=Mon
+LITRIC_DOWNLOAD_LIST staging= saved=
+litric.shell.regional.locale.measurement=metric
+litric.shell.regional.locale.keyboard=us
+litric.shell.present=drm
+litric.shell.drm.card=/dev/dri/card0
+litric.shell.drm.mode=1280x800
+litric.shell.drm.connector=Virtual-1
+litric.shell.drm=1280x800 pitch=5120 connector=Virtual-1 format=XRGB8888 flip=pageflip
+litric.shell.gpu.card=/dev/dri/card0
+litric.shell.gpu.driver=bochs-drm
+litric.shell.gpu.vendor=0x1234
+litric.shell.gpu.device=0x1111
+litric.shell.gpu=card=/dev/dri/card0 driver=bochs-drm vendor=0x1234 device=0x1111 render=none
+litric.shell.target=drm-kms
+litric.shell.fbcon=released=1
+litric.shell.input.found=3
+litric.shell.input.opened=2
+litric.shell.input.keyboard=true
+litric.shell.input.pointer=true
+litric.shell.input.absmax=32767x32767
+litric.shell.input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+litric.shell.input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+litric.shell.wayland.display=wayland-0
+litric.shell.wayland.socket=/run/litric/wayland-0
+litric.shell.mode=ready
+litric.shell.drawn=1
+litric.shell.mode=ready
+litric.shell.life=active
+litric.shell.frame_interval_ms=16
+litric.shell.overlay=none
+litric.shell.frames=10
+litric.shell.hotspots=41
+litric.shell.notifications=0
+litric.shell.pointer=564,151
+litric.shell.facts.source=litric-sysd
+litric.shell.files.watch=none reads=0
+litric.shell.browser.status=the page could not be shown: no such tab
+litric.shell.browser.tab=litric://about
+litric.shell.browser.frame=none
+litric.shell.browser.viewport=none
+litric.shell.browser.omnibox=true
+litric.shell.browser.omnibox_fresh=true
+litric.shell.browser.omnibox_click=564,155
+litric.shell.browser.downloads_click=582,185
+litric.shell.browser.title=New Tab
+litric.shell.browser.tabs=1 active=0
+litric.shell.browser.panel=page
+litric.shell.browser.downloads=0
+litric.shell.net.probe=up
+litric.shell.windows=1
+litric.shell.workspace=1/4
+litric.shell.focus=#1
+litric.shell.window=#1 com.litric.browser "Litric Browser" 1000x620+64+76 normal ws0
+litric.shell.tz.name=UTC
+litric.shell.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.tz.offset=+00:00
+litric.shell.tz.abbrev=UTC
+litric.shell.tz.dst=false
+litric.shell.tz.transitions=0
+litric.shell.clock.local=15:05 UTC
+litric.shell.clock.utc=15:05
+litric.shell.locale.tag=C
+litric.shell.locale.source=fallback-c(no locale configured)
+litric.shell.locale.hour_cycle=24
+litric.shell.locale.first_day=Mon
+litric.shell.locale.measurement=metric
+litric.shell.locale.keyboard=us
+litric.shell.rows_presented=7200
+litric.shell.frames=10
+litric.shell.frames_drawn=9
+litric.shell.frames_over_budget=9
+  114 root     /usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock --home /root --root / --update-root /var/lib/litric/update --backup-root /var/lib/litric/backup
+  124 litric   /usr/bin/litric-browserd --profile /run/litric-browser/profile --downloads /run/litric-browser/Downloads
+  125 litric   /opt/chrome/chrome --headless=new --disable-dev-shm-usage --hide-scrollbars --mute-audio --no-first-run --no-default-browser-check --remote-debugging-pipe --disable-gpu --user-data-dir=/run/litric-browser/profile
+  127 litric   /opt/chrome/chrome_crashpad_handler --monitor-self --monitor-self-annotation=ptype=crashpad-handler --database=/home/litric/.config/google-chrome-for-testing/Crash Reports --annotation=lsb-release=Unknown --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=131.0.6778.204 --initial-client-fd=7 --shared-client-connection
+  129 litric   /opt/chrome/chrome_crashpad_handler --no-periodic-tasks --monitor-self-annotation=ptype=crashpad-handler --database=/home/litric/.config/google-chrome-for-testing/Crash Reports --annotation=lsb-release=Unknown --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=131.0.6778.204 --initial-client-fd=4 --shared-client-connection
+  133 litric   /opt/chrome/chrome --type=zygote --no-zygote-sandbox --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  134 litric   /opt/chrome/chrome --type=zygote --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  136 litric   /opt/chrome/chrome --type=zygote --headless=new --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl
+  157 litric   /opt/chrome/chrome --type=gpu-process --disable-dev-shm-usage --headless=new --ozone-platform=headless --use-angle=swiftshader-webgl --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --gpu-preferences=UAAAAAAAAAAgAAAEAAAAAAAAAAAAAAAAAABgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAA --use-gl=angle --use-angle=swiftshader-webgl --shared-files --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding 
+  158 litric   /opt/chrome/chrome --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=network --disable-dev-shm-usage --use-angle=swiftshader-webgl --mute-audio --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --shared-files=network_parent_dirs_pipe:100,v8_context_snapshot_data:101 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  168 litric   /opt/chrome/chrome --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-US --service-sandbox-type=utility --disable-dev-shm-usage --use-angle=swiftshader-webgl --mute-audio --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  169 litric   /opt/chrome/chrome --type=broker
+  189 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=6 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=37948587 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  190 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=5 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=38157567 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  209 root     /usr/bin/litric-filesd --socket /run/litric/files.sock --root /var/lib/litric-files/root --import-dir /run/litric-browser/Downloads
+  218 root     /usr/bin/litric-shell --socket /run/litric/sysd.sock --status /run/litric/shell.status --seconds 900
+  234 root     /usr/bin/litric-drmpresent /dev/dri/card0
+  552 litric   /opt/chrome/chrome --type=renderer --string-annotations --crashpad-handler-pid=127 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/run/litric-browser/profile --change-stack-guard-on-fork=enable --disable-dev-shm-usage --remote-debugging-pipe --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=1 --renderer-client-id=7 --time-ticks-at-unix-epoch=-1793977434607379 --launch-time-ticks=60338548 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8789243220503797646,16063371591054431465,262144 --disable-features=PaintHolding --variations-seed-version
+  674 root     grep -E litric|test-game
+LITRIC_PS_END
+LITRIC_STATUS_BEGIN
+version=0.2.0
+canvas=1280x800
+scale=1.00
+theme=dark
+facts.source=litric-sysd
+environments=3
+files=daemon socket=/run/litric/files.sock
+regional.tz.name=UTC
+regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+regional.tz.offset=+00:00
+regional.tz.abbrev=UTC
+regional.tz.dst=false
+regional.tz.transitions=0
+regional.clock.local=00:00 UTC
+regional.clock.utc=00:00
+regional.locale.tag=C
+regional.locale.source=fallback-c(no locale configured)
+regional.locale.hour_cycle=24
+regional.locale.first_day=Mon
+regional.locale.measurement=metric
+regional.locale.keyboard=us
+present=drm
+drm.card=/dev/dri/card0
+drm.mode=1280x800
+drm.connector=Virtual-1
+drm=1280x800 pitch=5120 connector=Virtual-1 format=XRGB8888 flip=pageflip
+gpu.card=/dev/dri/card0
+gpu.driver=bochs-drm
+gpu.vendor=0x1234
+gpu.device=0x1111
+gpu=card=/dev/dri/card0 driver=bochs-drm vendor=0x1234 device=0x1111 render=none
+target=drm-kms
+fbcon=released=1
+input.found=3
+input.opened=2
+input.keyboard=true
+input.pointer=true
+input.absmax=32767x32767
+input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+wayland.display=wayland-0
+wayland.socket=/run/litric/wayland-0
+mode=ready
+drawn=1
+mode=ready
+life=active
+frame_interval_ms=16
+overlay=none
+frames=10
+hotspots=41
+notifications=0
+pointer=564,151
+facts.source=litric-sysd
+files.watch=none reads=0
+browser.status=the page could not be shown: no such tab
+browser.tab=litric://about
+browser.frame=none
+browser.viewport=none
+browser.omnibox=true
+browser.omnibox_fresh=true
+browser.omnibox_click=564,155
+browser.downloads_click=582,185
+browser.title=New Tab
+browser.tabs=1 active=0
+browser.panel=page
+browser.downloads=0
+net.probe=up
+windows=1
+workspace=1/4
+focus=#1
+window=#1 com.litric.browser "Litric Browser" 1000x620+64+76 normal ws0
+tz.name=UTC
+tz.source=fallback-utc(no TZ and no /etc/localtime)
+tz.offset=+00:00
+tz.abbrev=UTC
+tz.dst=false
+tz.transitions=0
+clock.local=15:05 UTC
+clock.utc=15:05
+locale.tag=C
+locale.source=fallback-c(no locale configured)
+locale.hour_cycle=24
+locale.first_day=Mon
+locale.measurement=metric
+locale.keyboard=us
+rows_presented=7200
+frames=10
+frames_drawn=9
+frames_over_budget=9
+LITRIC_STATUS_END
+LITRIC_METRIC_BEGIN
+LITRIC_METRIC uptime=68
+LITRIC_METRIC mem_total_kb=4008868
+LITRIC_METRIC mem_available_kb=2960936
+LITRIC_PROC pid=114 comm=litric-sysd rss_kb=3456 stat=114 (litric-sysd) S 1 0 0 0 -1 4194560 197 418 0 0 27 73 1 6 20 0 2 0 2864 142778368 800 18446744073709551615 104711622719984 104711623802304 140724059613360 0 0 0 0 4102 1088 0 0 0 17 1 0 0 0 0 0 104711623823120 104711623825776 104711625449472 140724059618939 140724059619095 140724059619095 140724059619299 0
+LITRIC_PROC pid=124 comm=litric-browserd rss_kb=2584 stat=124 (litric-browserd) S 1 0 0 0 -1 4194560 220 0 0 0 6 2 0 0 20 0 1 0 2905 4464640 640 18446744073709551615 107877714465232 107877714906192 140736725259104 0 0 0 0 4102 1088 1 0 0 17 1 0 0 0 0 0 107877714924344 107877714927024 107878159253504 140736725265950 140736725266055 140736725266055 140736725266399 0
+LITRIC_PROC pid=125 comm=chrome rss_kb=180264 stat=125 (chrome) S 124 0 0 0 -1 4194560 15605 136 0 0 1680 489 0 3 20 0 30 0 2912 34928832512 45031 18446744073709551615 99372359720960 99372556166352 140734147415568 0 0 0 0 4096 1098990847 0 0 0 17 1 0 0 0 0 0 99372566302720 99372566966273 99373272920064 140734147423672 140734147423885 140734147423885 140734147424229 0
+LITRIC_PROC pid=133 comm=chrome rss_kb=61936 stat=133 (chrome) S 125 0 0 0 -1 4194304 4255 0 0 0 32 31 0 0 20 0 1 0 2985 35013242880 15424 18446744073709551615 97645981143040 97646177588432 140724064407520 0 0 0 0 4098 65536 1 0 0 17 0 0 0 0 0 0 97646187724800 97646188388353 97646367711232 140724064415101 140724064415338 140724064415338 140724064415717 0
+LITRIC_PROC pid=134 comm=chrome rss_kb=61192 stat=134 (chrome) S 125 0 0 0 -1 4194560 4196 0 0 0 32 30 0 0 20 0 1 0 2987 35013230592 15264 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 65536 1 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=136 comm=chrome rss_kb=16692 stat=136 (chrome) S 134 0 0 0 -1 4194624 320 0 0 0 1 7 0 0 20 0 1 0 3051 35013251072 4128 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 65536 1 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=157 comm=chrome rss_kb=79104 stat=157 (chrome) S 133 0 0 0 -1 4194368 3227 0 0 0 454 125 0 0 20 0 11 0 3140 35118882816 19699 18446744073709551615 97645981143040 97646177588432 140724064407520 0 0 0 0 4098 25232636 0 0 0 17 0 0 0 0 0 0 97646187724800 97646188388353 97646367711232 140724064415101 140724064415338 140724064415338 140724064415717 0
+LITRIC_PROC pid=158 comm=chrome rss_kb=106140 stat=158 (chrome) S 125 0 0 0 -1 4194304 6043 0 0 0 391 131 0 0 20 0 8 0 3156 34804379648 26489 18446744073709551615 104485916200960 104486112646352 140721992944672 0 0 0 0 4098 1098908924 0 0 0 17 0 0 0 0 0 0 104486122782720 104486123446273 104486647414784 140721992952892 140721992953454 140721992953454 140721992953833 0
+LITRIC_PROC pid=168 comm=chrome rss_kb=47848 stat=168 (chrome) S 136 0 0 0 -1 4194368 1417 0 0 0 68 17 0 0 20 0 6 0 3336 35055624192 11933 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 0 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=169 comm=chrome rss_kb=19268 stat=169 (chrome) S 158 0 0 0 -1 4194368 176 0 0 0 5 11 0 0 20 0 1 0 3376 34745073664 4769 18446744073709551615 104485916200960 104486112646352 140721992944672 0 0 0 0 4098 1098908924 1 0 0 17 1 0 0 0 0 0 104486122782720 104486123446273 104486647414784 140721992952892 140721992953454 140721992953454 140721992953833 0
+LITRIC_PROC pid=189 comm=chrome rss_kb=116964 stat=189 (chrome) S 136 0 0 0 -1 4194368 5662 0 0 0 379 101 0 0 20 0 10 0 3798 1241440276480 29181 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_PROC pid=190 comm=chrome rss_kb=141128 stat=190 (chrome) S 136 0 0 0 -1 4194368 10888 0 0 0 1291 222 0 0 20 0 10 0 3818 1241449095168 35201 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 0 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+litric-shell: frame 10 took 698 ms, over the 16 ms budget for active (over budget 10 time(s))
+LITRIC_PROC pid=218 comm=litric-shell rss_kb=57296 stat=218 (litric-shell) S 1 0 0 0 -1 4194560 14090 0 0 0 846 195 0 0 20 0 5 0 4171 469549056 14292 18446744073709551615 96937756467152 96937760077424 140728745738256 0 0 0 0 4102 1088 0 0 0 17 1 0 0 0 0 0 96937760183336 96937760189064 96938735603712 140728745741948 140728745742049 140728745742049 140728745742306 0
+LITRIC_PROC pid=552 comm=chrome rss_kb=65052 stat=552 (chrome) S 136 0 0 0 -1 4194368 2500 0 0 0 31 26 0 0 20 0 9 0 6038 1241430605824 16221 18446744073709551615 106051074686976 106051271132368 140736944088880 0 0 0 0 4098 1098993405 0 0 0 17 1 0 0 0 0 0 106051281268736 106051281932289 106052228616192 140736944090473 140736944090690 140736944090690 140736944091109 0
+LITRIC_METRIC_END

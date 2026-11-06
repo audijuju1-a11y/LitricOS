@@ -1,0 +1,290 @@
+[1;32m[qemu-proof][0m bootstrapping QEMU toolchain and rootfs at /workspace/chats/d7991b8c41a570fd94f0a9bc/build/qemu-bootstrap
+[1;32m[bootstrap][0m using complete cache at /workspace/chats/d7991b8c41a570fd94f0a9bc/build/qemu-bootstrap
+[1;32m[qemu-proof][0m staging guest rootfs at artifacts/qemu-guest-proof/gpu-1280x800-run2/rootfs
+[1;32m[qemu-proof][0m packing initramfs
+[1;32m[qemu-proof][0m preparing QEMU BIOS/data directory
+[1;32m[qemu-proof][0m booting TCG guest at 1280x800 (serial: artifacts/qemu-guest-proof/gpu-1280x800-run2/serial.log)
+[1;32m[qemu-proof][0m QEMU pid 426387 (framebuffer request 1280x800)
+waiting for the LitricOS desktop at 1280x800 and its absolute pointer
+clicking Play at (981, 266) on the installed game
+waiting for the real client's pixels
+clicking Stop at (713, 26)
+opening the browser from the launcher
+loading https://example.com/ from the address bar
+opening a second tab with Ctrl+T
+switching back to the first tab with Ctrl+1
+opening two download tabs with Ctrl+T
+starting the gh-release download in the third tab
+waiting for the large transfer to be visibly in flight
+starting the sha256sum download in the fourth tab
+waiting for both downloads to finish staging
+opening the Downloads panel
+closing the small-download tab with Ctrl+W
+closing the large-download tab with Ctrl+W
+switching to the first page tab with Ctrl+1
+switching to the second page tab with Ctrl+2
+wrapping to the first tab with Ctrl+Tab
+{
+  "assertions": {
+    "browser_download_active": true,
+    "browser_download_large": true,
+    "browser_download_listed": true,
+    "browser_download_saved": true,
+    "browser_download_screenshot_at_expected_size": true,
+    "browser_download_staged": true,
+    "browser_download_tabs_closed": true,
+    "browser_downloads_concurrent": true,
+    "browser_engine_chromium": true,
+    "browser_final_status_loaded": true,
+    "browser_frame_received": true,
+    "browser_gpu_software_fallback": true,
+    "browser_https_url": true,
+    "browser_pixels": true,
+    "browser_screenshot_at_expected_size": true,
+    "browser_second_tab_loaded": true,
+    "browser_tab_closed": true,
+    "browser_tab_cycle_after_close": true,
+    "browser_tab_switch_after_close": true,
+    "browser_tab_switch_back": true,
+    "browser_tabs_closed_screenshot_at_expected_size": true,
+    "browser_tabs_switched_screenshot_at_expected_size": true,
+    "browser_title": true,
+    "browser_two_tabs": true,
+    "browser_viewport": true,
+    "browser_window": true,
+    "browser_window_inside_framebuffer": true,
+    "client_window_gone_after_stop": true,
+    "colourful_above_floor": true,
+    "colourful_below_ceiling_after_stop": true,
+    "gpu_card_node": true,
+    "gpu_driver_named": true,
+    "gpu_kms_connector": true,
+    "gpu_kms_mode": true,
+    "gpu_pageflip": true,
+    "gpu_present_drm": true,
+    "guest_network": true,
+    "installed": true
+  },
+  "browser": {
+    "bright": 383868,
+    "colourful": 4468,
+    "dark": 588599,
+    "download": {
+      "candidate": "gh-release",
+      "expected_sha256": "41c8b0698ad3003cb5c44bde672a1ffd5f818595abd80162fbf8cc999418446a",
+      "expected_size": "13065800",
+      "large": true,
+      "name": "gh_2.62.0_linux_amd64.tar.gz",
+      "saved": true,
+      "sha256": "41c8b0698ad3003cb5c44bde672a1ffd5f818595abd80162fbf8cc999418446a",
+      "size": "13065800",
+      "staged": true,
+      "staged_sha256": "41c8b0698ad3003cb5c44bde672a1ffd5f818595abd80162fbf8cc999418446a",
+      "staged_size": "13065800",
+      "url": "https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz"
+    },
+    "download_click": [
+      610,
+      213
+    ],
+    "download_count": "2",
+    "download_panel": "downloads",
+    "downloads": [
+      {
+        "candidate": "gh-release",
+        "expected_sha256": "41c8b0698ad3003cb5c44bde672a1ffd5f818595abd80162fbf8cc999418446a",
+        "expected_size": "13065800",
+        "large": true,
+        "name": "gh_2.62.0_linux_amd64.tar.gz",
+        "saved": true,
+        "sha256": "41c8b0698ad3003cb5c44bde672a1ffd5f818595abd80162fbf8cc999418446a",
+        "size": "13065800",
+        "staged": true,
+        "staged_sha256": "41c8b0698ad3003cb5c44bde672a1ffd5f818595abd80162fbf8cc999418446a",
+        "staged_size": "13065800",
+        "url": "https://github.com/cli/cli/releases/download/v2.62.0/gh_2.62.0_linux_amd64.tar.gz"
+      },
+      {
+        "candidate": "sha256sum",
+        "expected_sha256": "f1f692fe9f923a4f5c6741729fb5931212ebccfff976225feb7a2ccec8635da4",
+        "expected_size": "2129",
+        "large": false,
+        "name": "sha256sum.txt",
+        "saved": true,
+        "sha256": "f1f692fe9f923a4f5c6741729fb5931212ebccfff976225feb7a2ccec8635da4",
+        "size": "2129",
+        "staged": true,
+        "staged_sha256": "f1f692fe9f923a4f5c6741729fb5931212ebccfff976225feb7a2ccec8635da4",
+        "staged_size": "2129",
+        "url": "https://github.com/jqlang/jq/releases/download/jq-1.7.1/sha256sum.txt"
+      }
+    ],
+    "downloads_concurrent": true,
+    "downloads_screenshot": {
+      "bright": 1873,
+      "colourful": 4220,
+      "dark": 976420,
+      "height": 800,
+      "width": 1280
+    },
+    "engine_chromium": true,
+    "final_status": "loaded \u2014 Example Domain",
+    "frame": "4096000 bytes",
+    "gpu_policy": "browserd: gpu=software(no render node under /dev/dri)",
+    "height": 800,
+    "second_tab": "https://example.org/",
+    "switched_back": "https://example.com/",
+    "tab": "https://example.com/",
+    "tabs": "2 active=1",
+    "tabs_after_close": {
+      "frame": "4096000 bytes",
+      "status": "loaded \u2014 Example Domain",
+      "tabs": "2 active=1",
+      "title": "Example Domain",
+      "url": "https://example.org/"
+    },
+    "tabs_after_cycle": {
+      "frame": "4096000 bytes",
+      "status": "loaded \u2014 Example Domain",
+      "tabs": "2 active=0",
+      "title": "Example Domain",
+      "url": "https://example.com/"
+    },
+    "tabs_after_first_close": "3 active=2",
+    "tabs_after_switch_one": {
+      "frame": "4096000 bytes",
+      "status": "loaded \u2014 Example Domain",
+      "tabs": "2 active=0",
+      "title": "Example Domain",
+      "url": "https://example.com/"
+    },
+    "tabs_after_switch_two": {
+      "frame": "4096000 bytes",
+      "status": "loaded \u2014 Example Domain",
+      "tabs": "2 active=1",
+      "title": "Example Domain",
+      "url": "https://example.org/"
+    },
+    "tabs_before_close": "4 active=3",
+    "tabs_closed_screenshot": {
+      "bright": 383922,
+      "colourful": 4468,
+      "dark": 588126,
+      "height": 800,
+      "width": 1280
+    },
+    "tabs_switched_screenshot": {
+      "bright": 384046,
+      "colourful": 4484,
+      "dark": 588081,
+      "height": 800,
+      "width": 1280
+    },
+    "title": "Example Domain",
+    "url": "https://example.com/",
+    "viewport": "1280x800",
+    "width": 1280,
+    "window": {
+      "app": "com.litric.browser",
+      "height": 620,
+      "id": 3,
+      "title": "Litric Browser",
+      "width": 1000,
+      "x": 92,
+      "y": 104
+    }
+  },
+  "framebuffer": {
+    "height": 800,
+    "status_line": "litric.shell.drm=1280x800 pitch=5120 connector=Virtual-1 format=XRGB8888 flip=pageflip",
+    "width": 1280
+  },
+  "game": {
+    "bright": 277488,
+    "colourful": 555925,
+    "dark": 27817,
+    "frames": [
+      {
+        "app": "com.litric.settings",
+        "height": 620,
+        "id": 1,
+        "title": "Settings",
+        "width": 980,
+        "x": 64,
+        "y": 76
+      },
+      {
+        "app": "litric.client",
+        "height": 800,
+        "id": 2,
+        "title": "simple-shm",
+        "width": 1280,
+        "x": 0,
+        "y": 0
+      }
+    ],
+    "height": 800,
+    "play": [
+      981,
+      266
+    ],
+    "shell_windows": 2,
+    "width": 1280,
+    "window": "litric.client fullscreen",
+    "window_line": "litric.shell.window=#2 litric.client \"simple-shm\" 1280x800+0+0 fullscreen ws0"
+  },
+  "geometry_checks": {
+    "client_fullscreen_at_expected_size": true,
+    "framebuffer": true,
+    "game_screenshot_at_expected_size": true,
+    "settings_window_inside_framebuffer": true,
+    "settings_window_scaled": true,
+    "stopped_screenshot_at_expected_size": true,
+    "window_counts": true,
+    "windows_inside_framebuffer": true
+  },
+  "gpu": {
+    "card": "/dev/dri/card0",
+    "connector": "Virtual-1",
+    "device": "0x1111",
+    "driver": "bochs-drm",
+    "flip": "ok",
+    "kms_mode": "1280x800",
+    "present": "drm",
+    "render": null,
+    "vendor": "0x1234"
+  },
+  "network": {
+    "ok": true,
+    "probe": "http://10.0.2.2:18102/proof.txt"
+  },
+  "qmp": "artifacts/qemu-guest-proof/gpu-1280x800-run2/qmp.sock",
+  "serial": "artifacts/qemu-guest-proof/gpu-1280x800-run2/serial.log",
+  "stopped": {
+    "bright": 6563,
+    "colourful": 4816,
+    "dark": 976514,
+    "frames": [
+      {
+        "app": "com.litric.settings",
+        "height": 620,
+        "id": 1,
+        "title": "Settings",
+        "width": 980,
+        "x": 64,
+        "y": 76
+      }
+    ],
+    "height": 800,
+    "shell_windows": 1,
+    "stop": [
+      713,
+      26
+    ],
+    "width": 1280
+  }
+}
+QEMU GUEST PROOF: PASS
+[1;32m[qemu-proof][0m PASS — screenshots and result: artifacts/qemu-guest-proof/gpu-1280x800-run2
+[1;32m[qemu-proof][0m serial: artifacts/qemu-guest-proof/gpu-1280x800-run2/serial.log
+[1;32m[qemu-proof][0m initramfs: artifacts/qemu-guest-proof/gpu-1280x800-run2/litricos-qemu-initramfs.cpio.gz

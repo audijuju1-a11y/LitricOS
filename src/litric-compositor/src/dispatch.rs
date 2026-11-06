@@ -353,6 +353,7 @@ impl Dispatch<wl_surface::WlSurface, SurfaceData> for State {
                 let Some(s) = state.surfaces.get_mut(&id) else {
                     return;
                 };
+                s.pending_buffer_resource = buffer.clone();
                 s.pending_buffer = buffer.and_then(|b| {
                     b.data::<BufferData>()
                         .filter(|d| d.0.is_valid())

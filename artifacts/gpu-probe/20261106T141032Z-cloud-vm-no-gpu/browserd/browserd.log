@@ -1,0 +1,2 @@
+browserd: engine unavailable: No Chromium binary is present in this image (ADR-0018: the engine is integrated, never written). Set BROWSERD_CHROMIUM or install chromium.
+browserd: listening on /tmp/litric-gpu-probe-cleaslt3/browser.sock

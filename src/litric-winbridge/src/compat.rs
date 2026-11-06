@@ -128,7 +128,10 @@ pub const KNOWN: &[Entry] = &[
         reason: "Roblox's Windows client ships the Hyperion (Byfron) anti-cheat, \
                  which detects translation layers and refuses to start under them. \
                  This is deliberate on Roblox's part, not a gap in the compatibility \
-                 layer, so no amount of work here will change it.",
+                 layer. The status can change only if Roblox publishes an official \
+                 Linux client, or explicitly states that Hyperion supports this \
+                 runtime under Wine/Proton and changes its terms. Bypassing the \
+                 anti-cheat is not a route this system offers.",
         alternative: Alternative::WindowsEnvironment,
     },
     Entry {
@@ -251,6 +254,17 @@ mod tests {
         assert!(
             a.reason.to_lowercase().contains("anti-cheat"),
             "{}",
+            a.reason
+        );
+        let reason = a.reason.to_lowercase();
+        assert!(
+            reason.contains("official linux client"),
+            "the user must know what would change the status: {}",
+            a.reason
+        );
+        assert!(
+            reason.contains("terms") && reason.contains("bypassing"),
+            "the conditions must be explicit: {}",
             a.reason
         );
         assert!(

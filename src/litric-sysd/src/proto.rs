@@ -160,6 +160,22 @@ pub enum Request {
         /// The display environment to add to the daemon's own.
         env: Vec<(String, String)>,
     },
+    /// Start an application through an explicit compatibility profile.
+    ///
+    /// `LAUNCHPROFILE <linux|flatpak|steam> <hex-target> [<hex-arg>...]
+    /// [-- <hex-NAME=VALUE>...]`. The target is an absolute native executable,
+    /// a Flatpak application id, or a Steam application id. The separator is
+    /// optional because not every launch needs a display environment.
+    LaunchProfile {
+        /// The runtime that should start the target.
+        runtime: crate::compat::Runtime,
+        /// The native path, Flatpak id, or Steam id.
+        target: String,
+        /// Arguments passed after the runtime's own arguments.
+        args: Vec<String>,
+        /// The session display environment to add.
+        env: Vec<(String, String)>,
+    },
     /// Take one local bundle from the service's incoming directory and make it
     /// a runnable application.
     ///
@@ -1001,6 +1017,86 @@ impl Request {
                 } else {
                     Ok(Self::LaunchApp { argv })
                 }
+            }
+            "launchprofile" => {
+                let separator = args.iter().position(|raw| *raw == "--");
+                let (head, env_raw) = match separator {
+                    Some(at) => (
+                        args.get(..at).unwrap_or(&[]),
+                        args.get(at.saturating_add(1)..).unwrap_or(&[]),
+                    ),
+                    None => (&args[..], &[][..]),
+                };
+                if head.len() < 2 {
+                    return Err(ProtoError::BadArity {
+                        verb: "LAUNCHPROFILE",
+                        expected: 2,
+                        got: head.len(),
+                    });
+                }
+                let runtime_word = head.first().copied().unwrap_or_default();
+                let runtime = crate::compat::Runtime::parse(runtime_word).ok_or_else(|| {
+                    ProtoError::BadArgument {
+                        name: "application runtime",
+                        value: runtime_word.to_owned(),
+                    }
+                })?;
+                let target = hex_text(head.get(1).copied().unwrap_or_default(), "target")?;
+                if target.is_empty() || target.contains('\0') {
+                    return Err(ProtoError::BadArgument {
+                        name: "target",
+                        value: "<empty or nul>".to_owned(),
+                    });
+                }
+                let raw_args = head.get(2..).unwrap_or(&[]);
+                if raw_args.len() > MAX_ARGV {
+                    return Err(ProtoError::BadArity {
+                        verb: "LAUNCHPROFILE arguments",
+                        expected: MAX_ARGV,
+                        got: raw_args.len(),
+                    });
+                }
+                let mut launch_args = Vec::with_capacity(raw_args.len());
+                for raw in raw_args.iter().copied() {
+                    let value = hex_text(raw, "argument")?;
+                    if value.contains('\0') {
+                        return Err(ProtoError::BadArgument {
+                            name: "argument",
+                            value: "<nul>".to_owned(),
+                        });
+                    }
+                    launch_args.push(value);
+                }
+                if env_raw.len() > MAX_ENV {
+                    return Err(ProtoError::BadArity {
+                        verb: "LAUNCHPROFILE environment",
+                        expected: MAX_ENV,
+                        got: env_raw.len(),
+                    });
+                }
+                let mut env = Vec::with_capacity(env_raw.len());
+                for raw in env_raw.iter().copied() {
+                    let value = hex_text(raw, "environment")?;
+                    let Some((name, value)) = value.split_once('=') else {
+                        return Err(ProtoError::BadArgument {
+                            name: "environment",
+                            value: "<missing '='>".to_owned(),
+                        });
+                    };
+                    if name.is_empty() || name.contains('\0') || value.contains('\0') {
+                        return Err(ProtoError::BadArgument {
+                            name: "environment name",
+                            value: "<empty or nul>".to_owned(),
+                        });
+                    }
+                    env.push((name.to_owned(), value.to_owned()));
+                }
+                Ok(Self::LaunchProfile {
+                    runtime,
+                    target,
+                    args: launch_args,
+                    env,
+                })
             }
             "power" => {
                 if args.is_empty() || args.len() > 2 {
@@ -1858,6 +1954,39 @@ mod tests {
                 ],
             })
         );
+    }
+
+    #[test]
+    fn a_profile_launch_names_runtime_target_and_environment() {
+        let app = crate::launch::hex_encode(b"org.example.Game");
+        let arg = crate::launch::hex_encode(b"--fullscreen");
+        let env = crate::launch::hex_encode(b"WAYLAND_DISPLAY=wayland-0");
+        assert_eq!(
+            Request::parse(&format!("LAUNCHPROFILE flatpak {app} {arg} -- {env}")),
+            Ok(Request::LaunchProfile {
+                runtime: crate::compat::Runtime::Flatpak,
+                target: "org.example.Game".to_owned(),
+                args: vec!["--fullscreen".to_owned()],
+                env: vec![("WAYLAND_DISPLAY".to_owned(), "wayland-0".to_owned())],
+            })
+        );
+        let id = crate::launch::hex_encode(b"12345");
+        assert_eq!(
+            Request::parse(&format!("LAUNCHPROFILE steam {id}")),
+            Ok(Request::LaunchProfile {
+                runtime: crate::compat::Runtime::SteamProton,
+                target: "12345".to_owned(),
+                args: Vec::new(),
+                env: Vec::new(),
+            })
+        );
+        assert!(matches!(
+            Request::parse(&format!("LAUNCHPROFILE wine {id}")),
+            Err(ProtoError::BadArgument {
+                name: "application runtime",
+                ..
+            })
+        ));
     }
 
     #[test]

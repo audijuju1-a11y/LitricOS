@@ -415,9 +415,11 @@ static int present(struct output *o) {
     }
     if (!wait_flip(o->fd)) {
         fprintf(stderr, "%s: no flip completion within %d ms\n", TAG, FLIP_TIMEOUT_MS);
+        o->front = back;
+        return 0;
     }
     o->front = back;
-    return 0;
+    return 1;
 }
 
 int main(int argc, char **argv) {
@@ -501,6 +503,7 @@ int main(int argc, char **argv) {
     }
 
     int rc = 0;
+    int flip_reported = 0;
     for (;;) {
         char line[128];
         int n = read_line(STDIN_FILENO, line, sizeof line);
@@ -512,9 +515,19 @@ int main(int argc, char **argv) {
         }
         if (line[0] == 'Q') break;
         if (line[0] == 'P') {
-            if (present(&o) < 0) {
+            int flip = present(&o);
+            if (flip < 0) {
                 rc = 1;
                 break;
+            }
+            if (!flip_reported) {
+                /* One machine-readable line is worth more than an inference
+                 * from a screenshot: the shell's proof can distinguish a real
+                 * page flip from a driver that scans out in place. */
+                fprintf(stderr, "LITRIC_DRM_FLIP=%s\n",
+                        flip > 0 ? "ok" : (o.flip_ok ? "timeout" : "unsupported"));
+                fflush(stderr);
+                flip_reported = 1;
             }
             continue;
         }

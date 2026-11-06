@@ -58,6 +58,7 @@ pub mod filewatch;
 pub mod font;
 pub mod fsbridge;
 pub mod fsclient;
+pub mod gpu;
 pub mod i18n;
 pub mod icons;
 pub mod inbox;
@@ -79,6 +80,9 @@ pub mod shell;
 pub mod shortcuts;
 pub mod store;
 pub mod taskmgr;
+#[cfg(unix)]
+pub mod terminal;
+pub mod terminal_screen;
 pub mod textaudit;
 pub mod textedit;
 pub mod themeicons;

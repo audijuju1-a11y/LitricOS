@@ -122,18 +122,32 @@ component, our UI and policy on top
 > `docs/audit/2026-10-30-a3-claim-audit.md`. No remaining `P` row lost its
 > backend, and no row was promoted to `P`.
 
+> **2026-11-02: S93 Terminal PTY.** Row 549 moved from `T` to `P`: the Terminal
+> now runs a persistent `/bin/sh -i` under a real PTY, with live `TIOCSWINSZ`
+> resize, a styled alternate-screen grid, DECSTBM scroll regions, mouse
+> reporting (`1000`/`1002`/`1003`, X10 and SGR `1006`), bracketed paste
+> (`2004`) and raw key/text forwarding. SGR stores 16/256/truecolor and
+> bold/dim/italic/underline/reverse per cell; wide CJK/emoji cells occupy two
+> columns and Thai/combining marks stay with their base. `vim` was run for real
+> on this host, and real PTY fixtures assert exact RGB, indexed and wide-cell
+> values plus byte-exact mouse reports and a 20 KB wrapped/raw paste. Sixel,
+> full grapheme shaping, OS clipboard capture and GPU acceleration remain
+> limits. No image or display test was possible here. See
+> `docs/design/2026-11-02-terminal-pty.md`
+> and the S93 entry in `docs/PROGRESS-TRACKER.md`.
+
 ## TALLY
 
 | Status | Count | Share |
 |---|---:|---:|
 | `D` done and tested | **9** | 0.8% |
-| `P` partial, real code with passing tests | **117** | 10.0% |
+| `P` partial, real code with passing tests | **118** | 10.1% |
 | `S` specified, no code | **293** | 25.2% |
-| `T` not started | **746** | 64.0% |
+| `T` not started | **745** | 63.9% |
 | **Total** | **1165** | |
 
 Nine rows are done: the boot chain, proved by `docs/evidence/gate01-boot.log`.
-A hundred and seventeen are partial — real code with passing tests, most of it now
+A hundred and eighteen are partial — real code with passing tests, most of it now
 running inside the image: the capability engine, the storage broker, the
 manifest parser, the Windows compatibility planner and its known-software
 table, the environment manager, the design tokens, the trash policy, the input
@@ -872,7 +886,7 @@ security cost, and a revert button.
 |---:|---|:---:|:---:|
 | 547 | Files (file manager) | O | T |
 | 548 | Settings | O | T |
-| 549 | Terminal, GPU-rendered, full Unicode | O | T |
+| 549 | Terminal, PTY-backed shell, live resize, styled alternate screen, scroll regions, mouse reporting and bracketed paste | O | **P** |
 | 550 | Text editor | O | T |
 | 551 | Litric Browser (our UI on an existing engine) | O+U | **P** |
 | 552 | Mail client | O | T |
@@ -1605,6 +1619,14 @@ One desktop, three application ecosystems. Decided in
 [ADR-0020](adr/0020-unified-application-compatibility.md); the
 
 implementable contract is [master-plan/22](master-plan/22-unified-compatibility.md).
+
+As of 2026-11-05, `litric-sysd/src/compat.rs` resolves and executes native
+Linux, Flatpak (`flatpak run`) and Steam (`steam -applaunch`) launch profiles
+through the existing capability and `execve` path. The native route is exercised
+by the QEMU guest's Play click; Flatpak and Steam are exercised with fake
+launchers in unit tests because neither runtime is installed on the build host.
+This does not make the Windows bottle executor (row 626), Steam game support,
+Proton prefixes or anti-cheat support complete.
 
 
 

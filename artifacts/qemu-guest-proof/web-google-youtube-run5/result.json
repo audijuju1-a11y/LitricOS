@@ -1,0 +1,44 @@
+{
+  "assertions": {
+    "completed": false
+  },
+  "browser": {
+    "window": {
+      "app": "com.litric.browser",
+      "height": 620,
+      "id": 1,
+      "title": "Litric Browser",
+      "width": 1000,
+      "x": 64,
+      "y": 76
+    }
+  },
+  "error": "name 'serial_text' is not defined",
+  "geometry": {
+    "height": 800,
+    "width": 1280
+  },
+  "host": "QEMU guest",
+  "metrics": {},
+  "pages": {},
+  "requested_urls": {
+    "accepted_prefixes": {
+      "google": [
+        "https://google.com",
+        "https://www.google.com"
+      ],
+      "youtube": [
+        "https://youtube.com",
+        "https://www.youtube.com",
+        "https://m.youtube.com"
+      ]
+    },
+    "google": "google.com",
+    "youtube": [
+      "m.youtube.com",
+      "www.youtube.com/embed/dQw4w9WgXcQ"
+    ]
+  },
+  "screenshots": {},
+  "status": "FAIL"
+}

@@ -105,6 +105,9 @@ ALLOWED = {
         "the_binary_refuses_a_root_it_cannot_serve": "removes the single scratch file this test placed where a storage root should be, after asserting the daemon refused to serve it",
         "the_binary_reports_what_it_would_serve": "removes the empty scratch root this test created under the system temp directory, after asserting --info created nothing in it",
     },
+    "src/litric-shell/src/terminal.rs": {
+        "remove_size_file": "removes only the 0600 PTY size file this module created from its own process id, nonce and counter; it is never a user path and is removed on spawn failure or session drop",
+    },
     "src/litric-shell/src/prefstore.rs": {
         "save": "removes only the store's own temporary file (settings.conf.tmp.<pid>) -- before writing, and again when the write failed -- never a preference record",
     },

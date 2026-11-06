@@ -417,6 +417,7 @@ fn main() -> ExitCode {
             &InputEvent::PointerMove {
                 at,
                 delta: Point::new(8.0, 6.0),
+                mods: litric_input::keys::Modifiers::NONE,
             },
             now,
         );

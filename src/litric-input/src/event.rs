@@ -95,6 +95,14 @@ pub enum InputEvent {
         /// method can commit a whole syllable at once.
         text: String,
     },
+    /// The host pasted text, for example from the system clipboard. This is a
+    /// separate event from a sequence of key presses: a newline in a paste is
+    /// data, not Enter, and bracketed-paste support needs the whole payload.
+    Paste {
+        /// The pasted text, including any newlines and without key bindings
+        /// applied.
+        text: String,
+    },
     /// The pointer moved.
     PointerMove {
         /// Where it is now, already clamped to the display.
@@ -103,6 +111,9 @@ pub enum InputEvent {
         /// screen the position stops changing while the device keeps moving,
         /// and gestures need the real delta.
         delta: Point,
+        /// Modifiers held while the pointer moved, so drag and motion reports
+        /// carry Shift/Ctrl/Alt just like button and wheel reports do.
+        mods: Modifiers,
     },
     /// A pointer button changed.
     PointerButton {
@@ -153,6 +164,7 @@ impl InputEvent {
             Self::KeyDown { .. }
                 | Self::KeyUp { .. }
                 | Self::TextInput { .. }
+                | Self::Paste { .. }
                 | Self::PointerMove { .. }
                 | Self::PointerButton { .. }
                 | Self::Scroll { .. }
@@ -173,6 +185,7 @@ impl InputEvent {
             ),
             Self::KeyUp { key, .. } => format!("key up {key}"),
             Self::TextInput { text } => format!("text {text:?}"),
+            Self::Paste { text } => format!("paste {} chars", text.chars().count()),
             Self::PointerMove { at, .. } => format!("move {:.0},{:.0}", at.x, at.y),
             Self::PointerButton {
                 button,
@@ -214,6 +227,11 @@ mod tests {
         assert!(InputEvent::PointerMove {
             at: Point::new(1.0, 2.0),
             delta: Point::new(1.0, 0.0),
+            mods: crate::keys::Modifiers::NONE,
+        }
+        .is_user_activity());
+        assert!(InputEvent::Paste {
+            text: "two\nlines".to_owned()
         }
         .is_user_activity());
         assert!(!InputEvent::DeviceAdded {

@@ -1,0 +1,82 @@
+{
+  "assertions": {
+    "client_window_gone_after_stop": true,
+    "colourful_above_floor": true,
+    "colourful_below_ceiling_after_stop": true,
+    "installed": true
+  },
+  "framebuffer": {
+    "height": 800,
+    "status_line": "litric.shell.fb=1280x800 32bpp stride=5120 format=Xrgb8888 driver=bochs-drmdrmfb",
+    "width": 1280
+  },
+  "game": {
+    "bright": 102202,
+    "colourful": 691056,
+    "dark": 13812,
+    "frames": [
+      {
+        "app": "com.litric.settings",
+        "height": 620,
+        "id": 1,
+        "title": "Settings",
+        "width": 980,
+        "x": 64,
+        "y": 76
+      },
+      {
+        "app": "litric.client",
+        "height": 800,
+        "id": 2,
+        "title": "simple-shm",
+        "width": 1280,
+        "x": 0,
+        "y": 0
+      }
+    ],
+    "height": 800,
+    "play": [
+      981,
+      266
+    ],
+    "shell_windows": 2,
+    "width": 1280,
+    "window": "litric.client fullscreen",
+    "window_line": "litric.shell.window=#2 litric.client \"simple-shm\" 1280x800+0+0 fullscreen ws0"
+  },
+  "geometry_checks": {
+    "client_fullscreen_at_expected_size": true,
+    "framebuffer": true,
+    "game_screenshot_at_expected_size": true,
+    "settings_window_inside_framebuffer": true,
+    "settings_window_scaled": true,
+    "stopped_screenshot_at_expected_size": true,
+    "window_counts": true,
+    "windows_inside_framebuffer": true
+  },
+  "qmp": "/workspace/chats/d7991b8c41a570fd94f0a9bc/artifacts/qemu-guest-proof/qmp.sock",
+  "serial": "/workspace/chats/d7991b8c41a570fd94f0a9bc/artifacts/qemu-guest-proof/serial.log",
+  "stopped": {
+    "bright": 6573,
+    "colourful": 4816,
+    "dark": 976509,
+    "frames": [
+      {
+        "app": "com.litric.settings",
+        "height": 620,
+        "id": 1,
+        "title": "Settings",
+        "width": 980,
+        "x": 64,
+        "y": 76
+      }
+    ],
+    "height": 800,
+    "shell_windows": 1,
+    "stop": [
+      713,
+      26
+    ],
+    "width": 1280
+  }
+}

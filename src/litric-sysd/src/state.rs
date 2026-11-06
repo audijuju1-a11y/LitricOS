@@ -26,6 +26,7 @@ use litric_trash::{Retention, Trash};
 
 use crate::action::{self, PowerAction, Runner, SystemRunner};
 use crate::backup::{BackupError, BackupService, Summary};
+use crate::compat::{self, LaunchRequest, Runtime, ToolPaths};
 use crate::facts::{read_facts, Facts};
 use crate::install::{self, Installed};
 use crate::proto::{AccessWord, Request, Response};
@@ -557,6 +558,12 @@ impl Sysd {
             Request::Resolve { app, uri, access } => self.resolve(app, uri, *access, now),
             Request::LaunchApp { argv } => self.launch_app(argv, &[]),
             Request::LaunchAppEnv { argv, env } => self.launch_app(argv, env),
+            Request::LaunchProfile {
+                runtime,
+                target,
+                args,
+                env,
+            } => self.launch_profile(*runtime, target, args, env),
             Request::AppInstall { id, bundle } => self.app_install(id, bundle),
             Request::AppUninstall { id } => self.app_uninstall(id),
             Request::UpdateStatus { schema } => self.update_status(*schema, now),
@@ -708,25 +715,74 @@ impl Sysd {
     /// absolute path, and a request that could choose a root could choose which
     /// binary the path meant.
     fn launch_app(&mut self, argv: &[String], env: &[(String, String)]) -> Response {
+        if let Err(refusal) = self.launch_authorised() {
+            return refusal;
+        }
+        let request = match LaunchRequest::native(argv, env) {
+            Ok(request) => request,
+            Err(error) => return Response::err(error.kind(), error.detail()),
+        };
+        self.execute_launch(&request)
+    }
+
+    /// Start one application through an explicit compatibility profile.
+    ///
+    /// This is the protocol path used by callers that know the runtime before
+    /// they ask for a launch, such as a Steam shortcut or a Flatpak desktop
+    /// entry. The capability decision and the executor are the same ones the
+    /// native `LAUNCHENV` path uses; a profile cannot bypass either.
+    fn launch_profile(
+        &mut self,
+        runtime: Runtime,
+        target: &str,
+        args: &[String],
+        env: &[(String, String)],
+    ) -> Response {
+        if let Err(refusal) = self.launch_authorised() {
+            return refusal;
+        }
+        let request = LaunchRequest {
+            runtime,
+            target: target.to_owned(),
+            args: args.to_vec(),
+            env: env.to_vec(),
+        };
+        self.execute_launch(&request)
+    }
+
+    /// The one capability check for every launch route.
+    fn launch_authorised(&mut self) -> Result<(), Response> {
         let Some(client) = self.client.clone() else {
-            return Response::err("refused", "this build has no local client identity");
+            return Err(Response::err(
+                "refused",
+                "this build has no local client identity",
+            ));
         };
         let Some(scope) = Scope::parse_resource("app://").ok() else {
-            return Response::err("bad-argument", "no scope for this action");
+            return Err(Response::err("bad-argument", "no scope for this action"));
         };
         let Some(capability) = Capability::new(CapabilityId::ProcessSpawn, scope) else {
-            return Response::err("bad-argument", "no capability for this action");
+            return Err(Response::err(
+                "bad-argument",
+                "no capability for this action",
+            ));
         };
         let decision = self.caps.check_with_consent(&client, &capability, false, 0);
-        if !decision.is_allowed() {
-            return Response::err(
+        if decision.is_allowed() {
+            Ok(())
+        } else {
+            Err(Response::err(
                 "refused",
                 format!("{} {capability}", decision.reason().token()),
-            );
+            ))
         }
-        match crate::launch::launch_with_env(argv, env) {
+    }
+
+    /// Resolve and spawn one profile, then report what actually started.
+    fn execute_launch(&mut self, request: &LaunchRequest) -> Response {
+        match compat::execute(request, &ToolPaths::default()) {
             Ok(pid) => {
-                let program = argv.first().map_or("the program", String::as_str);
+                let program = request.target.as_str();
                 let name = Path::new(program)
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -3252,5 +3308,50 @@ mod tests {
         // One CPU and 512 MiB, minus the host reservation, is a machine the
         // manager can still describe.
         assert!(!s.environments().all().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_explicit_linux_profile_launches_through_the_compat_path() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{Duration, Instant};
+
+        let dir = std::env::temp_dir().join(format!(
+            "litric-sysd-profile-launch-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let marker = dir.join("profile-ran");
+        let program = dir.join("profile-app");
+        let temp = dir.join(".profile-app.tmp");
+        std::fs::write(
+            &temp,
+            format!("#!/bin/sh\nprintf profile-ran > '{}'\n", marker.display()),
+        )
+        .expect("write");
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        std::fs::rename(&temp, &program).expect("rename");
+
+        let mut s = sysd();
+        let request = Request::LaunchProfile {
+            runtime: Runtime::LinuxNative,
+            target: program.display().to_string(),
+            args: Vec::new(),
+            env: Vec::new(),
+        };
+        let reply = s.handle(&request, NOW);
+        assert!(reply.is_ok(), "{}", reply.encode());
+        assert!(line(&reply, "pid=").is_some(), "{:?}", reply.lines());
+
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            if std::fs::read_to_string(&marker).ok().as_deref() == Some("profile-ran") {
+                let _ = std::fs::remove_dir_all(&dir);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("the profile executable did not run");
     }
 }

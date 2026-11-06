@@ -297,6 +297,7 @@ impl InputState {
                 out.push(InputEvent::PointerMove {
                     at: self.pointer,
                     delta,
+                    mods: self.mods,
                 });
             }
         }

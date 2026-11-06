@@ -35,7 +35,14 @@ AmbientCapabilities=
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-PrivateDevices=yes
+# Chromium's GPU process needs the render node when the machine has one.
+# PrivateDevices=yes would hide /dev/dri entirely, so physical device access
+# is allowed only through the DRM char devices below; DevicePolicy=closed keeps
+# every other device (fb0, input, kvm, disks) out of the cgroup. A machine with
+# no render node still runs Chromium with --disable-gpu.
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=char-drm rw
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes

@@ -720,6 +720,7 @@ fn ui_install_button(
         &InputEvent::PointerMove {
             at: point,
             delta: Point::new(1.0, 1.0),
+            mods: litric_input::keys::Modifiers::NONE,
         },
         at,
     );

@@ -130,6 +130,7 @@ mod broker {
     use super::json_escape;
     use std::collections::HashMap;
     use std::io::{self, BufRead, BufReader, Read, Write};
+    use std::os::unix::io::AsRawFd;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -207,6 +208,43 @@ mod broker {
             Ok(())
         }
 
+        /// One `struct pollfd`: the descriptor, the events asked for, and the
+        /// events the kernel reports.
+        #[repr(C)]
+        struct PollFd {
+            fd: i32,
+            events: i16,
+            revents: i16,
+        }
+
+        /// `POLLIN`.
+        const POLLIN: i16 = 1;
+
+        extern "C" {
+            fn poll(fds: *mut PollFd, nfds: u64, timeout: i32) -> i32;
+        }
+
+        /// Wait until `fd` has bytes to read, or `timeout_ms` passes.
+        ///
+        /// A blocking read was enough while every navigation ended in a load
+        /// event. One that becomes a download ends in no event at all, so the
+        /// read never returned, the broker never answered, and every later
+        /// command — including the download listing — sat behind it.
+        pub fn wait_readable(fd: i32, timeout_ms: i32) -> io::Result<bool> {
+            let mut entry = PollFd {
+                fd,
+                events: POLLIN,
+                revents: 0,
+            };
+            #[allow(unsafe_code)]
+            let ready = unsafe { poll(&mut entry, 1, timeout_ms) };
+            if ready < 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(ready > 0)
+            }
+        }
+
         /// Best-effort close of a parent-side descriptor.
         pub fn close_fd(fd: i32) {
             #[allow(unsafe_code)]
@@ -276,6 +314,10 @@ mod broker {
         /// Sessions whose `Page.loadEventFired` arrived while another call was
         /// waiting for its response. A response and an event share the pipe.
         loaded: std::collections::HashSet<String>,
+        /// Whether the last navigation turned into a download. A download has
+        /// no document and therefore no load event; treating it as a page that
+        /// never finishes blocked the broker for good.
+        download_started: bool,
         viewport: (u32, u32),
     }
 
@@ -309,6 +351,144 @@ mod broker {
                     .map(std::path::PathBuf::from)
             })
             .as_ref()
+    }
+
+    /// How Chromium's GPU process should be configured.
+    ///
+    /// Headless Chromium forces software rendering unless it is explicitly
+    /// allowed to use a GPU. A render node is the kernel's userspace-facing
+    /// handle for that GPU; it is not the display node the shell modesets.
+    /// Without one, asking Chromium for a GPU only produces a noisy GPU
+    /// process that cannot open a device, so the software path is the honest
+    /// default on machines that have no render node.
+    #[derive(Debug)]
+    pub(super) enum GpuPolicy {
+        /// No render node: Chromium stays on its software renderer.
+        Software {
+            /// Why the software path was chosen.
+            reason: &'static str,
+        },
+        /// A render node exists: ask Chromium for hardware acceleration.
+        Hardware {
+            /// The ANGLE backend to request.
+            backend: &'static str,
+            /// The render node Chromium may use.
+            render: PathBuf,
+        },
+    }
+
+    impl GpuPolicy {
+        /// The Chromium switches for this policy. Software is explicit so a
+        /// machine without a GPU does not leave a GPU process probing /dev.
+        pub(super) fn args(&self) -> Vec<String> {
+            match self {
+                Self::Software { .. } => vec!["--disable-gpu".to_owned()],
+                Self::Hardware { backend, .. } => vec![
+                    "--enable-gpu".to_owned(),
+                    "--enable-gpu-rasterization".to_owned(),
+                    "--enable-zero-copy".to_owned(),
+                    format!("--use-angle={backend}"),
+                    // These features are ignored by builds/drivers that do not
+                    // implement them. They request video decode/encode on the
+                    // GPU where the distribution's Chromium supports it; the
+                    // QEMU proof does not claim video acceleration.
+                    "--enable-features=VaapiVideoDecoder,VaapiVideoEncoder".to_owned(),
+                ],
+            }
+        }
+
+        /// The requested backend, or `None` for the software path. This is a
+        /// read-only accessor so tests do not have to destructure a moved enum.
+        #[cfg(test)]
+        pub(super) fn backend(&self) -> Option<&str> {
+            match self {
+                Self::Software { .. } => None,
+                Self::Hardware { backend, .. } => Some(*backend),
+            }
+        }
+
+        /// The render node behind a hardware policy, if any.
+        #[cfg(test)]
+        pub(super) fn render(&self) -> Option<&Path> {
+            match self {
+                Self::Software { .. } => None,
+                Self::Hardware { render, .. } => Some(render.as_path()),
+            }
+        }
+
+        /// One journal line that names the choice and the device behind it.
+        pub(super) fn summary(&self) -> String {
+            match self {
+                Self::Software { reason } => format!("gpu=software({reason})"),
+                Self::Hardware { backend, render } => {
+                    format!("gpu=hardware backend={backend} render={}", render.display())
+                }
+            }
+        }
+    }
+
+    /// Parse `renderD128`, `renderD129`, ... without accepting lookalikes.
+    fn render_number(name: &str) -> Option<u32> {
+        let digits = name.strip_prefix("renderD")?;
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        digits.parse::<u32>().ok().filter(|number| *number >= 128)
+    }
+
+    /// The lowest render node under `root`, or `None` when the machine has no
+    /// GPU render node. `root` is a parameter so this can be tested with a
+    /// fixture tree instead of a real graphics device.
+    pub(super) fn render_node(root: &Path) -> Option<PathBuf> {
+        let entries = std::fs::read_dir(root.join("dev/dri")).ok()?;
+        let mut lowest: Option<(u32, PathBuf)> = None;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(number) = name.to_str().and_then(render_number) else {
+                continue;
+            };
+            if lowest.as_ref().is_none_or(|(current, _)| number < *current) {
+                lowest = Some((number, entry.path()));
+            }
+        }
+        lowest.map(|(_, path)| path)
+    }
+
+    /// Whether a Vulkan ICD is installed. Chromium's default GPU discovery
+    /// needs an X display on Linux; the Vulkan ANGLE backend is the one its
+    /// own headless documentation recommends for machines without X. When
+    /// Vulkan is absent, the system EGL/GLES backend is the remaining attempt.
+    fn vulkan_available(root: &Path) -> bool {
+        ["usr/share/vulkan/icd.d", "etc/vulkan/icd.d"]
+            .iter()
+            .any(|relative| {
+                std::fs::read_dir(root.join(relative)).is_ok_and(|entries| {
+                    entries.flatten().any(|entry| {
+                        entry.path().is_file()
+                            && entry.file_name().to_string_lossy().ends_with(".json")
+                    })
+                })
+            })
+    }
+
+    /// Select the GPU policy from what the kernel and the image actually
+    /// provide. Hardware is only chosen when there is a render node to open;
+    /// Vulkan is preferred because headless Chromium can use it without an X
+    /// display, with system EGL as the fallback when no ICD is installed.
+    pub(super) fn gpu_policy(root: &Path) -> GpuPolicy {
+        let Some(render) = render_node(root) else {
+            return GpuPolicy::Software {
+                reason: "no render node under /dev/dri",
+            };
+        };
+        GpuPolicy::Hardware {
+            backend: if vulkan_available(root) {
+                "vulkan"
+            } else {
+                "gl-egl"
+            },
+            render,
+        }
     }
 
     /// The tab state that tells the truth after `Page.stopLoading`.
@@ -389,6 +569,8 @@ mod broker {
 
             let (in_r, in_w) = cdp_fd::pipe_cloexec()?;
             let (out_r, out_w) = cdp_fd::pipe_cloexec()?;
+            let gpu = gpu_policy(Path::new("/"));
+            eprintln!("browserd: {}", gpu.summary());
             let mut cmd = std::process::Command::new(binary);
             let mut args = vec![
                 "--headless=new".to_owned(),
@@ -399,7 +581,6 @@ mod broker {
                 // engine failure; it is never silently downgraded to
                 // --no-sandbox, which would turn every renderer into a process
                 // with the broker's access to the profile and downloads.
-                "--disable-gpu".to_owned(),
                 "--disable-dev-shm-usage".to_owned(),
                 "--hide-scrollbars".to_owned(),
                 "--mute-audio".to_owned(),
@@ -407,6 +588,11 @@ mod broker {
                 "--no-default-browser-check".to_owned(),
                 "--remote-debugging-pipe".to_owned(),
             ];
+            // A machine with a render node asks Chromium for GPU raster,
+            // compositing and video; a machine without one stays explicitly
+            // on the software path. Never --disable-software-rasterizer: the
+            // GPU path must still have a fallback.
+            args.extend(gpu.args());
             // The user-data dir must be inside the unit's ReadWritePaths:
             // with the default (~/.config/chromium) under ProtectHome=yes,
             // Chromium dies on its first mkdir.
@@ -456,6 +642,7 @@ mod broker {
                 next_id: AtomicU64::new(1),
                 tabs: HashMap::new(),
                 loaded: std::collections::HashSet::new(),
+                download_started: false,
                 viewport: (1280, 800),
             };
             if let Some(downloads) = downloads_dir() {
@@ -495,12 +682,37 @@ mod broker {
                 .and_then(|_| self.cdp_in.write_all(b"\0"))
                 .and_then(|_| self.cdp_in.flush())
                 .map_err(|e| format!("CDP write: {e}"))?;
+            // Every CDP call gets a deadline. Without one, a reply Chromium
+            // never sends — a navigation that becomes a download has no
+            // document to report — blocked this broker and every command
+            // behind it for as long as the browser lived.
+            let deadline = std::time::Instant::now()
+                .checked_add(std::time::Duration::from_secs(60))
+                .ok_or_else(|| "CDP deadline overflow".to_owned())?;
             loop {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(format!("CDP {method}: no reply within 60s"));
+                }
+                let millis = i32::try_from(remaining.as_millis()).unwrap_or(i32::MAX);
+                if self.cdp_out.buffer().is_empty()
+                    && !cdp_fd::wait_readable(self.cdp_out.get_ref().as_raw_fd(), millis)
+                        .map_err(|e| format!("CDP poll: {e}"))?
+                {
+                    return Err(format!("CDP {method}: no reply within 60s"));
+                }
                 let value = read_json_value(&mut self.cdp_out)?;
                 if let Some(event_session) = text_field(&value, "sessionId") {
                     if text_field(&value, "method").as_deref() == Some("Page.loadEventFired") {
                         self.loaded.insert(event_session);
                     }
+                } else if text_field(&value, "method").as_deref()
+                    == Some("Browser.downloadWillBegin")
+                {
+                    // Emitted with `eventsEnabled` on the browser session, so
+                    // it carries no sessionId. It arrives either before the
+                    // navigate reply or while waiting for a load event.
+                    self.download_started = true;
                 }
                 if field(&value, "id").and_then(litric_browser::json::Value::as_u64) == Some(id) {
                     if let Some(error) = cdp_error(&value) {
@@ -575,12 +787,28 @@ mod broker {
             if self.loaded.remove(session) {
                 return Ok(());
             }
+            if self.download_started {
+                self.download_started = false;
+                return Err("the navigation became a download".to_owned());
+            }
             let deadline = std::time::Instant::now()
-                .checked_add(std::time::Duration::from_secs(15))
+                .checked_add(std::time::Duration::from_secs(45))
                 .ok_or_else(|| "navigation timeout overflow".to_owned())?;
             loop {
-                if std::time::Instant::now() >= deadline {
-                    return Err("the page did not finish loading within 15s".to_owned());
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err("the page did not finish loading within 45s".to_owned());
+                }
+                let millis = i32::try_from(remaining.as_millis()).unwrap_or(i32::MAX);
+                // Poll the descriptor only when the reader has nothing buffered:
+                // a previous read may already hold the event, and waiting on a
+                // quiet descriptor for bytes that are in memory is a timeout
+                // that never needed to happen.
+                if self.cdp_out.buffer().is_empty()
+                    && !cdp_fd::wait_readable(self.cdp_out.get_ref().as_raw_fd(), millis)
+                        .map_err(|e| format!("CDP poll: {e}"))?
+                {
+                    return Err("the page did not finish loading within 45s".to_owned());
                 }
                 let value = read_json_value(&mut self.cdp_out)?;
                 let method = text_field(&value, "method");
@@ -589,6 +817,10 @@ mod broker {
                     && event_session.as_deref() == Some(session)
                 {
                     return Ok(());
+                }
+                if self.download_started {
+                    self.download_started = false;
+                    return Err("the navigation became a download".to_owned());
                 }
                 if method.as_deref() == Some("Inspector.targetCrashed")
                     && event_session.as_deref() == Some(session)
@@ -659,6 +891,7 @@ mod broker {
                 .map(|t| t.session.clone())
                 .ok_or("no tab")?;
             let params = format!(r#"{{"url":"{}"}}"#, json_escape(url));
+            self.download_started = false;
             let nav = self.call_session("Page.navigate", &params, Some(&session))?;
             if let Some(error) = text_field(&nav, "errorText") {
                 if !error.is_empty() {
@@ -667,6 +900,12 @@ mod broker {
                     }
                     return Err(format!("navigation failed: {error}"));
                 }
+            }
+            if self.download_started {
+                if let Some(t) = self.tabs.get_mut(&tab) {
+                    t.state = "downloading";
+                }
+                return Err("the navigation became a download".to_owned());
             }
             self.wait_loaded(&session)?;
             let title = self.title(&session);
@@ -739,6 +978,12 @@ mod broker {
                 .get(&tab)
                 .map(|t| t.session.clone())
                 .ok_or("no such tab")?;
+            // A target that Chromium has put in the background can leave
+            // `Page.captureScreenshot` unanswered indefinitely (the guest proof
+            // saw the 60s timeout after switching back to a page whose tab had
+            // been inactive while two downloads ran). ACTIVATE is a real tab
+            // switch, so make the target front before asking it for pixels.
+            self.call_session("Page.bringToFront", "{}", Some(&session))?;
             // Read the page's own address and title first: the capture below is
             // of whatever the page has become, and the reply must describe the
             // same page or the picture and the address bar disagree.
@@ -1669,7 +1914,9 @@ fn main() {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::broker::{bind_listener, drop_staged, find_chromium, Broker};
+    use super::broker::{
+        bind_listener, drop_staged, find_chromium, gpu_policy, render_node, Broker,
+    };
     use super::{pct_decode, pct_encode};
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::fs::PermissionsExt as _;
@@ -1727,6 +1974,64 @@ mod tests {
             b"do not delete",
             "a broker must not unlink a file it did not create"
         );
+    }
+
+    fn gpu_fixture(tag: &str) -> std::path::PathBuf {
+        let root = scratch(tag);
+        assert!(std::fs::create_dir_all(root.join("dev/dri")).is_ok());
+        root
+    }
+
+    #[test]
+    fn gpu_policy_keeps_software_without_a_render_node() {
+        let root = gpu_fixture("gpu-software");
+        let policy = gpu_policy(&root);
+        assert_eq!(
+            policy.backend(),
+            None,
+            "no render node must not claim a GPU"
+        );
+        assert_eq!(policy.render(), None);
+        let args = policy.args();
+        assert!(args.iter().any(|arg| arg == "--disable-gpu"));
+        assert!(!args.iter().any(|arg| arg == "--enable-gpu"));
+        assert!(policy.summary().contains("gpu=software"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gpu_policy_uses_the_lowest_render_node_and_vulkan_when_available() {
+        let root = gpu_fixture("gpu-vulkan");
+        let icd = root.join("usr/share/vulkan/icd.d");
+        assert!(std::fs::create_dir_all(&icd).is_ok());
+        assert!(std::fs::write(icd.join("radeon_icd.x86_64.json"), b"{}").is_ok());
+        assert!(std::fs::write(root.join("dev/dri/renderD129"), b"").is_ok());
+        assert!(std::fs::write(root.join("dev/dri/renderD128"), b"").is_ok());
+        assert_eq!(
+            render_node(&root),
+            Some(root.join("dev/dri/renderD128")),
+            "the lowest render node is stable"
+        );
+        let policy = gpu_policy(&root);
+        assert_eq!(policy.backend(), Some("vulkan"));
+        let expected_render = root.join("dev/dri/renderD128");
+        assert_eq!(policy.render(), Some(expected_render.as_path()));
+        let args = policy.args();
+        assert!(args.iter().any(|arg| arg == "--enable-gpu"));
+        assert!(args.iter().any(|arg| arg == "--enable-gpu-rasterization"));
+        assert!(args.iter().any(|arg| arg == "--use-angle=vulkan"));
+        assert!(!args.iter().any(|arg| arg == "--disable-gpu"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn gpu_policy_uses_system_egl_when_vulkan_is_absent() {
+        let root = gpu_fixture("gpu-egl");
+        assert!(std::fs::write(root.join("dev/dri/renderD128"), b"").is_ok());
+        let policy = gpu_policy(&root);
+        assert_eq!(policy.backend(), Some("gl-egl"));
+        assert!(policy.args().iter().any(|arg| arg == "--use-angle=gl-egl"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

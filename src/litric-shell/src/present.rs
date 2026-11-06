@@ -225,6 +225,18 @@ pub fn open_with(
                 ));
                 lines.push(format!("drm.connector={}", presenter.info().connector));
                 lines.push(format!("drm={}", presenter.info().summary()));
+                if let Some(gpu) = crate::gpu::discover(root) {
+                    lines.push(format!("gpu.card={}", gpu.card.display()));
+                    lines.push(format!("gpu.driver={}", gpu.driver));
+                    lines.push(format!("gpu.vendor={}", gpu.vendor));
+                    lines.push(format!("gpu.device={}", gpu.device));
+                    if let Some(render) = gpu.render.as_ref() {
+                        lines.push(format!("gpu.render={}", render.display()));
+                    }
+                    lines.push(format!("gpu={}", gpu.summary()));
+                } else {
+                    lines.push("gpu=none".to_owned());
+                }
                 lines.push("target=drm-kms".to_owned());
                 return Ok(Opened {
                     output: Output::Drm(presenter),

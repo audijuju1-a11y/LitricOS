@@ -1423,6 +1423,7 @@ fn fit_clock(t: &Tokens, v: &View<'_>, size: f32, tw: Tweaks) -> f32 {
         tracking: -size * CLOCK_GLYPH * 0.03,
         color: rgb(0xFFFFFF),
         face: font::FontFace::Sans,
+        italic: false,
     };
     let width = font::measure(&v.clock, &probe);
     let room = v.w * 0.9;
@@ -1540,6 +1541,7 @@ fn clock(canvas: &mut Canvas, v: &View<'_>, size: f32, accent: u32, tw: Tweaks) 
             tracking: -size * 0.03,
             color: with_alpha(glow_col, 1.0),
             face: font::FontFace::Sans,
+            italic: false,
         };
         glow_halo(canvas, &v.clock, cx, baseline, &style, glow_col, glow);
     }
@@ -1552,6 +1554,7 @@ fn clock(canvas: &mut Canvas, v: &View<'_>, size: f32, accent: u32, tw: Tweaks) 
         tracking: -size * 0.03,
         color: fill,
         face: font::FontFace::Sans,
+        italic: false,
     };
     let w = font::measure(&v.clock, &style);
     font::draw(canvas, &v.clock, cx - w / 2.0, baseline, &style);

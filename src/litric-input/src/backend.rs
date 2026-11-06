@@ -395,9 +395,17 @@ impl ScriptedSource {
     }
 
     /// Add more records to replay.
+    ///
+    /// The queue is popped from the end, so appended records go in reverse.
+    /// An empty queue needs the same reversal as `new`; otherwise its first
+    /// `SYN_REPORT` would overtake the record it is meant to complete.
     pub fn push(&mut self, events: &[RawEvent]) {
-        for e in events.iter().rev() {
-            self.queue.insert(0, *e);
+        if self.queue.is_empty() {
+            self.queue.extend(events.iter().rev().copied());
+        } else {
+            for e in events.iter().rev() {
+                self.queue.insert(0, *e);
+            }
         }
     }
 
@@ -477,6 +485,19 @@ mod tests {
         )));
         assert!(s.is_empty());
         assert!(s.poll(Duration::from_millis(0)).is_empty());
+    }
+
+    #[test]
+    fn pushing_into_an_empty_source_keeps_packet_order() {
+        let mut s = ScriptedSource::empty(800.0, 600.0);
+        s.push(&[ev(EV_REL, REL_X, 12), ev(EV_SYN, SYN_REPORT, 0)]);
+        let events = s.poll(Duration::from_millis(0));
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert!(matches!(
+            events.first(),
+            Some(InputEvent::PointerMove { at, .. }) if at.x == 412.0
+        ));
+        assert!(s.is_empty());
     }
 
     #[test]

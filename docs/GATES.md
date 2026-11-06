@@ -3668,3 +3668,320 @@ performance claim accompanies the visual rewrite.
 
 Revert the S92 commit. The token palette, ledger wallpaper, window chrome, page layouts, screenshot
 sets and S92 records disappear; S91 functionality, including the Games page, remains.
+
+
+---
+
+## 2026-11-05 — S94: a booted QEMU guest installs and plays a fullscreen client
+
+- **Result:** PASS_WITH_LIMITATIONS
+- **Date:** 2026-11-05
+- **Conditions:** a booted Linux guest under QEMU TCG, serial console, bochs
+  framebuffer, and the guest's own `litric-sysd`/`litric-shell`; no KVM, GPU,
+  network, audio or physical display.
+- [x] A bootable initramfs was built from the current release binaries, the
+  prepared Ubuntu userspace and the repository's real `weston-simple-shm`.
+- [x] QEMU booted it headless to `litric.shell.mode=ready`, with a Wayland
+  socket, a 1280x800 bochs framebuffer and an absolute pointer.
+- [x] The guest installed `com.litric.test-game` through the real sysd socket:
+  `OK 2`, `id=com.litric.test-game`, `state=installed`.
+- [x] QMP clicked Play and the guest mapped
+  `litric.client "simple-shm" 1280x800+0+0 fullscreen`.
+- [x] QMP `screendump` found 691,056 colourful and 102,202 bright client pixels,
+  not merely a mapped-window status line.
+- [x] QMP clicked Stop; the client window disappeared (`windows=1`) and the
+  stopped frame had 4,816 colourful pixels. All four assertions in `result.json`
+  are true; the detached final run exited 0 and printed `QEMU GUEST PROOF: PASS`.
+- [ ] The mkosi disk image, UKI, dm-verity, systemd services, persistence and
+  first-boot flow were not tested; this is a direct-kernel initramfs.
+- [ ] KVM, a GPU/DRM present path, network, audio, Bluetooth, a physical display
+  or input hotplug were not tested.
+- [ ] A playable commercial game, Steam/Proton, gamescope or anti-cheat was not
+  tested; the client is the deterministic `weston-simple-shm` fixture.
+
+### Commands and results
+
+```text
+$ export PATH="$HOME/.cargo/bin:$PATH"
+$ ./tools/qemu-guest-proof.sh
+...
+QEMU GUEST PROOF: PASS
+[qemu-proof] PASS — screenshots and result: artifacts/qemu-guest-proof
+$ cat /tmp/qemu-proof-final.exit
+0
+```
+
+The boot and install transcript is `artifacts/qemu-guest-proof/serial.log`; the
+QMP screenshots are `game.png` and `stopped.png`; `result.json` has all four
+assertions true. Repro detail: [QEMU-GUEST-PROOF.md](QEMU-GUEST-PROOF.md).
+
+### Limits
+
+The proof covers the boot, installer, fullscreen client and Stop path on a real
+Linux guest. It does not cover the mkosi image, systemd, persistence, KVM,
+GPU/KMS, audio, networking, a physical display or a playable game. S94 used prepared
+QEMU/kernel/rootfs trees external to Git; S95 adds the self-bootstrap that
+supersedes that limitation. TCG numbers are not performance claims.
+
+### Rollback
+
+Remove `tools/qemu-guest-proof.sh`, `tools/qemu_guest_proof.py`,
+`docs/QEMU-GUEST-PROOF.md` and the S94 records. No product source is involved;
+generated images and logs remain untracked artifacts.
+
+---
+
+## 2026-11-05 — S95: QEMU proof bootstraps from an empty workspace
+
+- **Result:** PASS_WITH_LIMITATIONS
+- **Date:** 2026-11-05
+- **Conditions:** x86_64 Ubuntu 24.04 workspace with network egress for the
+  first bootstrap; QEMU TCG, serial console, bochs framebuffer and the guest's
+  own `litric-sysd`/`litric-shell`; no KVM, GPU, guest network, audio or physical
+  display.
+- [x] `/tmp/litric-tools`, `/tmp/litric-rootfs` and `/tmp/litric-apt` were moved
+  to `/tmp/litric-offline-reference-20261105-035558/` and their old paths were
+  absent for the final run.
+- [x] `build/qemu-bootstrap` was removed, so the final command had to bootstrap
+  its own QEMU/Ubuntu toolchain and guest rootfs.
+- [x] The bootstrap downloaded 220 MB, created QEMU 8.2.2 plus kernel
+  `6.8.0-147-generic`, and completed without root or host package installation.
+- [x] `./tools/qemu-guest-proof.sh` printed `QEMU GUEST PROOF: PASS`, exited 0,
+  and completed in 62s including the bootstrap.
+- [x] The guest installed `com.litric.test-game` (`OK 2`, `state=installed`),
+  mapped the fullscreen `simple-shm` client, and QMP read 691,056 colourful and
+  102,202 bright client pixels from the guest scanout.
+- [x] QMP clicked Stop; the client window disappeared (`windows=1`), the stopped
+  frame had 4,816 colourful pixels, and all four assertions in `result.json` are
+  true.
+- [x] A completed cache was tested with HTTP/HTTPS proxies pointed at a closed
+  port: bootstrap exited 0 from the cache. An empty cache under the same blocked
+  network exited 1 with an actionable `LITRIC_TOOLS`/`LITRIC_ROOTFS` message.
+- [ ] The mkosi disk image, UKI, dm-verity, systemd services, persistence and
+  first-boot flow were not tested; this is a direct-kernel initramfs.
+- [ ] KVM, a GPU/DRM present path, guest network, audio, Bluetooth, a physical
+  display or input hotplug were not tested.
+- [ ] Cross-distribution bootstrap, pinned package versions and a fully offline
+  first run were not tested; those require the documented prepared-tree path.
+
+### Commands and results
+
+```text
+$ test ! -e /tmp/litric-tools && test ! -e /tmp/litric-rootfs
+$ rm -rf build/qemu-bootstrap
+$ ./tools/qemu-guest-proof.sh
+...
+[bootstrap] bootstrap complete: .../build/qemu-bootstrap
+...
+QEMU GUEST PROOF: PASS
+[qemu-proof] PASS — screenshots and result: artifacts/qemu-guest-proof
+$ cat /tmp/qemu-clean-proof2.exit
+0
+```
+
+The boot and install transcript is `artifacts/qemu-guest-proof/serial.log`; the
+QMP screenshots are `game.png` and `stopped.png`; `result.json` has all four
+assertions true. Reproduction and cache details:
+[QEMU-GUEST-PROOF.md](QEMU-GUEST-PROOF.md).
+
+### Limits
+
+The proof covers boot, installer, fullscreen client and Stop on a real Linux
+guest. It does not cover the mkosi image, systemd, persistence, KVM, GPU/KMS,
+audio, networking, a physical display or a playable game. The bootstrap supports
+x86_64 Ubuntu/Debian with `apt-get` and uses floating archive candidates; a
+first run needs about 220 MB of egress and 1 GiB free, while a completed cache or
+both `LITRIC_TOOLS` and `LITRIC_ROOTFS` works offline. TCG numbers are not
+performance claims.
+
+### Rollback
+
+Remove `tools/qemu-guest-bootstrap.sh`, revert the bootstrap hook and Stop
+predicate, and remove the S95 records. No product source is involved; generated
+caches and artifacts remain untracked.
+
+
+---
+
+## 2026-11-05 — S96: QEMU proof at 1920x1080 and 1600x900
+
+- **Result:** PASS_WITH_LIMITATIONS
+- **Date:** 2026-11-05
+- **Conditions:** completed S95 bootstrap cache; QEMU TCG with
+  `VGA,edid=on,xres=W,yres=H,vgamem_mb=16` and user-mode `e1000`; the guest's own
+  `litric-sysd`/`litric-shell`; no KVM, GPU, audio, physical display or runtime
+  mode switch.
+- [x] `LITRIC_QEMU_WIDTH`, `LITRIC_QEMU_HEIGHT` and `LITRIC_QEMU_OUT` are
+  supported by `tools/qemu-guest-proof.sh`; the dimensions flow to QEMU and the
+  QMP driver instead of a fixed 1280x800.
+- [x] The driver takes `--width`/`--height`, derives Play from the captured
+  Settings frame, reads the newest `litric.shell.windows=` state, and checks the
+  guest framebuffer, client geometry, Settings scale, frame bounds, window
+  counts and screenshot dimensions.
+- [x] 1920x1080: `/sys/class/graphics/fb0/virtual_size` = `1920,1080`;
+  `litric.shell.fb=1920x1080 32bpp stride=7680`; Settings
+  `1470x930+64+90`; client `1920x1080+0+0 fullscreen`; screenshot 1920x1080;
+  windows 2 -> 1; 1,118,252 colourful and 561,253 bright game pixels.
+- [x] 1600x900: `/sys/class/graphics/fb0/virtual_size` = `1600,900`;
+  `litric.shell.fb=1600x900 32bpp stride=6400`; Settings
+  `1225x775+64+83`; client `1600x900+0+0 fullscreen`; screenshot 1600x900;
+  windows 2 -> 1; 959,201 colourful and 130,224 bright game pixels.
+- [x] 1280x800 regression: `litric.shell.fb=1280x800`; Settings
+  `980x620+64+76`; client `1280x800+0+0 fullscreen`; screenshot 1280x800;
+  windows 2 -> 1; 691,056 colourful and 102,202 bright game pixels.
+- [x] Compatibility/network regression at 1280x800: the Play click went through
+  `LAUNCHENV` → `litric-sysd/src/compat.rs` native resolver → real `execve`;
+  `litric.client "simple-shm" 1280x800+0+0 fullscreen`; windows 2 → 1;
+  `LITRIC_NETWORK_OK` and `litric-network-proof` arrived over `-nic
+  user,model=e1000`; all five assertions were true.
+- [x] All eight `geometry_checks` and all base assertions were true in
+  every mode; each proof exited 0 (33s, 34s, 38s cache-hit runs).
+- [x] `cargo test --workspace` exited 0 with 2,100 passing tests and 0 failures
+  after the compatibility/network change.
+- [ ] Runtime mode switching/hotplug, 4K, fractional scaling, rotation and other
+  aspect ratios were not tested; the three modes were selected at boot.
+- [ ] The mkosi image, UKI, dm-verity, systemd, persistence, KVM, GPU/KMS,
+  audio, Bluetooth and physical displays remain untested.
+- [ ] The guest network proof is one host-only HTTP request through QEMU user
+  mode; DNS, WAN, multiplayer, game networking and full-system network policy
+  remain untested.
+- [ ] The client is the deterministic `weston-simple-shm` fixture. Roblox, real
+  games, Steam/Proton, gamescope, anti-cheat and Qt/GTK applications remain
+  untested; this is not a claim of complete Linux compatibility.
+
+### Commands and results
+
+```text
+$ LITRIC_QEMU_WIDTH=1920 LITRIC_QEMU_HEIGHT=1080 \
+    LITRIC_QEMU_OUT=artifacts/qemu-guest-proof/1920x1080 \
+    ./tools/qemu-guest-proof.sh
+QEMU GUEST PROOF: PASS
+PROOF_EXIT=0
+ELAPSED=38s
+
+$ LITRIC_QEMU_WIDTH=1600 LITRIC_QEMU_HEIGHT=900 \
+    LITRIC_QEMU_OUT=artifacts/qemu-guest-proof/1600x900 \
+    ./tools/qemu-guest-proof.sh
+QEMU GUEST PROOF: PASS
+PROOF_EXIT=0
+ELAPSED=34s
+
+$ ./tools/qemu-guest-proof.sh
+QEMU GUEST PROOF: PASS
+PROOF_EXIT=0
+ELAPSED=33s
+```
+
+The machine-readable results and screenshots are below
+`artifacts/qemu-guest-proof/`, with the 1920 and 1600 runs in their own
+subdirectories. Exact geometry and reproduction are in
+[QEMU-GUEST-PROOF.md](QEMU-GUEST-PROOF.md).
+
+### Limits
+
+The fix is in the guest proof harness; the tested client resize path was
+already correct at these three boot modes, so no `clients.rs` change was needed.
+This does not establish runtime resize, hotplug, other modes, the mkosi image or
+a commercial game. TCG numbers are not performance claims.
+
+### Rollback
+
+Remove the S96 records and the multi-mode sections of
+`docs/QEMU-GUEST-PROOF.md`; restore the harness defaults if the wider mode
+matrix is not wanted. The generated artifacts remain untracked and disposable.
+
+## 2026-11-06 — the browser proves two concurrent downloads, 13 MB, and tab close/switch
+
+The 2026-11-05 entry established the engine in the guest. This run extends the
+same QEMU boot to four tabs and two public GitHub downloads, then closes and
+switches tabs while asserting the shell's own status. It supersedes the older
+browser entry's single-download/two-tab limits for the cases below.
+
+| check | result |
+|---|---|
+| `cargo build --workspace` | ok, exit 0 |
+| `cargo test --workspace` | 2,112 passed, 0 failed, 0 ignored, exit 0 (a PTY Ctrl+C timing flake failed once under load; the isolated test and the workspace rerun both passed) |
+| `./tools/qemu-guest-proof.sh` run 1 | PASS, exit 0 |
+| run 2, consecutive | PASS, exit 0 |
+| two-run equality | `result-run1.json` and `result-run2.json` have the same 31 assertions, all `true` |
+| pages and frame | `https://example.com/` and `https://example.org/`, `browser.frame=4096000 bytes`, `browser.viewport=1280x800` |
+| concurrent downloads | GitHub CLI 2.62.0 tarball 13,065,800 bytes sha256 `41c8b069…`, and jq `sha256sum.txt` 2,129 bytes sha256 `f1f692fe…`; a `.crdownload` of at least 1 MB existed before the second request began |
+| import and save | both files were staged, imported by `litric-filesd` into `/Downloads`, listed in the panel (`browser.downloads=2`), and read back with the expected size and sha256 |
+| close | Ctrl+W: `4 active=3` → `3 active=2` → `2 active=1`; active `https://example.org/` stayed `loaded — Example Domain` with a 4,096,000-byte frame; `browser-tabs-closed.png` is 1280x800 |
+| switch | Ctrl+1 → `2 active=0` `https://example.com/`; Ctrl+2 → `2 active=1` `https://example.org/`; Ctrl+Tab → `2 active=0` `https://example.com/`; each loaded with a live frame; `browser-tabs-switched.png` is 1280x800 |
+| `result.json` | 31 assertions `true`, including the multi-download, large-file, close and switch checks |
+
+Evidence: `artifacts/qemu-guest-proof/browser-1280x800/{result.json,result-run1.json,result-run2.json,serial.log,browser.png,browser-tabs.png,browser-downloads.png,browser-tabs-closed.png,browser-tabs-switched.png}`;
+reproduction and limits are in [QEMU-GUEST-PROOF.md](QEMU-GUEST-PROOF.md).
+
+### A defect the proof found, and the fix
+
+The proof found a broker capture timeout after returning to a tab that had been
+in the background: `ACTIVATE` could leave `Page.captureScreenshot` without a
+reply for 60 seconds. `refresh_frame` now calls `Page.bringToFront` before it
+reads or captures the target. The switch assertions require a live frame after
+every key, so a regression fails the proof rather than passing on stale pixels.
+
+The earlier TAB percent-encoding fix remains covered by
+`a_tab_line_carries_the_address_and_title_a_tab_shows`; it is separate from this
+entry.
+
+### What is still open
+
+* GPU/KMS present, audio and DBus services were not tested; the engine ran
+  headless under TCG.
+* Four tabs on static pages were exercised; many tabs, reorder, popups, history,
+  session restore and per-tab download ownership beyond these two files were
+  not.
+* Ranged or resumed transfers, other MIME types and a persistent profile were
+  not tested; the proof's profile and `/Downloads` are ephemeral.
+* Ctrl+W closed the two download tabs; closing a tab that held a live page was
+  not exercised.
+* The mkosi image's `chromium` declaration and this pinned Chrome for Testing
+  are separate supply paths; the desktop disk image was not rebuilt.
+* No Steam, Flatpak, Proton or Roblox claim is made or implied here.
+
+---
+
+## 2026-11-06 — KMS scanout on a virtual DRM card, and conditional browser GPU
+
+**Result: PASS_WITH_LIMITATIONS (virtual display controller only).** The QEMU
+guest now presents through DRM/KMS on QEMU's virtual `bochs-drm` card and
+records the browser's GPU policy. GATE 05 remains open for a physical card.
+
+| check | result |
+|---|---|
+| `cargo test -p litric-browser --features broker --bin litric-browserd` | 15 passed, 0 failed; 3 tests cover GPU policy |
+| `cargo build --workspace` | exit 0 |
+| `cargo test --workspace` | 2,119 passed, 0 failed |
+| `cargo clippy -p litric-browser --features broker --all-targets -- -D warnings` | exit 0 |
+| `gpu-1280x800-run2` | PASS, exit 0; 38/38 assertions; 8/8 geometry checks |
+| `gpu-1280x800-run3`, consecutive | PASS, exit 0; 38/38 assertions; 8/8 geometry checks |
+| KMS | `present=drm`, `drm.card=/dev/dri/card0`, `drm.mode=1280x800`, `drm.connector=Virtual-1`, `LITRIC_DRM_FLIP=ok` |
+| GPU identity | `driver=bochs-drm`, `vendor=0x1234`, `device=0x1111`; `render=none` |
+| browser | `browserd: gpu=software(no render node under /dev/dri)`; software policy (`--disable-gpu`); four tabs, two downloads and all tab-switch assertions still pass |
+| conditional hardware path | a `renderD*` node selects `--enable-gpu` plus GPU raster/zero-copy, Vulkan or system EGL; unit-tested only and not reachable in this VM |
+
+Evidence: `artifacts/qemu-guest-proof/gpu-1280x800-run2/{result.json,serial.log,browser.png,game.png}`
+and the same files under `.../gpu-1280x800-run3/`. The first attempt
+(`gpu-1280x800`) was cut off by the outer five-minute command limit after tab
+close; rerunning detached in a terminal produced the two passes above.
+Reproduction:
+
+```sh
+LITRIC_SKIP_BUILD=1 LITRIC_QEMU_OUT=artifacts/qemu-guest-proof/gpu-1280x800-run2 \
+  LITRIC_QEMU_NET_PORT=18102 ./tools/qemu-guest-proof.sh
+```
+
+### What this does not establish
+
+* A physical GPU, 3D rasterisation, VA-API or hardware video decode was not
+  tested. `bochs-drm` is a virtual 2D display controller and exposes no render
+  node; the browser correctly stayed on its software path.
+* The conditional browser GPU branch is unit-tested against fixture render
+  nodes and Vulkan/EGL ICDs, not exercised against a real GPU.
+* No frame-time or throughput claim is made. The shell raster remains software
+  (ADR-0026); KMS changes where the completed frame is scanned out, not how it
+  is drawn.
+* The mkosi image, a physical display, KVM, audio and DBus services remain
+  untested in this guest proof.

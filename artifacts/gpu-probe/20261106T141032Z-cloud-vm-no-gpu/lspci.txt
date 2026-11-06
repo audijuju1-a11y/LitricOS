@@ -1,0 +1,1 @@
+SKIP: lspci is not installed

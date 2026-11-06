@@ -1,0 +1,3 @@
+hello: ERR engine-unavailable No%20Chromium%20binary%20is%20present%20in%20this%20image%20%28ADR-0018%3A%20the%20engine%20is%20integrated%2C%20never%20written%29.%20Set%20BROWSERD_CHROMIUM%20or%20install%20chromium.
+engine: missing
+gpu_policy: None

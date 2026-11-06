@@ -1,0 +1,6 @@
+uid=226170968 gid=1001 groups=[1001]
+mode=20660 uid=0 gid=994
+gid_name=kvm
+open_RDWR=EACCES errno=13
+open_RDONLY=EACCES errno=13
+CapEff=0000000000000000

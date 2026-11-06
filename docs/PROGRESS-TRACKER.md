@@ -7,7 +7,7 @@ command that produced it ran in this workspace; unrun work is listed under
 - Repository: `audijuju1-a11y/LitricOS`
 - Work branch: `freebuff/d7991b8c41a570fd94f0a9bc` (tracks `origin/main`)
 - Rust workspace root: `src/` (23 crates, toolchain 1.99.1)
-- Date of this entry: 2026-10-28
+- Date of this entry: 2026-11-05
 
 ## 1. Repository identity check
 
@@ -74,7 +74,7 @@ evidence, not throughput.
 | `VP-01`–`VP-27` device halves | **PARTIAL / NOT RUN** | Need Windows 26H2, macOS, a Linux desktop session or a mkosi image |
 | Chapter L rows observed live | **0 / 112** | Same; the corpus remains documentation-derived until `VP-23` runs |
 | Remaining "Reused" citation list in Part 23 | **DONE** | Every entry checked in this batch; decisions in §6 |
-| Installer/image build and QEMU boot | **NOT RUN** | This workspace has no image, no `qemu-system-x86_64`/`qemu-img`/`mkosi`, and no way to install them: `sudo` is refused (`no new privileges` flag) and the package index has no `qemu-system-x86` (§7 Phase 1 quotes both) |
+| Installer/image build and QEMU boot | **PASS_WITH_LIMITATIONS for the initramfs path (S94/S95/S96); mkosi image still NOT RUN** | A booted TCG guest installed `com.litric.test-game` through `litric-sysd`, mapped a fullscreen `litric.client` at 1280x800, 1600x900 and 1920x1080, produced client pixels and removed the window on Stop. This is a direct-kernel initramfs, not the mkosi disk image; no KVM, GPU, network, audio, runtime mode switch or persistent system was exercised |
 
 ## 5. Next verified step
 
@@ -9402,3 +9402,353 @@ audio or physical-display test. No Steam/Proton, anti-cheat or playable commerci
 `.deb`, `.rpm`, `.AppImage` and downloaded-package installation remain unimplemented. High-contrast
 themes have token/contrast tests but no screenshot. No RAM or performance measurement was taken for
 S92, so no speed or memory improvement is claimed.
+
+
+## S93 — Terminal: styled PTY grid, live resize, mouse and paste (2026-11-02)
+
+### What changed
+
+- The persistent shell runs under `src/litric-shell/src/litric-pty.c`, linked
+  with `-lutil`. The helper calls `openpty`/`login_tty`, starts `/bin/sh -i` and
+  relays bytes; Rust stays `#![forbid(unsafe_code)]`.
+- `Session::resize(cols, rows)` writes a 0600 size file that the helper polls
+  every ~100 ms. It applies `TIOCSWINSZ` and signals the foreground process
+  group with `SIGWINCH`. Initial size is 100×30; layout keeps model and kernel
+  size in step.
+- `TerminalApp` owns an alternate-screen grid: `?1049h/l`, `?1047`, `?47`,
+  cursor addressing, erase, cursor visibility and cursor save/restore. Primary
+  scrollback is preserved unchanged while the program is on the alternate
+  screen.
+- Each grid cell now stores a display cluster, a column width and a
+  `CellStyle`: foreground/background `Color` plus bold, dim, italic,
+  underline and reverse attributes. SGR supports ANSI 16 colours, `38;5;n` /
+  `48;5;n` 256-colour, `38;2;r;g;b` / `48;2;r;g;b` truecolor, attributes and
+  resets (`0`, `22`, `23`, `24`, `27`, `39`, `49`). Styles are copied per cell
+  and reset on alternate-screen entry and exit; no cell retroactively changes.
+- Wide CJK/emoji characters occupy two columns with a continuation cell.
+  Combining marks, Thai vowel/tone marks, variation selectors and ZWJ append to
+  the preceding cluster without advancing. Wrapping, overwrite, backspace,
+  erase and resize repair never leave half a wide glyph.
+- The grid supports DECSTBM scroll regions (`CSI r`), region-only line feed and
+  reverse index (`ESC M`), `CSI S/T` scroll up/down, `CSI L/M` insert/delete
+  lines, and resize clamping. Rows outside the region stay put.
+- `views::draw_terminal` draws each cell at its own column with its foreground,
+  background, bold weight, dim alpha, synthetic italic, underline and reverse
+  background. ANSI/256/truecolor requests resolve to actual pixels.
+- While alternate screen is active the shell forwards raw input: printable text,
+  arrows, Home/End/Delete/Insert/PageUp/PageDown, F1–F12, Shift+Tab, Escape,
+  Enter, Tab, Backspace and Ctrl+letter, including Ctrl+C/Ctrl+D.
+- `TerminalApp` parses `?1000`/`?1002`/`?1003` as independent tracking flags:
+  normal press/release, button-event drag, and any-event motion respectively;
+  the effective mode is `Any > Button > Normal > Off`. `?1006` selects SGR
+  encoding (lowercase `m` release, coordinates past 223); without it the X10
+  form is used, including modifier bits and the release Cb. Wheel is press-only
+  (buttons 64/65), and turning tracking off clears the held-button mask.
+- `views::draw_terminal` publishes the drawn cell rectangle; `Shell` maps a
+  pointer event through that rectangle and writes the report to the PTY writer
+  only while the Terminal window is focused and no overlay, context menu or
+  desktop dialog is over it. A delivered press captures motion and release
+  until the button comes up, clamping a drag that leaves the grid to an edge
+  cell. Release without its press is suppressed, and focus/chrome loss clears
+  the held mask. Mode state is cleared on first alternate-screen entry, on
+  leaving it, by `clear_screen` and by `ESC c`.
+- `InputEvent::Paste` is routed through `TerminalApp::paste_bytes` to the same
+  PTY writer. With `?2004` on, one 20 KB payload is wrapped once as
+  `ESC[200~ … ESC[201~`; with it off the payload is sent raw. Newlines remain
+  data, and an embedded `ESC[201~` is stripped before wrapping.
+- `tools/build.sh` stages `litric-pty`. If it cannot start, the labelled
+  one-shot fallback remains; that path is not presented as a full PTY.
+- Streaming, `cd`/environment persistence and the prompt marker are unchanged.
+
+### Evidence (run in this workspace)
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | **2,091 passed, 0 failed, 0 ignored** |
+| `cargo test -p litric-shell --lib` | **820 passed, 0 failed** |
+| real resize | `stty size` reported `30 100` before and **`40 120`** after `Session::resize(120, 40)` in the same session |
+| real `vim` | **VIM 9.1** in a real PTY with `-c 'set t_Co=256' -c 'syntax on'`; captured SGR produced a non-default foreground/background cell, then `:q!` emitted `?1049l`, and `echo restored-after-vim` ran in the same session |
+| real styled fixture | actual PTY bytes containing `31;1;4`, `38;5;196`, `38;2;1;2;3`, `界` and Thai `ก` + `ั`; grid asserted exact styles, widths and cursor column 12, then restored primary |
+| SGR parser tests | 16-colour, 256-colour, truecolour, bold/dim/italic/underline/reverse, reset and alt transition |
+| wide/combining tests | CJK/emoji width 2, continuation, Thai/combining width 0, wrapping, overwrite, backspace, erase, resize repair |
+| scroll-region tests | region-only line feed, reverse index, insert/delete lines, bounded scroll and resize clamp; parser test for `CSI r`/`CSI S` |
+| view test | bold brightening, synthetic italic, reverse background resolution |
+| raw fixture | real PTY delivered `ESC [ A` (`1b 5b 41` from `od`) in raw mode, left `?1049l`, and `echo after-fixture` still worked |
+| end-to-end mouse | real PTY fixture under `?1049h`; `Shell::handle` press/release/drag/free-motion/wheel events produced exact SGR files for `?1000`, `?1002` and `?1003`, with disallowed motion absent; leaving the alternate screen left every mode off |
+| pointer capture | `ScriptedSource` evdev packets pressed at cell (1,1), dragged above the grid and released there; the real PTY read press, drag and release at the clamped edge, and the held mask was empty |
+| evdev end-to-end mouse | a real PTY child enabled `?1000`, `?1002`, `?1003` and `?1006` itself; evdev records through `InputState`/`Shell` produced exact Shift-modified press, release, drag, free-motion and wheel reports, including a drag/release outside the grid clamped to cell (0,0); after disable a timed read got no bytes, and a wheel after the PTY session reported closed left the reports unchanged |
+| end-to-end paste | real PTY fixture read a 20,024-byte payload with newlines: `?2004h` produced exactly the 12-byte wrapper plus payload, `?2004l` produced exactly the raw payload, and leaving the screen cleared the mode |
+| mouse/paste model | tracking flags and DECRST, held-state reset, SGR/X10 encodings, modifier bits, wheel, 50 KB paste, newline preservation and embedded-terminator removal |
+| overlay boundary | open Quick Settings with `?1000h`/`?1006h`/`?2004h` active; paste and click stayed out of the PTY while the grid was still drawn |
+| existing session tests | `cd`/environment, Ctrl+C stopping `sleep 10`, output streaming, raw key bytes |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all --check` | exit 0 |
+| `bash ci/verify.sh` | **39 pass, 0 fail, 3 skipped** — image build, boot smoke and idle measurement need mkosi/QEMU |
+
+The vim and styled-fixture tests use real PTY output, not a parser-only string
+table. They prove the PTY/SGR path and alternate-screen transitions, not every
+pixel of vim's frame. As in a real terminal, an SGR state without a reset
+persists across a newline; the per-cell style copy is what prevents an old
+cell from bleeding into a later one. `less`, `top`, `nano` and `script` are
+installed but were not used as this batch's evidence.
+
+### Limits
+
+- The Unicode width table is a small dependency-free approximation, not the
+  full UAX #29 grapheme algorithm. Complex emoji ZWJ sequences, flags and rare
+  marks may be approximate.
+- Sixel, screen selection and GPU acceleration are not implemented. Mouse
+  reporting (`1000`/`1002`/`1003`, X10 and SGR `1006`) and bracketed paste
+  (`2004`) are implemented. OS clipboard capture remains an input-host
+  responsibility; this batch routes `InputEvent::Paste`, it does not read the
+  clipboard itself. This is not a complete terminal emulator and it is not a
+  GPU terminal.
+- Italic is synthetic because no italic face is bundled.
+- The image was not built or booted here (no `mkosi`/QEMU and no display), so the
+  grid is proven on the host, not inside a booted LitricOS image; no vim/less/top
+  screenshot was captured.
+- The readiness marker is a fixed token. A command that deliberately prints it
+  could look like a prompt; it is display state, not a security boundary.
+- The shell still runs with the desktop user's authority. It is not a capability
+  broker and does not claim sandboxing.
+- The size file is 0600 and is built from the process id, a nonce and a counter;
+  its only removal is the reviewed `remove_size_file` helper recorded in
+  `ci/lint-file-safety.py`.
+- If `litric-pty` is missing, the one-shot fallback remains; full-screen, styled
+  behaviour then does not apply.
+
+Full design, process model and exact test names:
+`docs/design/2026-11-02-terminal-pty.md`.
+
+
+## S94 — QEMU guest proof: bootable initramfs, install, fullscreen client, Stop (2026-11-05)
+
+### What changed
+
+- Added `tools/qemu-guest-proof.sh`: builds the release `litric-sysd` and
+  `litric-shell`, stages the prepared Linux userspace plus the repository's
+  real `weston-simple-shm` fixture, writes the guest init, packs the initramfs,
+  and boots QEMU headless with a serial log and QMP.
+- Added `tools/qemu_guest_proof.py`: waits for the guest shell from its serial
+  output, opens Settings/Games, clicks Play and Stop through QMP's absolute
+  virtio tablet, and asserts the guest's framebuffer pixels after each action.
+- The guest init mounts a tmpfs on `/dev/shm` before starting the shell. Without
+  it, `weston-simple-shm` mapped a window but could not allocate its shared
+  memory buffer, so no client pixels reached the scanout.
+- No product source changed in this batch. S94 validates the existing installer,
+  Games, fullscreen-client and Stop paths on a real booted guest.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| initramfs built | `artifacts/qemu-guest-proof/litricos-qemu-initramfs.cpio.gz`, 6.5 MiB |
+| QEMU boot | `q35,accel=tcg`, 2 vCPU, 2048 MiB, 1280x800 bochs framebuffer, serial console |
+| shell ready | `litric.shell.mode=ready`, `fb=1280x800 ... bochs-drmdrmfb`, Wayland socket present, absolute pointer `32767x32767` |
+| install through sysd | `OK 2`, `id=com.litric.test-game`, `state=installed`; installed files listed by the guest init |
+| fullscreen client | `window=#2 litric.client "simple-shm" 1280x800+0+0 fullscreen ws0` |
+| client pixels | 691,056 colourful and 102,202 bright pixels in the guest scanout |
+| Stop | client window gone, `windows=1`; stopped scanout has 4,816 colourful pixels |
+| driver assertions | all four `true` in `result.json` |
+| script exit | detached rerun printed `QEMU GUEST PROOF: PASS` and exited `0` |
+
+### Commands and results
+
+```text
+$ export PATH="$HOME/.cargo/bin:$PATH"
+$ ./tools/qemu-guest-proof.sh
+...
+QEMU GUEST PROOF: PASS
+[qemu-proof] PASS — screenshots and result: artifacts/qemu-guest-proof
+$ cat /tmp/qemu-proof-final.exit
+0
+```
+
+The host command wrapper has a five-minute limit. The proof can outlive it
+under TCG, so the final run used `nohup` and checked the script's own exit status
+file. `result.json` is written only after every assertion passes. Full commands,
+guest transcript and limitations:
+`docs/QEMU-GUEST-PROOF.md`.
+
+### Limits
+
+This is a direct-kernel initramfs under TCG, not the mkosi disk image or a UKI.
+It does not test systemd units, dm-verity, persistence, first-boot setup, KVM,
+GPU/KMS, audio, networking, Bluetooth, input hotplug or a physical display. The
+client is the deterministic `weston-simple-shm` fixture, not a playable game;
+Steam/Proton, gamescope, anti-cheat and Qt/GTK applications were not tested. The
+S94 used prepared QEMU/kernel/rootfs trees external to Git; S95 adds the
+self-bootstrap that supersedes that limitation.
+
+### Rollback
+
+Remove `tools/qemu-guest-proof.sh`, `tools/qemu_guest_proof.py`,
+`docs/QEMU-GUEST-PROOF.md` and this S94 record. No product source is involved;
+the generated images and logs remain untracked artifacts.
+
+## S95 — QEMU proof bootstraps from an empty workspace (2026-11-05)
+
+### What changed
+
+- Added `tools/qemu-guest-bootstrap.sh`: a rootless bootstrap that uses a private
+  APT root under `build/qemu-bootstrap/apt`, downloads the QEMU toolchain,
+  Ubuntu 24.04 kernel/modules and guest userspace, and builds the rootfs. It
+  never writes the host package database and does not need root.
+- `tools/qemu-guest-proof.sh` now invokes the bootstrap automatically when the
+  tools/rootfs cache is absent. It uses `build/qemu-bootstrap` by default and
+  supports `LITRIC_BOOTSTRAP_CACHE`, `LITRIC_TOOLS` and `LITRIC_ROOTFS` for
+  alternate caches or prepared trees.
+- Fixed the Stop assertion: it now reads the newest `litric.shell.windows=`
+  state instead of treating an older pre-Stop client line as still present.
+- Bounded APT retries/timeouts and added an explicit post-update index check, so
+  an offline cache miss exits promptly with an actionable error instead of
+  silently failing later in `apt-cache` or hanging in retries.
+- Updated `docs/QEMU-GUEST-PROOF.md` with the clean-run command, real network
+  and disk prerequisites, cache/offline behavior, measured timing and the
+  bootstrap's host limits.
+
+### Evidence
+
+| Check | Result |
+|---|---|
+| old `/tmp` trees | `/tmp/litric-tools`, `/tmp/litric-rootfs` and `/tmp/litric-apt` moved to `/tmp/litric-offline-reference-20261105-035558/`; old paths absent and unused |
+| cache cleared | `build/qemu-bootstrap` removed before the final run |
+| bootstrap | downloaded 220 MB from the Ubuntu archive; QEMU 8.2.2, kernel `6.8.0-147-generic`, busybox/glibc and Noto rootfs created |
+| cache sizes | 517 MiB APT, 359 MiB tools, 8 MiB rootfs (about 884 MiB) |
+| clean proof | `./tools/qemu-guest-proof.sh` printed `QEMU GUEST PROOF: PASS`, exited 0, 62s wall time |
+| installer | `OK 2`, `id=com.litric.test-game`, `state=installed` from the guest's sysd |
+| client pixels | 691,056 colourful and 102,202 bright pixels from the guest scanout |
+| Stop | `windows=1` after QMP clicked Stop; stopped scanout had 4,816 colourful pixels |
+| assertions | `installed`, `colourful_above_floor`, `client_window_gone_after_stop`, `colourful_below_ceiling_after_stop` all true in `result.json` |
+| cache/offline | a completed cache exited 0 with HTTP/HTTPS proxies pointed at a closed port; an empty cache with the same blocked network exited 1 and named `LITRIC_TOOLS` and `LITRIC_ROOTFS` |
+
+The first clean run exposed the Stop-tail race: it reached the game and clicked
+Stop, but the old predicate timed out on a stale `window=#2` line. The final
+clean run above used the corrected newest-state predicate.
+
+### Commands and results
+
+```text
+$ test ! -e /tmp/litric-tools && test ! -e /tmp/litric-rootfs
+$ rm -rf build/qemu-bootstrap
+$ ./tools/qemu-guest-proof.sh
+...
+[bootstrap] bootstrap complete: .../build/qemu-bootstrap
+...
+QEMU GUEST PROOF: PASS
+[qemu-proof] PASS — screenshots and result: artifacts/qemu-guest-proof
+$ cat /tmp/qemu-clean-proof2.exit
+0
+```
+
+The final run's serial transcript is
+`artifacts/qemu-guest-proof/serial.log`; `game.png` and `stopped.png` are guest
+framebuffer reads; `result.json` has all four assertions true. No host compositor,
+mock client or same-process composition was used.
+
+### Limits
+
+This remains a direct-kernel initramfs under QEMU TCG, not the mkosi disk image
+or a UKI. It does not test systemd units, dm-verity, persistence, first-boot
+setup, KVM, GPU/KMS, audio, networking, Bluetooth, input hotplug or a physical
+display. The client is the deterministic `weston-simple-shm` fixture, not a
+playable game. The bootstrap supports x86_64 Ubuntu/Debian with `apt-get` and
+uses candidate packages from the host's configured archive; it is not a
+cross-distribution or fully pinned offline installer. A first run needs network
+egress to the Ubuntu archive (about 220 MB) and about 1 GiB free; a completed
+cache or both prepared trees work without that download.
+
+### Rollback
+
+Remove `tools/qemu-guest-bootstrap.sh`, revert the bootstrap hook and Stop
+predicate in `tools/qemu-guest-proof.sh`/`tools/qemu_guest_proof.py`, and remove
+this S95 record plus the bootstrap sections of `docs/QEMU-GUEST-PROOF.md`. No
+product source is involved; generated caches and artifacts remain untracked.
+
+
+## S96 — QEMU proof spans 1280x800, 1600x900 and 1920x1080 (2026-11-05)
+
+### What changed
+
+- `tools/qemu-guest-proof.sh` now accepts `LITRIC_QEMU_WIDTH`,
+  `LITRIC_QEMU_HEIGHT` and `LITRIC_QEMU_OUT`; it passes the dimensions to
+  QEMU's explicit `VGA,edid=on,xres=W,yres=H,vgamem_mb=16` device and to the
+  QMP driver instead of always booting 1280x800.
+- `tools/qemu_guest_proof.py` now takes `--width`/`--height`, derives the Play
+  click from the captured Settings frame rather than scaling a fixed absolute
+  point, and reads the newest `litric.shell.windows=` state instead of an older
+  marked status block.
+- The driver requires the guest framebuffer, fullscreen client frame, Settings
+  scale, all frame bounds, window counts, and screenshot dimensions to agree at
+  the requested size. The base assertions remain installed, client pixels, and
+  client removed after Stop.
+- No `src/litric-shell/src/clients.rs` change was needed: the client resize path
+  produced the exact fullscreen frame at all three tested boot modes. The first
+  1920 failure was in the harness (`the status has no Settings window geometry`
+  plus a fixed Play coordinate), not in the client.
+
+### Evidence
+
+| Check | 1280x800 | 1600x900 | 1920x1080 |
+|---|---|---|---|
+| guest `/sys/class/graphics/fb0/virtual_size` | `1280,800` | `1600,900` | `1920,1080` |
+| shell framebuffer line | `litric.shell.fb=1280x800 32bpp stride=5120` | `litric.shell.fb=1600x900 32bpp stride=6400` | `litric.shell.fb=1920x1080 32bpp stride=7680` |
+| Settings frame | `980x620+64+76` | `1225x775+64+83` | `1470x930+64+90` |
+| fullscreen client | `1280x800+0+0` | `1600x900+0+0` | `1920x1080+0+0` |
+| screenshot | 1280x800 | 1600x900 | 1920x1080 |
+| game colourful / bright pixels | 691,056 / 102,202 | 959,201 / 130,224 | 1,118,252 / 561,253 |
+| windows before -> after Stop | 2 -> 1 | 2 -> 1 | 2 -> 1 |
+| proof exit / wall time | 0 / 33s | 0 / 34s | 0 / 38s |
+
+All eight `geometry_checks` and all four base assertions were true in every
+mode. `cargo test --workspace` exited 0 with 2,100 passing tests and 0 failures
+after the compatibility/network change. The compatibility/network regression
+at 1280x800 ran the Play click through `LAUNCHENV` →
+`litric-sysd/src/compat.rs` → real `execve`, observed the client window and
+pixels, and logged `LITRIC_NETWORK_OK` / `litric-network-proof` over QEMU
+user-mode networking with the `e1000` driver. Its serial, screenshot and
+`result.json` are in `artifacts/qemu-guest-proof/compat-network-1280x800/`.
+The 1920, 1600 and 1280 display serial logs, screenshots and result JSON are
+under `artifacts/qemu-guest-proof/` with the two alternate modes in their own
+subdirectories.
+
+### Commands and results
+
+```text
+$ LITRIC_QEMU_WIDTH=1920 LITRIC_QEMU_HEIGHT=1080 \
+    LITRIC_QEMU_OUT=artifacts/qemu-guest-proof/1920x1080 \
+    ./tools/qemu-guest-proof.sh
+QEMU GUEST PROOF: PASS
+PROOF_EXIT=0
+ELAPSED=38s
+
+$ LITRIC_QEMU_WIDTH=1600 LITRIC_QEMU_HEIGHT=900 \
+    LITRIC_QEMU_OUT=artifacts/qemu-guest-proof/1600x900 \
+    ./tools/qemu-guest-proof.sh
+QEMU GUEST PROOF: PASS
+PROOF_EXIT=0
+ELAPSED=34s
+
+$ ./tools/qemu-guest-proof.sh
+QEMU GUEST PROOF: PASS
+PROOF_EXIT=0
+ELAPSED=33s
+```
+
+### Limits
+
+The three modes were selected at QEMU boot; there was no runtime mode switch,
+hotplug, 4K, fractional scaling, rotation or other aspect-ratio test. This
+remains a direct-kernel initramfs under TCG, not the mkosi image or a UKI, and
+does not cover systemd, persistence, KVM, GPU/KMS, audio, Bluetooth or a
+physical display. The guest network proof is one host-only HTTP request through
+QEMU user mode; DNS, WAN, multiplayer and full-system network policy were not
+tested. The client is `weston-simple-shm`, not a playable game; Roblox, real
+games, Steam/Proton, gamescope, anti-cheat and Qt/GTK applications were not
+tested. This is not a claim of complete Linux compatibility.
+
+### Rollback
+
+Remove this S96 record and the multi-mode additions to
+`docs/QEMU-GUEST-PROOF.md`; restore the harness defaults if the wider matrix is
+not wanted. Generated artifacts remain untracked and disposable.

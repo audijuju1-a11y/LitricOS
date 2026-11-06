@@ -855,6 +855,7 @@ fn scene_launcher(rig: &mut Rig) {
         &InputEvent::PointerMove {
             at: Point::new(width() as f32 / 2.0, height() as f32 - 5.0),
             delta: Point::new(1.0, 1.0),
+            mods: litric_input::keys::Modifiers::NONE,
         },
         1_000,
     );
@@ -881,6 +882,7 @@ fn scene_install_dialog(rig: &mut Rig) {
         &InputEvent::PointerMove {
             at,
             delta: Point::new(1.0, 1.0),
+            mods: litric_input::keys::Modifiers::NONE,
         },
         2_000,
     );

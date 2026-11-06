@@ -228,6 +228,17 @@ if command -v cargo >/dev/null 2>&1; then
     # pixels to the visible scanout. Keep the one necessary mmap boundary in a
     # standalone helper; the Rust shell sends it fixed-size frames through stdin
     # and retains all desktop policy in safe Rust.
+    # The terminal's PTY owner. It needs openpty/login_tty/ioctl, so it lives
+    # beside the shell as a tiny C helper and is installed next to the Rust
+    # binary. Without it the Shell falls back to a one-shot command and says so.
+    PTY_SOURCE="${PROJECT_ROOT}/src/litric-shell/src/litric-pty.c"
+    if [[ -f "$PTY_SOURCE" ]]; then
+        command -v cc >/dev/null 2>&1 || die "C compiler required for litric-pty"
+        mkdir -p "$STAGE"
+        cc -std=c17 -O2 -Wall -Wextra -Werror "$PTY_SOURCE" -lutil -o "${STAGE}/litric-pty"
+        chmod 0755 "${STAGE}/litric-pty"
+        log "staged litric-pty"
+    fi
     PRESENTER_SOURCE="${PROJECT_ROOT}/src/litric-shell/src/fbpresent.c"
     if [[ -f "$PRESENTER_SOURCE" ]]; then
         command -v cc >/dev/null 2>&1 || die "C compiler required for litric-fbpresent"

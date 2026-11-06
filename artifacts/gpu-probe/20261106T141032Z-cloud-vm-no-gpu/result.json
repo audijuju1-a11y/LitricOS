@@ -1,0 +1,90 @@
+{
+  "artifacts": "artifacts/gpu-probe/20261106T141032Z-cloud-vm-no-gpu",
+  "browser": {
+    "browserd_path": "/workspace/chats/d7991b8c41a570fd94f0a9bc/src/target/release/litric-browserd",
+    "browserd_present": true,
+    "chromium_gpu": {
+      "error": "no Chromium binary",
+      "features": {},
+      "hardware_accelerated": false,
+      "html": null,
+      "ran": false,
+      "report_available": false,
+      "returncode": null,
+      "text": null,
+      "timed_out": false,
+      "video_decode_hardware_accelerated": false
+    },
+    "chromium_path": null,
+    "engine": "missing",
+    "engine_log": null,
+    "error": null,
+    "gpu_backend": null,
+    "gpu_policy": null,
+    "gpu_render": null,
+    "hello": "ERR engine-unavailable No%20Chromium%20binary%20is%20present%20in%20this%20image%20%28ADR-0018%3A%20the%20engine%20is%20integrated%2C%20never%20written%29.%20Set%20BROWSERD_CHROMIUM%20or%20install%20chromium.",
+    "log": "artifacts/gpu-probe/20261106T141032Z-cloud-vm-no-gpu/browserd/browserd.log",
+    "started": true
+  },
+  "checks": {
+    "browser_engine_chromium": false,
+    "browser_gpu_policy_hardware": false,
+    "browserd_present": true,
+    "chromium_gpu_hardware": false,
+    "chromium_gpu_report": false,
+    "dri_card": false,
+    "render_node": false,
+    "vaapi": false,
+    "vaapi_browser_decode": false,
+    "vulkan": false
+  },
+  "dri": {
+    "by_path": [],
+    "cards": [],
+    "entries": [],
+    "lspci": null,
+    "modules": [],
+    "nvidia_smi": null,
+    "present": false,
+    "render_nodes": [],
+    "sysfs_present": false
+  },
+  "exit_code": 2,
+  "generated_at": "2026-11-06T14:10:32+00:00",
+  "host": {
+    "cmdline": "console=ttyS0 systemd.getty_auto=0 reboot=k panic=1 root=/dev/vda rw data=journal memhp_default_state=online clocksource=kvm-clock systemd.run=\"systemd-run --unit=freestyle-vms-agent --service-type=exec --property=Restart=always --property=RestartSec=1 /sbin/freestyle-vms-agent\" systemd.run=\"systemctl --no-block start multi-user.target\" systemd.run_success_action=none systemd.run_failure_action=none ip=169.254.77.2::169.254.77.1:255.255.255.252::eth0:off freestyle.ip6=fdf5:7700::/64,fe80::f5:77ff:fe00:1",
+    "cwd": "/workspace/chats/d7991b8c41a570fd94f0a9bc",
+    "git_head": "0af98d5c924a0f78643d08fdb5fb89bc3b5c02a6",
+    "os_release": "PRETTY_NAME=\"Ubuntu 24.04.5 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.5 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=noble\nLOGO=ubuntu-logo",
+    "python": "3.12.3",
+    "uid": 226170968,
+    "uname": {
+      "machine": "x86_64",
+      "node": "freestyle-vm",
+      "release": "6.1.102",
+      "system": "Linux",
+      "version": "#1 SMP PREEMPT_DYNAMIC Wed Aug 26 20:12:24 UTC 2026"
+    }
+  },
+  "limitations": [
+    "browserd: gpu=... reports the policy selected when Chromium starts; it is not per-frame GPU utilisation.",
+    "chrome://gpu is a capability report, not a frame-time or throughput measurement.",
+    "vainfo lists VA-API profiles; this probe does not decode an encoded video, so actual decode acceleration is not proven.",
+    "The probe requires read access to /dev/dri. It does not write to a device or change its permissions.",
+    "A physical display/KMS scanout is separate from browser compositing and is not exercised here."
+  ],
+  "schema": 1,
+  "status": "BLOCKED",
+  "vaapi": {
+    "available": false,
+    "profiles": [],
+    "runs": [],
+    "tool": null
+  },
+  "vulkan": {
+    "available": false,
+    "command": null,
+    "summary": "",
+    "tool": null
+  }
+}

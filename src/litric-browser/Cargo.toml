@@ -33,6 +33,11 @@ indexing_slicing     = "deny"
 integer_division     = "warn"
 
 [features]
+# The broker is the product's browser engine path, so it is part of a default
+# build: an image built with `cargo build -p litric-browser` must contain
+# `litric-browserd`. It remains an explicit feature so a host that cannot run a
+# Unix daemon can still build the library with `--no-default-features`.
+default = ["broker"]
 broker = []
 
 [dependencies]

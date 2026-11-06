@@ -1,0 +1,60 @@
+{
+  "assertions": {
+    "completed": false
+  },
+  "browser": {
+    "window": {
+      "app": "com.litric.browser",
+      "height": 620,
+      "id": 1,
+      "title": "Litric Browser",
+      "width": 1000,
+      "x": 64,
+      "y": 76
+    }
+  },
+  "error": "[Errno 32] Broken pipe",
+  "geometry": {
+    "height": 800,
+    "width": 1280
+  },
+  "host": "QEMU guest",
+  "metrics": {},
+  "pages": {
+    "google": {
+      "frame": "4096000 bytes",
+      "status": "loaded \u2014 Google",
+      "tabs": "1 active=0",
+      "title": "Google",
+      "url": "https://google.com/"
+    }
+  },
+  "requested_urls": {
+    "accepted_prefixes": {
+      "google": [
+        "https://google.com",
+        "https://www.google.com"
+      ],
+      "youtube": [
+        "https://youtube.com",
+        "https://www.youtube.com",
+        "https://m.youtube.com"
+      ]
+    },
+    "google": "google.com",
+    "youtube": [
+      "m.youtube.com",
+      "www.youtube.com/embed/dQw4w9WgXcQ"
+    ]
+  },
+  "screenshots": {
+    "google": {
+      "bright": 389097,
+      "colourful": 5991,
+      "dark": 592332,
+      "height": 800,
+      "width": 1280
+    }
+  },
+  "status": "FAIL"
+}

@@ -238,6 +238,7 @@ fn a_linux_application_opens_a_window_on_the_litric_desktop() {
         &InputEvent::PointerMove {
             at,
             delta: Point::new(1.0, 1.0),
+            mods: litric_input::keys::Modifiers::NONE,
         },
         t,
     );

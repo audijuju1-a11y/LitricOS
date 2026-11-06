@@ -200,6 +200,10 @@ pub struct Style {
     pub color: u32,
     /// Typeface family.
     pub face: FontFace,
+    /// Draw the face with a synthetic forward oblique. The bundled faces have
+    /// no italic cut, so the terminal's `SGR 3` is honoured by shearing the
+    /// rasterised glyphs rather than silently dropping the attribute.
+    pub italic: bool,
 }
 
 impl Style {
@@ -212,6 +216,7 @@ impl Style {
             tracking: 0.0,
             color,
             face: FontFace::Sans,
+            italic: false,
         }
     }
 
@@ -224,6 +229,7 @@ impl Style {
             tracking: 0.0,
             color,
             face: FontFace::Sans,
+            italic: false,
         }
     }
 
@@ -245,6 +251,13 @@ impl Style {
     #[must_use]
     pub const fn monospace(mut self) -> Self {
         self.face = FontFace::Mono;
+        self
+    }
+
+    /// Draw with a synthetic italic slant.
+    #[must_use]
+    pub const fn italic(mut self) -> Self {
+        self.italic = true;
         self
     }
 }
@@ -1879,7 +1892,7 @@ pub fn draw_literal(canvas: &mut Canvas, text: &str, x: f32, baseline: f32, styl
             baseline,
             scale,
             stroke_w,
-            color,
+            style,
         );
         pen += advance_px(i, scale, stroke_w, tracking);
     }
@@ -1938,7 +1951,15 @@ fn draw_open_type(
                 if coverage == 0 {
                     continue;
                 }
-                let Some(px) = gx.checked_add(i64::try_from(col).unwrap_or(i64::MAX)) else {
+                let slant = if style.italic {
+                    ((baseline - y as f32) * 0.20).round() as i64
+                } else {
+                    0
+                };
+                let Some(px) = gx
+                    .checked_add(slant)
+                    .and_then(|x| x.checked_add(i64::try_from(col).unwrap_or(i64::MAX)))
+                else {
                     continue;
                 };
                 canvas.blend_px(px, y, style.color, f32::from(coverage) / 255.0);
@@ -1969,9 +1990,20 @@ fn draw_glyph(
     baseline: f32,
     scale: f32,
     stroke_w: f32,
-    color: u32,
+    style: &Style,
 ) {
-    let map = |p: (f32, f32)| -> (f32, f32) { (x + p.0 * scale, baseline - p.1 * scale) };
+    let color = style.color;
+    let italic = style.italic;
+    let map = |p: (f32, f32)| -> (f32, f32) {
+        let px = x + p.0 * scale;
+        let py = baseline - p.1 * scale;
+        let px = if italic {
+            px + (baseline - py) * 0.20
+        } else {
+            px
+        };
+        (px, py)
+    };
     for s in g.strokes {
         match *s {
             Poly(points) => {

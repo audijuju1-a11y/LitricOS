@@ -1,0 +1,12 @@
+GPU probe: BLOCKED
+host: x86_64 kernel 6.1.102
+render nodes: none
+cards: none
+browserd: /workspace/chats/d7991b8c41a570fd94f0a9bc/src/target/release/litric-browserd
+browser engine: missing
+browser GPU policy: not reported
+vulkaninfo: unavailable
+vainfo: unavailable (0 profiles)
+chrome://gpu: not confirmed (no report)
+VA-API video decode report: not confirmed
+artifacts: artifacts/gpu-probe/20261106T141032Z-cloud-vm-no-gpu

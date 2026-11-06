@@ -279,6 +279,14 @@ fn a_foreign_client_maps_a_window_and_goes_away_cleanly() {
         after_input.is_some() && child.0.try_wait().ok().flatten().is_none(),
         "the client survives the pointer and key events and keeps drawing"
     );
+    // A client with two shm buffers reuses each one only after the compositor
+    // releases it. Without wl_buffer.release, the reference client eventually
+    // prints this and stops drawing.
+    let log = std::fs::read_to_string(runtime.join("client.log")).unwrap_or_default();
+    assert!(
+        !log.contains("Both buffers busy"),
+        "the compositor released the client's buffers. client log:\n{log}"
+    );
 
     // Close: the client must exit on its own when the window manager asks.
     server.close(surface);

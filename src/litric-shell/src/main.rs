@@ -2235,6 +2235,7 @@ mod tests {
         let mv = |x: f32, y: f32| InputEvent::PointerMove {
             at: Point::new(x, y),
             delta: Point::new(1.0, 1.0),
+            mods: litric_input::keys::Modifiers::NONE,
         };
         let button = |x: f32, y: f32, pressed: bool| InputEvent::PointerButton {
             button: PointerButton::Primary,

@@ -14,10 +14,12 @@
 //!                       └──► damage()              (what to repaint)
 //! ```
 
+#[cfg(unix)]
+use crate::terminal::{Event as TerminalEvent, Session as TerminalSession};
 use std::collections::VecDeque;
 use std::io::Read as _;
 #[cfg(unix)]
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(unix)]
 use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
@@ -36,6 +38,59 @@ use crate::canvas::Rect;
 use crate::lock::Secret;
 use crate::shortcuts::{Action, App, MetaTap, Shortcuts};
 use crate::ui::{Hotspots, Tokens};
+
+/// Where the Terminal's cell grid sits in display coordinates.
+///
+/// The model stores state, not pixels. The view is the only layer that knows
+/// where each cell landed, so it records that rectangle here and the pointer
+/// path maps display points back into terminal columns and rows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct TerminalGrid {
+    /// Left edge of column zero.
+    pub x: f32,
+    /// Top edge of row zero.
+    pub y: f32,
+    /// Pixels per column.
+    pub cell_w: f32,
+    /// Pixels per row.
+    pub line_h: f32,
+    /// Columns represented by the grid.
+    pub cols: usize,
+    /// Rows represented by the grid.
+    pub rows: usize,
+}
+
+impl TerminalGrid {
+    fn cell_at(self, at: Point) -> Option<(usize, usize)> {
+        if !(at.x >= self.x && at.y >= self.y) {
+            return None;
+        }
+        let col = ((at.x - self.x) / self.cell_w.max(1.0)).floor() as usize;
+        let row = ((at.y - self.y) / self.line_h.max(1.0)).floor() as usize;
+        (col < self.cols && row < self.rows).then_some((col, row))
+    }
+
+    /// The nearest cell for a point outside the grid.
+    ///
+    /// Once a press has been delivered to a program, the pointer may leave the
+    /// terminal while the button is still down. Clamping to an edge keeps the
+    /// drag and its release in the program instead of losing them outside the
+    /// window.
+    fn clamp_cell(self, at: Point) -> Option<(usize, usize)> {
+        if self.cols == 0 || self.rows == 0 {
+            return None;
+        }
+        let last_col = self.cols.saturating_sub(1) as f32;
+        let last_row = self.rows.saturating_sub(1) as f32;
+        let col = ((at.x - self.x) / self.cell_w.max(1.0))
+            .floor()
+            .clamp(0.0, last_col) as usize;
+        let row = ((at.y - self.y) / self.line_h.max(1.0))
+            .floor()
+            .clamp(0.0, last_row) as usize;
+        Some((col, row))
+    }
+}
 
 /// How much of the desktop is working.
 ///
@@ -2508,10 +2563,368 @@ impl Shell {
         }
     }
 
-    /// Run one terminal command for real on the guest: `/bin/sh -c` under
-    /// `timeout`, output streamed back through a channel that `tick`
-    /// drains, so a slow or runaway command can never stall a frame.
+    /// Run a command in the Terminal's persistent PTY shell.
+    ///
+    /// The first command starts `script(1)` and waits for the shell's readiness
+    /// marker before sending it; later commands go straight to the same shell,
+    /// so `cd`, environment changes and interactive prompts survive between
+    /// commands. Nothing here blocks the frame loop: the session owns two
+    /// worker threads and the UI only sends bytes and drains events.
+    ///
+    /// If `script(1)` is unavailable, the old one-shot path runs with its own
+    /// 30-second bound and the reason is shown above the prompt rather than
+    /// silently pretending the session is persistent.
     pub fn terminal_run(&mut self) {
+        let cmd = self.terminal.input.trim().to_owned();
+        if cmd.is_empty() {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            if self.terminal_session.is_none() {
+                match TerminalSession::spawn(self.application_env()) {
+                    Ok(mut session) => {
+                        let (cols, rows) = self.terminal.viewport();
+                        let _ = session.resize(cols as u16, rows as u16);
+                        self.terminal_session = Some(session);
+                        self.terminal_ready = false;
+                    }
+                    Err(error) => {
+                        self.terminal.input = cmd;
+                        self.terminal.note = Some(format!(
+                            "PTY shell unavailable ({error}); using a one-shot command."
+                        ));
+                        self.terminal_run_once();
+                        return;
+                    }
+                }
+            }
+            self.terminal.input.clear();
+            self.terminal.remember_command(&cmd);
+            self.terminal.echo_command(&cmd);
+            if !self.terminal_ready {
+                if self.pending_terminal.is_some() {
+                    self.terminal
+                        .push_line("litric: the shell is still starting; try again in a moment");
+                } else {
+                    self.pending_terminal = Some(cmd);
+                    self.terminal.busy = true;
+                }
+                self.request_full_redraw();
+                return;
+            }
+            if self
+                .terminal_session
+                .as_ref()
+                .is_some_and(|session| session.send(format!("{cmd}\n").as_bytes()))
+            {
+                self.terminal.busy = true;
+            } else {
+                self.terminal_session = None;
+                self.terminal_ready = false;
+                self.terminal.busy = false;
+                self.terminal.note = Some(
+                    "The shell session ended; type the command again to start a new one."
+                        .to_owned(),
+                );
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            self.terminal_run_once();
+        }
+        self.request_full_redraw();
+    }
+
+    /// Send one control byte to the foreground process, or nothing when no
+    /// shell is running. Ctrl+C and Ctrl+D are not text: they are terminal
+    /// signals, and a persistent shell without them would be a pane you could
+    /// start a long command in but never stop.
+    pub fn terminal_send_control(&mut self, byte: u8) {
+        #[cfg(unix)]
+        {
+            if let Some(session) = self.terminal_session.as_ref() {
+                if session.send(&[byte]) {
+                    self.request_full_redraw();
+                    return;
+                }
+                self.terminal.note =
+                    Some("The shell session ended; type a command to start a new one.".to_owned());
+            } else {
+                self.terminal.note = Some("No shell session is running.".to_owned());
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = byte;
+            self.terminal.note =
+                Some("Terminal control keys need a real LitricOS/Linux session.".to_owned());
+        }
+        self.request_full_redraw();
+    }
+
+    /// Set the PTY window size and the model's matching grid size.
+    ///
+    /// The UI calls this from the layout pass. A change writes the size file;
+    /// the helper applies `TIOCSWINSZ` and sends `SIGWINCH`, so `stty size`,
+    /// `tput`, cursor addressing and a running full-screen program see the new
+    /// dimensions. No-op while the numbers are unchanged.
+    pub fn terminal_resize(&mut self, cols: usize, rows: usize) {
+        let cols = cols.clamp(20, 500);
+        let rows = rows.clamp(5, 300);
+        if self.terminal.viewport() == (cols, rows) {
+            return;
+        }
+        self.terminal.set_viewport(cols, rows);
+        #[cfg(unix)]
+        if let Some(session) = self.terminal_session.as_mut() {
+            let _ = session.resize(cols as u16, rows as u16);
+        }
+        self.request_full_redraw();
+    }
+
+    /// Record where the Terminal cells were drawn. The view calls this while
+    /// laying out; a pointer event can then use the same geometry the person
+    /// sees rather than duplicating padding arithmetic in the input path.
+    pub(crate) fn set_terminal_grid(&mut self, grid: Option<TerminalGrid>) {
+        self.terminal_grid = grid;
+    }
+
+    /// Send pasted text to the running program, wrapped when it enabled
+    /// bracketed paste. The payload is one write, not a sequence of key events:
+    /// newlines stay data and a large clipboard cannot be split into Enters.
+    pub fn terminal_send_paste(&mut self, text: &str) {
+        let bytes = self.terminal.paste_bytes(text);
+        self.terminal_send_raw(&bytes);
+    }
+
+    /// Whether the focused Terminal owns a host paste right now.
+    fn terminal_takes_paste(&self) -> bool {
+        self.terminal.focused
+            && self.terminal_window_focused()
+            && self.terminal_input_unobstructed()
+    }
+
+    /// Whether shell chrome is sitting over the Terminal's input surface.
+    ///
+    /// An open launcher, menu or dialog owns the pointer and keyboard even when
+    /// the window below it is still focused. The terminal grid is drawn under
+    /// those surfaces, so without this check a terminal mouse mode would steal
+    /// clicks meant for the overlay.
+    fn terminal_input_unobstructed(&self) -> bool {
+        !self.overlay.is_open() && self.context_menu.is_none() && self.desktop_dialog.is_none()
+    }
+
+    fn terminal_window_focused(&self) -> bool {
+        self.wm
+            .focused()
+            .and_then(|id| self.wm.window(id))
+            .is_some_and(|window| window.app_id == "com.litric.terminal")
+    }
+
+    /// Map a display point to a cell using the geometry the view published.
+    fn terminal_mouse_cell(&self, at: Point) -> Option<(usize, usize)> {
+        if self.terminal.mouse_mode() == crate::apps::MouseMode::Off {
+            return None;
+        }
+        if !self.terminal_window_focused() || !self.terminal_input_unobstructed() {
+            return None;
+        }
+        self.terminal_grid?.cell_at(at)
+    }
+
+    /// Forward one pointer action to the Terminal's alternate-screen program.
+    /// Returns whether the program asked for that action in its current mode.
+    fn terminal_mouse(
+        &mut self,
+        action: crate::apps::MouseAction,
+        button: Option<crate::apps::MouseButton>,
+        at: Point,
+        mods: Modifiers,
+    ) -> bool {
+        if self.terminal.mouse_mode() == crate::apps::MouseMode::Off
+            || !self.terminal_window_focused()
+            || !self.terminal_input_unobstructed()
+        {
+            // A drag interrupted by focus or shell chrome has no safe owner
+            // for a later release. Drop the mask so a refocus cannot turn the
+            // held button into a phantom drag.
+            self.terminal.clear_mouse_buttons();
+            return false;
+        }
+        // While a button is held, the last delivered cell owns motion and
+        // release even after the pointer leaves the grid. Clamp to the edge
+        // rather than dropping the event on the window frame.
+        let cell = self.terminal_mouse_cell(at).or_else(|| {
+            if self.terminal.mouse_buttons_held() {
+                self.terminal_grid?.clamp_cell(at)
+            } else {
+                None
+            }
+        });
+        let Some((col, row)) = cell else {
+            return false;
+        };
+        if action != crate::apps::MouseAction::Motion {
+            self.terminal.focused = true;
+        }
+        let Some(bytes) = self.terminal.mouse_report(action, button, col, row, mods) else {
+            return false;
+        };
+        self.terminal_send_raw(&bytes);
+        true
+    }
+
+    /// Send raw bytes to a full-screen program.
+    ///
+    /// A full-screen program owns the terminal while its alternate screen is
+    /// active: arrow keys are escape sequences, Ctrl+C is `0x03`, and text is
+    /// UTF-8 bytes, not a line to edit in the shell's input model.
+    pub fn terminal_send_raw(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            if let Some(session) = self.terminal_session.as_ref() {
+                if session.send(bytes) {
+                    self.terminal.busy = true;
+                    self.request_full_redraw();
+                    return;
+                }
+                self.terminal.note =
+                    Some("The shell session ended; type a command to start a new one.".to_owned());
+            } else {
+                self.terminal.note = Some("No shell session is running.".to_owned());
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = bytes;
+            self.terminal.note =
+                Some("Terminal raw input needs a real LitricOS/Linux session.".to_owned());
+        }
+        self.request_full_redraw();
+    }
+
+    /// Whether a focused Terminal full-screen program should receive raw input.
+    fn terminal_takes_raw_input(&self) -> bool {
+        self.terminal.focused
+            && self.terminal.alt_active()
+            && self.terminal_window_focused()
+            && self.terminal_input_unobstructed()
+    }
+
+    /// Map one key to the bytes a full-screen terminal program expects.
+    ///
+    /// Plain printable characters return `None`: the text-input path already
+    /// delivers them, with the layout's shift/caps applied, and sending them
+    /// here as well would double every letter.
+    fn terminal_key_bytes(key: Key, mods: Modifiers) -> Option<Vec<u8>> {
+        if mods.meta {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        if mods.alt {
+            bytes.push(0x1b);
+        }
+        match key {
+            Key::Char(ch) if mods.ctrl => {
+                let lower = ch.to_ascii_lowercase();
+                if lower.is_ascii_alphabetic() {
+                    bytes.push((lower as u8) & 0x1f);
+                } else {
+                    return None;
+                }
+            }
+            Key::Char(ch) if mods.alt => {
+                let mut buffer = [0u8; 4];
+                bytes.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+            }
+            Key::Char(_) => return None,
+            Key::Escape => bytes.push(0x1b),
+            Key::Enter => bytes.push(b'\r'),
+            Key::Tab => {
+                if mods.shift {
+                    bytes.extend_from_slice(b"[Z");
+                } else {
+                    bytes.push(b'\t');
+                }
+            }
+            Key::Backspace => bytes.push(0x7f),
+            Key::Delete => bytes.extend_from_slice(b"[3~"),
+            Key::Insert => bytes.extend_from_slice(b"[2~"),
+            Key::Home => bytes.extend_from_slice(b"[H"),
+            Key::End => bytes.extend_from_slice(b"[F"),
+            Key::PageUp => bytes.extend_from_slice(b"[5~"),
+            Key::PageDown => bytes.extend_from_slice(b"[6~"),
+            Key::Left => bytes.extend_from_slice(b"[D"),
+            Key::Right => bytes.extend_from_slice(b"[C"),
+            Key::Up => bytes.extend_from_slice(b"[A"),
+            Key::Down => bytes.extend_from_slice(b"[B"),
+            Key::Function(number) if (1..=12).contains(&number) => {
+                let code = match number {
+                    1 => "P",
+                    2 => "Q",
+                    3 => "R",
+                    4 => "S",
+                    5 => "15~",
+                    6 => "17~",
+                    7 => "18~",
+                    8 => "19~",
+                    9 => "20~",
+                    10 => "21~",
+                    11 => "23~",
+                    _ => "24~",
+                };
+                bytes.push(b'[');
+                bytes.extend_from_slice(code.as_bytes());
+            }
+            _ => return None,
+        }
+        if bytes.is_empty() {
+            return None;
+        }
+        let needs_escape = matches!(
+            key,
+            Key::Delete
+                | Key::Insert
+                | Key::Home
+                | Key::End
+                | Key::PageUp
+                | Key::PageDown
+                | Key::Left
+                | Key::Right
+                | Key::Up
+                | Key::Down
+                | Key::Function(_)
+        ) || (matches!(key, Key::Tab) && mods.shift);
+        if needs_escape && bytes.first() != Some(&0x1b) {
+            bytes.insert(0, 0x1b);
+        }
+        Some(bytes)
+    }
+
+    /// Drop the current shell and show a fresh Terminal model.
+    ///
+    /// The old process is killed by [`TerminalSession`]'s `Drop`; a command
+    /// cannot be left running invisibly after its terminal is gone.
+    pub fn terminal_new_session(&mut self) {
+        #[cfg(unix)]
+        {
+            self.terminal_session = None;
+            self.terminal_job = None;
+            self.terminal_ready = false;
+            self.pending_terminal = None;
+        }
+        self.terminal.busy = false;
+        let _ = self.terminal.new_session();
+        self.request_full_redraw();
+    }
+
+    /// The one-shot fallback. Kept real rather than replaced by a message:
+    /// a host without `script(1)` can still run a command and see its output.
+    fn terminal_run_once(&mut self) {
         let cmd = self.terminal.input.trim().to_owned();
         self.terminal.input.clear();
         if cmd.is_empty() {
@@ -2612,9 +3025,74 @@ impl Shell {
         self.request_full_redraw();
     }
 
-    /// Drain the terminal job's output into the scrollback. Called from
-    /// `tick`; returns whether anything new arrived (a repaint is owed).
+    /// Drain both the persistent PTY session and the one-shot fallback.
+    ///
+    /// Called from `tick`; returns whether anything new arrived (a repaint is
+    /// owed). The readiness event is the only place a first command is sent:
+    /// that is what makes it wait for the shell instead of racing its prompt.
     fn terminal_pump(&mut self) -> bool {
+        #[cfg(unix)]
+        {
+            let events = match self.terminal_session.as_mut() {
+                Some(session) => session.drain(),
+                None => Vec::new(),
+            };
+            let mut got = self.terminal_pump_once();
+            for event in events {
+                match event {
+                    TerminalEvent::Output(bytes) => {
+                        self.terminal.push_output(&bytes);
+                        self.terminal.busy = true;
+                        got = true;
+                    }
+                    TerminalEvent::Ready => {
+                        if !self.terminal_ready {
+                            self.terminal_ready = true;
+                            if let Some(cmd) = self.pending_terminal.take() {
+                                let sent = self.terminal_session.as_ref().is_some_and(|session| {
+                                    session.send(format!("{cmd}\n").as_bytes())
+                                });
+                                if !sent {
+                                    self.terminal_session = None;
+                                    self.terminal.busy = false;
+                                    self.terminal.note = Some(
+                                        "The shell session ended before the first command could run."
+                                            .to_owned(),
+                                    );
+                                }
+                            } else {
+                                self.terminal.busy = false;
+                            }
+                        } else {
+                            self.terminal.flush_line();
+                            self.terminal.busy = false;
+                        }
+                        got = true;
+                    }
+                    TerminalEvent::Closed => {
+                        self.terminal_session = None;
+                        self.terminal_ready = false;
+                        self.pending_terminal = None;
+                        self.terminal.busy = false;
+                        self.terminal.flush_line();
+                        self.terminal.note = Some(
+                            "The shell session ended. Type a command to start a new one."
+                                .to_owned(),
+                        );
+                        got = true;
+                    }
+                }
+            }
+            got
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
+    /// The one-shot fallback's pump.
+    fn terminal_pump_once(&mut self) -> bool {
         #[cfg(unix)]
         {
             let Some(rx) = self.terminal_job.as_mut() else {
@@ -3677,7 +4155,7 @@ pub struct Shell {
     pub shortcuts: Shortcuts,
     /// Where the machine is, and how its user writes things.
     pub regional: Regional,
-    /// How much of the desktop is working.
+    /// The terminal grid geometry is stored separately; see `terminal_grid`.
     pub mode: DesktopMode,
     /// Which overlay is showing.
     pub overlay: Overlay,
@@ -3797,9 +4275,23 @@ pub struct Shell {
     pub trash: crate::apps::TrashApp,
     /// The Terminal application model.
     pub terminal: crate::apps::TerminalApp,
-    /// The running terminal command's output channel (unix only).
+    /// Where the Terminal's cells were last drawn, for pointer routing. This
+    /// is layout, not model state: it is replaced on every frame and cleared
+    /// before a surface that does not draw the Terminal.
+    terminal_grid: Option<TerminalGrid>,
+    /// The running terminal command's output channel (unix only). This is the
+    /// one-shot fallback used when `script(1)` is not available.
     #[cfg(unix)]
     terminal_job: Option<std::sync::mpsc::Receiver<String>>,
+    /// The persistent PTY shell, when one is running.
+    #[cfg(unix)]
+    terminal_session: Option<TerminalSession>,
+    /// The PTY shell has printed its readiness marker at least once.
+    #[cfg(unix)]
+    terminal_ready: bool,
+    /// The first command, held until the PTY shell is ready to read it.
+    #[cfg(unix)]
+    pending_terminal: Option<String>,
     /// An open context menu, if any.
     pub context_menu: Option<crate::apps::ContextMenu>,
     /// A context-menu snapshot retained only for its short visual exit.
@@ -4533,8 +5025,15 @@ impl Shell {
             defender: DefenderState::default(),
             trash: crate::apps::TrashApp::default(),
             terminal: crate::apps::TerminalApp::new(),
+            terminal_grid: None,
             #[cfg(unix)]
             terminal_job: None,
+            #[cfg(unix)]
+            terminal_session: None,
+            #[cfg(unix)]
+            terminal_ready: false,
+            #[cfg(unix)]
+            pending_terminal: None,
             context_menu: None,
             retiring_context_menu: None,
             desktop_icons: crate::apps::DesktopIcons::minimal(),
@@ -5999,6 +6498,10 @@ impl Shell {
                 self.key_up(*key, *mods)
             }
             InputEvent::TextInput { text } => {
+                if self.terminal_takes_raw_input() {
+                    self.terminal_send_raw(text.as_bytes());
+                    return Vec::new();
+                }
                 if self.browser_page_focused() {
                     self.browser_engine_text(text);
                 } else if self.client_focused().is_none() {
@@ -6008,7 +6511,19 @@ impl Shell {
                 }
                 Vec::new()
             }
-            InputEvent::PointerMove { at, .. } => {
+            InputEvent::Paste { text } => {
+                if self.terminal_takes_paste() {
+                    self.terminal_send_paste(text);
+                } else {
+                    // Other text surfaces can still receive a paste as text;
+                    // the Terminal is special only in the protocol it wraps.
+                    self.text_input(text);
+                }
+                Vec::new()
+            }
+            InputEvent::PointerMove { at, mods, .. } => {
+                let _reported =
+                    self.terminal_mouse(crate::apps::MouseAction::Motion, None, *at, *mods);
                 self.browser_engine_move(*at);
                 self.pointer_move(*at);
                 let over = self.client_under(*at);
@@ -6023,8 +6538,41 @@ impl Shell {
                 at,
                 clicks,
                 mods,
-            } => self.pointer_button(*button, *pressed, *at, *clicks, *mods),
-            InputEvent::Scroll { dy, at, .. } => {
+            } => {
+                let terminal_button = match button {
+                    PointerButton::Primary => Some(crate::apps::MouseButton::Left),
+                    PointerButton::Middle => Some(crate::apps::MouseButton::Middle),
+                    PointerButton::Secondary => Some(crate::apps::MouseButton::Right),
+                    _ => None,
+                };
+                if let Some(terminal_button) = terminal_button {
+                    let action = if *pressed {
+                        crate::apps::MouseAction::Press
+                    } else {
+                        crate::apps::MouseAction::Release
+                    };
+                    if self.terminal_mouse(action, Some(terminal_button), *at, *mods) {
+                        return Vec::new();
+                    }
+                }
+                self.pointer_button(*button, *pressed, *at, *clicks, *mods)
+            }
+            InputEvent::Scroll { dy, at, mods, .. } => {
+                if *dy != 0.0 {
+                    let button = if *dy < 0.0 {
+                        crate::apps::MouseButton::WheelUp
+                    } else {
+                        crate::apps::MouseButton::WheelDown
+                    };
+                    if self.terminal_mouse(
+                        crate::apps::MouseAction::Press,
+                        Some(button),
+                        *at,
+                        *mods,
+                    ) {
+                        return Vec::new();
+                    }
+                }
                 if self.reader_scroll(*at, *dy) {
                     return Vec::new();
                 }
@@ -6056,6 +6604,16 @@ impl Shell {
 
         if let Some(handled) = self.install_dialog_key(key) {
             return handled;
+        }
+
+        // A full-screen terminal program owns the keyboard while its alternate
+        // screen is active. Printable text arrives through TextInput; control
+        // keys, arrows and Escape are translated to the byte sequences here.
+        if self.terminal_takes_raw_input() {
+            if let Some(bytes) = Self::terminal_key_bytes(key, mods) {
+                self.terminal_send_raw(&bytes);
+            }
+            return Vec::new();
         }
 
         // One focus order for the controls each frame actually drew. Tab and
@@ -6407,6 +6965,14 @@ impl Shell {
                 Key::Char('l') if mods.ctrl => {
                     self.terminal.clear_screen();
                     self.request_full_redraw();
+                    Some(Vec::new())
+                }
+                Key::Char('c') if mods.ctrl => {
+                    self.terminal_send_control(0x03);
+                    Some(Vec::new())
+                }
+                Key::Char('d') if mods.ctrl => {
+                    self.terminal_send_control(0x04);
                     Some(Vec::new())
                 }
                 Key::Enter => {
@@ -7175,12 +7741,7 @@ impl Shell {
                 Vec::new()
             }
             Hot::TerminalNewSession => {
-                if !self.terminal.new_session() {
-                    self.terminal.note = Some(
-                        "A command is still running; wait for it to finish before starting a new session."
-                            .to_owned(),
-                    );
-                }
+                self.terminal_new_session();
                 Vec::new()
             }
             Hot::ActivityFilter => Vec::new(),
@@ -8919,6 +9480,55 @@ impl Shell {
                 .as_ref()
                 .map_or_else(|| "none".to_owned(), |f| format!("{} bytes", f.len())),
         ));
+        out.push(format!(
+            "browser.viewport={}",
+            self.browser
+                .last_frame
+                .map_or_else(|| "none".to_owned(), |(w, h)| format!("{w}x{h}"))
+        ));
+        out.push(format!("browser.omnibox={}", self.browser.omnibox_focus));
+        // The click that focuses the field also marks the old address as
+        // selected; the next typed character replaces it. Exposing that flag
+        // lets the proof driver wait for the state it needs instead of
+        // inferring it from focus, which Ctrl+T and tab switches also set.
+        out.push(format!(
+            "browser.omnibox_fresh={}",
+            self.browser.omnibox_fresh
+        ));
+        // The exact centres of the two controls a proof driver has to click.
+        // Guessing them from the window frame found the Downloads button while
+        // looking for the address bar; the shell already knows where it drew
+        // them, so it says so.
+        if let Some(rect) = self.hotspots().rect_of(Hot::BrowserOmnibox) {
+            let (x, y) = rect.center();
+            out.push(format!("browser.omnibox_click={x:.0},{y:.0}"));
+        }
+        if let Some(rect) = self.hotspots().rect_of(Hot::BrowserDownloads) {
+            let (x, y) = rect.center();
+            out.push(format!("browser.downloads_click={x:.0},{y:.0}"));
+        }
+        if let Some(t) = self.browser.tab() {
+            out.push(format!("browser.title={}", t.title));
+        }
+        out.push(format!(
+            "browser.tabs={} active={}",
+            self.browser.tabs.len(),
+            self.browser.active
+        ));
+        out.push(format!(
+            "browser.panel={}",
+            match self.browser.panel {
+                crate::apps::BrowserPanel::Page => "page",
+                crate::apps::BrowserPanel::History => "history",
+                crate::apps::BrowserPanel::Bookmarks => "bookmarks",
+                crate::apps::BrowserPanel::Downloads => "downloads",
+                crate::apps::BrowserPanel::SitePermissions => "site",
+            }
+        ));
+        out.push(format!(
+            "browser.downloads={}",
+            self.browser.downloads.len()
+        ));
         out.push(format!("net.probe={}", net_probe_token()));
         out.extend(self.wm.diagnostics());
         out.extend(
@@ -9089,6 +9699,40 @@ struct TabUpdate {
 /// Unknown fields are ignored rather than rejected: the broker may add one, and
 /// a tab strip that stops updating because of a new key would be worse than the
 /// missing feature.
+/// Decode one percent-encoded LBP field, keeping bytes that are already
+/// literal.
+///
+/// The broker escapes the characters a line protocol cannot carry but leaves
+/// `/` literal inside an address, while [`litric_core::pct::decode`] refuses a
+/// literal `/` by design. Using the strict decoder here turned
+/// `https://example.com/` into `https%3A//example.com/` in the address bar —
+/// the page loaded and the bar lied about where it was. Every valid `%XX` is
+/// decoded and everything else passes through, which is what a display field
+/// needs.
+fn decode_wire_field(value: &str) -> String {
+    fn hex_at(bytes: &[u8], index: usize) -> Option<u32> {
+        bytes.get(index).and_then(|b| (*b as char).to_digit(16))
+    }
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while let Some(&b) = bytes.get(i) {
+        if b == b'%' {
+            if let (Some(hi), Some(lo)) = (
+                hex_at(bytes, i.saturating_add(1)),
+                hex_at(bytes, i.saturating_add(2)),
+            ) {
+                out.push((((hi << 4) | lo) & 0xFF) as u8);
+                i = i.saturating_add(3);
+                continue;
+            }
+        }
+        out.push(b);
+        i = i.saturating_add(1);
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[must_use]
 fn parse_tab_line(line: &str) -> Option<TabUpdate> {
     let mut fields = line.split_whitespace();
@@ -9105,12 +9749,8 @@ fn parse_tab_line(line: &str) -> Option<TabUpdate> {
         };
         match key {
             "state" => value.clone_into(&mut update.state),
-            "url" => {
-                update.url = litric_core::pct::decode(value).unwrap_or_else(|_| value.to_owned())
-            }
-            "title" => {
-                update.title = litric_core::pct::decode(value).unwrap_or_else(|_| value.to_owned());
-            }
+            "url" => update.url = decode_wire_field(value),
+            "title" => update.title = decode_wire_field(value),
             _ => {}
         }
     }
@@ -9394,6 +10034,11 @@ const NET_PROBE_MAX_ATTEMPTS: u32 = 30;
 const NET_PROBE_INTERVAL: Duration = Duration::from_secs(6);
 #[cfg(unix)]
 const NET_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+/// DNS is a second blocking step with no timeout of its own. Bound it on a
+/// worker thread so one stalled resolver cannot leave the probe pending for
+/// the life of the session.
+#[cfg(unix)]
+const NET_RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Kick off the probe thread (idempotent): it retries the real handshake
 /// until the stack answers or the ceiling is reached, so "down" always means
@@ -9428,16 +10073,36 @@ fn net_attempt() -> u8 {
     if !has_default_route() {
         return 3; // no route: networkd never configured the NIC
     }
-    match ("dns.google", 443u16).to_socket_addrs() {
-        Err(_) => 2,
-        Ok(mut addrs) => match addrs.next() {
-            None => 2,
-            Some(addr) => match TcpStream::connect_timeout(&addr, NET_PROBE_TIMEOUT) {
-                Ok(_) => 1,
-                Err(_) => 2,
-            },
+    let addrs = match resolve_with_timeout("dns.google", NET_RESOLVE_TIMEOUT) {
+        Some(addrs) => addrs,
+        None => return 2,
+    };
+    match addrs.first() {
+        None => 2,
+        Some(addr) => match TcpStream::connect_timeout(addr, NET_PROBE_TIMEOUT) {
+            Ok(_) => 1,
+            Err(_) => 2,
         },
     }
+}
+
+/// Resolve on a worker thread so a stuck resolver cannot hold the probe
+/// `pending` forever. If the timeout wins, the thread is detached; it owns no
+/// shared state and exits when the system resolver returns.
+#[cfg(unix)]
+fn resolve_with_timeout(host: &str, timeout: Duration) -> Option<Vec<SocketAddr>> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let target = format!("{host}:443");
+    std::thread::Builder::new()
+        .name("litric-net-resolve".to_owned())
+        .spawn(move || {
+            let result = target
+                .to_socket_addrs()
+                .map(|addresses| addresses.collect::<Vec<SocketAddr>>());
+            let _ = sender.send(result);
+        })
+        .ok()?;
+    receiver.recv_timeout(timeout).ok()?.ok()
 }
 
 /// `pending` until the probe finishes, then `up`, `down` (DNS/TCP broken),
@@ -9483,9 +10148,9 @@ mod net_probe_tests {
     #[test]
     fn probe_reports_a_definite_answer() {
         // Not a pass/fail of the lab's internet: a probe that never answers
-        // is the bug. Whatever the network is, the token must resolve to a
-        // definite state within the connect timeout plus slack.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        // is the bug. Resolution and connect each have their own bound, so
+        // allow both plus scheduling slack on a loaded test host.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
             let t = net_probe_token();
             if t != "pending" || std::time::Instant::now() > deadline {
@@ -10030,6 +10695,13 @@ mod tests {
         assert_eq!(update.state, "loaded");
         assert_eq!(update.url, "https://example.com/a b");
         assert_eq!(update.title, "Example ทดสอบ");
+        // The broker leaves `/` literal and escapes the colon. The strict
+        // decoder rejected the whole field, and the address bar showed the
+        // escape instead of the address (found by the QEMU proof).
+        let live = "TAB 1 state=loaded url=https%3A//example.com/ title=Example%20Domain back=0 fwd=0 secure=1";
+        let update = parse_tab_line(live).expect("the broker's own encoding parses");
+        assert_eq!(update.url, "https://example.com/", "{update:?}");
+        assert_eq!(update.title, "Example Domain", "{update:?}");
         assert!(parse_tab_line("PONG").is_none());
         assert!(parse_tab_line("TAB").is_none());
     }
@@ -10508,6 +11180,7 @@ mod tests {
                 &InputEvent::PointerMove {
                     at: Point::new(x, y),
                     delta: Point::new(1.0, 1.0),
+                    mods: Modifiers::NONE,
                 },
                 t,
             );
@@ -10623,6 +11296,7 @@ mod tests {
             &InputEvent::PointerMove {
                 at: Point::new(cx + 40.0, cy + 20.0),
                 delta: Point::new(40.0, 20.0),
+                mods: litric_input::keys::Modifiers::NONE,
             },
             120,
         );
@@ -11160,6 +11834,7 @@ mod tests {
             &InputEvent::PointerMove {
                 at: Point::new(10.0, 10.0),
                 delta: Point::new(1.0, 0.0),
+                mods: litric_input::keys::Modifiers::NONE,
             },
             1_000 + 200_100,
         );
@@ -11338,6 +12013,7 @@ mod tests {
             &InputEvent::PointerMove {
                 at: Point::new(400.0, 400.0),
                 delta: Point::new(4.0, 0.0),
+                mods: Modifiers::NONE,
             },
             100,
         );
@@ -11414,6 +12090,7 @@ mod tests {
             &InputEvent::PointerMove {
                 at: far,
                 delta: Point::new(1.0, 1.0),
+                mods: Modifiers::NONE,
             },
             100,
         );
@@ -11423,6 +12100,7 @@ mod tests {
             &InputEvent::PointerMove {
                 at: Point::new(cx, cy),
                 delta: Point::new(1.0, 1.0),
+                mods: Modifiers::NONE,
             },
             200,
         );
@@ -11658,6 +12336,7 @@ mod tests {
             "{d:?}"
         );
         assert!(d.iter().any(|l| l.starts_with("windows=")), "{d:?}");
+        assert!(d.iter().any(|l| l.starts_with("browser.omnibox=")), "{d:?}");
         assert!(d.iter().any(|l| l.starts_with("tz.")), "{d:?}");
     }
 
@@ -12054,6 +12733,7 @@ mod scan_worker_tests {
             &InputEvent::PointerMove {
                 at,
                 delta: Point::new(1.0, 1.0),
+                mods: Modifiers::NONE,
             },
             1_000,
         );
@@ -12675,6 +13355,7 @@ mod browser_tab_strip {
             &InputEvent::PointerMove {
                 at: p,
                 delta: Point::new(1.0, 1.0),
+                mods: Modifiers::NONE,
             },
             1_000,
         );
@@ -13301,5 +13982,578 @@ impl Shell {
             Hot::TrashEmpty => literal(Role::Button, "Empty Trash"),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_key_tests {
+    use super::*;
+
+    #[test]
+    fn raw_terminal_keys_are_the_sequences_a_program_expects() {
+        let key = |key, mods| Shell::terminal_key_bytes(key, mods);
+        assert_eq!(key(Key::Up, Modifiers::NONE), Some(b"\x1b[A".to_vec()));
+        assert_eq!(key(Key::Left, Modifiers::NONE), Some(b"\x1b[D".to_vec()));
+        assert_eq!(key(Key::Home, Modifiers::NONE), Some(b"\x1b[H".to_vec()));
+        assert_eq!(
+            key(Key::Function(5), Modifiers::NONE),
+            Some(b"\x1b[15~".to_vec())
+        );
+        assert_eq!(
+            key(
+                Key::Tab,
+                Modifiers {
+                    shift: true,
+                    ..Modifiers::NONE
+                }
+            ),
+            Some(b"\x1b[Z".to_vec())
+        );
+        assert_eq!(key(Key::Enter, Modifiers::NONE), Some(b"\r".to_vec()));
+        assert_eq!(key(Key::Backspace, Modifiers::NONE), Some(b"\x7f".to_vec()));
+        assert_eq!(
+            key(
+                Key::Char('c'),
+                Modifiers {
+                    ctrl: true,
+                    ..Modifiers::NONE
+                }
+            ),
+            Some(b"\x03".to_vec())
+        );
+        assert_eq!(
+            key(
+                Key::Char('d'),
+                Modifiers {
+                    ctrl: true,
+                    ..Modifiers::NONE
+                }
+            ),
+            Some(b"\x04".to_vec())
+        );
+        assert_eq!(key(Key::Char('a'), Modifiers::NONE), None);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod terminal_interaction_tests {
+    use super::*;
+    use crate::canvas::{rgb, Canvas};
+    use crate::ui::Tokens;
+    use litric_design::{Theme, ThemeKind};
+    use litric_input::evdev::{
+        BTN_LEFT, EV_KEY, EV_REL, EV_SYN, REL_WHEEL, REL_X, REL_Y, SYN_REPORT, VALUE_DOWN, VALUE_UP,
+    };
+    use litric_input::{InputSource, ScriptedSource};
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
+
+    fn raw_event(kind: u16, code: u16, value: i32) -> litric_input::evdev::RawEvent {
+        litric_input::evdev::RawEvent {
+            sec: 1,
+            usec: 0,
+            kind,
+            code,
+            value,
+        }
+    }
+
+    fn shell() -> Shell {
+        let tokens = Tokens::new(Theme::of(ThemeKind::Dark), 1.0);
+        let mut s = Shell::new(tokens, 1280.0, 800.0, Regional::fallback("test"));
+        s.mode = DesktopMode::Ready;
+        s.open_app(App::Terminal);
+        s.terminal.focused = true;
+        frame(&mut s);
+        s
+    }
+
+    fn frame(s: &mut Shell) {
+        let mut canvas = Canvas::new(1280, 800, rgb(0x000000));
+        crate::views::draw(&mut canvas, s);
+    }
+
+    fn terminal_text(s: &Shell) -> String {
+        match s.terminal.screen() {
+            Some(screen) => screen.text_lines().join("\n"),
+            None => s
+                .terminal
+                .lines
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+
+    fn wait_for(s: &mut Shell, what: &str, mut done: impl FnMut(&Shell) -> bool) {
+        let started = Instant::now();
+        loop {
+            frame(s);
+            if done(s) {
+                return;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "timed out waiting for {what}; terminal now shows:\n{}",
+                terminal_text(s)
+            );
+            s.tick_after(16);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn start(s: &mut Shell, command: String, marker: &str) {
+        s.terminal.input = command;
+        s.terminal_run();
+        // The command echo is in the primary scrollback before the program
+        // runs. Requiring the alternate screen proves the bytes came from the
+        // fixture, not from the shell echoing what litric typed.
+        wait_for(s, marker, |s| {
+            s.terminal.alt_active() && terminal_text(s).contains(marker)
+        });
+    }
+
+    fn cell(s: &Shell, col: usize, row: usize) -> Point {
+        let Some(grid) = s.terminal_grid else {
+            eprintln!("the Terminal view did not publish its cell geometry");
+            return Point::default();
+        };
+        assert!(col < grid.cols, "column {col} is inside {grid:?}");
+        assert!(row < grid.rows, "row {row} is inside {grid:?}");
+        Point::new(
+            grid.x + (col as f32 + 0.5) * grid.cell_w,
+            grid.y + (row as f32 + 0.5) * grid.line_h,
+        )
+    }
+
+    fn button(s: &mut Shell, at: Point, pressed: bool) {
+        let now = s.now_ms.saturating_add(1);
+        let event = InputEvent::PointerButton {
+            button: PointerButton::Primary,
+            pressed,
+            at,
+            clicks: 1,
+            mods: Modifiers::NONE,
+        };
+        s.handle(&event, now);
+    }
+
+    fn motion(s: &mut Shell, at: Point) {
+        let now = s.now_ms.saturating_add(1);
+        let event = InputEvent::PointerMove {
+            at,
+            delta: Point::new(0.0, 0.0),
+            mods: Modifiers::NONE,
+        };
+        s.handle(&event, now);
+    }
+
+    fn wheel(s: &mut Shell, at: Point, dy: f32) {
+        let now = s.now_ms.saturating_add(1);
+        let event = InputEvent::Scroll {
+            dx: 0.0,
+            dy,
+            at,
+            mods: Modifiers::NONE,
+        };
+        s.handle(&event, now);
+    }
+
+    fn paste(s: &mut Shell, text: &str) {
+        let now = s.now_ms.saturating_add(1);
+        s.handle(
+            &InputEvent::Paste {
+                text: text.to_owned(),
+            },
+            now,
+        );
+    }
+
+    fn temp_path(tag: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        std::env::temp_dir().join(format!("litric-{tag}-{}-{unique}", std::process::id()))
+    }
+
+    fn read(path: &Path) -> Vec<u8> {
+        std::fs::read(path).unwrap_or_else(|error| {
+            eprintln!("read {}: {error}", path.display());
+            Vec::new()
+        })
+    }
+
+    fn assert_exact(actual: &[u8], expected: &[u8]) {
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "byte count differs; actual={:?}",
+            String::from_utf8_lossy(actual)
+        );
+        assert_eq!(
+            actual,
+            expected,
+            "bytes differ; actual={:?} expected={:?}",
+            String::from_utf8_lossy(actual),
+            String::from_utf8_lossy(expected)
+        );
+    }
+
+    fn feed_evdev(source: &mut ScriptedSource, s: &mut Shell) {
+        for event in source.poll(Duration::ZERO) {
+            let now = s.now_ms.saturating_add(1);
+            s.handle(&event, now);
+        }
+    }
+
+    fn move_evdev(source: &mut ScriptedSource, to: Point) {
+        let from = source.state().pointer();
+        let dx = (to.x - from.x).round() as i32;
+        let dy = (to.y - from.y).round() as i32;
+        source.push(&[
+            raw_event(EV_REL, REL_X, dx),
+            raw_event(EV_REL, REL_Y, dy),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+    }
+
+    #[test]
+    fn ui_mouse_events_reach_a_real_program_in_each_tracking_mode() {
+        let mut s = shell();
+        let phase1 = temp_path("mouse-1000");
+        let phase2 = temp_path("mouse-1002");
+        let phase3 = temp_path("mouse-1003");
+
+        // A real program: alt screen, SGR mouse, then three byte-exact reads.
+        // The read counts are the expected reports, so one extra or missing
+        // event makes the next phase start with the wrong bytes and fails the
+        // exact file comparison rather than passing silently.
+        let expected1 = b"\x1b[<0;2;2M\x1b[<0;2;2m\x1b[<64;2;2M".to_vec();
+        let expected2 = b"\x1b[<0;3;2M\x1b[<32;4;2M\x1b[<0;4;2m".to_vec();
+        let expected3 = b"\x1b[<35;1;1M\x1b[<0;1;1M\x1b[<32;2;1M\x1b[<0;2;1m".to_vec();
+        let command = format!(
+            "printf '\\033[?1049h\\033[2J\\033[H\\033[?1000h\\033[?1006hMOUSE-1000\\r\\n'; stty raw -echo; dd bs=1 count={} of={} 2>/dev/null; printf '\\r\\n\\033[?1002hMOUSE-1002\\r\\n'; dd bs=1 count={} of={} 2>/dev/null; printf '\\r\\n\\033[?1003hMOUSE-1003\\r\\n'; dd bs=1 count={} of={} 2>/dev/null; printf '\\r\\n\\033[?1049lMOUSE-DONE\\r\\n'; stty sane",
+            expected1.len(),
+            phase1.display(),
+            expected2.len(),
+            phase2.display(),
+            expected3.len(),
+            phase3.display(),
+        );
+        start(&mut s, command, "MOUSE-1000");
+        frame(&mut s);
+
+        // 1000: press/release/wheel only; the motion in between stays local.
+        let p11 = cell(&s, 1, 1);
+        let p22 = cell(&s, 2, 2);
+        button(&mut s, p11, true);
+        motion(&mut s, p22);
+        button(&mut s, p11, false);
+        wheel(&mut s, p11, -1.0);
+        wait_for(&mut s, "MOUSE-1002", |s| {
+            s.terminal.alt_active() && terminal_text(s).contains("MOUSE-1002")
+        });
+
+        // 1002: motion while held is a drag with button 32; motion after the
+        // release is not reported at all.
+        let p21 = cell(&s, 2, 1);
+        let p31 = cell(&s, 3, 1);
+        let p41 = cell(&s, 4, 1);
+        button(&mut s, p21, true);
+        motion(&mut s, p31);
+        button(&mut s, p31, false);
+        motion(&mut s, p41);
+        wait_for(&mut s, "MOUSE-1003", |s| {
+            s.terminal.alt_active() && terminal_text(s).contains("MOUSE-1003")
+        });
+
+        // 1003: free motion is button 35, then a held drag is 32.
+        let p00 = cell(&s, 0, 0);
+        let p10 = cell(&s, 1, 0);
+        motion(&mut s, p00);
+        button(&mut s, p00, true);
+        motion(&mut s, p10);
+        button(&mut s, p10, false);
+        wait_for(&mut s, "MOUSE-DONE", |s| {
+            !s.terminal.alt_active() && phase3.exists()
+        });
+
+        assert_exact(&read(&phase1), &expected1);
+        assert_exact(&read(&phase2), &expected2);
+        assert_exact(&read(&phase3), &expected3);
+        assert_eq!(s.terminal.mouse_mode(), crate::apps::MouseMode::Off);
+        assert!(!s.terminal.mouse_sgr());
+        for path in [&phase1, &phase2, &phase3] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn ui_paste_reaches_a_real_program_wrapped_only_when_enabled() {
+        let mut s = shell();
+        let wrapped_file = temp_path("paste-bracketed");
+        let raw_file = temp_path("paste-raw");
+        let text = "first line\nsecond line\r\n".to_owned() + &"x".repeat(20_000);
+        let wrapped = format!("\x1b[200~{text}\x1b[201~").into_bytes();
+        let command = format!(
+            "printf '\\033[?1049h\\033[2J\\033[H\\033[?2004hPASTE-WRAPPED\\r\\n'; stty raw -echo; dd bs=1 count={} of={} 2>/dev/null; printf '\\r\\n\\033[?2004lPASTE-RAW\\r\\n'; dd bs=1 count={} of={} 2>/dev/null; printf '\\r\\n\\033[?1049lPASTE-DONE\\r\\n'; stty sane",
+            wrapped.len(),
+            wrapped_file.display(),
+            text.len(),
+            raw_file.display(),
+        );
+        start(&mut s, command, "PASTE-WRAPPED");
+        frame(&mut s);
+        paste(&mut s, &text);
+        wait_for(&mut s, "PASTE-RAW", |s| {
+            s.terminal.alt_active() && terminal_text(s).contains("PASTE-RAW")
+        });
+        paste(&mut s, &text);
+        wait_for(&mut s, "PASTE-DONE", |s| {
+            !s.terminal.alt_active() && raw_file.exists()
+        });
+
+        assert_exact(&read(&wrapped_file), &wrapped);
+        assert_exact(&read(&raw_file), text.as_bytes());
+        assert!(!s.terminal.bracketed_paste());
+        assert!(!s.terminal.alt_active());
+        for path in [&wrapped_file, &raw_file] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn evdev_pointer_packets_capture_a_drag_outside_the_terminal() {
+        let mut s = shell();
+        let file = temp_path("mouse-capture");
+        // Press inside cell (1,1), drag to the top-left outside the grid, then
+        // release there. The program must receive the drag and release at the
+        // clamped edge, not lose them on the window frame.
+        let expected = b"\x1b[<0;2;2M\x1b[<32;1;1M\x1b[<0;1;1m".to_vec();
+        let command = format!(
+            "printf '\\033[?1049h\\033[2J\\033[H\\033[?1002h\\033[?1006hMOUSE-CAPTURE\\r\\n'; stty raw -echo; dd bs=1 count={} of={} 2>/dev/null; printf '\\r\\n\\033[?1049lMOUSE-CAPTURE-DONE\\r\\n'; stty sane",
+            expected.len(),
+            file.display(),
+        );
+        start(&mut s, command, "MOUSE-CAPTURE");
+        frame(&mut s);
+        let grid = s.terminal_grid.expect("the Terminal publishes its grid");
+        let inside = cell(&s, 1, 1);
+        let outside = Point::new(grid.x - 30.0, grid.y - 30.0);
+        let dx = (outside.x - inside.x).round() as i32;
+        let dy = (outside.y - inside.y).round() as i32;
+        let raw = vec![
+            raw_event(EV_KEY, BTN_LEFT, VALUE_DOWN),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+            raw_event(EV_REL, REL_X, dx),
+            raw_event(EV_REL, REL_Y, dy),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+            raw_event(EV_KEY, BTN_LEFT, VALUE_UP),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ];
+        let mut source = ScriptedSource::new(1280.0, 800.0, raw);
+        source.state_mut().set_pointer(inside);
+        for _ in 0..3 {
+            for event in source.poll(Duration::ZERO) {
+                let now = s.now_ms.saturating_add(1);
+                s.handle(&event, now);
+            }
+        }
+        wait_for(&mut s, "MOUSE-CAPTURE-DONE", |s| {
+            !s.terminal.alt_active() && file.exists()
+        });
+        assert_exact(&read(&file), &expected);
+        assert_eq!(s.terminal.mouse_mode(), crate::apps::MouseMode::Off);
+        assert!(!s.terminal.mouse_buttons_held());
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn evdev_mouse_reports_reach_a_real_child_and_stop_after_it_disables() {
+        let mut s = shell();
+        let reports1 = temp_path("mouse-evdev-1000");
+        let reports2 = temp_path("mouse-evdev-1002");
+        let reports3 = temp_path("mouse-evdev-1003");
+        let quiet = temp_path("mouse-evdev-quiet");
+        let expected1 = b"\x1b[<4;2;2M\x1b[<4;2;2m\x1b[<68;2;2M\x1b[<69;2;2M".to_vec();
+        let expected2 = b"\x1b[<4;3;2M\x1b[<36;4;2M\x1b[<36;1;1M\x1b[<4;1;1m".to_vec();
+        let expected3 = b"\x1b[<39;6;2M\x1b[<4;6;2M\x1b[<36;7;2M\x1b[<4;7;2m".to_vec();
+
+        // The child enables the modes itself, reads exact report counts, then
+        // disables every mode and performs one timed single-byte read. A mouse
+        // report after disable would make that read return the byte; silence
+        // makes it return after 0.5 s with an empty file.
+        let command = format!(
+            r"printf '\033[?1049h\033[2J\033[H\033[?1000h\033[?1006hMOUSE-EVDEV-1000\r\n'; stty raw -echo; dd bs=1 count={} of={} 2>/dev/null; printf '\r\n\033[?1002hMOUSE-EVDEV-1002\r\n'; dd bs=1 count={} of={} 2>/dev/null; printf '\r\n\033[?1003hMOUSE-EVDEV-1003\r\n'; dd bs=1 count={} of={} 2>/dev/null; printf '\r\n\033[?1000l\033[?1002l\033[?1003l\033[?1006lMOUSE-EVDEV-DISABLED\r\n'; stty -icanon min 0 time 5; printf 'MOUSE-EVDEV-QUIET-READY\r\n'; dd bs=1 count=1 of={} 2>/dev/null; printf '\r\nMOUSE-EVDEV-QUIET-DONE\r\n'; stty sane; printf '\033[?1049lMOUSE-EVDEV-EXITED\r\n'",
+            expected1.len(),
+            reports1.display(),
+            expected2.len(),
+            reports2.display(),
+            expected3.len(),
+            reports3.display(),
+            quiet.display(),
+        );
+        start(&mut s, command, "MOUSE-EVDEV-1000");
+        frame(&mut s);
+        let mut source = ScriptedSource::new(1280.0, 800.0, Vec::new());
+        const KEY_LEFTSHIFT: u16 = 42;
+
+        // Modifiers come from the same evdev state machine as the buttons.
+        source.push(&[
+            raw_event(EV_KEY, KEY_LEFTSHIFT, VALUE_DOWN),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+
+        source.state_mut().set_pointer(cell(&s, 1, 1));
+        source.push(&[
+            raw_event(EV_KEY, BTN_LEFT, VALUE_DOWN),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        source.push(&[
+            raw_event(EV_KEY, BTN_LEFT, VALUE_UP),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        source.push(&[
+            raw_event(EV_REL, REL_WHEEL, 1),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        source.push(&[
+            raw_event(EV_REL, REL_WHEEL, -1),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        wait_for(&mut s, "MOUSE-EVDEV-1002", |s| {
+            s.terminal.alt_active() && terminal_text(s).contains("MOUSE-EVDEV-1002")
+        });
+
+        // 1002: press, drag, drag outside the grid while held, and release
+        // outside. The last two must arrive at the clamped top-left cell.
+        source.state_mut().set_pointer(cell(&s, 2, 1));
+        source.push(&[
+            raw_event(EV_KEY, BTN_LEFT, VALUE_DOWN),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        move_evdev(&mut source, cell(&s, 3, 1));
+        feed_evdev(&mut source, &mut s);
+        let grid = s.terminal_grid.expect("the Terminal publishes its grid");
+        move_evdev(&mut source, Point::new(grid.x - 40.0, grid.y - 40.0));
+        feed_evdev(&mut source, &mut s);
+        source.push(&[
+            raw_event(EV_KEY, BTN_LEFT, VALUE_UP),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        wait_for(&mut s, "MOUSE-EVDEV-1003", |s| {
+            s.terminal.alt_active() && terminal_text(s).contains("MOUSE-EVDEV-1003")
+        });
+
+        // 1003: free motion, then a held drag, then release.
+        source.state_mut().set_pointer(cell(&s, 4, 1));
+        move_evdev(&mut source, cell(&s, 5, 1));
+        feed_evdev(&mut source, &mut s);
+        source.push(&[
+            raw_event(EV_KEY, BTN_LEFT, VALUE_DOWN),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        move_evdev(&mut source, cell(&s, 6, 1));
+        feed_evdev(&mut source, &mut s);
+        source.push(&[
+            raw_event(EV_KEY, BTN_LEFT, VALUE_UP),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        wait_for(&mut s, "MOUSE-EVDEV-DISABLED", |s| {
+            terminal_text(s).contains("MOUSE-EVDEV-DISABLED")
+        });
+
+        // The child is now reading one byte with a 0.5 s VTIME timeout. A
+        // press/release pair after ?1000l/?1002l/?1003l/?1006l must not reach
+        // the PTY, so the read times out and leaves the file empty.
+        source.state_mut().set_pointer(cell(&s, 1, 1));
+        source.push(&[
+            raw_event(EV_KEY, BTN_LEFT, VALUE_DOWN),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        source.push(&[
+            raw_event(EV_KEY, BTN_LEFT, VALUE_UP),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        wait_for(&mut s, "MOUSE-EVDEV-QUIET-DONE", |s| {
+            terminal_text(s).contains("MOUSE-EVDEV-QUIET-DONE")
+        });
+        assert!(
+            read(&quiet).is_empty(),
+            "mouse bytes reached the PTY after the child disabled reporting: {:?}",
+            String::from_utf8_lossy(&read(&quiet))
+        );
+        assert_eq!(s.terminal.mouse_mode(), crate::apps::MouseMode::Off);
+
+        wait_for(&mut s, "MOUSE-EVDEV-EXITED", |s| {
+            !s.terminal.alt_active() && terminal_text(s).contains("MOUSE-EVDEV-EXITED")
+        });
+        // The fixture's command has returned to the interactive prompt. End
+        // that real PTY session too, then prove a post-exit wheel cannot reach
+        // the now-closed child.
+        s.terminal_send_raw(b"exit\n");
+        wait_for(&mut s, "the child's PTY session to close", |s| {
+            s.terminal_session.is_none()
+        });
+        assert!(
+            s.terminal_session.is_none(),
+            "the child's PTY session did not close"
+        );
+        let before_exit = [read(&reports1), read(&reports2), read(&reports3)];
+        source.push(&[
+            raw_event(EV_REL, REL_WHEEL, 1),
+            raw_event(EV_SYN, SYN_REPORT, 0),
+        ]);
+        feed_evdev(&mut source, &mut s);
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(
+            [read(&reports1), read(&reports2), read(&reports3)],
+            before_exit,
+            "a mouse report was written after the child exited"
+        );
+        assert!(!s.terminal.mouse_buttons_held());
+        assert_exact(&read(&reports1), &expected1);
+        assert_exact(&read(&reports2), &expected2);
+        assert_exact(&read(&reports3), &expected3);
+        for path in [&reports1, &reports2, &reports3, &quiet] {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn an_open_overlay_keeps_terminal_mouse_and_paste_out_of_the_program() {
+        let mut s = shell();
+        s.terminal.push_output(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h");
+        s.overlay = Overlay::QuickSettings;
+        frame(&mut s);
+        assert!(
+            s.terminal_grid.is_some(),
+            "the Terminal is still drawn under the overlay"
+        );
+        let at = cell(&s, 0, 0);
+        paste(&mut s, "not for the program");
+        assert!(
+            s.terminal.note.is_none(),
+            "paste must not reach the PTY while an overlay owns the keyboard"
+        );
+        button(&mut s, at, true);
+        button(&mut s, at, false);
+        assert!(
+            s.terminal.note.is_none(),
+            "mouse reports must not reach the PTY while an overlay owns the pointer"
+        );
+        assert_eq!(s.terminal.mouse_mode(), crate::apps::MouseMode::Normal);
     }
 }

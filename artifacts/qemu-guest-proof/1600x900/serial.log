@@ -1,0 +1,567 @@
+[    1.035376] mtrr: your CPUs had inconsistent fixed MTRR settings
+[    1.036399] mtrr: your CPUs had inconsistent variable MTRR settings
+[    1.036771] mtrr: your CPUs had inconsistent MTRRdefType settings
+[    2.064820] device-mapper: core: CONFIG_IMA_DISABLE_HTABLE is disabled. Duplicate IMA measurements will not be recorded in the IMA log.
+[    2.068626] amd_pstate: the _CPC object is not present in SBIOS or ACPI disabled
+[    2.546447] Unstable clock detected, switching default tracing clock to "global"
+[    2.546447] If you want to keep using the local clock, then add:
+[    2.546447]   "trace_clock=local"
+[    2.546447] on the kernel command line
+LITRIC_INIT_START
+LITRIC_MODULE_OK=ttm
+LITRIC_MODULE_OK=drm_ttm_helper
+LITRIC_MODULE_OK=drm_vram_helper
+LITRIC_MODULE_OK=bochs
+LITRIC_MODULE_OK=virtio_input
+LITRIC_FB:
+1600,900
+LITRIC_INPUT:
+event0  event1  event2  mice    mouse0
+litric.sysd.version=0.2.0
+litric.sysd.socket=/run/litric/sysd.sock
+litric.sysd.grants=seeded store=/var/lib/litric-sysd/grants.conf records=20
+LITRIC_INSTALL:
+OK 2
+id=com.litric.test-game
+state=installed
+LITRIC_INSTALL_OK
+LITRIC_INSTALLED:
+/root/.local/share/litric/apps/com.litric.test-game/app.desktop
+/root/.local/share/litric/apps/com.litric.test-game/app
+/root/.local/share/litric/incoming/game/app
+/root/.local/share/litric/incoming/game/app.desktop
+/root/.local/share/applications/com.litric.test-game.desktop
+LITRIC_SHELL_PID=108
+litric.shell.version=0.2.0
+litric.shell.canvas=1600x900
+litric.shell.scale=1.25
+litric.shell.theme=dark
+litric.shell.facts.source=litric-sysd
+litric.shell.environments=3
+litric.shell.files=direct (no daemon socket at /run/litric/files.sock)
+litric.shell.regional.tz.name=UTC
+litric.shell.regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.regional.tz.offset=+00:00
+litric.shell.regional.tz.abbrev=UTC
+litric.shell.regional.tz.dst=false
+litric.shell.regional.tz.transitions=0
+litric.shell.regional.clock.local=00:00 UTC
+litric.shell.regional.clock.utc=00:00
+litric.shell.regional.locale.tag=C
+litric.shell.regional.locale.source=fallback-c(no locale configured)
+litric.shell.regional.locale.hour_cycle=24
+litric.shell.regional.locale.first_day=Mon
+litric.shell.regional.locale.measurement=metric
+litric.shell.regional.locale.keyboard=us
+litric.shell.present=drm-skipped(/usr/bin/litric-drmpresent is not installed)
+litric.shell.present=fbdev
+litric.shell.fb=1600x900 32bpp stride=6400 format=Xrgb8888 driver=bochs-drmdrmfb
+litric.shell.fb.sysfs=/sys/class/graphics/fb0
+litric.shell.target=framebuffer
+litric.shell.fbcon=released=1
+litric.shell.input.found=3
+litric.shell.input.opened=2
+litric.shell.input.keyboard=true
+litric.shell.input.pointer=true
+litric.shell.input.absmax=32767x32767
+litric.shell.input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+litric.shell.input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+litric.shell.wayland.display=wayland-0
+litric.shell.wayland.socket=/run/litric/wayland-0
+litric.shell.mode=ready
+litric.shell.drawn=1
+LITRIC_TICK=1
+LITRIC_PS_BEGIN
+  100 0        /usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock --home /root --root / --update-root /var/lib/litric/update --backup-root /var/lib/litric/backup
+  108 0        /usr/bin/litric-shell --socket /run/litric/sysd.sock --status /run/litric/shell.status --seconds 300
+  109 0        /usr/bin/litric-fbpresent /dev/fb0 5760000
+  118 0        grep -E litric|test-game
+LITRIC_PS_END
+LITRIC_STATUS_BEGIN
+version=0.2.0
+canvas=1600x900
+scale=1.25
+theme=dark
+facts.source=litric-sysd
+environments=3
+files=direct (no daemon socket at /run/litric/files.sock)
+regional.tz.name=UTC
+regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+regional.tz.offset=+00:00
+regional.tz.abbrev=UTC
+regional.tz.dst=false
+regional.tz.transitions=0
+regional.clock.local=00:00 UTC
+regional.clock.utc=00:00
+regional.locale.tag=C
+regional.locale.source=fallback-c(no locale configured)
+regional.locale.hour_cycle=24
+regional.locale.first_day=Mon
+regional.locale.measurement=metric
+regional.locale.keyboard=us
+present=drm-skipped(/usr/bin/litric-drmpresent is not installed)
+present=fbdev
+fb=1600x900 32bpp stride=6400 format=Xrgb8888 driver=bochs-drmdrmfb
+fb.sysfs=/sys/class/graphics/fb0
+target=framebuffer
+fbcon=released=1
+input.found=3
+input.opened=2
+input.keyboard=true
+input.pointer=true
+input.absmax=32767x32767
+input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+wayland.display=wayland-0
+wayland.socket=/run/litric/wayland-0
+mode=ready
+drawn=1
+LITRIC_STATUS_END
+litric-shell: frame 1 took 938 ms, over the 500 ms budget for deep-idle (over budget 1 time(s))
+litric-shell: frame 2 took 854 ms, over the 16 ms budget for active (over budget 2 time(s))
+litric-shell: frame 3 took 798 ms, over the 16 ms budget for active (over budget 3 time(s))
+litric-shell: frame 4 took 659 ms, over the 16 ms budget for active (over budget 4 time(s))
+litric-shell: frame 5 took 581 ms, over the 16 ms budget for active (over budget 5 time(s))
+LITRIC_TICK=2
+LITRIC_PS_BEGIN
+  100 0        /usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock --home /root --root / --update-root /var/lib/litric/update --backup-root /var/lib/litric/backup
+  108 0        /usr/bin/litric-shell --socket /run/litric/sysd.sock --status /run/litric/shell.status --seconds 300
+  109 0        /usr/bin/litric-fbpresent /dev/fb0 5760000
+  125 0        grep -E litric|test-game
+LITRIC_PS_END
+LITRIC_STATUS_BEGIN
+version=0.2.0
+canvas=1600x900
+scale=1.25
+theme=dark
+facts.source=litric-sysd
+environments=3
+files=direct (no daemon socket at /run/litric/files.sock)
+regional.tz.name=UTC
+regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+regional.tz.offset=+00:00
+regional.tz.abbrev=UTC
+regional.tz.dst=false
+regional.tz.transitions=0
+regional.clock.local=00:00 UTC
+regional.clock.utc=00:00
+regional.locale.tag=C
+regional.locale.source=fallback-c(no locale configured)
+regional.locale.hour_cycle=24
+regional.locale.first_day=Mon
+regional.locale.measurement=metric
+regional.locale.keyboard=us
+present=drm-skipped(/usr/bin/litric-drmpresent is not installed)
+present=fbdev
+fb=1600x900 32bpp stride=6400 format=Xrgb8888 driver=bochs-drmdrmfb
+fb.sysfs=/sys/class/graphics/fb0
+target=framebuffer
+fbcon=released=1
+input.found=3
+input.opened=2
+input.keyboard=true
+input.pointer=true
+input.absmax=32767x32767
+input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+wayland.display=wayland-0
+wayland.socket=/run/litric/wayland-0
+mode=ready
+drawn=1
+LITRIC_STATUS_END
+litric-shell: frame 6 took 846 ms, over the 16 ms budget for active (over budget 6 time(s))
+litric-shell: frame 7 took 755 ms, over the 16 ms budget for active (over budget 7 time(s))
+litric.shell.version=0.2.0
+litric.shell.canvas=1600x900
+litric.shell.scale=1.25
+litric.shell.theme=dark
+litric.shell.facts.source=litric-sysd
+litric.shell.environments=3
+litric.shell.files=direct (no daemon socket at /run/litric/files.sock)
+litric.shell.regional.tz.name=UTC
+litric.shell.regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.regional.tz.offset=+00:00
+litric.shell.regional.tz.abbrev=UTC
+litric.shell.regional.tz.dst=false
+litric.shell.regional.tz.transitions=0
+litric.shell.regional.clock.local=00:00 UTC
+litric.shell.regional.clock.utc=00:00
+litric.shell.regional.locale.tag=C
+litric.shell.regional.locale.source=fallback-c(no locale configured)
+litric.shell.regional.locale.hour_cycle=24
+litric.shell.regional.locale.first_day=Mon
+litric.shell.regional.locale.measurement=metric
+litric.shell.regional.locale.keyboard=us
+litric.shell.present=drm-skipped(/usr/bin/litric-drmpresent is not installed)
+litric.shell.present=fbdev
+litric.shell.fb=1600x900 32bpp stride=6400 format=Xrgb8888 driver=bochs-drmdrmfb
+litric.shell.fb.sysfs=/sys/class/graphics/fb0
+litric.shell.target=framebuffer
+litric.shell.fbcon=released=1
+litric.shell.input.found=3
+litric.shell.input.opened=2
+litric.shell.input.keyboard=true
+litric.shell.input.pointer=true
+litric.shell.input.absmax=32767x32767
+litric.shell.input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+litric.shell.input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+litric.shell.wayland.display=wayland-0
+litric.shell.wayland.socket=/run/litric/wayland-0
+litric.shell.mode=ready
+litric.shell.drawn=1
+litric.shell.mode=ready
+litric.shell.life=active
+litric.shell.frame_interval_ms=16
+litric.shell.overlay=none
+litric.shell.frames=8
+litric.shell.hotspots=46
+litric.shell.notifications=0
+litric.shell.pointer=801,451
+litric.shell.facts.source=litric-sysd
+litric.shell.files.watch=none reads=0
+litric.shell.browser.status=
+litric.shell.browser.tab=litric://about
+litric.shell.browser.frame=none
+litric.shell.net.probe=pending
+litric.shell.windows=1
+litric.shell.workspace=1/4
+litric.shell.focus=#1
+litric.shell.window=#1 com.litric.settings "Settings" 1225x775+64+83 normal ws0
+litric.shell.tz.name=UTC
+litric.shell.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.tz.offset=+00:00
+litric.shell.tz.abbrev=UTC
+litric.shell.tz.dst=false
+litric.shell.tz.transitions=0
+litric.shell.clock.local=04:25 UTC
+litric.shell.clock.utc=04:25
+litric.shell.locale.tag=C
+litric.shell.locale.source=fallback-c(no locale configured)
+litric.shell.locale.hour_cycle=24
+litric.shell.locale.first_day=Mon
+litric.shell.locale.measurement=metric
+litric.shell.locale.keyboard=us
+litric.shell.rows_presented=6300
+litric.shell.frames=8
+litric.shell.frames_drawn=7
+litric.shell.frames_over_budget=7
+litric-shell: frame 8 took 295 ms, over the 16 ms budget for active (over budget 8 time(s))
+litric-shell: frame 9 took 873 ms, over the 16 ms budget for active (over budget 9 time(s))
+litric-shell: frame 10 took 988 ms, over the 16 ms budget for active (over budget 10 time(s))
+LITRIC_TICK=3
+LITRIC_PS_BEGIN
+  100 0        /usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock --home /root --root / --update-root /var/lib/litric/update --backup-root /var/lib/litric/backup
+  108 0        /usr/bin/litric-shell --socket /run/litric/sysd.sock --status /run/litric/shell.status --seconds 300
+  109 0        /usr/bin/litric-fbpresent /dev/fb0 5760000
+  133 0        /root/.local/share/litric/apps/com.litric.test-game/app
+  140 0        grep -E litric|test-game
+LITRIC_PS_END
+LITRIC_STATUS_BEGIN
+version=0.2.0
+canvas=1600x900
+scale=1.25
+theme=dark
+facts.source=litric-sysd
+environments=3
+files=direct (no daemon socket at /run/litric/files.sock)
+regional.tz.name=UTC
+regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+regional.tz.offset=+00:00
+regional.tz.abbrev=UTC
+regional.tz.dst=false
+regional.tz.transitions=0
+regional.clock.local=00:00 UTC
+regional.clock.utc=00:00
+regional.locale.tag=C
+regional.locale.source=fallback-c(no locale configured)
+regional.locale.hour_cycle=24
+regional.locale.first_day=Mon
+regional.locale.measurement=metric
+regional.locale.keyboard=us
+present=drm-skipped(/usr/bin/litric-drmpresent is not installed)
+present=fbdev
+fb=1600x900 32bpp stride=6400 format=Xrgb8888 driver=bochs-drmdrmfb
+fb.sysfs=/sys/class/graphics/fb0
+target=framebuffer
+fbcon=released=1
+input.found=3
+input.opened=2
+input.keyboard=true
+input.pointer=true
+input.absmax=32767x32767
+input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+wayland.display=wayland-0
+wayland.socket=/run/litric/wayland-0
+mode=ready
+drawn=1
+mode=ready
+life=active
+frame_interval_ms=16
+overlay=none
+frames=8
+hotspots=46
+notifications=0
+pointer=801,451
+facts.source=litric-sysd
+files.watch=none reads=0
+browser.status=
+browser.tab=litric://about
+browser.frame=none
+net.probe=pending
+windows=1
+workspace=1/4
+focus=#1
+window=#1 com.litric.settings "Settings" 1225x775+64+83 normal ws0
+tz.name=UTC
+tz.source=fallback-utc(no TZ and no /etc/localtime)
+tz.offset=+00:00
+tz.abbrev=UTC
+tz.dst=false
+tz.transitions=0
+clock.local=04:25 UTC
+clock.utc=04:25
+locale.tag=C
+locale.source=fallback-c(no locale configured)
+locale.hour_cycle=24
+locale.first_day=Mon
+locale.measurement=metric
+locale.keyboard=us
+rows_presented=6300
+frames=8
+frames_drawn=7
+frames_over_budget=7
+LITRIC_STATUS_END
+litric.shell.version=0.2.0
+litric.shell.canvas=1600x900
+litric.shell.scale=1.25
+litric.shell.theme=dark
+litric.shell.facts.source=litric-sysd
+litric.shell.environments=3
+litric.shell.files=direct (no daemon socket at /run/litric/files.sock)
+litric.shell.regional.tz.name=UTC
+litric.shell.regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.regional.tz.offset=+00:00
+litric.shell.regional.tz.abbrev=UTC
+litric.shell.regional.tz.dst=false
+litric.shell.regional.tz.transitions=0
+litric.shell.regional.clock.local=00:00 UTC
+litric.shell.regional.clock.utc=00:00
+litric.shell.regional.locale.tag=C
+litric.shell.regional.locale.source=fallback-c(no locale configured)
+litric.shell.regional.locale.hour_cycle=24
+litric.shell.regional.locale.first_day=Mon
+litric.shell.regional.locale.measurement=metric
+litric.shell.regional.locale.keyboard=us
+litric.shell.present=drm-skipped(/usr/bin/litric-drmpresent is not installed)
+litric.shell.present=fbdev
+litric.shell.fb=1600x900 32bpp stride=6400 format=Xrgb8888 driver=bochs-drmdrmfb
+litric.shell.fb.sysfs=/sys/class/graphics/fb0
+litric.shell.target=framebuffer
+litric.shell.fbcon=released=1
+litric.shell.input.found=3
+litric.shell.input.opened=2
+litric.shell.input.keyboard=true
+litric.shell.input.pointer=true
+litric.shell.input.absmax=32767x32767
+litric.shell.input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+litric.shell.input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+litric.shell.wayland.display=wayland-0
+litric.shell.wayland.socket=/run/litric/wayland-0
+litric.shell.mode=ready
+litric.shell.drawn=1
+litric.shell.mode=ready
+litric.shell.life=active
+litric.shell.frame_interval_ms=16
+litric.shell.overlay=none
+litric.shell.frames=12
+litric.shell.hotspots=26
+litric.shell.notifications=1
+litric.shell.pointer=1211,321
+litric.shell.facts.source=litric-sysd
+litric.shell.files.watch=none reads=0
+litric.shell.browser.status=
+litric.shell.browser.tab=litric://about
+litric.shell.browser.frame=none
+litric.shell.net.probe=noroute
+litric.shell.windows=2
+litric.shell.workspace=1/4
+litric.shell.focus=#2
+litric.shell.window=#1 com.litric.settings "Settings" 1225x775+64+83 normal ws0
+litric.shell.window=#2 litric.client "simple-shm" 1600x900+0+0 fullscreen ws0
+litric.shell.tz.name=UTC
+litric.shell.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.tz.offset=+00:00
+litric.shell.tz.abbrev=UTC
+litric.shell.tz.dst=false
+litric.shell.tz.transitions=0
+litric.shell.clock.local=04:25 UTC
+litric.shell.clock.utc=04:25
+litric.shell.locale.tag=C
+litric.shell.locale.source=fallback-c(no locale configured)
+litric.shell.locale.hour_cycle=24
+litric.shell.locale.first_day=Mon
+litric.shell.locale.measurement=metric
+litric.shell.locale.keyboard=us
+litric.shell.rows_presented=9900
+litric.shell.frames=12
+litric.shell.frames_drawn=11
+litric.shell.frames_over_budget=11
+LITRIC_TICK=4
+LITRIC_PS_BEGIN
+  100 0        /usr/bin/litric-sysd --serve --socket /run/litric/sysd.sock --home /root --root / --update-root /var/lib/litric/update --backup-root /var/lib/litric/backup
+  108 0        /usr/bin/litric-shell --socket /run/litric/sysd.sock --status /run/litric/shell.status --seconds 300
+  109 0        /usr/bin/litric-fbpresent /dev/fb0 5760000
+  152 0        grep -E litric|test-game
+LITRIC_PS_END
+LITRIC_STATUS_BEGIN
+version=0.2.0
+canvas=1600x900
+scale=1.25
+theme=dark
+facts.source=litric-sysd
+environments=3
+files=direct (no daemon socket at /run/litric/files.sock)
+regional.tz.name=UTC
+regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+regional.tz.offset=+00:00
+regional.tz.abbrev=UTC
+regional.tz.dst=false
+regional.tz.transitions=0
+regional.clock.local=00:00 UTC
+regional.clock.utc=00:00
+regional.locale.tag=C
+regional.locale.source=fallback-c(no locale configured)
+regional.locale.hour_cycle=24
+regional.locale.first_day=Mon
+regional.locale.measurement=metric
+regional.locale.keyboard=us
+present=drm-skipped(/usr/bin/litric-drmpresent is not installed)
+present=fbdev
+fb=1600x900 32bpp stride=6400 format=Xrgb8888 driver=bochs-drmdrmfb
+fb.sysfs=/sys/class/graphics/fb0
+target=framebuffer
+fbcon=released=1
+input.found=3
+input.opened=2
+input.keyboard=true
+input.pointer=true
+input.absmax=32767x32767
+input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+wayland.display=wayland-0
+wayland.socket=/run/litric/wayland-0
+mode=ready
+drawn=1
+mode=ready
+life=active
+frame_interval_ms=16
+overlay=none
+frames=12
+hotspots=26
+notifications=1
+pointer=1211,321
+facts.source=litric-sysd
+files.watch=none reads=0
+browser.status=
+browser.tab=litric://about
+browser.frame=none
+net.probe=noroute
+windows=2
+workspace=1/4
+focus=#2
+window=#1 com.litric.settings "Settings" 1225x775+64+83 normal ws0
+window=#2 litric.client "simple-shm" 1600x900+0+0 fullscreen ws0
+tz.name=UTC
+tz.source=fallback-utc(no TZ and no /etc/localtime)
+tz.offset=+00:00
+tz.abbrev=UTC
+tz.dst=false
+tz.transitions=0
+clock.local=04:25 UTC
+clock.utc=04:25
+locale.tag=C
+locale.source=fallback-c(no locale configured)
+locale.hour_cycle=24
+locale.first_day=Mon
+locale.measurement=metric
+locale.keyboard=us
+rows_presented=9900
+frames=12
+frames_drawn=11
+frames_over_budget=11
+LITRIC_STATUS_END
+litric.shell.version=0.2.0
+litric.shell.canvas=1600x900
+litric.shell.scale=1.25
+litric.shell.theme=dark
+litric.shell.facts.source=litric-sysd
+litric.shell.environments=3
+litric.shell.files=direct (no daemon socket at /run/litric/files.sock)
+litric.shell.regional.tz.name=UTC
+litric.shell.regional.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.regional.tz.offset=+00:00
+litric.shell.regional.tz.abbrev=UTC
+litric.shell.regional.tz.dst=false
+litric.shell.regional.tz.transitions=0
+litric.shell.regional.clock.local=00:00 UTC
+litric.shell.regional.clock.utc=00:00
+litric.shell.regional.locale.tag=C
+litric.shell.regional.locale.source=fallback-c(no locale configured)
+litric.shell.regional.locale.hour_cycle=24
+litric.shell.regional.locale.first_day=Mon
+litric.shell.regional.locale.measurement=metric
+litric.shell.regional.locale.keyboard=us
+litric.shell.present=drm-skipped(/usr/bin/litric-drmpresent is not installed)
+litric.shell.present=fbdev
+litric.shell.fb=1600x900 32bpp stride=6400 format=Xrgb8888 driver=bochs-drmdrmfb
+litric.shell.fb.sysfs=/sys/class/graphics/fb0
+litric.shell.target=framebuffer
+litric.shell.fbcon=released=1
+litric.shell.input.found=3
+litric.shell.input.opened=2
+litric.shell.input.keyboard=true
+litric.shell.input.pointer=true
+litric.shell.input.absmax=32767x32767
+litric.shell.input.device=/dev/input/event1 [keyboard] AT Translated Set 2 keyboard
+litric.shell.input.device=/dev/input/event2 [pointer+touch] QEMU Virtio Tablet
+litric.shell.wayland.display=wayland-0
+litric.shell.wayland.socket=/run/litric/wayland-0
+litric.shell.mode=ready
+litric.shell.drawn=1
+litric.shell.mode=ready
+litric.shell.life=active
+litric.shell.frame_interval_ms=16
+litric.shell.overlay=none
+litric.shell.frames=16
+litric.shell.hotspots=46
+litric.shell.notifications=0
+litric.shell.pointer=892,32
+litric.shell.facts.source=litric-sysd
+litric.shell.files.watch=none reads=0
+litric.shell.browser.status=
+litric.shell.browser.tab=litric://about
+litric.shell.browser.frame=none
+litric.shell.net.probe=noroute
+litric.shell.windows=1
+litric.shell.workspace=1/4
+litric.shell.focus=#1
+litric.shell.window=#1 com.litric.settings "Settings" 1225x775+64+83 normal ws0
+litric.shell.tz.name=UTC
+litric.shell.tz.source=fallback-utc(no TZ and no /etc/localtime)
+litric.shell.tz.offset=+00:00
+litric.shell.tz.abbrev=UTC
+litric.shell.tz.dst=false
+litric.shell.tz.transitions=0
+litric.shell.clock.local=04:26 UTC
+litric.shell.clock.utc=04:26
+litric.shell.locale.tag=C
+litric.shell.locale.source=fallback-c(no locale configured)
+litric.shell.locale.hour_cycle=24
+litric.shell.locale.first_day=Mon
+litric.shell.locale.measurement=metric
+litric.shell.locale.keyboard=us
+litric.shell.rows_presented=13500
+litric.shell.frames=16
+litric.shell.frames_drawn=15
+litric.shell.frames_over_budget=15

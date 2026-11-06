@@ -36,7 +36,9 @@
 use std::collections::VecDeque;
 
 use crate::shell::Hot;
+use crate::terminal_screen::{CellStyle, Color, Screen};
 use litric_defender::verdict::Decision;
+use litric_input::keys::Modifiers;
 
 /// A text file opened in the viewer, with its own scroll.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2309,13 +2311,78 @@ pub fn dialog_field_key(
 // Terminal
 // ---------------------------------------------------------------------------
 
+/// Which xterm mouse tracking mode a program enabled.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MouseMode {
+    /// `?1000` off; the shell owns the pointer.
+    #[default]
+    Off,
+    /// `?1000`: press and release, no motion.
+    Normal,
+    /// `?1002`: press/release plus motion while a button is held.
+    Button,
+    /// `?1003`: every pointer move, held or not.
+    Any,
+}
+
+/// One button in a terminal mouse report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    /// Primary button.
+    Left,
+    /// Middle button.
+    Middle,
+    /// Secondary button.
+    Right,
+    /// Wheel up (button 64).
+    WheelUp,
+    /// Wheel down (button 65).
+    WheelDown,
+}
+
+/// What happened to a terminal mouse button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseAction {
+    /// A button went down, or a wheel notch arrived.
+    Press,
+    /// A button came up.
+    Release,
+    /// The pointer moved without a button changing.
+    Motion,
+}
+
+impl MouseButton {
+    const fn code(self) -> u8 {
+        match self {
+            Self::Left => 0,
+            Self::Middle => 1,
+            Self::Right => 2,
+            Self::WheelUp => 64,
+            Self::WheelDown => 65,
+        }
+    }
+
+    const fn held_bit(self) -> u8 {
+        match self {
+            Self::Left => 0b001,
+            Self::Middle => 0b010,
+            Self::Right => 0b100,
+            Self::WheelUp | Self::WheelDown => 0,
+        }
+    }
+
+    const fn is_wheel(self) -> bool {
+        matches!(self, Self::WheelUp | Self::WheelDown)
+    }
+}
+
 /// The Terminal application model: a command line the guest OS answers.
 ///
-/// Commands run for real — `/bin/sh` on the guest — through a bounded
-/// thread whose output arrives as lines. The model is deliberately dumb:
-/// a scrollback of strings, one input line, a busy flag. The shell owns
-/// the process side, because the process side is the part that must
-/// never block the frame loop.
+/// Commands run for real in a persistent `/bin/sh` attached to a PTY. The
+/// shell owns the process side, because the process side is the part that
+/// must never block the frame loop; this model owns the visible scrollback,
+/// the current line, and enough control-sequence handling that ordinary
+/// colour and progress output does not turn into punctuation soup.
 #[derive(Debug, Clone, Default)]
 pub struct TerminalApp {
     /// Output lines, oldest first, bounded at [`TerminalApp::MAX_LINES`].
@@ -2335,6 +2402,64 @@ pub struct TerminalApp {
     pub history_cursor: Option<usize>,
     /// The in-progress input saved when the user first navigates backward.
     pub history_draft: String,
+    /// The line being assembled from a byte stream that may not have ended
+    /// with a newline yet.
+    partial: String,
+    /// Where the stream is inside an ANSI escape sequence. The state is kept
+    /// across reads because a terminal can split an escape anywhere.
+    escape: Escape,
+    /// A carriage return was seen. If the next byte is a newline this is a
+    /// normal CRLF; otherwise the next printable byte overwrites the line,
+    /// which is how progress meters work.
+    carriage_return: bool,
+    /// The alternate-screen grid, when a full-screen program is active. The
+    /// primary scrollback in `lines` is kept untouched and restored when the
+    /// program leaves the alternate screen.
+    alternate: Option<Screen>,
+    /// The SGR state applied to subsequently written alternate-screen cells.
+    /// It is reset on entry to and exit from the alternate screen and by
+    /// `SGR 0`, so attributes cannot leak through a screen transition.
+    sgr: CellStyle,
+    /// Width the UI last offered to the PTY, used when a program enters the
+    /// alternate screen before the next resize notification.
+    screen_cols: usize,
+    /// Height the UI last offered to the PTY.
+    screen_rows: usize,
+    /// Whether the program wants its cursor shown (`CSI ?25h/l`).
+    cursor_visible: bool,
+    /// The xterm mouse tracking flags a program enabled. They are separate
+    /// flags because `?1000h` and `?1002h` can overlap; the highest enabled
+    /// mode decides how motion is filtered.
+    mouse_normal: bool,
+    mouse_button: bool,
+    mouse_any: bool,
+    /// `?1006`: report coordinates and release in SGR form instead of X10.
+    mouse_sgr: bool,
+    /// The buttons currently held, so `?1002` motion can name one.
+    mouse_held: u8,
+    /// `?2004`: wrap pasted text in the bracketed-paste markers.
+    bracketed_paste: bool,
+    /// Parameters collected inside a CSI sequence.
+    csi: String,
+    /// The CSI began with `?`, so it is a private mode rather than a command.
+    csi_private: bool,
+    /// Cursor stored by `CSI s` on the alternate grid.
+    saved_cursor: Option<(usize, usize)>,
+}
+
+/// Where an ANSI escape sequence is in the byte stream.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Escape {
+    #[default]
+    None,
+    /// ESC was seen and the next byte chooses the sequence kind.
+    Esc,
+    /// Inside a CSI sequence (`ESC [ ... final`).
+    Csi,
+    /// Inside an OSC sequence (`ESC ] ... BEL` or `ESC \`).
+    Osc,
+    /// OSC saw ESC; a following backslash terminates it.
+    OscEsc,
 }
 
 impl TerminalApp {
@@ -2360,6 +2485,23 @@ impl TerminalApp {
             history: VecDeque::new(),
             history_cursor: None,
             history_draft: String::new(),
+            partial: String::new(),
+            escape: Escape::None,
+            carriage_return: false,
+            alternate: None,
+            sgr: CellStyle::default(),
+            screen_cols: 100,
+            screen_rows: 30,
+            cursor_visible: true,
+            mouse_normal: false,
+            mouse_button: false,
+            mouse_any: false,
+            mouse_sgr: false,
+            mouse_held: 0,
+            bracketed_paste: false,
+            csi: String::new(),
+            csi_private: false,
+            saved_cursor: None,
         }
     }
 
@@ -2368,6 +2510,626 @@ impl TerminalApp {
         self.lines.push_back(line.into());
         while self.lines.len() > Self::MAX_LINES {
             self.lines.pop_front();
+        }
+    }
+
+    /// Feed raw PTY output into the active screen.
+    ///
+    /// Ordinary output still goes to the bounded primary scrollback. When the
+    /// program enters the alternate screen (`CSI ?1049h`, plus the older
+    /// `?47h`/`?1047h`), output goes to a cell grid instead: cursor addressing,
+    /// clear and erase then affect what the program expects, and the primary
+    /// scrollback is restored unchanged on `CSI ?1049l`. SGR colour and
+    /// attributes are stored per cell; OSC titles/belts are accepted and
+    /// ignored. Mouse reporting and bracketed paste are parsed here; the shell
+    /// turns pointer and paste events into bytes through the methods below.
+    /// Sixel is still ignored.
+    pub fn push_output(&mut self, data: &[u8]) {
+        for ch in String::from_utf8_lossy(data).chars() {
+            self.push_char(ch);
+        }
+    }
+
+    /// Finish the primary scrollback line when a command prompt returns.
+    ///
+    /// The alternate grid has no line to flush: it is a screen, not a log.
+    /// A program that printed a final line without a newline in the primary
+    /// screen still gets it into the scrollback instead of losing it.
+    pub fn flush_line(&mut self) {
+        if self.alternate.is_some() {
+            return;
+        }
+        if !self.partial.is_empty() {
+            let line = std::mem::take(&mut self.partial);
+            self.push_line(line);
+        }
+        self.carriage_return = false;
+    }
+
+    /// Whether a full-screen program currently owns the alternate screen.
+    #[must_use]
+    pub fn alt_active(&self) -> bool {
+        self.alternate.is_some()
+    }
+
+    /// The alternate grid, when active.
+    #[must_use]
+    pub fn screen(&self) -> Option<&Screen> {
+        self.alternate.as_ref()
+    }
+
+    /// Whether the program asked for a visible cursor.
+    #[must_use]
+    pub const fn cursor_visible(&self) -> bool {
+        self.cursor_visible
+    }
+
+    /// Tell the model how large the visible terminal is.
+    ///
+    /// The shell also calls `terminal_resize` so the PTY reports the same
+    /// numbers to the program. Keeping the model and the PTY in step is what
+    /// makes `stty size` and cursor addressing agree.
+    pub fn set_viewport(&mut self, cols: usize, rows: usize) {
+        let cols = cols.clamp(20, 500);
+        let rows = rows.clamp(5, 300);
+        if cols == self.screen_cols && rows == self.screen_rows {
+            return;
+        }
+        self.screen_cols = cols;
+        self.screen_rows = rows;
+        if let Some(screen) = self.alternate.as_mut() {
+            screen.resize(cols, rows);
+        }
+    }
+
+    /// The viewport the model believes it has.
+    #[must_use]
+    pub const fn viewport(&self) -> (usize, usize) {
+        (self.screen_cols, self.screen_rows)
+    }
+
+    /// The effective mouse tracking mode.
+    #[must_use]
+    pub const fn mouse_mode(&self) -> MouseMode {
+        if self.mouse_any {
+            MouseMode::Any
+        } else if self.mouse_button {
+            MouseMode::Button
+        } else if self.mouse_normal {
+            MouseMode::Normal
+        } else {
+            MouseMode::Off
+        }
+    }
+
+    /// Whether the program asked for SGR (`?1006`) mouse encoding.
+    #[must_use]
+    pub const fn mouse_sgr(&self) -> bool {
+        self.mouse_sgr
+    }
+
+    /// Whether the program asked for bracketed paste (`?2004`).
+    #[must_use]
+    pub const fn bracketed_paste(&self) -> bool {
+        self.bracketed_paste
+    }
+
+    /// Whether a terminal mouse button is still down.
+    ///
+    /// The shell uses this as pointer capture: once a press was delivered, a
+    /// drag or release outside the visible grid still belongs to the program.
+    #[must_use]
+    pub const fn mouse_buttons_held(&self) -> bool {
+        self.mouse_held != 0
+    }
+
+    /// Drop the held-button mask without sending a report.
+    ///
+    /// Used when focus or shell chrome interrupts a drag. The program did not
+    /// receive a release, so it must not receive a phantom drag on refocus.
+    pub fn clear_mouse_buttons(&mut self) {
+        self.mouse_held = 0;
+    }
+
+    /// Build the bytes for one mouse event, or `None` when the current mode
+    /// does not report it. Press and release are always reported while mouse
+    /// tracking is on; motion follows `1000`/`1002`/`1003` exactly.
+    ///
+    /// SGR (`?1006`) keeps coordinates above 223 usable and uses a lowercase
+    /// `m` for release. Without `?1006` the legacy X10 form is used; it cannot
+    /// represent coordinates past 223, so such a report is dropped rather than
+    /// producing a wrong cell.
+    pub fn mouse_report(
+        &mut self,
+        action: MouseAction,
+        button: Option<MouseButton>,
+        col: usize,
+        row: usize,
+        mods: Modifiers,
+    ) -> Option<Vec<u8>> {
+        let mode = self.mouse_mode();
+        if mode == MouseMode::Off {
+            return None;
+        }
+        let motion = action == MouseAction::Motion;
+        if motion {
+            match mode {
+                MouseMode::Normal | MouseMode::Off => return None,
+                MouseMode::Button if self.mouse_held == 0 => return None,
+                MouseMode::Button | MouseMode::Any => {}
+            }
+        }
+        let button = match action {
+            MouseAction::Motion => None,
+            MouseAction::Press | MouseAction::Release => Some(button?),
+        };
+        // A release without the matching press did not start in this program
+        // (for example the press landed on the window frame). Sending it would
+        // leave some full-screen programs believing a button is still down.
+        if action == MouseAction::Release {
+            if let Some(button) = button {
+                if !button.is_wheel() && self.mouse_held & button.held_bit() == 0 {
+                    return None;
+                }
+            }
+        }
+        let base = if let Some(button) = button {
+            button.code()
+        } else {
+            match self.mouse_held {
+                0b001 => 0,
+                0b010 => 1,
+                0b100 => 2,
+                _ => 3,
+            }
+        };
+        let mut code = base;
+        if motion {
+            code = code.saturating_add(32);
+        }
+        if mods.shift {
+            code = code.saturating_add(4);
+        }
+        if mods.alt || mods.altgr || mods.meta {
+            code = code.saturating_add(8);
+        }
+        if mods.ctrl {
+            code = code.saturating_add(16);
+        }
+        let release = action == MouseAction::Release;
+        let bytes = if self.mouse_sgr {
+            let final_char = if release { 'm' } else { 'M' };
+            format!(
+                "\x1b[<{code};{};{}{}",
+                col.saturating_add(1),
+                row.saturating_add(1),
+                final_char
+            )
+            .into_bytes()
+        } else {
+            if col > 222 || row > 222 {
+                return None;
+            }
+            // X10 has no button number on release: Cb 3 says "release", and
+            // the modifier bits still travel with it.
+            let base = if release {
+                3u8.saturating_add(code & 0b0001_1100)
+            } else {
+                code
+            };
+            vec![
+                0x1b,
+                b'[',
+                b'M',
+                u8::try_from(32u16.saturating_add(u16::from(base))).ok()?,
+                u8::try_from(32u16.saturating_add(u16::try_from(col).ok()?.saturating_add(1)))
+                    .ok()?,
+                u8::try_from(32u16.saturating_add(u16::try_from(row).ok()?.saturating_add(1)))
+                    .ok()?,
+            ]
+        };
+        if let Some(button) = button {
+            if button.is_wheel() {
+                // Wheel is a press-only event in every xterm mode.
+            } else if action == MouseAction::Press {
+                self.mouse_held |= button.held_bit();
+            } else if release {
+                self.mouse_held &= !button.held_bit();
+            }
+        }
+        Some(bytes)
+    }
+
+    /// Wrap pasted text for the program that is running. Newlines are data and
+    /// are not translated into Enter key presses. Bracketed paste is a
+    /// protocol boundary: an embedded end marker would let clipboard text
+    /// escape it, so it is removed rather than sent as a premature terminator.
+    #[must_use]
+    pub fn paste_bytes(&self, text: &str) -> Vec<u8> {
+        if !self.bracketed_paste {
+            return text.as_bytes().to_vec();
+        }
+        let safe = text.replace("\x1b[201~", "");
+        let mut bytes = Vec::with_capacity(safe.len().saturating_add(12));
+        bytes.extend_from_slice(b"\x1b[200~");
+        bytes.extend_from_slice(safe.as_bytes());
+        bytes.extend_from_slice(b"\x1b[201~");
+        bytes
+    }
+
+    fn reset_input_modes(&mut self) {
+        self.mouse_normal = false;
+        self.mouse_button = false;
+        self.mouse_any = false;
+        self.mouse_sgr = false;
+        self.mouse_held = 0;
+        self.bracketed_paste = false;
+    }
+
+    fn enter_alt(&mut self) {
+        if self.alternate.is_none() {
+            self.alternate = Some(Screen::new(self.screen_cols, self.screen_rows));
+            // A program that enters a new screen must start from a known input
+            // state: a mouse mode left by the previous program would otherwise
+            // keep forwarding clicks into an application that never asked.
+            self.reset_input_modes();
+        }
+        self.sgr = CellStyle::default();
+        self.cursor_visible = true;
+        self.saved_cursor = None;
+    }
+
+    fn leave_alt(&mut self) {
+        self.alternate = None;
+        self.reset_input_modes();
+        self.sgr = CellStyle::default();
+        self.cursor_visible = true;
+        self.saved_cursor = None;
+        self.csi.clear();
+        self.csi_private = false;
+    }
+
+    /// ANSI full reset (`ESC c`): drop the screen and every mode a program set.
+    fn full_reset(&mut self) {
+        self.alternate = None;
+        self.lines.clear();
+        self.partial.clear();
+        self.escape = Escape::None;
+        self.carriage_return = false;
+        self.sgr = CellStyle::default();
+        self.cursor_visible = true;
+        self.csi.clear();
+        self.csi_private = false;
+        self.saved_cursor = None;
+        self.reset_input_modes();
+    }
+
+    fn save_cursor(&mut self) {
+        if let Some(screen) = self.alternate.as_ref() {
+            self.saved_cursor = Some((screen.cursor_row, screen.cursor_col));
+        }
+    }
+
+    fn restore_cursor(&mut self) {
+        let Some((row, col)) = self.saved_cursor else {
+            return;
+        };
+        if let Some(screen) = self.alternate.as_mut() {
+            screen.move_to(row, col);
+        }
+    }
+
+    fn push_primary_char(&mut self, ch: char) {
+        match ch {
+            '\u{1b}' => self.escape = Escape::Esc,
+            '\r' => self.carriage_return = true,
+            '\n' => {
+                self.carriage_return = false;
+                let line = std::mem::take(&mut self.partial);
+                self.push_line(line);
+            }
+            '\u{8}' => {
+                self.partial.pop();
+                self.carriage_return = false;
+            }
+            '\t' => {
+                self.partial.push_str("    ");
+                self.carriage_return = false;
+            }
+            c if c.is_control() => {}
+            c => {
+                if self.carriage_return {
+                    self.partial.clear();
+                    self.carriage_return = false;
+                }
+                self.partial.push(c);
+            }
+        }
+    }
+
+    fn push_alt_char(&mut self, ch: char) {
+        let Some(screen) = self.alternate.as_mut() else {
+            return;
+        };
+        match ch {
+            '\r' => screen.carriage_return(),
+            '\n' => screen.line_feed(),
+            '\u{8}' => screen.backspace(),
+            '\t' => screen.tab(),
+            c if c.is_control() => {}
+            c => screen.put_styled(c, self.sgr),
+        }
+    }
+
+    fn push_char(&mut self, ch: char) {
+        match self.escape {
+            Escape::None => {
+                if self.alternate.is_some() {
+                    if ch == '\u{1b}' {
+                        self.escape = Escape::Esc;
+                    } else {
+                        self.push_alt_char(ch);
+                    }
+                } else {
+                    self.push_primary_char(ch);
+                }
+            }
+            Escape::Esc => {
+                self.escape = match ch {
+                    '[' => {
+                        self.csi.clear();
+                        self.csi_private = false;
+                        Escape::Csi
+                    }
+                    ']' => Escape::Osc,
+                    '7' => {
+                        self.save_cursor();
+                        Escape::None
+                    }
+                    '8' => {
+                        self.restore_cursor();
+                        Escape::None
+                    }
+                    'M' => {
+                        if let Some(screen) = self.alternate.as_mut() {
+                            screen.reverse_index();
+                        }
+                        Escape::None
+                    }
+                    'c' => {
+                        self.full_reset();
+                        Escape::None
+                    }
+                    _ => Escape::None,
+                };
+            }
+            Escape::Csi => {
+                if ch == '?' && self.csi.is_empty() {
+                    self.csi_private = true;
+                } else if ch.is_ascii_digit() || ch == ';' {
+                    if self.csi.len() < 64 {
+                        self.csi.push(ch);
+                    }
+                } else if ('\u{40}'..='\u{7e}').contains(&ch) {
+                    let params = std::mem::take(&mut self.csi);
+                    let private = self.csi_private;
+                    self.csi_private = false;
+                    self.escape = Escape::None;
+                    self.apply_csi(&params, private, ch);
+                }
+            }
+            Escape::Osc => match ch {
+                '\u{7}' => self.escape = Escape::None,
+                '\u{1b}' => self.escape = Escape::OscEsc,
+                _ => {}
+            },
+            Escape::OscEsc => {
+                self.escape = if ch == '\\' {
+                    Escape::None
+                } else {
+                    Escape::Osc
+                };
+            }
+        }
+    }
+
+    fn apply_csi(&mut self, params: &str, private: bool, final_char: char) {
+        let values: Vec<usize> = params
+            .split(';')
+            .map(|part| part.parse::<usize>().unwrap_or(0))
+            .collect();
+        let param = |index: usize, default: usize| {
+            values
+                .get(index)
+                .copied()
+                .filter(|value| *value > 0)
+                .unwrap_or(default)
+        };
+
+        if private {
+            match final_char {
+                'h' | 'l' => {
+                    let enable = final_char == 'h';
+                    for value in values.iter().copied() {
+                        match value {
+                            1049 | 1047 | 47 => {
+                                if enable {
+                                    self.enter_alt();
+                                } else {
+                                    self.leave_alt();
+                                }
+                            }
+                            25 => self.cursor_visible = enable,
+                            1000 => self.mouse_normal = enable,
+                            1002 => self.mouse_button = enable,
+                            1003 => self.mouse_any = enable,
+                            1006 => self.mouse_sgr = enable,
+                            2004 => self.bracketed_paste = enable,
+                            _ => {}
+                        }
+                        // A button held while the program turns tracking off
+                        // would otherwise make the next 1002 motion look like
+                        // a drag with no press.
+                        if !enable && matches!(value, 1000 | 1002 | 1003) {
+                            self.mouse_held = 0;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        if final_char == 's' {
+            self.save_cursor();
+            return;
+        }
+        if final_char == 'u' {
+            self.restore_cursor();
+            return;
+        }
+        if final_char == 'm' {
+            self.apply_sgr(&values);
+            return;
+        }
+
+        let Some(screen) = self.alternate.as_mut() else {
+            return;
+        };
+        match final_char {
+            'H' | 'f' => {
+                screen.move_to(param(0, 1).saturating_sub(1), param(1, 1).saturating_sub(1))
+            }
+            'A' => {
+                let row = screen.cursor_row.saturating_sub(param(0, 1));
+                screen.move_to(row, screen.cursor_col);
+            }
+            'B' => {
+                let row = screen.cursor_row.saturating_add(param(0, 1));
+                screen.move_to(row, screen.cursor_col);
+            }
+            'C' => {
+                let col = screen.cursor_col.saturating_add(param(0, 1));
+                screen.move_to(screen.cursor_row, col);
+            }
+            'D' => {
+                let col = screen.cursor_col.saturating_sub(param(0, 1));
+                screen.move_to(screen.cursor_row, col);
+            }
+            'G' => {
+                let col = param(0, 1).saturating_sub(1);
+                screen.move_to(screen.cursor_row, col);
+            }
+            'd' => {
+                let row = param(0, 1).saturating_sub(1);
+                screen.move_to(row, screen.cursor_col);
+            }
+            'J' => match values.first().copied().unwrap_or(0) {
+                2 | 3 => screen.clear(),
+                _ => {}
+            },
+            'K' => match values.first().copied().unwrap_or(0) {
+                1 => screen.erase_to_start_of_line(),
+                2 => {
+                    screen.erase_to_start_of_line();
+                    screen.erase_to_end_of_line();
+                }
+                _ => screen.erase_to_end_of_line(),
+            },
+            'r' => {
+                let bottom_default = screen.rows();
+                screen.set_scroll_region(
+                    param(0, 1).saturating_sub(1),
+                    param(1, bottom_default).saturating_sub(1),
+                );
+            }
+            'S' => screen.scroll_up(param(0, 1)),
+            'T' => screen.scroll_down(param(0, 1)),
+            'L' => screen.insert_lines(param(0, 1)),
+            'M' => screen.delete_lines(param(0, 1)),
+            _ => {}
+        }
+    }
+
+    /// Apply one CSI `m` sequence to the SGR state.
+    ///
+    /// Parameters are parsed as semicolon-separated numbers, which is the form
+    /// vim and ordinary terminfo use: `38;5;n` is an indexed colour and
+    /// `38;2;r;g;b` is truecolor. A malformed extended colour is ignored up to
+    /// its introducer rather than printing the numbers as text.
+    fn apply_sgr(&mut self, values: &[usize]) {
+        let mut index = 0usize;
+        while let Some(code) = values.get(index).copied() {
+            match code {
+                0 => self.sgr.reset(),
+                1 => self.sgr.attrs.bold = true,
+                2 => self.sgr.attrs.dim = true,
+                3 => self.sgr.attrs.italic = true,
+                4 => self.sgr.attrs.underline = true,
+                7 => self.sgr.attrs.reverse = true,
+                22 => {
+                    self.sgr.attrs.bold = false;
+                    self.sgr.attrs.dim = false;
+                }
+                23 => self.sgr.attrs.italic = false,
+                24 => self.sgr.attrs.underline = false,
+                27 => self.sgr.attrs.reverse = false,
+                30..=37 => {
+                    self.sgr.fg =
+                        Color::Indexed(u8::try_from(code.saturating_sub(30)).unwrap_or(0));
+                }
+                39 => self.sgr.fg = Color::Default,
+                40..=47 => {
+                    self.sgr.bg =
+                        Color::Indexed(u8::try_from(code.saturating_sub(40)).unwrap_or(0));
+                }
+                49 => self.sgr.bg = Color::Default,
+                90..=97 => {
+                    self.sgr.fg =
+                        Color::Indexed(u8::try_from(code.saturating_sub(82)).unwrap_or(8));
+                }
+                100..=107 => {
+                    self.sgr.bg =
+                        Color::Indexed(u8::try_from(code.saturating_sub(92)).unwrap_or(8));
+                }
+                38 | 48 => {
+                    let Some(kind) = values.get(index.saturating_add(1)).copied() else {
+                        break;
+                    };
+                    let color = if kind == 5 {
+                        let Some(value) = values.get(index.saturating_add(2)).copied() else {
+                            break;
+                        };
+                        index = index.saturating_add(2);
+                        Color::Indexed(u8::try_from(value).unwrap_or(0))
+                    } else if kind == 2 {
+                        let Some(r) = values.get(index.saturating_add(2)).copied() else {
+                            break;
+                        };
+                        let Some(g) = values.get(index.saturating_add(3)).copied() else {
+                            break;
+                        };
+                        let Some(b) = values.get(index.saturating_add(4)).copied() else {
+                            break;
+                        };
+                        index = index.saturating_add(4);
+                        Color::Rgb(
+                            u8::try_from(r).unwrap_or(0),
+                            u8::try_from(g).unwrap_or(0),
+                            u8::try_from(b).unwrap_or(0),
+                        )
+                    } else {
+                        break;
+                    };
+                    if code == 38 {
+                        self.sgr.fg = color;
+                    } else {
+                        self.sgr.bg = color;
+                    }
+                }
+                _ => {}
+            }
+            index = index.saturating_add(1);
         }
     }
 
@@ -2429,8 +3191,18 @@ impl TerminalApp {
 
     /// Clear visible output and the old input draft while retaining history.
     pub fn clear_screen(&mut self) {
+        self.alternate = None;
+        self.sgr = CellStyle::default();
         self.lines.clear();
         self.input.clear();
+        self.partial.clear();
+        self.escape = Escape::None;
+        self.csi.clear();
+        self.csi_private = false;
+        self.saved_cursor = None;
+        self.carriage_return = false;
+        self.cursor_visible = true;
+        self.reset_input_modes();
         self.push_line("LitricOS Terminal · session ready");
         self.history_cursor = None;
         self.history_draft.clear();
@@ -3146,5 +3918,390 @@ mod scan_mode_tests {
         assert_eq!(ScanMode::Fast.file_cap(), 2_000);
         assert_eq!(ScanMode::Deep.file_cap(), 40_000);
         assert!(ScanMode::Fast.depth() <= ScanMode::Deep.depth());
+    }
+}
+
+#[cfg(test)]
+mod terminal_output_tests {
+    use super::{MouseAction, MouseButton, MouseMode, TerminalApp};
+    use crate::terminal_screen::{CellStyle, Color};
+    use litric_input::keys::Modifiers;
+
+    #[test]
+    fn terminal_output_drops_ansi_and_handles_crlf() {
+        let mut term = TerminalApp::new();
+        term.push_output(b"\x1b[31mred\x1b[0m\r\nnext\n");
+        assert!(
+            term.lines.iter().any(|line| line == "red"),
+            "{:?}",
+            term.lines
+        );
+        assert!(
+            term.lines.iter().any(|line| line == "next"),
+            "{:?}",
+            term.lines
+        );
+        assert!(
+            !term.lines.iter().any(|line| line.contains('\u{1b}')),
+            "an escape reached the scrollback"
+        );
+    }
+
+    #[test]
+    fn terminal_output_overwrites_a_progress_line_on_carriage_return() {
+        let mut term = TerminalApp::new();
+        term.push_output(b"10%\r20%\r\n");
+        assert!(
+            term.lines.iter().any(|line| line == "20%"),
+            "{:?}",
+            term.lines
+        );
+        assert!(
+            !term.lines.iter().any(|line| line == "10%"),
+            "the progress line was not overwritten"
+        );
+    }
+
+    #[test]
+    fn terminal_output_flushes_a_line_without_a_newline_at_the_prompt() {
+        let mut term = TerminalApp::new();
+        term.push_output(b"done");
+        term.flush_line();
+        assert!(term.lines.iter().any(|line| line == "done"));
+    }
+
+    #[test]
+    fn alternate_screen_keeps_the_primary_scrollback_and_restores_the_cursor() {
+        let mut term = TerminalApp::new();
+        term.set_viewport(40, 12);
+        term.push_output(b"before-alt\n");
+        term.push_output(b"\x1b[?1049h\x1b[2J\x1b[2;3HALT");
+        assert!(term.alt_active(), "CSI ?1049h did not open the grid");
+        let screen = term.screen().expect("alternate screen");
+        assert_eq!((screen.cols(), screen.rows()), (40, 12));
+        assert_eq!(screen.cell(1, 2), Some('A'));
+        assert!(term.lines.iter().any(|line| line == "before-alt"));
+
+        term.push_output(b"\x1b[?25l");
+        assert!(!term.cursor_visible(), "CSI ?25l was ignored");
+        term.set_viewport(52, 18);
+        assert_eq!(
+            term.screen().map(|screen| (screen.cols(), screen.rows())),
+            Some((52, 18))
+        );
+
+        term.push_output(b"\x1b[?1049lAFTER");
+        assert!(!term.alt_active(), "CSI ?1049l did not restore primary");
+        assert!(term.cursor_visible());
+        assert!(term.lines.iter().any(|line| line == "before-alt"));
+        term.push_output(b"\n");
+        assert!(term.lines.iter().any(|line| line == "AFTER"));
+    }
+
+    #[test]
+    fn alternate_screen_clear_and_erase_do_not_touch_scrollback() {
+        let mut term = TerminalApp::new();
+        term.set_viewport(20, 5);
+        term.push_output(b"kept\n");
+        term.push_output(b"\x1b[?47h\x1b[2Jone\ntwo\x1b[K\x1b[?47l");
+        assert!(!term.alt_active());
+        assert!(term.lines.iter().any(|line| line == "kept"));
+        assert!(!term.lines.iter().any(|line| line.contains("one")));
+    }
+    #[test]
+    fn alternate_sgr_stores_16_256_truecolor_and_attributes_per_cell() {
+        let mut term = TerminalApp::new();
+        term.set_viewport(20, 4);
+        term.push_output(
+            b"\x1b[?1049h\x1b[31;1;4mA\x1b[0mB\x1b[94mC\x1b[38;5;196mD\x1b[38;2;1;2;3mE\x1b[48;5;17mF\x1b[7mG",
+        );
+        let screen = term.screen().expect("alternate screen");
+        let style = |col: usize| {
+            screen
+                .cell_at(0, col)
+                .map(|cell| cell.style)
+                .expect("styled cell")
+        };
+        let a = style(0);
+        assert_eq!(a.fg, Color::Indexed(1));
+        assert!(a.attrs.bold && a.attrs.underline);
+        assert_eq!(style(1), CellStyle::default(), "SGR 0 did not reset");
+        assert_eq!(style(2).fg, Color::Indexed(12));
+        assert_eq!(style(3).fg, Color::Indexed(196));
+        assert_eq!(style(4).fg, Color::Rgb(1, 2, 3));
+        assert_eq!(style(5).bg, Color::Indexed(17));
+        assert!(style(6).attrs.reverse);
+        assert_eq!(screen.text_lines(), ["ABCDEFG", "", "", "", ""]);
+    }
+
+    #[test]
+    fn alternate_sgr_resets_all_attributes_and_does_not_leak_across_transitions() {
+        let mut term = TerminalApp::new();
+        term.set_viewport(20, 4);
+        term.push_output(b"\x1b[31;1m");
+        term.push_output(b"\x1b[?1049hA");
+        assert_eq!(
+            term.screen()
+                .and_then(|screen| screen.cell_at(0, 0))
+                .map(|cell| cell.style),
+            Some(CellStyle::default()),
+            "entering alternate screen did not reset SGR"
+        );
+
+        term.push_output(b"\x1b[2;3;7;4;1mB\x1b[22;23;24;27mC\x1b[38;5;9mD\x1b[mE");
+        let screen = term.screen().expect("alternate screen");
+        let b = screen.cell_at(0, 1).expect("B").style;
+        assert!(b.attrs.bold && b.attrs.dim && b.attrs.italic);
+        assert!(b.attrs.underline && b.attrs.reverse);
+        let c = screen.cell_at(0, 2).expect("C").style;
+        assert!(!c.attrs.bold && !c.attrs.dim && !c.attrs.italic);
+        assert!(!c.attrs.underline && !c.attrs.reverse);
+        assert_eq!(c.fg, Color::Default);
+        assert_eq!(
+            screen.cell_at(0, 3).map(|cell| cell.style.fg),
+            Some(Color::Indexed(9))
+        );
+        assert_eq!(
+            screen.cell_at(0, 4).map(|cell| cell.style),
+            Some(CellStyle::default()),
+            "CSI m without parameters did not reset"
+        );
+
+        term.push_output(b"\x1b[?1049l");
+        term.push_output(b"\x1b[?1049hC");
+        assert_eq!(
+            term.screen()
+                .and_then(|screen| screen.cell_at(0, 0))
+                .map(|cell| cell.style),
+            Some(CellStyle::default()),
+            "re-entering alternate screen inherited the old SGR state"
+        );
+    }
+
+    #[test]
+    fn alternate_grid_places_wide_and_combining_text_through_the_parser() {
+        let mut term = TerminalApp::new();
+        term.set_viewport(20, 4);
+        term.push_output("\x1b[?1049h界AกัB".as_bytes());
+        let screen = term.screen().expect("alternate screen");
+        assert_eq!(
+            screen.cell_at(0, 0).map(|cell| cell.text.as_str()),
+            Some("界")
+        );
+        assert_eq!(screen.cell_at(0, 1).map(|cell| cell.width), Some(0));
+        assert_eq!(
+            screen.cell_at(0, 2).map(|cell| cell.text.as_str()),
+            Some("A")
+        );
+        assert_eq!(
+            screen.cell_at(0, 3).map(|cell| cell.text.as_str()),
+            Some("กั")
+        );
+        assert_eq!(
+            screen.cell_at(0, 4).map(|cell| cell.text.as_str()),
+            Some("B")
+        );
+        assert_eq!(screen.cursor_col, 5);
+    }
+    #[test]
+    fn private_mouse_and_paste_modes_track_and_clear_on_screen_switches() {
+        let mut term = TerminalApp::new();
+        term.push_output(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h");
+        assert_eq!(term.mouse_mode(), MouseMode::Normal);
+        assert!(term.mouse_sgr());
+        assert!(term.bracketed_paste());
+
+        term.push_output(b"\x1b[?1002h");
+        assert_eq!(term.mouse_mode(), MouseMode::Button);
+        term.push_output(b"\x1b[?1000l");
+        assert_eq!(
+            term.mouse_mode(),
+            MouseMode::Button,
+            "1002 still owns motion"
+        );
+        term.push_output(b"\x1b[?1003h\x1b[?1002l");
+        assert_eq!(term.mouse_mode(), MouseMode::Any);
+        term.push_output(b"\x1b[?2004l");
+        assert!(!term.bracketed_paste());
+
+        // Entering a screen clears modes that belonged to the old surface.
+        term.push_output(b"\x1b[?1049h");
+        assert_eq!(term.mouse_mode(), MouseMode::Off);
+        assert!(!term.mouse_sgr());
+        assert!(!term.bracketed_paste());
+        term.push_output(b"\x1b[?1000h\x1b[?1006h\x1b[?2004h");
+        term.push_output(b"\x1b[?1049l");
+        assert_eq!(term.mouse_mode(), MouseMode::Off);
+        assert!(!term.mouse_sgr());
+        assert!(!term.bracketed_paste());
+
+        // A full reset must not leave a mode that can capture the next app.
+        term.push_output(b"\x1b[?1003h\x1b[?2004h\x1b[?1006h");
+        term.push_output(b"\x1bc");
+        assert_eq!(term.mouse_mode(), MouseMode::Off);
+        assert!(!term.mouse_sgr());
+        assert!(!term.bracketed_paste());
+    }
+
+    #[test]
+    fn sgr_mouse_reports_follow_normal_button_and_any_event_rules() {
+        let mut term = TerminalApp::new();
+        let none = Modifiers::NONE;
+        assert!(
+            term.mouse_report(MouseAction::Press, Some(MouseButton::Left), 0, 0, none)
+                .is_none(),
+            "mouse reporting is off before a program enables it"
+        );
+        term.push_output(b"\x1b[?1000h\x1b[?1006h");
+        assert_eq!(
+            term.mouse_report(MouseAction::Press, Some(MouseButton::Left), 2, 1, none)
+                .expect("press"),
+            b"\x1b[<0;3;2M"
+        );
+        assert!(
+            term.mouse_report(MouseAction::Motion, None, 3, 1, none)
+                .is_none(),
+            "1000 does not report motion"
+        );
+        assert_eq!(
+            term.mouse_report(MouseAction::Release, Some(MouseButton::Left), 3, 1, none)
+                .expect("release"),
+            b"\x1b[<0;4;2m"
+        );
+        assert_eq!(
+            term.mouse_report(MouseAction::Press, Some(MouseButton::WheelUp), 0, 0, none)
+                .expect("wheel"),
+            b"\x1b[<64;1;1M"
+        );
+
+        term.push_output(b"\x1b[?1002h");
+        assert_eq!(
+            term.mouse_report(MouseAction::Press, Some(MouseButton::Left), 2, 1, none)
+                .expect("press"),
+            b"\x1b[<0;3;2M"
+        );
+        assert_eq!(
+            term.mouse_report(MouseAction::Motion, None, 3, 1, none)
+                .expect("drag motion"),
+            b"\x1b[<32;4;2M"
+        );
+        assert_eq!(
+            term.mouse_report(MouseAction::Release, Some(MouseButton::Left), 3, 1, none)
+                .expect("release"),
+            b"\x1b[<0;4;2m"
+        );
+        assert!(
+            term.mouse_report(MouseAction::Motion, None, 4, 1, none)
+                .is_none(),
+            "1002 stops reporting motion after the button is released"
+        );
+        assert!(
+            term.mouse_report(MouseAction::Release, Some(MouseButton::Right), 4, 1, none)
+                .is_none(),
+            "a release without its press did not start in this program"
+        );
+
+        // Turning tracking off drops the held-button state. Re-enabling it
+        // must not turn a later hover into a phantom drag.
+        term.push_output(b"\x1b[?1002l");
+        term.push_output(b"\x1b[?1002h");
+        assert!(
+            term.mouse_report(MouseAction::Motion, None, 4, 1, none)
+                .is_none(),
+            "a button held across a mode reset does not survive"
+        );
+
+        term.push_output(b"\x1b[?1003h");
+        assert_eq!(
+            term.mouse_report(MouseAction::Motion, None, 0, 0, none)
+                .expect("free motion"),
+            b"\x1b[<35;1;1M"
+        );
+        let ctrl_shift = Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Modifiers::NONE
+        };
+        assert_eq!(
+            term.mouse_report(
+                MouseAction::Press,
+                Some(MouseButton::Right),
+                0,
+                0,
+                ctrl_shift
+            )
+            .expect("modified press"),
+            b"\x1b[<22;1;1M"
+        );
+    }
+
+    #[test]
+    fn legacy_mouse_encoding_has_x10_offsets_and_a_release_button() {
+        let mut term = TerminalApp::new();
+        term.push_output(b"\x1b[?1000h");
+        assert_eq!(
+            term.mouse_report(
+                MouseAction::Press,
+                Some(MouseButton::Left),
+                0,
+                0,
+                Modifiers::NONE
+            )
+            .expect("press"),
+            [0x1b, b'[', b'M', 32, 33, 33]
+        );
+        assert_eq!(
+            term.mouse_report(
+                MouseAction::Release,
+                Some(MouseButton::Left),
+                0,
+                0,
+                Modifiers::NONE
+            )
+            .expect("release"),
+            [0x1b, b'[', b'M', 35, 33, 33]
+        );
+    }
+
+    #[test]
+    fn bracketed_paste_wraps_once_and_preserves_newlines_and_large_payloads() {
+        let mut term = TerminalApp::new();
+        let text = "first\nsecond\r\nตั\u{0e27}อย่าง";
+        assert_eq!(term.paste_bytes(text), text.as_bytes());
+
+        term.push_output(b"\x1b[?2004h");
+        let wrapped = term.paste_bytes(text);
+        assert_eq!(
+            wrapped,
+            format!("\x1b[200~{text}\x1b[201~").into_bytes(),
+            "newlines are paste data, not Enter keys"
+        );
+
+        let large = "x".repeat(50_000);
+        let wrapped = term.paste_bytes(&large);
+        assert_eq!(wrapped.len(), large.len().saturating_add(12));
+        assert!(wrapped.starts_with(b"\x1b[200~"));
+        assert!(wrapped.ends_with(b"\x1b[201~"));
+        assert!(wrapped
+            .windows(large.len())
+            .any(|window| window == large.as_bytes()));
+
+        // A clipboard cannot be allowed to terminate its own paste early.
+        let hostile = "safe\x1b[201~still-safe";
+        let wrapped = term.paste_bytes(hostile);
+        assert_eq!(wrapped, b"\x1b[200~safestill-safe\x1b[201~");
+    }
+
+    #[test]
+    fn alternate_scroll_region_sequences_keep_outside_rows_still() {
+        let mut term = TerminalApp::new();
+        term.set_viewport(8, 5);
+        term.push_output(b"\x1b[?1049h\x1b[1;1HA\x1b[2;1HB\x1b[3;1HC\x1b[4;1HD\x1b[5;1HE");
+        term.push_output(b"\x1b[2;4r");
+        let screen = term.screen().expect("alternate screen");
+        assert_eq!(screen.scroll_region(), (1, 3));
+        term.push_output(b"\x1b[4;1H\x1b[S");
+        let screen = term.screen().expect("alternate screen");
+        assert_eq!(screen.text_lines(), ["A", "C", "D", "", "E"]);
     }
 }

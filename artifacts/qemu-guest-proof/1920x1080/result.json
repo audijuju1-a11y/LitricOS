@@ -1,0 +1,82 @@
+{
+  "assertions": {
+    "client_window_gone_after_stop": true,
+    "colourful_above_floor": true,
+    "colourful_below_ceiling_after_stop": true,
+    "installed": true
+  },
+  "framebuffer": {
+    "height": 1080,
+    "status_line": "litric.shell.fb=1920x1080 32bpp stride=7680 format=Xrgb8888 driver=bochs-drmdrmfb",
+    "width": 1920
+  },
+  "game": {
+    "bright": 561253,
+    "colourful": 1118252,
+    "dark": 62223,
+    "frames": [
+      {
+        "app": "com.litric.settings",
+        "height": 930,
+        "id": 1,
+        "title": "Settings",
+        "width": 1470,
+        "x": 64,
+        "y": 90
+      },
+      {
+        "app": "litric.client",
+        "height": 1080,
+        "id": 2,
+        "title": "simple-shm",
+        "width": 1920,
+        "x": 0,
+        "y": 0
+      }
+    ],
+    "height": 1080,
+    "play": [
+      1440,
+      375
+    ],
+    "shell_windows": 2,
+    "width": 1920,
+    "window": "litric.client fullscreen",
+    "window_line": "litric.shell.window=#2 litric.client \"simple-shm\" 1920x1080+0+0 fullscreen ws0"
+  },
+  "geometry_checks": {
+    "client_fullscreen_at_expected_size": true,
+    "framebuffer": true,
+    "game_screenshot_at_expected_size": true,
+    "settings_window_inside_framebuffer": true,
+    "settings_window_scaled": true,
+    "stopped_screenshot_at_expected_size": true,
+    "window_counts": true,
+    "windows_inside_framebuffer": true
+  },
+  "qmp": "artifacts/qemu-guest-proof/1920x1080/qmp.sock",
+  "serial": "artifacts/qemu-guest-proof/1920x1080/serial.log",
+  "stopped": {
+    "bright": 17642,
+    "colourful": 10649,
+    "dark": 1979812,
+    "frames": [
+      {
+        "app": "com.litric.settings",
+        "height": 930,
+        "id": 1,
+        "title": "Settings",
+        "width": 1470,
+        "x": 64,
+        "y": 90
+      }
+    ],
+    "height": 1080,
+    "shell_windows": 1,
+    "stop": [
+      1070,
+      39
+    ],
+    "width": 1920
+  }
+}
