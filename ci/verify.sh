@@ -353,6 +353,23 @@ fi
 
 # ---------------------------------------------------------------------------
 echo
+echo "[3n] Wired network configuration"
+# ---------------------------------------------------------------------------
+# The shipped wired profile must work on a physical machine, not only inside
+# the QEMU proof VM. This check is the executable form of that sentence: the
+# generic wired file asks for DHCP, and the static slirp lease exists only in a
+# file matched by QEMU's NIC MAC that sorts first.
+if [[ -n "$PY" ]]; then
+    check "wired default is DHCP; QEMU slirp is MAC-matched and first" \
+        "$PY" ci/lint-network-config.py
+    check "network-config linter detects a static default and a bad order" \
+        "$PY" ci/lint-network-config.py --self-test
+else
+    skip "wired network configuration" "no python interpreter on PATH"
+fi
+
+# ---------------------------------------------------------------------------
+echo
 echo "[4] Development signing keys"
 # ---------------------------------------------------------------------------
 if have openssl; then

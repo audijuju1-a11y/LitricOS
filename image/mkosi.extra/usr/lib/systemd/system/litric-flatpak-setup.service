@@ -1,0 +1,32 @@
+[Unit]
+Description=LitricOS Flathub remote provisioning
+Documentation=file:///usr/share/doc/litric/master-plan/09-app-model-portals-packaging.md
+# The App Store is a view of Flatpak. Without a remote it has nothing to list,
+# so the first boot after networking comes up declares Flathub once. The script
+# is idempotent and exits zero when the remote already exists or the network is
+# not there yet.
+#
+# Started by `litric-flatpak-setup.timer`, not pulled in by multi-user.target:
+# the fetch must never hold the boot.
+ConditionPathExists=/usr/bin/flatpak
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /usr/lib/litric/flatpak-setup.sh
+# A remote-add that hangs on a captive portal must not hold the boot. The
+# script tolerates failure and the unit runs again next boot.
+TimeoutStartSec=180
+RemainAfterExit=no
+
+# Writes the system-wide Flatpak repository and nothing else. `flatpak
+# remote-add` reaches the network, so INET is allowed here and nowhere in
+# `litric-sysd`; keeping the fetch out of the capability broker is the point.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/flatpak
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native

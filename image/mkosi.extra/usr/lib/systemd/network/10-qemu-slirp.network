@@ -1,0 +1,32 @@
+# LitricOS — deterministic addressing inside the QEMU proof VM.
+#
+# QEMU's user-mode network (slirp) hands out 10.0.2.15/24 with the host at
+# 10.0.2.2 and its resolver at 10.0.2.3. The guest proofs need that address to be
+# true before userspace starts, because they fetch proofs from 10.0.2.2 and a
+# DHCP exchange adds a dependency (and a failure mode) to the measurement.
+#
+# The match is the MAC, not the interface name, and not the driver:
+#
+#   * the name `en*` is the same one real hardware uses, so matching it would
+#     apply this file to every physical machine;
+#   * matching `Driver=virtio_net` would also hit a real virtio NIC on a LAN;
+#   * QEMU assigns 52:54:00:12:34:56 to the first NIC when the command line
+#     does not specify one, which is exactly how tools/run-qemu.sh,
+#     tools/boot-test.sh and tools/qemu-guest-proof.sh start their guests.
+#
+# `20-wired.network` is the DHCP default for everything else. networkd applies
+# the first matching file in lexical order, so this one is consulted first.
+
+[Match]
+MACAddress=52:54:00:12:34:56
+
+[Link]
+# The probe measures the link itself, not `network-online.target`; an address
+# that is already static must not report the link offline while it settles.
+RequiredForOnline=no
+
+[Network]
+Address=10.0.2.15/24
+Gateway=10.0.2.2
+DNS=10.0.2.3
+IPv6AcceptRA=yes

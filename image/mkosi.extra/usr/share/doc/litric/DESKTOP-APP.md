@@ -18,12 +18,12 @@ LITRIC_DISPLAY=none tools/desktop-app.sh   # headless, for screenshots
 | --- | --- | --- |
 | Mouse | `usb-tablet` — absolute pointer | Yes. HID → evdev → the shell's pointer path. |
 | Keyboard | `usb-kbd` | Yes. HID → evdev → the shell's key handling. |
-| LAN | `virtio-net-pci` on QEMU user networking | Yes. The guest runs its own DHCP client and holds `10.0.2.15/24`, route via `10.0.2.2`, DNS `10.0.2.3`. |
+| LAN | `virtio-net-pci` on QEMU user networking | Yes. The VM holds the static slirp lease `10.0.2.15/24` (the file is matched by QEMU's NIC MAC), route via `10.0.2.2`, DNS `10.0.2.3`; a physical machine uses DHCP. |
 | Wi-Fi | none | No adapter. QEMU 11 has no wireless controller model. |
 | Bluetooth | none | No adapter. QEMU 11 has no Bluetooth controller model. |
 | Disk | the built GPT image, read/write | Yes. The root is erofs behind dm-verity; `/var` is btrfs and writable. |
 
-The network is not a stub: `litric-sysd` reports the lease the guest actually
+The network is not a stub: `litric-sysd` reports the address the guest actually
 holds — `ip -br addr` inside the guest prints `enp0s4 UP 10.0.2.15/24`, and the
 route table has `default via 10.0.2.2 dev enp0s4` — and traffic is NATed by QEMU
 to the host's connection.

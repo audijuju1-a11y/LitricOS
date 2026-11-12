@@ -1,0 +1,20 @@
+[Unit]
+Description=LitricOS Flathub remote provisioning timer
+Documentation=file:///usr/share/doc/litric/master-plan/09-app-model-portals-packaging.md
+# A timer, not a target dependency: provisioning reaches the network, and a
+# machine that boots offline must not sit in a oneshot job until its timeout
+# while the desktop waits. The service already tolerates being offline; the
+# timer simply runs it again later.
+
+[Timer]
+# Late enough that the link is usually up, early enough that the App Store is
+# useful when the user first opens it.
+OnBootSec=30s
+# Retry while the machine stays up: a cable plugged in after boot, or a
+# captive portal that clears, is a normal case and needs no reboot.
+OnUnitInactiveSec=6h
+AccuracySec=1min
+Unit=litric-flatpak-setup.service
+
+[Install]
+WantedBy=timers.target

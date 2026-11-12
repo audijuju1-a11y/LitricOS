@@ -3985,3 +3985,57 @@ LITRIC_SKIP_BUILD=1 LITRIC_QEMU_OUT=artifacts/qemu-guest-proof/gpu-1280x800-run2
   is drawn.
 * The mkosi image, a physical display, KVM, audio and DBus services remain
   untested in this guest proof.
+
+---
+
+## 2026-11-12 — commercial-readiness slice: Flathub, real-hardware DHCP, host browser e2e
+
+**Result: PARTIAL.** The image now declares Flathub remotely and no longer
+hard-codes QEMU's slirp lease on every wired interface. The browser engine passed
+a full host-side end-to-end run against a real HTTPS page. Nothing in this entry
+proves a booted image, a physical link, or a Flatpak install; those are `NOT RUN`
+and are listed as such below.
+
+| check | result |
+|---|---|
+| `cd src && cargo test --workspace` | 1,536 passed, 2 failed (see below) |
+| `tools/browser-e2e.py --broker src/target/debug/litric-browserd --chromium /usr/bin/chromium --url https://example.com/ --require-engine` (as an unprivileged user) | PASS, all 12 stages, 0 skipped; navigation title `Example Domain`, 1280x800 BGRA frame, link click, scroll, input, second tab |
+| `python3 ci/lint-network-config.py` | PASS |
+| `python3 ci/lint-network-config.py --self-test` | PASS — the linter rejects a static default and a mis-ordered VM file |
+| `python3 ci/lint-unit-binaries.py` | PASS — `litric-flatpak-setup.service` resolves; its `/usr/bin/bash` is a base binary |
+| `python3 ci/lint-mkosi.py` | 6 errors, all missing `keys/dev/*` in this checkout; not caused by this change |
+
+The two failing tests are `litric-shell` journeys that exec the committed
+`weston-simple-shm` fixture: `journey_real_linux_app_is_installed_launched_mapped_rendered_and_removed`
+and `journey_test_game_plays_fullscreen_and_stops`. The fixture's bundled
+`libwayland-client.so.0` requires `GLIBC_2.38`; this host is `GLIBC 2.35`, so the
+child dies before it can map a window (`Weston Simple SHM exited before opening a
+window`). This is an environment mismatch, not a regression from this change, and
+it is the reason the real-client path cannot be called green on this host.
+
+### What changed
+
+* `image/mkosi.extra/usr/lib/litric/flatpak-setup.sh` and
+  `litric-flatpak-setup.service`: idempotent Flathub provisioning after
+  `network-online.target`, in a hardened unit with `AF_INET` allowed. It installs
+  nothing and exits zero when offline.
+* `image/mkosi.extra/usr/lib/systemd/network/20-wired.network` is now `DHCP=yes`
+  for real hardware; `10-qemu-slirp.network` keeps the static slirp lease and
+  matches QEMU's default NIC MAC, so networkd's first-match rule selects it only
+  inside the VM.
+* `ci/lint-network-config.py` + `ci/verify.sh` section `[3n]`: the split is now
+  executable policy, with a self-test that proves it can fail.
+* `docs/COMMERCIAL-READINESS-2026-11-12.md`: the measured state and the reason
+  application installs still cannot work (children inherit `litric-sysd`'s
+  `IPAddressDeny=any`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`,
+  `RestrictNamespaces=yes`, `ProtectHome=yes`).
+
+### NOT RUN
+
+* `tools/build.sh --profile desktop` — no `mkosi` or Arch toolchain on this host.
+* `tools/qemu-guest-proof.sh` — no `qemu-system-x86_64` on this host; the DHCP
+  default and the MAC-matched slirp file were not exercised by a link-up.
+* A real Flatpak install or `flatpak run` — `flatpak` is absent here, and the
+  sandbox defect above blocks it in the image regardless.
+* `ci/verify.sh` in full — the Rust and image sections depend on the build/boot
+  tooling listed above; the checks reported here were run individually.

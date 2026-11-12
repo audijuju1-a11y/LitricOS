@@ -18,7 +18,7 @@ DNS resolution state. Not in scope: VPN, captive-portal detection, tethering.
 | Thing | Where | State |
 |---|---|---|
 | `iwd` (Wi-Fi supplicant), `nftables`, `systemd-resolvconf` | `image/mkosi.profiles/core.conf` | shipped, unmanaged |
-| Wired configuration: static QEMU slirp addressing, `[Match] Name=en* eth*` | `image/mkosi.extra/usr/lib/systemd/network/20-wired.network` | shipped, works, documented reason for static over DHCP |
+| Wired configuration: DHCP on real hardware; QEMU slirp static addressing matched by MAC | `image/mkosi.extra/usr/lib/systemd/network/20-wired.network` and `10-qemu-slirp.network` | shipped; the static slirp file is first-match by MAC, so a physical machine gets DHCP (2026-11-12, config-level change, boot proof NOT RUN) |
 | Interface facts | `/sys/class/net/*`, `/proc/net/dev` | read by nobody |
 | The shell's network indicator | `src/litric-shell/src/main.rs` (`read_network`) | reads a state string; it does not know what an interface is |
 | A connection manager | — | **absent by decision**: `NetworkManager` is rejected in `docs/PERF-budget.md` row 6 |

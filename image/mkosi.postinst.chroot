@@ -58,6 +58,11 @@ enable_unit litric-selftest.service multi-user.target
 enable_unit litric-mm-tune.service  sysinit.target
 enable_unit litric-etc-overlay.service local-fs.target
 enable_unit litric-first-run.service multi-user.target
+# Flatpak ships no remote. Without Flathub the App Store is permanently empty,
+# which is indistinguishable from a broken catalog; this declares the remote
+# after the network is up. It installs nothing and is idempotent. The timer, not
+# the service, is enabled: a boot with no network must not wait on the fetch.
+enable_unit litric-flatpak-setup.timer timers.target
 enable_unit litric-sysd.service     multi-user.target
 # The guest supervisor: every launch of Windows or Linux as an environment
 # goes through this daemon (ADR-0015). Enabled alongside sysd, ordered after

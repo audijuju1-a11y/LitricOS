@@ -1,10 +1,17 @@
-# LitricOS — wired network on the virtual (and any real) NIC.
+# LitricOS — wired networking on real hardware.
 #
-# Without a .network match, systemd-networkd never configures an interface:
-# the guest booted with a virtio-net device, a kernel driver (CONFIG_VIRTIO_NET
-# is builtin), and no address — the browser engine could spawn Chromium but had
-# nowhere to fetch from, and every page honestly reported a network error.
-# DHCP=yes covers QEMU slirp (10.0.2.15/24, DNS 10.0.2.3) and any real LAN.
+# This is the file a physical machine uses: it asks the DHCP client for an
+# address, a prefix, a gateway and DNS, which is what a LAN, a home router and a
+# corporate network all expect. The previous revision hard-coded QEMU's slirp
+# lease (10.0.2.15/24, gateway 10.0.2.2, DNS 10.0.2.3) for every `en*`/`eth*`
+# interface, which was true only inside the virtual machine the proofs run in and
+# wrong on every real network. On real hardware that address is either outside
+# the subnet or already in use, so the link came up and nothing routed.
+#
+# The virtual machine keeps its deterministic static address in
+# `10-qemu-slirp.network`, which matches QEMU's default NIC MAC instead of the
+# interface name. `systemd-networkd` applies the first matching file in lexical
+# order, so 10- wins inside QEMU and 20- is the only match on real hardware.
 #
 # Both naming schemes are matched because a minimal image may not run udev's
 # predictable renaming: "eth0" before udev, "enp0s*t*" after it.
@@ -13,13 +20,5 @@
 Name=en* eth*
 
 [Network]
-# Static slirp addressing is deliberate: the kernel refuses a DHCP OFFER
-# addressed to 255.255.255.255 while the interface has no address yet (logged
-# as a martian source, observed live at every boot), so the lease never
-# completes and the browser engine starts with a dead network. QEMU's slirp
-# NAT answers ARP for 10.0.2.2 itself, so a static address needs no exchange
-# at all — the address, gateway and resolver are simply true on this bus.
-Address=10.0.2.15/24
-Gateway=10.0.2.2
-DNS=10.0.2.3
+DHCP=yes
 IPv6AcceptRA=yes
