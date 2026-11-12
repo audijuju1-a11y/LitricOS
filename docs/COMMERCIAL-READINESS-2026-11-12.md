@@ -70,9 +70,44 @@ capability broker; a second unit, `litric-appd`, executes store work and
 launches in a namespace that has the network, a home and Flatpak's namespaces.
 The forwarding seam is `LITRIC_APPD_SOCKET` (set by the sysd unit); without it,
 every existing test and a development host keep the old in-process path
-unchanged. `litric-sysd` prints `litric.sysd.appd=<path|none>` at start, and
-`litric-appd` prints `litric.appd.flatpak=<present|missing>` before it serves —
-both are facts a boot proof can read rather than infer from a unit file.
+unchanged. `litric-sysd` prints `litric.sysd.appd=<path|none>` and
+`litric.sysd.execution=appd|local` at start, and `litric-appd` prints
+`litric.appd.flatpak=<present|missing>` before it serves — facts a boot proof can
+read rather than infer from a unit file.
+
+### 2.5 The home directory, the busy answer, and the executor's journal
+
+Four smaller defects came out of the same reading of the image:
+
+* **`/var/home/litric` did not exist.** `sysusers.d/litric.conf` names it as the
+  account's home, and `/var` is its own btrfs partition
+  (`mkosi.repart/20-var.conf`), so the comment claiming `/var/home` "cannot be
+  created at boot" was wrong for every profile above `nano`.
+  `tmpfiles.d/litric-home.conf` now creates `/var/home` (0755) and
+  `/var/home/litric` (0700, owned by `litric`). Without it, every tool that
+  reads `$HOME` from passwd — D-Bus, xdg-user-dirs, `flatpak --user` — pointed
+  at a path that did not exist.
+* **Every tool script lacked the execute bit.** `tools/build.sh` is documented as
+  `./tools/build.sh` in this repository and failed with "Permission denied";
+  only `tools/browser-e2e.py` was `0755`. All of `tools/*.sh` and `tools/*.py`
+  are now executable, and `./tools/gen-dev-keys.sh` runs (idempotent; it refuses
+  to overwrite an existing key without `--force`).
+* **A second application operation queued behind the first.** One `dispatch`
+  held the state lock for the whole plan — up to 900 s for an install — so a
+  second store write waited with no way to tell "busy" from "hung".
+  `server.rs` now takes a separate operation slot with `try_lock` and answers
+  `ERR busy` at once. Catalog reads are not application operations and are
+  unaffected.
+* **The executor left no record.** The broker audits decisions; nothing recorded
+  what was executed. `litric-appd` writes one journal line per request
+  (`litric.appd.request=<kind> result=ok|err kind=… lines=N ms=…`) and prints
+  `litric.appd.pid=` and `litric.appd.home=` at start, so "the install ran and
+  took 400 s" is readable rather than inferred.
+
+A failed install is retried by re-sending the same request: Flatpak's install is
+idempotent for an already-installed id, and `ERR busy` says when not to try. No
+automatic retry loop is added — a broker that retried by itself would turn a
+broken remote into an hourly download.
 
 ---
 
@@ -174,13 +209,14 @@ run is listed as **NOT RUN**.
 
 | Check | Command | Result |
 |---|---|---|
-| Workspace tests | `cd src && cargo test --workspace --no-fail-fast` | 2,128 passed, 2 failed (fixture glibc; see §4.1) |
-| Broker tests | `cargo test -p litric-sysd` | PASS, 365 passed across 6 targets |
-| Broker → runtime daemon socket journey | `cargo test -p litric-sysd appd::tests` | PASS, 9/9 (see §4.3) |
+| Workspace tests | `cd src && cargo test --workspace --no-fail-fast` | 2,132 passed, 2 failed (fixture glibc; see §4.1) |
+| Broker tests | `cargo test -p litric-sysd` | PASS, 369 passed across 6 targets |
+| Broker → runtime daemon socket journey | `cargo test -p litric-sysd appd::tests` | PASS, 11/11 (see §4.3) |
+| Busy answer under a running operation | `cargo test -p litric-sysd server::tests` | PASS, 5/5 |
 | Browser engine e2e | `tools/browser-e2e.py --broker ... --chromium /usr/bin/chromium` | PASS, 12/12 stages (see §4.2) |
 | Network config lint + self-test | `python3 ci/lint-network-config.py [--self-test]` | PASS |
 | Unit reference lint | `python3 ci/lint-unit-binaries.py` | PASS (19 references: 10 resolvable, 9 skipped, 0 broken — `litric-appd` resolves) |
-| mkosi schema lint | `python3 ci/lint-mkosi.py` | 6 errors, all missing `keys/dev/*` in this checkout; **not caused by this change** |
+| mkosi schema lint | `./tools/gen-dev-keys.sh && python3 ci/lint-mkosi.py` | OK: 6 file(s) clean (a checkout with no generated `keys/dev/*` still reports the same 6 errors; `tools/build.sh` generates them itself before this lint) |
 | Rust formatting | `cargo fmt --check` | **NOT RUN** — no `rustfmt` component in this toolchain; the mirror returns 404 for it |
 | Image build | `tools/build.sh --profile desktop` | **NOT RUN** — no `mkosi`/Arch toolchain on this host |
 | QEMU boot / link-up | `tools/qemu-guest-proof.sh` | **NOT RUN** — no `qemu-system-x86_64` on this host |
@@ -188,7 +224,7 @@ run is listed as **NOT RUN**.
 
 ### 4.1 Workspace tests
 
-`cargo test --workspace --no-fail-fast` on 2026-11-12: **2,128 passed, 2 failed**,
+`cargo test --workspace --no-fail-fast` on 2026-11-12: **2,132 passed, 2 failed**,
 0 ignored. (An earlier run without `--no-fail-fast` reported 1,536 passed: cargo
 stops scheduling test binaries after the first failing package, so that figure
 was a prefix of the suite, not its size.) The two failures are the journeys that
@@ -232,11 +268,19 @@ it with an `Executor`, and drives it through a `Sysd` built with
   really ran (a marker file appears);
 * a configured-but-absent daemon returns `ERR appd-unavailable` instead of
   silently executing in the broker's namespace;
-* a `RUN` target the resolver refuses comes back as `ERR bad-argument`.
+* a `RUN` target the resolver refuses comes back as `ERR bad-argument`;
+* a second application operation while one is running gets `ERR busy` without
+  waiting for the first, while a `PING` is still served.
 
-It does **not** prove that `flatpak` itself installs an application: the runner
-is a recorder, and no `flatpak` binary exists on this host. That remains the
-first item of §5.
+A second test closes the loop over **both** sockets: a client sends
+`STORE LIST` and `STORE INSTALL org.gnome.Builder flathub confirm` to the
+broker's socket, the broker authorises, forwards over `/run/litric/appd.sock`,
+and the runtime daemon's runner receives the install. That is the path the shell
+takes (`shell.sysd_socket`), with the executor outside the broker's process.
+
+None of it proves that `flatpak` itself installs an application: the runner is a
+recorder, and no `flatpak` binary exists on this host. That remains the first
+item of §5.
 
 ---
 

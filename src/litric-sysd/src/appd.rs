@@ -42,7 +42,7 @@
 //! `ENV` cannot be confused with a hex argument: hex is `[0-9a-f]` only.
 
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Read, Write};
@@ -268,6 +268,49 @@ fn hex_text(raw: &str, name: &'static str) -> Result<String, ProtoError> {
     })
 }
 
+/// The word a command is logged under.
+///
+/// The broker keeps the audit of *decisions*; this is the other half, the
+/// record of what was *executed*. The names are stable tokens so a boot proof
+/// can count them, and they are coarse on purpose: which app was installed is
+/// the broker's audit line, not this one.
+impl Command {
+    /// The stable token this command appears as in the journal.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Command::Ping => "ping",
+            Command::Quit => "quit",
+            Command::Store(_) => "store-read",
+            Command::Write(_) => "store-write",
+            Command::Run(_) => "run",
+        }
+    }
+}
+
+/// The journal line for one executed command.
+///
+/// One line per request, whatever its outcome: a daemon that logs only failures
+/// cannot be told apart from one that is not being asked. The elapsed time is
+/// included because "the install took 400 s" is the measurement a support
+/// report needs, and the reply's line count because `OK 0` and `OK 12` are
+/// different answers that both look like success in a status line.
+#[must_use]
+pub fn request_log(command: &Command, reply: &Response, elapsed: Duration) -> String {
+    format!(
+        "litric.appd.request={} result={} kind={} lines={} ms={}",
+        command.name(),
+        if reply.is_ok() { "ok" } else { "err" },
+        if reply.kind().is_empty() {
+            "-"
+        } else {
+            reply.kind()
+        },
+        reply.lines().len(),
+        elapsed.as_millis()
+    )
+}
+
 /// The executor half of the daemon.
 ///
 /// It owns a [`Sysd`] only so that the catalog formatting and the compatibility
@@ -362,7 +405,14 @@ fn handle(stream: &UnixStream, executor: &mut Executor) -> std::io::Result<()> {
                 writer.flush()?;
                 return Ok(());
             }
-            Ok(command) => executor.execute(&command),
+            Ok(command) => {
+                let started = Instant::now();
+                let reply = executor.execute(&command);
+                // The executor's own record of what it did. Written before the
+                // reply so a client that vanishes cannot lose the audit line.
+                eprintln!("{}", request_log(&command, &reply, started.elapsed()));
+                reply
+            }
             Err(error) => Response::err(error.kind(), error.to_string()),
         };
         writer.write_all(reply.encode().as_bytes())?;
@@ -563,6 +613,50 @@ mod tests {
     }
 
     #[test]
+    fn every_request_leaves_one_journal_line_naming_what_it_did() {
+        let install = Command::Write(SystemAction::Store(StoreAction::Install {
+            id: "org.gnome.Builder".to_owned(),
+            remote: "flathub".to_owned(),
+        }));
+        let line = request_log(
+            &install,
+            &Response::ok(vec!["state=installed".to_owned()]),
+            Duration::from_millis(1234),
+        );
+        assert_eq!(
+            line,
+            "litric.appd.request=store-write result=ok kind=- lines=1 ms=1234"
+        );
+
+        let refused = request_log(
+            &Command::Ping,
+            &Response::err("busy", "another operation runs"),
+            Duration::from_millis(0),
+        );
+        assert_eq!(
+            refused,
+            "litric.appd.request=ping result=err kind=busy lines=0 ms=0"
+        );
+
+        // The four command kinds are distinguishable from the log alone.
+        let names = [
+            Command::Ping.name(),
+            Command::Quit.name(),
+            Command::Store(Request::StoreList).name(),
+            install.name(),
+            Command::Run(LaunchRequest {
+                runtime: Runtime::Flatpak,
+                target: "org.gnome.Builder".to_owned(),
+                args: Vec::new(),
+                env: Vec::new(),
+            })
+            .name(),
+        ];
+        let unique: std::collections::BTreeSet<&&str> = names.iter().collect();
+        assert_eq!(unique.len(), names.len(), "names: {names:?}");
+    }
+
+    #[test]
     fn a_reply_that_declares_more_lines_than_it_carries_is_not_a_reply() {
         assert!(Response::decode("OK 2\none\n").is_none());
         assert_eq!(
@@ -723,6 +817,60 @@ mod tests {
             .expect("a reply");
         assert!(!reply.is_ok());
         assert_eq!(reply.kind(), "bad-argument");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The whole chain over both sockets: a client speaks to the broker's
+    /// socket, the broker authorises and forwards, and the runtime daemon
+    /// executes. This is the path the shell takes — `shell.sysd_socket` — with
+    /// the executor on the far side rather than in the broker's process.
+    #[cfg(unix)]
+    #[test]
+    fn the_broker_socket_carries_a_store_install_to_the_runtime_daemon() {
+        use crate::action::testing::RecordingRunner;
+
+        let dir = scratch("chain");
+        let appd_socket = dir.join("appd.sock");
+        let sysd_socket = dir.join("sysd.sock");
+
+        let listing = "Application\tName\tVersion\tOrigin\tSize\n\
+            org.gnome.Builder\tBuilder\t46.1\tflathub\t1.2 GB\n";
+        let runner = RecordingRunner::succeeding(0).answering(0, listing);
+        let runtime_state = Sysd::new(4, 1024, "/var/lib/litric-app", Path::new("no-such-root"))
+            .with_runner(Box::new(runner.clone()));
+        let runtime = crate::server::bind(&appd_socket).expect("bind the runtime daemon");
+        std::thread::spawn(move || {
+            let _ = serve(&runtime, Executor::new(runtime_state));
+        });
+
+        let broker_state = Sysd::new(4, 1024, "/root", Path::new("no-such-root"))
+            .with_appd_socket(&appd_socket);
+        let broker = crate::server::bind(&sysd_socket).expect("bind the broker");
+        std::thread::spawn(move || {
+            let _ = crate::server::serve(&broker, broker_state);
+        });
+
+        // A read crosses both sockets and comes back as the protocol's own.
+        let read =
+            crate::server::query(&sysd_socket, "STORE LIST").expect("a read over both sockets");
+        assert!(read.starts_with("OK "), "{read}");
+        assert!(read.contains("org.gnome.Builder"), "{read}");
+
+        // A write does too: authorised by the broker, executed by the daemon.
+        let install = crate::server::query(
+            &sysd_socket,
+            "STORE INSTALL org.gnome.Builder flathub confirm",
+        )
+        .expect("an install over both sockets");
+        assert!(install.starts_with("OK "), "{install}");
+        let calls = runner.calls();
+        let (program, args) = calls.last().expect("the install reached the runner");
+        assert_eq!(program, "flatpak");
+        assert!(
+            args.iter().any(|arg| arg == "org.gnome.Builder"),
+            "{args:?}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

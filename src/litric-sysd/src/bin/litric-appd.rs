@@ -144,7 +144,12 @@ fn run_server(args: &Args) -> ExitCode {
         }
     };
     println!("litric.appd.version={VERSION}");
+    println!("litric.appd.pid={}", std::process::id());
     println!("litric.appd.socket={}", args.socket.display());
+    // The home this daemon hands to `flatpak run`. It is the unit's
+    // StateDirectory, and a proof that reads `litric.appd.home=` can tell a
+    // persistent application data directory from a path that does not exist.
+    println!("litric.appd.home={}", args.home);
     // A measured fact, not an assumption: a store with no client says so at
     // start rather than on the first query.
     println!(

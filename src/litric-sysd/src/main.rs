@@ -232,12 +232,21 @@ fn run_server(args: &Args) -> ExitCode {
     println!("litric.sysd.version={VERSION}");
     println!("litric.sysd.socket={}", args.socket.display());
     // Which process executes store work is a fact a boot proof must be able to
-    // read, not something inferred from a unit file.
+    // read, not something inferred from a unit file. Two lines: where the
+    // executor is, and what this daemon will do when it is not there.
     println!(
         "litric.sysd.appd={}",
         state
             .appd_socket()
             .map_or_else(|| "none".to_owned(), |p| p.display().to_string())
+    );
+    println!(
+        "litric.sysd.execution={}",
+        if state.appd_socket().is_some() {
+            "appd"
+        } else {
+            "local"
+        }
     );
     println!(
         "litric.sysd.grants={} store={} records={}",

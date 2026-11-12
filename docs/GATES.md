@@ -4100,3 +4100,72 @@ unencodable store action is never forwarded.
   item 2 of the readiness plan.
 * Store writes still hold the broker's request lock while the executor runs, so a
   long install blocks other brokered requests for its duration.
+
+---
+
+## 2026-11-12 — second slice: home directory, execute bits, a typed busy, executor journal
+
+**Result: PARTIAL (no boot; every change is measured at unit and socket level).**
+Five defects found while preparing the first boot proof. Each one is a
+prerequisite for a boot in which an application can be installed and opened, and
+none of them needs a build host to be fixed or checked.
+
+| check | result |
+|---|---|
+| `cd src && cargo test --workspace --no-fail-fast` | 2,132 passed, 2 failed (the same two `litric-shell` journeys that exec the `weston-simple-shm` fixture: `GLIBC_2.38` required, host is `GLIBC 2.35`) |
+| `cargo test -p litric-sysd` | 369 passed, 0 failed across 6 targets |
+| `cargo test -p litric-sysd appd::tests` | 11 passed, 0 failed |
+| `cargo test -p litric-sysd server::tests` | 5 passed, 0 failed |
+| `cargo check -p litric-sysd --all-targets` | exit 0, no warnings |
+| `python3 ci/lint-mkosi.py` (after `./tools/gen-dev-keys.sh`) | `OK: 6 file(s) clean` |
+| `./tools/gen-dev-keys.sh` (second run) | exit 0, refuses to overwrite without `--force` |
+| `python3 ci/lint-unit-binaries.py` | 19 references: 10 resolvable, 9 skipped, 0 broken |
+| `python3 ci/lint-network-config.py` | PASS |
+| `cargo fmt --check` | **NOT RUN** — no `rustfmt` component; the configured mirror returns 404 |
+
+### What changed, and why each one mattered
+
+* **`/var/home/litric` now exists.** `sysusers.d/litric.conf` names it as the
+  `litric` account's home and nothing created it. `/var` is a separate btrfs
+  partition (`mkosi.repart/20-var.conf`, `MountPoint=/var:nofail`), so the
+  comment in `tmpfiles.d/litric-home.conf` that said `/var/home` "cannot be
+  created at boot" was wrong above the `nano` profile. Two `d` lines create
+  `/var/home` (0755) and `/var/home/litric` (0700, `litric:litric`), which is
+  what D-Bus, xdg-user-dirs, GTK config and `flatpak --user` read from passwd.
+* **Every tool script was non-executable.** All of `tools/` was committed as
+  `100644` except `tools/browser-e2e.py`, so the documented
+  `./tools/build.sh --profile desktop` failed with "Permission denied" on a
+  fresh clone. `tools/*.sh` and `tools/*.py` are now `100755` (mode change only;
+  no content changed by it) and `./tools/gen-dev-keys.sh` runs from the path the
+  documentation names.
+* **A second application operation is refused, not queued.** `dispatch` in
+  `server.rs` held the state lock for a whole plan — up to 900 s for an install —
+  and a second store write waited behind it with no way to distinguish busy from
+  hung. A separate operation slot (`Mutex<()>`, `try_lock`) now answers
+  `ERR busy` immediately, releases on drop, and survives a poisoned slot. Catalog
+  reads and `PING` are not operations and are unaffected; they still queue behind
+  a running install, which is recorded as the next concurrency step.
+* **The executor writes a journal line per request.** `litric.appd.request=<kind>
+  result=ok|err kind=… lines=N ms=…`, one line per command, written before the
+  reply. `litric-appd` also prints `litric.appd.pid=` and `litric.appd.home=`,
+  and `litric-sysd` prints `litric.sysd.execution=appd|local`, so a boot proof can
+  read who executed what instead of inferring it from a unit file.
+
+### What the new socket test proves
+
+`appd::tests::the_broker_socket_carries_a_store_install_to_the_runtime_daemon`
+binds both sockets and sends the request to the **broker's** socket, exactly as
+the shell does: `STORE LIST` returns the runtime daemon's rows over the chain,
+and `STORE INSTALL org.gnome.Builder flathub confirm` reaches the runtime
+daemon's runner as a `flatpak` argv. It is two daemons and two sockets, not one
+process and a function call. `server::tests` additionally proves that a second
+operation gets `busy` while the first holds the slot, that a read is still
+answered, and that a slot poisoned by a panic is reusable.
+
+### NOT RUN
+
+* `tools/build.sh --profile desktop` and `tools/qemu-guest-proof.sh` — no
+  `mkosi`, Arch toolchain or `qemu-system-x86_64` on this host.
+* Any real `flatpak` command; the runner records argv and returns a code.
+* The `/var/home/litric` tmpfiles entry is checked for field syntax only. That
+  systemd creates it, with that owner, on a real `/var` is a boot-time claim.

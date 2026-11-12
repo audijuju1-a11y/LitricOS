@@ -13,17 +13,22 @@
 //! * **A connection cannot take the daemon down.** Each is served on its own
 //!   thread, and a thread that panics while holding the state lock hands the
 //!   state to the next caller rather than poisoning the daemon permanently.
+//! * **A second application operation is refused, not queued.** An install can
+//!   hold the state lock for as long as its plan allows (900 s for a Flatpak
+//!   install), so a second install that simply waited would look like a hung
+//!   desktop. It gets `ERR busy` immediately instead.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{fs, io, thread};
 
 use crate::proto::{ProtoError, Request, Response, MAX_LINE};
+use crate::providers::SystemAction;
 use crate::state::{Sysd, Timestamp};
 
 /// Seconds since the Unix epoch, or 0 if the clock is before it.
@@ -151,6 +156,11 @@ pub fn serve(listener: &UnixListener, state: Sysd) -> io::Result<()> {
     }
     let interval = state.backup_interval_secs();
     let shared = Arc::new(Mutex::new(state));
+    // Held for the duration of one application operation. It exists so that a
+    // second one can be told "busy" before it queues on the state lock: by the
+    // time it got the lock, the first operation would have finished or the
+    // client would have given up, and neither reads as an answer.
+    let writer = Arc::new(Mutex::new(()));
     if interval > 0 {
         spawn_backup_scheduler(Arc::clone(&shared), interval);
     }
@@ -169,12 +179,13 @@ pub fn serve(listener: &UnixListener, state: Sysd) -> io::Result<()> {
                     continue;
                 };
                 let shared = Arc::clone(&shared);
+                let writer = Arc::clone(&writer);
                 // A client that hangs must not stop the next one being served.
                 if let Err(e) = thread::Builder::new()
                     .name("litric-sysd-conn".to_owned())
                     .spawn(move || {
                         let _slot = slot;
-                        if let Err(e) = handle(&stream, &shared) {
+                        if let Err(e) = handle(&stream, &shared, &writer) {
                             eprintln!("litric-sysd: connection ended: {e}");
                         }
                     })
@@ -220,7 +231,11 @@ fn spawn_backup_scheduler(shared: Arc<Mutex<Sysd>>, interval: u64) {
 }
 
 /// Serve one connection to completion.
-fn handle(stream: &UnixStream, shared: &Arc<Mutex<Sysd>>) -> io::Result<()> {
+fn handle(
+    stream: &UnixStream,
+    shared: &Arc<Mutex<Sysd>>,
+    operation: &Arc<Mutex<()>>,
+) -> io::Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = stream.try_clone()?;
     let mut buf = Vec::new();
@@ -252,7 +267,7 @@ fn handle(stream: &UnixStream, shared: &Arc<Mutex<Sysd>>) -> io::Result<()> {
                 writer.write_all(Response::ok(Vec::new()).encode().as_bytes())?;
                 return Ok(());
             }
-            Ok(req) => dispatch(shared, &req),
+            Ok(req) => dispatch(shared, operation, &req),
             Err(ProtoError::Empty) => continue,
             Err(e) => Response::err(e.kind(), e.to_string()),
         };
@@ -261,12 +276,57 @@ fn handle(stream: &UnixStream, shared: &Arc<Mutex<Sysd>>) -> io::Result<()> {
     }
 }
 
+/// Whether a request runs an application-side operation that can take minutes.
+///
+/// These are the requests that reach Flatpak and the launcher: a catalog *read*
+/// is a separate variant and is not one of them. The list is deliberately
+/// explicit rather than a catch-all, so a new request has to be thought about
+/// here before it can be treated as one.
+fn is_application_operation(req: &Request) -> bool {
+    matches!(
+        req,
+        Request::Action {
+            action: SystemAction::Store(_) | SystemAction::Sandbox(_),
+            ..
+        } | Request::LaunchApp { .. }
+            | Request::LaunchAppEnv { .. }
+            | Request::LaunchProfile { .. }
+    )
+}
+
+/// One application operation at a time, refused rather than queued.
+///
+/// Returns the guard to hold while the operation runs, `None` for a request
+/// that is not one, or the reply to send when one is already running. A
+/// poisoned mutex is not a reason to refuse forever — the poison means a
+/// handler panicked, and the guard is only ever `()` — so it is taken anyway.
+fn writer_guard<'a>(
+    writer: &'a Arc<Mutex<()>>,
+    req: &Request,
+) -> Result<Option<MutexGuard<'a, ()>>, Response> {
+    if !is_application_operation(req) {
+        return Ok(None);
+    }
+    match writer.try_lock() {
+        Ok(guard) => Ok(Some(guard)),
+        Err(TryLockError::WouldBlock) => Err(Response::err(
+            "busy",
+            "another application operation is already running; retry when it finishes",
+        )),
+        Err(TryLockError::Poisoned(poisoned)) => Ok(Some(poisoned.into_inner())),
+    }
+}
+
 /// Take the state lock and answer.
 ///
 /// A previous handler that panicked leaves the mutex poisoned. Refusing every
 /// subsequent request because one connection died is a self-inflicted outage,
 /// so the state is recovered and service continues.
-fn dispatch(shared: &Arc<Mutex<Sysd>>, req: &Request) -> Response {
+fn dispatch(shared: &Arc<Mutex<Sysd>>, writer: &Arc<Mutex<()>>, req: &Request) -> Response {
+    let _writer = match writer_guard(writer, req) {
+        Ok(guard) => guard,
+        Err(reply) => return reply,
+    };
     let mut guard = match shared.lock() {
         Ok(g) => g,
         Err(poisoned) => poisoned.into_inner(),
@@ -373,5 +433,79 @@ mod tests {
         );
         held.pop();
         assert!(gate.enter().is_some(), "a closed connection frees its slot");
+    }
+
+    /// An install in flight answers a second install with `busy`, immediately,
+    /// rather than queueing it behind a plan that may run for 900 seconds.
+    #[test]
+    fn a_second_application_operation_is_refused_while_one_is_running() {
+        use crate::action::testing::RecordingRunner;
+        use crate::store::StoreAction;
+
+        let state = Sysd::new(2, 512, "/tmp", Path::new("/"))
+            .with_runner(Box::new(RecordingRunner::succeeding(0)));
+        let shared = Arc::new(Mutex::new(state));
+        let writer = Arc::new(Mutex::new(()));
+
+        let install = Request::Action {
+            action: SystemAction::Store(StoreAction::Install {
+                id: "org.gnome.Builder".to_owned(),
+                remote: "flathub".to_owned(),
+            }),
+            consent: true,
+        };
+
+        // Nothing running: the request is executed, not refused.
+        let reply = dispatch(&shared, &writer, &install);
+        assert_ne!(reply.kind(), "busy", "{reply:?}");
+
+        // One in flight: the next one is told so, and it takes no time.
+        let held = writer.lock().expect("the slot");
+        let reply = dispatch(&shared, &writer, &install);
+        assert_eq!(reply.kind(), "busy", "{reply:?}");
+        assert!(
+            reply.detail().contains("already running"),
+            "the refusal must say what to wait for: {reply:?}"
+        );
+
+        // A read is not an application operation and is still served: the UI
+        // must be able to ask for facts while an install runs.
+        let ping = dispatch(&shared, &writer, &Request::Ping);
+        assert!(ping.is_ok(), "{ping:?}");
+        drop(held);
+    }
+
+    /// The guard is released on drop, including when the held lock was left
+    /// poisoned by a handler that panicked.
+    #[test]
+    fn a_released_operation_slot_leaves_the_next_request_free() {
+        use crate::store::StoreAction;
+
+        let writer = Arc::new(Mutex::new(()));
+        let uninstall = Request::Action {
+            action: SystemAction::Store(StoreAction::Uninstall {
+                id: "org.gnome.Builder".to_owned(),
+            }),
+            consent: true,
+        };
+        {
+            let _held = writer_guard(&writer, &uninstall).expect("free");
+        }
+        let again = writer_guard(&writer, &uninstall);
+        assert!(again.is_ok(), "the slot was released with the guard");
+        // The reply carries the guard itself, so it is released by dropping it
+        // and not by the assertion above.
+        drop(again);
+
+        // Poisoning is not a permanent refusal: the guard carries no state.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = writer.lock().expect("the slot");
+            panic!("a handler panicked while holding the slot");
+        }));
+        let after = writer_guard(&writer, &uninstall);
+        assert!(
+            after.is_ok(),
+            "a poisoned slot must still be usable: {after:?}"
+        );
     }
 }
