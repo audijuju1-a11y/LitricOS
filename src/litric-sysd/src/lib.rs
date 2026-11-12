@@ -38,6 +38,7 @@
 #![forbid(unsafe_code)]
 
 pub mod action;
+pub mod appd;
 pub mod auth;
 pub mod backup;
 pub mod compat;

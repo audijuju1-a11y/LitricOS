@@ -24,7 +24,8 @@ use litric_env::{EnvironmentId, EnvironmentManager, SwitchOutcome};
 use litric_storage::{Access, Layout, StorageBroker, StorageUri};
 use litric_trash::{Retention, Trash};
 
-use crate::action::{self, PowerAction, Runner, SystemRunner};
+use crate::action::{self, Outcome, PowerAction, Runner, SystemRunner};
+use crate::appd;
 use crate::backup::{BackupError, BackupService, Summary};
 use crate::compat::{self, LaunchRequest, Runtime, ToolPaths};
 use crate::facts::{read_facts, Facts};
@@ -172,6 +173,14 @@ pub struct Sysd {
     /// The local backup service. Disabled until the daemon is given the one
     /// directory it may copy into; a request cannot choose that directory.
     backup: BackupService,
+    /// The application runtime daemon's socket, when this build has one.
+    ///
+    /// `None` is not a degraded mode in tests: without it the store and the
+    /// launcher run here, exactly as they did before the runtime daemon
+    /// existed. In the image the unit sets `LITRIC_APPD_SOCKET`, because this
+    /// process's own sandbox cannot reach the network or create an application
+    /// namespace, so a local `flatpak install` could only ever fail.
+    appd: Option<PathBuf>,
 }
 
 impl Sysd {
@@ -210,6 +219,7 @@ impl Sysd {
             updates: UpdateService::disabled(),
             applications_root: Path::new(home).join(".local/share"),
             backup: BackupService::disabled(),
+            appd: None,
         }
     }
 
@@ -290,6 +300,43 @@ impl Sysd {
             0
         } else {
             self.backup.interval_secs()
+        }
+    }
+
+    /// Send store work and launches to the application runtime daemon.
+    ///
+    /// The path is configuration, never a request field: a request that could
+    /// choose the socket could choose which process executes it. Without this
+    /// the daemon keeps its own code path, which is what the unit tests and a
+    /// development host use.
+    #[must_use]
+    pub fn with_appd_socket(mut self, path: impl Into<PathBuf>) -> Self {
+        self.appd = Some(path.into());
+        self
+    }
+
+    /// The runtime daemon socket this build will use, if any.
+    #[must_use]
+    pub fn appd_socket(&self) -> Option<&Path> {
+        self.appd.as_deref()
+    }
+
+    /// Forward one line to the runtime daemon and return its reply unchanged.
+    ///
+    /// A daemon that is configured but absent is an error, not a reason to run
+    /// twice: falling back to a local `flatpak` would execute the same command
+    /// in a namespace that cannot reach the network, and the user would see a
+    /// network failure instead of "the application runtime is not running".
+    fn forward(socket: &Path, line: &str, timeout: std::time::Duration) -> Response {
+        match appd::forward(socket, line, timeout) {
+            Ok(reply) => reply,
+            Err(error) => Response::err(
+                "appd-unavailable",
+                format!(
+                    "the application runtime did not answer at {}: {error}",
+                    socket.display()
+                ),
+            ),
         }
     }
 
@@ -779,7 +826,25 @@ impl Sysd {
     }
 
     /// Resolve and spawn one profile, then report what actually started.
+    ///
+    /// The child must not inherit this daemon's namespace: the broker has no
+    /// network, no home and no user namespaces, and an application needs all
+    /// three. When a runtime daemon is configured the resolved request travels
+    /// there and the reply is its own, so "a program is running" always comes
+    /// from the process that started it.
     fn execute_launch(&mut self, request: &LaunchRequest) -> Response {
+        if let Some(socket) = self.appd.clone() {
+            return Self::forward(&socket, &appd::launch_line(request), appd::RUN_TIMEOUT);
+        }
+        self.execute_launch_local(request)
+    }
+
+    /// Start a launch in this process.
+    ///
+    /// This is the runtime daemon's own path (`litric-appd` calls it) and the
+    /// path a build without a runtime daemon uses. It makes no capability
+    /// decision; callers have already made one.
+    pub fn execute_launch_local(&mut self, request: &LaunchRequest) -> Response {
         match compat::execute(request, &ToolPaths::default()) {
             Ok(pid) => {
                 let program = request.target.as_str();
@@ -975,6 +1040,9 @@ impl Sysd {
     /// refusal. The daemon never reads this in `FACTS`; each request is one
     /// bounded process.
     fn store_list(&mut self) -> Response {
+        if let Some(socket) = self.appd.clone() {
+            return Self::forward(&socket, "STORE LIST", appd::READ_TIMEOUT);
+        }
         Self::store_reply(self.provider.store_list(self.runner.as_ref()), "")
     }
 
@@ -984,6 +1052,10 @@ impl Sysd {
     /// a bad query is the caller's error, while a tool that is absent is a
     /// state.
     fn store_search(&mut self, query: &str) -> Response {
+        if let Some(socket) = self.appd.clone() {
+            let line = format!("STORE SEARCH {query}");
+            return Self::forward(&socket, &line, appd::READ_TIMEOUT);
+        }
         Self::store_reply(
             self.provider.store_search(self.runner.as_ref(), query),
             query,
@@ -996,6 +1068,9 @@ impl Sysd {
     /// rows are one per app id; a missing Flatpak is `sandbox.state=unavailable`
     /// rather than an error or an empty list that reads as "up to date".
     fn store_updates(&mut self) -> Response {
+        if let Some(socket) = self.appd.clone() {
+            return Self::forward(&socket, "STORE UPDATES", appd::READ_TIMEOUT);
+        }
         match self.provider.store_updates(self.runner.as_ref()) {
             Ok(updates) => {
                 let mut lines = vec![
@@ -1034,6 +1109,10 @@ impl Sysd {
     /// process runs; a bad id is the caller's error while a missing tool is a
     /// state.
     fn store_permissions(&mut self, id: &str) -> Response {
+        if let Some(socket) = self.appd.clone() {
+            let line = format!("STORE SANDBOX {id}");
+            return Self::forward(&socket, &line, appd::READ_TIMEOUT);
+        }
         match self.provider.store_permissions(self.runner.as_ref(), id) {
             Ok(facts) => {
                 let mut lines = vec![
@@ -1229,6 +1308,19 @@ impl Sysd {
                 return self.account(auth);
             }
         }
+        // A store write changes `/var/lib/flatpak` and, for an install, fetches
+        // from a remote. Neither is possible in this unit's namespace, and the
+        // runtime daemon is the unit written for it. The capability decision
+        // above is already made; the daemon executes and its reply is returned
+        // unchanged. An argument the wire could not carry is not forwarded: the
+        // local path below refuses it with the same words as before.
+        if matches!(action, SystemAction::Store(_) | SystemAction::Sandbox(_)) {
+            if let Some(socket) = self.appd.clone() {
+                if let Some(line) = appd::action_line(action) {
+                    return Self::forward(&socket, &line, appd::WRITE_TIMEOUT);
+                }
+            }
+        }
         // The root is the daemon's own, never a request's: the same rule as the
         // facts reader. A caller that could choose the root could choose which
         // credential file `iwd` is told about.
@@ -1284,6 +1376,43 @@ impl Sysd {
                     self.bt = Some(powered);
                 }
             }
+        }
+        Self::outcome_reply(outcome)
+    }
+
+    /// Execute a store or sandbox write whose capability decision was already
+    /// made.
+    ///
+    /// This is `litric-appd`'s half of the action path: the plan, the runner and
+    /// the reply are byte-for-byte the ones [`Sysd::action`] uses, and the only
+    /// thing missing is the broker. Anything other than a store action is
+    /// refused, so the runtime daemon cannot be asked to perform a power
+    /// transition or change a password.
+    pub fn apply_authorised(&mut self, action: &SystemAction) -> Response {
+        let outcome = match action {
+            SystemAction::Store(a) => self.provider.store(a, self.runner.as_ref(), &self.root),
+            SystemAction::Sandbox(a) => {
+                self.provider.sandbox(a, self.runner.as_ref(), &self.root)
+            }
+            _ => {
+                return Response::err(
+                    "bad-argument",
+                    "the application runtime executes store actions only",
+                )
+            }
+        };
+        Self::outcome_reply(outcome)
+    }
+
+    /// Turn a provider outcome into the reply both daemons send.
+    ///
+    /// A value the caller got wrong is the caller's error; everything else — a
+    /// tool that is not there, a helper that refused, a file that could not be
+    /// written — is the action failing, which is a different token for the same
+    /// reason the refusal reasons are: a client can tell "you sent nonsense"
+    /// from "this machine said no" without reading prose.
+    fn outcome_reply(outcome: Outcome) -> Response {
+        if outcome.applied {
             return Response::ok(outcome.lines);
         }
         let reason = outcome
@@ -1297,11 +1426,6 @@ impl Sysd {
             .find_map(|l| l.strip_prefix("detail="))
             .unwrap_or("the action did not happen")
             .to_owned();
-        // A value the caller got wrong is the caller's error; everything else —
-        // a tool that is not there, a helper that refused, a file that could not
-        // be written — is the action failing, which is a different token for the
-        // same reason the refusal reasons are: a client can tell "you sent
-        // nonsense" from "this machine said no" without reading prose.
         let kind = if reason == "bad-argument" {
             "bad-argument"
         } else {

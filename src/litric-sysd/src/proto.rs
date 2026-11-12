@@ -1263,6 +1263,56 @@ impl Response {
         &self.lines
     }
 
+    /// The stable token a client branches on, or `""` for a success.
+    ///
+    /// Needed where one daemon forwards another's reply: the broker must be
+    /// able to test a failure's kind without re-parsing the wire form.
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    /// The sentence that accompanies a failure, or `""` for a success.
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    /// Parse the wire form produced by [`Response::encode`].
+    ///
+    /// This exists for the one case where a daemon answers another daemon:
+    /// `litric-sysd` forwards an already-authorised request to `litric-appd`
+    /// and must return that daemon's reply unchanged. Anything malformed is
+    /// `None` rather than a partial response — a caller that cannot tell a
+    /// complete answer from a truncated one would report half an installation
+    /// as a success.
+    #[must_use]
+    pub fn decode(text: &str) -> Option<Self> {
+        let mut lines = text.lines();
+        let header = lines.next()?;
+        if let Some(rest) = header.strip_prefix("OK ") {
+            let count: usize = rest.trim().parse().ok()?;
+            let mut payload = Vec::with_capacity(count);
+            for _ in 0..count {
+                payload.push(lines.next()?.to_owned());
+            }
+            // A reply that continues past the count it declared is not this
+            // reply; accepting the prefix would silently swallow the next one.
+            if lines.next().is_some() {
+                return None;
+            }
+            Some(Self::ok(payload))
+        } else if let Some(rest) = header.strip_prefix("ERR ") {
+            let (kind, detail) = rest.split_once(' ').unwrap_or((rest, ""));
+            if lines.next().is_some() {
+                return None;
+            }
+            Some(Self::err(kind, detail))
+        } else {
+            None
+        }
+    }
+
     /// The wire form, newline-terminated.
     ///
     /// Payload lines have their newlines stripped: a value containing a newline

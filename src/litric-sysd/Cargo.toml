@@ -25,3 +25,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "litric-sysd"
 path = "src/main.rs"
+
+# The execution half of the application path. It is in this package because it
+# reuses the broker's store formatting and compatibility resolver verbatim: a
+# second copy of either would be a second answer to the same question.
+[[bin]]
+name = "litric-appd"
+path = "src/bin/litric-appd.rs"

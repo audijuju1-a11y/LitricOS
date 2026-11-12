@@ -1,0 +1,87 @@
+[Unit]
+Description=LitricOS application runtime daemon
+Documentation=file:///usr/share/doc/litric/adr/0016-system-daemon.md
+
+# The executor half of the application path. `litric-sysd` decides *whether* an
+# application may be installed or started; this unit is the process that does
+# it, because the broker's own sandbox makes that impossible: no network, no
+# home, no user namespaces, a read-only /var.
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/litric-appd --socket /run/litric/appd.sock
+# The command line is the whole contract: the unit file does not add flags, so
+# what tools/build.sh installs is what runs.
+
+# /run/litric is shared with the broker and the shell. Same mode and the same
+# preserve rule: /run is tmpfs, and a unit that removed the directory on stop
+# would take the other two daemons' sockets with it.
+RuntimeDirectory=litric
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+
+# Persistent state for the applications this daemon installs and runs:
+#
+#   /var/lib/litric-app        flatpak's system installation and app data
+#
+# The root filesystem is erofs behind dm-verity and `/var/home` does not exist
+# in this image, so `HOME` is named here rather than inherited. `flatpak
+# --system` installs below `/var/lib/flatpak`; `flatpak run` writes each
+# application's data below `$HOME/.var/app`, which is why that directory must
+# survive a reboot and why it is a StateDirectory rather than a runtime one.
+StateDirectory=litric-app
+StateDirectoryMode=0700
+Environment=HOME=/var/lib/litric-app
+
+Restart=on-failure
+RestartSec=2s
+StandardOutput=journal+console
+StandardError=journal+console
+
+# --- privileges and sandbox ------------------------------------------------
+# This unit runs as root on purpose, and that is a measured decision rather than
+# an oversight:
+#
+#   * `flatpak install --system` writes `/var/lib/flatpak` and, when it is not
+#     root, asks polkit. The image has no polkit agent, so the unprivileged path
+#     can only fail; the privileged one needs no prompt.
+#   * The desktop session's Wayland socket lives in `/run/litric`, mode 0700 and
+#     owned by root because the compositor is the shell. A desktop user cannot
+#     reach it today, so an application started as that user could not open a
+#     window. Narrowing this to the `litric` user is a session-model change: the
+#     socket must become reachable by the session's group first.
+#
+# What protects the machine is not this unit's sandbox but two other properties:
+# the socket is `0600` inside `0700` (only the broker can speak to it), and the
+# protocol is closed — four catalog reads, the store writes, and one launch. It
+# has no capability broker, so no request can widen its authority.
+#
+# Deliberately NOT set, each for a named reason:
+#   ProtectSystem/ProtectHome  installs and runs applications, which must read
+#                              and write the user's files.
+#   PrivateDevices             /dev/dri must stay visible for GPU rendering.
+#   RestrictNamespaces         Flatpak creates user, network, mount, PID, IPC
+#                              and UTS namespaces for every application.
+#   SystemCallFilter           bubblewrap and Wine use calls no generic
+#                              allowlist can be proven against here.
+#   MemoryDenyWriteExecute     Wine and game runtimes generate code.
+#   LockPersonality            Wine and Proton select an address-space layout.
+#   PrivateTmp                 Flatpak stages runtime data in /tmp.
+#   CapabilityBoundingSet=     empty would break the mounts bubblewrap performs
+#                              as root; the set is inherited unchanged instead.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictRealtime=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+SystemCallArchitectures=native
+
+# One install plus its runtimes is process-heavy; a runaway must fail here
+# rather than take the desktop with it. Deliberately not a memory cap: a large
+# application's download is legitimate work.
+TasksMax=2048
+
+[Install]
+WantedBy=multi-user.target

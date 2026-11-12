@@ -5,8 +5,8 @@ answer to four requests: make the system commercially usable, install Linux
 applications, make networking and the web work, and provide end-to-end proof
 while improving the architecture. It records what is true today, what this
 session changed, and what still blocks a commercial release. It deliberately
-does not claim "100% compatibility": no operating system can, and this one
-cannot yet install or run a Flatpak application at all.
+does not claim "100% compatibility": no operating system can, and this one has
+not yet been shown, in a boot, to install or run a Flatpak application.
 
 The vocabulary is the one in
 [`docs/master-plan/25-beta-1.0-gate-matrix.md`](master-plan/25-beta-1.0-gate-matrix.md):
@@ -18,10 +18,10 @@ The vocabulary is the one in
 
 | Request | State today | What blocks it | Where the blocker lives |
 |---|---|---|---|
-| Linux applications install and run | **NOT WORKING** | The store daemon and every launched application inherit the capability broker's sandbox: no `AF_INET`, no user namespaces, no writable `/home`. `flatpak install` cannot reach Flathub and `flatpak run` cannot create its namespaces. | `image/mkosi.extra/usr/lib/systemd/system/litric-sysd.service` (`ProtectHome=yes`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`, `IPAddressDeny=any`, `RestrictNamespaces=yes`) |
-| Internet works | **PARTIAL** | The image now gets DHCP on real hardware (was a hard-coded QEMU lease), and the browser engine has network in its own unit. Applications launched through the broker do **not**: they inherit the same sandbox. | `litric-sysd.service`; untested on physical hardware |
+| Linux applications install and run | **IMPLEMENTED, NOT VERIFIED IN A BOOT** | The executor half now exists: `litric-appd` runs in a unit with the network, home and namespaces Flatpak needs, and `litric-sysd` forwards only already-authorised store work and launches to it over a `0600` socket. The forwarding path is proven over a real socket; a real `flatpak install`/`flatpak run` is still **NOT RUN** (no `flatpak` here, no image build). | Verified by `src/litric-sysd/src/appd.rs`; the boot proof is the open item |
+| Internet works | **PARTIAL** | The image now gets DHCP on real hardware (was a hard-coded QEMU lease), and launched applications no longer inherit the broker's `IPAddressDeny=any`: they are started by `litric-appd`, which allows `AF_INET`/`AF_INET6`. Untested on physical hardware. | `litric-appd.service`; physical link **NOT RUN** |
 | Web works | **CONDITIONALLY VERIFIED (engine on a host)** | The broker/Chromium path is exercised end to end on the development host. The in-guest proof exists for 2026-11-06. Neither is a claim about a physical machine. | `tools/browser-e2e.py`, `docs/GATES.md` |
-| E2E and architecture | **PARTIAL** | Native install/launch/uninstall has a real-socket journey. There is no equivalent journey for the Flatpak path, and the launcher architecture is the reason. | `src/litric-shell/src/e2e_app_install.rs` |
+| E2E and architecture | **PARTIAL** | Native install/launch/uninstall has a real-socket journey; the broker→runtime-daemon path now has one too (catalog read, install plan, launch, absent-daemon refusal). The Flatpak *tool* is still simulated by a recorded runner. | `src/litric-shell/src/e2e_app_install.rs`, `src/litric-sysd/src/appd.rs` tests |
 
 ---
 
@@ -36,8 +36,8 @@ broken catalog. `image/mkosi.extra/usr/lib/litric/flatpak-setup.sh` and
 no network (exit zero, retry next boot), install nothing, and keep the fetch out
 of `litric-sysd` by running in their own hardened unit with `AF_INET` allowed.
 
-This makes the **catalog** reachable. It does not make an **install** work: see
-§3.1.
+This makes the **catalog** reachable. It does not, by itself, make an **install**
+work: the sandbox blocker and the executor that removes it are §3.1 and §3.2.
 
 ### 2.2 Wired networking is correct on real hardware again
 
@@ -62,6 +62,17 @@ in this session** — the host has no `mkosi` and no `qemu-system-*`.
 budget decision. A Flatpak application can therefore run but cannot open a file
 chooser or a print dialog. The profile now says so at the point where a future
 reader would otherwise add the package and silently break the budget.
+
+### 2.4 The broker no longer forks applications
+
+`litric-sysd` had two jobs with contradictory sandboxes. It is now only the
+capability broker; a second unit, `litric-appd`, executes store work and
+launches in a namespace that has the network, a home and Flatpak's namespaces.
+The forwarding seam is `LITRIC_APPD_SOCKET` (set by the sysd unit); without it,
+every existing test and a development host keep the old in-process path
+unchanged. `litric-sysd` prints `litric.sysd.appd=<path|none>` at start, and
+`litric-appd` prints `litric.appd.flatpak=<present|missing>` before it serves —
+both are facts a boot proof can read rather than infer from a unit file.
 
 ---
 
@@ -92,41 +103,50 @@ subtle:
   desktop account is `litric`, and a system package manager runs as root.
 
 The browser escapes this only because `litric-browser@.service` is a separate
-unit running as `litric` with `AF_INET AF_INET6` allowed. That is the pattern the
-application path needs, generalised.
+unit running as `litric` with `AF_INET AF_INET6` allowed. The application path
+now follows the same pattern; §3.2 is what was built.
 
-### 3.2 The proposed fix: `litric-appd`
+### 3.2 The fix implemented: `litric-appd`
 
-Introduce a session application runtime daemon, `litric-appd`, running as the
-desktop user (`litric`), owning:
+The broker and the executor are now two processes:
 
-* Flatpak catalog reads and writes (`flatpak list/search/install/uninstall`);
-* `flatpak run` and Steam/Proton launches;
-* native launches that need the session's network and home.
+| Unit | Decides | Runs | Sandbox |
+|---|---|---|---|
+| `litric-sysd` | capability, consent, audit | nothing application-related | no network, no home, no namespaces |
+| `litric-appd` | nothing | Flatpak catalog reads/writes and every launch | network, home, Flatpak's namespaces |
 
-`litric-sysd` keeps what it is good at: consent, capability decisions, and the
-audit trail. It forwards a validated request to `litric-appd` over a socket in
-`/run/litric/`, and returns the daemon's reply unchanged. The application child
-is then a child of a unit whose sandbox is written for applications, not for the
-broker.
+`litric-sysd` forwards an already-authorised request over
+`/run/litric/appd.sock` and returns the daemon's reply unchanged. The protocol
+is closed: four catalog reads (`STORE LIST/SEARCH/UPDATES/SANDBOX`), the store
+and sandbox writes, and one `RUN` line whose target, arguments and environment
+are hex-encoded so a path containing a space cannot become a second field. The
+daemon has no capability broker and no client identity; it re-validates every
+argument with the same functions the broker used (`store::valid_app_id`,
+`compat::resolve`, `launch::validate`).
 
-Required properties, in this order:
+Three decisions are worth stating because they are not the obvious ones:
 
-1. `litric-appd` is a **separate unit**, `User=litric`, with
-   `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`, no
-   `IPAddressDeny`, and `RestrictNamespaces=` limited to the namespace types
-   Flatpak needs (`user net`).
-2. It never decides *whether* an action is allowed. It executes a plan that
-   `litric-sysd` already authorised, and it re-validates the plan's arguments
-   with the same functions (`store::valid_app_id`, `compat::valid_flatpak_id`).
-3. Store writes used to be `--system`; under a user daemon the choice is
-   explicit. A single-user desktop should use `--user` (no polkit prompt, data
-   under `~/.local/share/flatpak`). If system-wide installation is kept, the
-   write needs a privileged helper, which is a second design decision and must
-   not be hidden inside `litric-appd`.
-4. Portal backend: a Litric-native implementation of the handful of portal
-   interfaces the store and file chooser need, or a documented decision to ship
-   gtk3 for the desktop profile. Doing neither is what exists now.
+1. **It runs as root in Phase 1.** The image has no `/var/home` (the root
+   filesystem is erofs behind dm-verity), and `flatpak --system` writes
+   `/var/lib/flatpak` without a polkit prompt only for root. A `--user`
+   installation would need a writable home that does not exist.
+2. **Applications therefore run as root too.** That is a real limitation, not a
+   detail: Flatpak reports that it is running as root and relaxes parts of its
+   own policy. User separation is Phase 2, and its blocker is named: the
+   compositor's Wayland socket lives in `/run/litric` (mode `0700`, owned by
+   root), so an application started as `litric` cannot reach the display. The
+   fix is to make the socket reachable by the session's group, which is a
+   session-model change and must be proven by a boot.
+3. **It is not a security boundary of its own.** Its socket is `0600` inside a
+   `0700` directory, so only the broker can speak to it, and the protocol
+   cannot ask for a power transition, a password change or a network change.
+   The unit's sandbox is deliberately thin (see the unit file for the
+   item-by-item reasons): the isolation that matters for a GUI application is
+   Flatpak's own `bubblewrap` sandbox, which a second generic filter here has
+   not been measured against.
+
+The portal gap remains: `xdg-desktop-portal` still has no backend, so a Flatpak
+application can run but cannot open a file chooser (§2.3).
 
 ### 3.3 What "compatibility" can honestly mean
 
@@ -154,28 +174,35 @@ run is listed as **NOT RUN**.
 
 | Check | Command | Result |
 |---|---|---|
-| Workspace tests | `cd src && cargo test --workspace` | 1,536 passed, 2 failed (fixture glibc; see §4.1) |
+| Workspace tests | `cd src && cargo test --workspace --no-fail-fast` | 2,128 passed, 2 failed (fixture glibc; see §4.1) |
+| Broker tests | `cargo test -p litric-sysd` | PASS, 365 passed across 6 targets |
+| Broker → runtime daemon socket journey | `cargo test -p litric-sysd appd::tests` | PASS, 9/9 (see §4.3) |
 | Browser engine e2e | `tools/browser-e2e.py --broker ... --chromium /usr/bin/chromium` | PASS, 12/12 stages (see §4.2) |
 | Network config lint + self-test | `python3 ci/lint-network-config.py [--self-test]` | PASS |
-| Unit reference lint | `python3 ci/lint-unit-binaries.py` | PASS (new unit's `bash` is a base binary; skipped) |
+| Unit reference lint | `python3 ci/lint-unit-binaries.py` | PASS (19 references: 10 resolvable, 9 skipped, 0 broken — `litric-appd` resolves) |
 | mkosi schema lint | `python3 ci/lint-mkosi.py` | 6 errors, all missing `keys/dev/*` in this checkout; **not caused by this change** |
+| Rust formatting | `cargo fmt --check` | **NOT RUN** — no `rustfmt` component in this toolchain; the mirror returns 404 for it |
 | Image build | `tools/build.sh --profile desktop` | **NOT RUN** — no `mkosi`/Arch toolchain on this host |
 | QEMU boot / link-up | `tools/qemu-guest-proof.sh` | **NOT RUN** — no `qemu-system-x86_64` on this host |
-| Flatpak install of a real app | — | **NOT RUN** — `flatpak` is not installed on this host, and §3.1 blocks it in the image |
+| Flatpak install of a real app | — | **NOT RUN** — `flatpak` is not installed on this host, and no image was built to run it in |
 
 ### 4.1 Workspace tests
 
-`cargo test --workspace` on 2026-11-12: **1,536 passed, 2 failed**. The failures
-are the two `litric-shell` journeys that exec the committed `weston-simple-shm`
-fixture (`journey_real_linux_app_is_installed_launched_mapped_rendered_and_removed`
-and `journey_test_game_plays_fullscreen_and_stops`). The fixture's bundled
+`cargo test --workspace --no-fail-fast` on 2026-11-12: **2,128 passed, 2 failed**,
+0 ignored. (An earlier run without `--no-fail-fast` reported 1,536 passed: cargo
+stops scheduling test binaries after the first failing package, so that figure
+was a prefix of the suite, not its size.) The two failures are the journeys that
+exec the committed `weston-simple-shm` fixture
+(`journey_real_linux_app_is_installed_launched_mapped_rendered_and_removed` and
+`journey_test_game_plays_fullscreen_and_stops`). The fixture's bundled
 `libwayland-client.so.0` needs `GLIBC_2.38` and this host is `GLIBC 2.35`, so the
 child exits before mapping a window. That is an environment mismatch, not a
 regression, and it leaves the real-client path **not green on this host**.
 
-The suite includes the native install/launch/uninstall journey over a real Unix
-socket and the shell's browser journeys; it does not include a Flatpak journey,
-because there is no working Flatpak launch path to drive.
+One run also reported `terminal::tests::a_pty_session_stops_a_command_with_ctrl_c`
+as failed under full parallel load; the test passes on its own (10 s) and in the
+`--no-fail-fast` run above, so it is recorded as timing-sensitive rather than as
+a defect.
 
 ### 4.2 Browser engine e2e
 
@@ -191,6 +218,26 @@ broker correctly refuses to add. This proves the engine path on the development
 host; it does not prove the in-guest path, and it does not prove an application
 other than the browser has network.
 
+### 4.3 The broker → runtime daemon journey
+
+`src/litric-sysd/src/appd.rs` contains a test that starts a real listener, serves
+it with an `Executor`, and drives it through a `Sysd` built with
+`with_appd_socket`. It proves, over the socket rather than in-process:
+
+* a catalog read returns the runtime daemon's `store.state=ready` and the parsed
+  row (`org.gnome.Builder`);
+* a `STORE INSTALL` that the broker authorises arrives at the runner as exactly
+  `flatpak install --system --noninteractive --assumeyes flathub org.gnome.Builder`;
+* a `LAUNCH` reply carries a `pid=` the runtime daemon produced, and the program
+  really ran (a marker file appears);
+* a configured-but-absent daemon returns `ERR appd-unavailable` instead of
+  silently executing in the broker's namespace;
+* a `RUN` target the resolver refuses comes back as `ERR bad-argument`.
+
+It does **not** prove that `flatpak` itself installs an application: the runner
+is a recorder, and no `flatpak` binary exists on this host. That remains the
+first item of §5.
+
 ---
 
 ## 5. Release plan with acceptance criteria
@@ -203,6 +250,10 @@ measurement, not a sentence.
    that fails when the network is unavailable rather than pretending a cached
    catalog is a live one. Acceptance: guest proof with a real app id, a window,
    and its pixels; `cargo test` journey over the appd socket.
+   *State:* the daemon, its unit, the closed protocol and the socket journey are
+   **implemented** (§2.4, §4.3). The guest proof with a real app id and pixels is
+   **NOT RUN** — it needs an image build and a boot. User separation (apps not
+   running as root) is Phase 2; its two blockers are named in §3.2.
 2. **Portal backend (P0 for daily use).** File chooser and open-URI for Flatpak
    apps. Acceptance: a Flatpak app opens a file through the portal in the guest.
 3. **Installer and first-boot account (P0).** The gate matrix records
@@ -225,7 +276,8 @@ measurement, not a sentence.
 * It does not claim a build, a boot, a link-up, or a Flatpak install: none of
   those ran here, and §4 marks them `NOT RUN`.
 * It does not claim that provisioning Flathub makes the App Store work. It makes
-  the catalog reachable; §3.1 is the remaining blocker.
+  the catalog reachable; the executor split removes the sandbox blocker (§2.4),
+  but a booted install is still `NOT RUN`.
 * It does not claim "100% compatibility" for any runtime, and it gives the
   reasons in §3.3.
 * It does not replace the gate matrix. `docs/master-plan/25-...` remains the

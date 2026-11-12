@@ -4039,3 +4039,64 @@ it is the reason the real-client path cannot be called green on this host.
   sandbox defect above blocks it in the image regardless.
 * `ci/verify.sh` in full — the Rust and image sections depend on the build/boot
   tooling listed above; the checks reported here were run individually.
+
+---
+
+## 2026-11-12 — `litric-appd`: the application runtime leaves the capability broker
+
+**Result: PARTIAL (socket-level proof only).** Application installs and launches
+used to fail for an architectural reason: `litric-sysd` forks the application, so
+the child inherits `IPAddressDeny=any`, `RestrictAddressFamilies=AF_UNIX
+AF_NETLINK`, `RestrictNamespaces=yes` and `ProtectHome=yes`. No Flatpak download,
+no bubblewrap sandbox and no reachable Wayland socket. The execution half now
+lives in a separate root daemon, `litric-appd`, reached over
+`/run/litric/appd.sock` (`0600` inside a `0700` directory). The broker authorises;
+the executor decides nothing and exposes a closed command set.
+
+| check | result |
+|---|---|
+| `cd src && cargo test --workspace --no-fail-fast` | 2,128 passed, 2 failed (the same two `litric-shell` journeys that exec the committed `weston-simple-shm` fixture: `GLIBC_2.38` required, host is `GLIBC 2.35`) |
+| `cargo test -p litric-sysd` | 365 passed, 0 failed across 6 targets (340 lib, 2 `litric-appd` bin, 5 `litric-sysd` bin, 1 grants, 16 update service, 1 wifi secret) |
+| `cargo test -p litric-sysd appd::tests` | 9 passed, 0 failed |
+| `cargo check -p litric-sysd --all-targets` | exit 0 |
+| `python3 ci/lint-unit-binaries.py` | 19 references: 10 resolvable, 9 skipped, 0 broken — `litric-appd` resolves |
+| `python3 ci/lint-network-config.py` | PASS |
+| `python3 ci/lint-mkosi.py` | 6 errors, all pre-existing missing `keys/dev/*` in this checkout |
+| `cargo fmt --check` | **NOT RUN** — the toolchain has no `rustfmt` and the configured mirror returns 404 for the component |
+
+### What the socket journey proves
+
+`appd::tests::a_read_an_install_and_a_launch_cross_the_real_socket` starts a real
+`UnixListener`, serves it with an `Executor` around a real store/state stack, and
+drives it from a `Sysd` configured with `with_appd_socket`:
+
+* `STORE LIST` returns `store.state=ready` and the parsed row `org.gnome.Builder`;
+* an authorised `STORE INSTALL` arrives at the runner as exactly
+  `flatpak install --system --noninteractive --assumeyes flathub org.gnome.Builder`;
+* `LAUNCH` returns a `pid=` produced by the executor and the program really runs
+  (marker file);
+* a configured-but-absent daemon yields `ERR appd-unavailable` instead of quietly
+  executing in the broker's namespace;
+* a `RUN` target the resolver refuses yields `ERR bad-argument`.
+
+Encoding and parsing are covered separately: arguments with spaces and tabs
+round-trip, a target spelled `ENV` cannot change the line shape, and an
+unencodable store action is never forwarded.
+
+### What this does not establish
+
+* **No boot.** `tools/build.sh --profile desktop` and `tools/qemu-guest-proof.sh`
+  are `NOT RUN`; `mkosi`, `qemu-system-x86_64` and the Arch toolchain are absent
+  on this host. The new unit, its `RuntimeDirectory` and the sysd `Wants=` edge
+  are linted and unit-tested, not started by systemd.
+* **No real Flatpak.** `flatpak` is not installed here; the runner in the journey
+  is a recorder, so the argv is proven, the download is not.
+* **Apps still run as root.** This is Phase 1. `flatpak --user` and a `litric`
+  session user are blocked by the root-owned Wayland socket and the absent
+  `/var/home`; `--system` is the only install mode that can work in the current
+  image. §3.2 of `docs/COMMERCIAL-READINESS-2026-11-12.md` states the limitation
+  and the two Phase 2 blockers.
+* **No portal.** A Flatpak app cannot open a file chooser or a URI yet; that is
+  item 2 of the readiness plan.
+* Store writes still hold the broker's request lock while the executor runs, so a
+  long install blocks other brokered requests for its duration.

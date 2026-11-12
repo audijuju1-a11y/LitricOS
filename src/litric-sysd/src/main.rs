@@ -85,6 +85,9 @@ struct Args {
     state: PathBuf,
     update_root: PathBuf,
     backup_root: Option<PathBuf>,
+    /// The application runtime daemon's socket, or `None` to execute store work
+    /// and launches in this process.
+    appd_socket: Option<PathBuf>,
 }
 
 fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
@@ -96,6 +99,12 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
         state: PathBuf::from(DEFAULT_STATE),
         update_root: PathBuf::from(DEFAULT_UPDATE_ROOT),
         backup_root: None,
+        // Configuration, not a request field. The unit sets it; an empty value
+        // means "no runtime daemon", which is what every test host has.
+        appd_socket: std::env::var("LITRIC_APPD_SOCKET")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
     };
     let mut saw_mode = false;
     while let Some(a) = it.next() {
@@ -125,6 +134,7 @@ fn parse_args<I: Iterator<Item = String>>(mut it: I) -> Result<Args, String> {
             "--state" => args.state = PathBuf::from(need("--state")?),
             "--update-root" => args.update_root = PathBuf::from(need("--update-root")?),
             "--backup-root" => args.backup_root = Some(PathBuf::from(need("--backup-root")?)),
+            "--appd-socket" => args.appd_socket = Some(PathBuf::from(need("--appd-socket")?)),
             "--help" | "-h" => {
                 return Ok(Args {
                     mode: Mode::Help,
@@ -154,6 +164,7 @@ USAGE:
     litric-sysd --boot [--update-root DIR]
     litric-sysd --serve [--socket PATH] [--home DIR] [--root DIR] [--state PATH]
                        [--update-root DIR] [--backup-root DIR]
+                       [--appd-socket PATH]
     litric-sysd --query REQUEST [--socket PATH]
 
 OPTIONS:
@@ -171,6 +182,10 @@ OPTIONS:
                       /var/lib/litric/update.
     --backup-root DIR Local backup directory. Default
                       HOME/.local/state/litric/backups.
+    --appd-socket PATH
+                      Forward store work and launches to the application
+                      runtime daemon at PATH. Default: $LITRIC_APPD_SOCKET,
+                      or unset to execute them here.
     -h, --help        This text.
     -V, --version     Version.
 ";
@@ -203,6 +218,10 @@ fn run_server(args: &Args) -> ExitCode {
         .with_grant_store(&args.state)
         .with_update_root(&args.update_root)
         .with_backup_root(backup_root);
+    let state = match &args.appd_socket {
+        Some(socket) => state.with_appd_socket(socket),
+        None => state,
+    };
     let listener = match server::bind(&args.socket) {
         Ok(l) => l,
         Err(e) => {
@@ -212,6 +231,14 @@ fn run_server(args: &Args) -> ExitCode {
     };
     println!("litric.sysd.version={VERSION}");
     println!("litric.sysd.socket={}", args.socket.display());
+    // Which process executes store work is a fact a boot proof must be able to
+    // read, not something inferred from a unit file.
+    println!(
+        "litric.sysd.appd={}",
+        state
+            .appd_socket()
+            .map_or_else(|| "none".to_owned(), |p| p.display().to_string())
+    );
     println!(
         "litric.sysd.grants={} store={} records={}",
         state.grants_note(),

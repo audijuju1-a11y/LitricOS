@@ -8,12 +8,24 @@ Documentation=file:///usr/share/doc/litric/adr/0016-system-daemon.md
 # mistake already cost this project a debugging session on litric-selftest.
 After=basic.target
 
+# Store work and application launches are executed by the runtime daemon, in a
+# namespace that has the network, the home directory and the namespaces an
+# application needs -- none of which this unit may have. `Wants=`, not
+# `Requires=`: a broker that refused to start because the executor is down
+# would take the whole desktop with it, while forwarding without it answers
+# `ERR appd-unavailable` and the rest of the machine still works.
+Wants=litric-appd.service
+After=litric-appd.service
+
 # Nothing above this exists yet. When litric-shell does, it will order itself
 # after this unit, because a shell that draws a trash icon before there is a
 # trash behind it is drawing a picture.
 
 [Service]
 Type=simple
+# Where the executor listens. Configuration, not a request field: a request that
+# could name the socket could choose which process runs an install.
+Environment=LITRIC_APPD_SOCKET=/run/litric/appd.sock
 # The boot entrypoint runs before the socket exists. It reads the generation
 # record, counts one attempt for a staged candidate and, when the third attempt
 # was already used, rejects that candidate while leaving the active generation

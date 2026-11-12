@@ -64,6 +64,12 @@ enable_unit litric-first-run.service multi-user.target
 # the service, is enabled: a boot with no network must not wait on the fetch.
 enable_unit litric-flatpak-setup.timer timers.target
 enable_unit litric-sysd.service     multi-user.target
+# The executor half of the application path. `litric-sysd` decides, this daemon
+# runs: Flatpak installs and every application launch happen here, because the
+# broker's namespace has no network, no home and no user namespaces. sysd orders
+# itself after it; enabling both is what makes the forwarding target exist on
+# the first boot rather than after the first request.
+enable_unit litric-appd.service     multi-user.target
 # The guest supervisor: every launch of Windows or Linux as an environment
 # goes through this daemon (ADR-0015). Enabled alongside sysd, ordered after
 # it, and useless-but-harmless until a guest disk exists.
